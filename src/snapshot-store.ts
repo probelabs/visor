@@ -31,12 +31,14 @@ import {
   canonicalCatalogKey,
   deriveControllerItemClaimId,
   deriveItemFingerprint,
+  deriveManagedRunId,
   deriveNodeGenerationId,
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
   immutableInstanceEvent,
   queryReadyGenerations,
   reduceInstanceEvent,
+  reduceInstanceEventBatch,
   replayInstanceEvents,
   type CatalogReconciliationRequestedEvent,
   type CatalogRequestAttemptStartedEvent,
@@ -48,6 +50,10 @@ import {
   type RootScopePath,
   type GeneratedAttemptStartedEvent,
   type GeneratedCheckScheduledEvent,
+  type ManagedRunAcquisitionFailureCode,
+  type ManagedRunBindingV1,
+  type ManagedRunCleanupStatus,
+  type ManagedRunFailureCode,
 } from './state-machine/graph/instance-kernel';
 import { resolveJsonPointer } from './state-machine/graph/instance-plan';
 
@@ -317,10 +323,175 @@ export class ExecutionJournal {
     return Object.freeze({ generation, node, claims: Object.freeze(claims) });
   }
 
+  deriveManagedRunBinding(attempt: GeneratedAttemptStartedEvent): ManagedRunBindingV1 {
+    const generation = this.instanceProjection.generationsById[attempt.nodeGenerationId];
+    const instance = generation
+      ? this.instanceProjection.instancesById[generation.subgraphInstanceId]
+      : undefined;
+    if (
+      !generation ||
+      !instance ||
+      generation.status !== 'running' ||
+      !generation.scheduled ||
+      generation.attemptId !== attempt.attemptId ||
+      generation.fence !== attempt.fence ||
+      generation.nodeInstanceId !== attempt.nodeInstanceId ||
+      this.instanceProjection.attemptBindingsById[attempt.attemptId] !==
+        generation.nodeGenerationId ||
+      attempt.sessionId !== instance.sessionId ||
+      attempt.checkId !== generation.checkId ||
+      canonicalJson(attempt.scope) !== canonicalJson(generation.scope) ||
+      attempt.nodeGenerationId !== generation.nodeGenerationId
+    ) {
+      throw new ClaimKernelError(
+        'INVALID_MANAGED_BINDING',
+        `Attempt ${attempt.attemptId} is not the current scheduled generated attempt`
+      );
+    }
+    const authority: Omit<ManagedRunBindingV1, 'managedRunId'> = {
+      sessionId: instance.sessionId,
+      checkId: generation.checkId,
+      scope: generation.scope,
+      nodeInstanceId: generation.nodeInstanceId,
+      nodeGenerationId: generation.nodeGenerationId,
+      attemptId: generation.attemptId!,
+      fence: generation.fence!,
+    };
+    return immutableCanonicalValue({
+      managedRunId: deriveManagedRunId(authority),
+      ...authority,
+    });
+  }
+
+  private appendInstanceEventBatch(events: readonly InstanceRuntimeEvent[]): void {
+    this.requireClaimPlan();
+    const stored = events.map(event => immutableInstanceEvent(event));
+    const projected = reduceInstanceEventBatch(this.instanceProjection, stored);
+    this.runtimeEvents.push(...stored);
+    this.instanceProjection = projected;
+  }
+
+  failManagedRunAcquisition(input: {
+    attempt: GeneratedAttemptStartedEvent;
+    binding: ManagedRunBindingV1;
+    failureCode: ManagedRunAcquisitionFailureCode;
+  }): void {
+    const eventId = this.nextRuntimeEventId();
+    this.appendInstanceEventBatch([
+      {
+        version: 1,
+        type: 'ManagedRunAcquisitionFailed',
+        eventId,
+        sessionId: input.attempt.sessionId,
+        scope: input.attempt.scope,
+        binding: input.binding,
+        failureCode: input.failureCode,
+      },
+      {
+        ...input.attempt,
+        type: 'AttemptFailed',
+        eventId: eventId + 1,
+        reason: input.failureCode,
+      },
+    ]);
+  }
+
+  recordManagedRunAcquired(binding: ManagedRunBindingV1): void {
+    this.appendInstanceEvent({
+      version: 1,
+      type: 'ManagedRunAcquired',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: binding.sessionId,
+      scope: binding.scope,
+      binding,
+    });
+  }
+
+  recordManagedRunStarted(binding: ManagedRunBindingV1): void {
+    this.appendInstanceEvent({
+      version: 1,
+      type: 'ManagedRunStarted',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: binding.sessionId,
+      scope: binding.scope,
+      binding,
+    });
+  }
+
+  recordManagedRunCancelRequested(binding: ManagedRunBindingV1): void {
+    this.appendInstanceEvent({
+      version: 1,
+      type: 'ManagedRunCancelRequested',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: binding.sessionId,
+      scope: binding.scope,
+      binding,
+      reason: 'deadline',
+    });
+  }
+
+  failManagedGeneratedAttempt(input: {
+    attempt: GeneratedAttemptStartedEvent;
+    binding: ManagedRunBindingV1;
+    cleanupStatus: ManagedRunCleanupStatus;
+    failureCode: ManagedRunFailureCode;
+  }): void {
+    const eventId = this.nextRuntimeEventId();
+    this.appendInstanceEventBatch([
+      {
+        version: 1,
+        type: 'ManagedRunTerminated',
+        eventId,
+        sessionId: input.attempt.sessionId,
+        scope: input.attempt.scope,
+        binding: input.binding,
+        cleanupStatus: input.cleanupStatus,
+        controllerDecision: 'failed',
+        failureCode: input.failureCode,
+      },
+      {
+        ...input.attempt,
+        type: 'AttemptFailed',
+        eventId: eventId + 1,
+        reason: input.failureCode,
+      },
+    ]);
+  }
+
   completeGeneratedAttempt(input: {
     attempt: GeneratedAttemptStartedEvent;
     payload: unknown;
   }): void {
+    const staged = this.stageGeneratedCompletion(input);
+    this.runtimeEvents.push(...staged.events);
+    this.instanceProjection = staged.projection;
+  }
+
+  completeManagedGeneratedAttempt(input: {
+    attempt: GeneratedAttemptStartedEvent;
+    binding: ManagedRunBindingV1;
+    payload: unknown;
+  }): void {
+    const terminal = immutableInstanceEvent({
+      version: 1,
+      type: 'ManagedRunTerminated',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: input.binding.sessionId,
+      scope: input.binding.scope,
+      binding: input.binding,
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+      failureCode: null,
+    });
+    const staged = this.stageGeneratedCompletion(input, [terminal]);
+    this.runtimeEvents.push(...staged.events);
+    this.instanceProjection = staged.projection;
+  }
+
+  private stageGeneratedCompletion(
+    input: { attempt: GeneratedAttemptStartedEvent; payload: unknown },
+    prefix: readonly InstanceRuntimeEvent[] = []
+  ): { events: readonly InstanceRuntimeEvent[]; projection: InstanceProjection } {
     const { attempt, payload } = input;
     const before = this.instanceProjection;
     const generation = before.generationsById[attempt.nodeGenerationId];
@@ -334,6 +505,7 @@ export class ExecutionJournal {
       staged = reduceInstanceEvent(staged, stored);
       events.push(stored);
     };
+    for (const event of prefix) stage(event);
     for (const emission of node.emissions) {
       this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
       const immutablePayload = immutableCanonicalValue(payload);
@@ -414,8 +586,10 @@ export class ExecutionJournal {
     }
     stage({ ...attempt, type: 'AttemptCompleted',
       eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1 });
-    this.runtimeEvents.push(...events);
-    this.instanceProjection = staged;
+    return {
+      events,
+      projection: reduceInstanceEventBatch(before, events),
+    };
   }
 
   failGeneratedAttempt(attempt: GeneratedAttemptStartedEvent, reason: string): void {
@@ -434,7 +608,19 @@ export class ExecutionJournal {
   replayInstanceProjection(): InstanceProjection {
     return replayInstanceEvents(
       this.runtimeEvents.filter(event =>
-        ['CatalogReconciliationRequested','SubgraphExpanded','ControllerItemClaimPublished','NodeGenerationInactivated','NodeGenerationActivated','SubgraphTombstoned'].includes(event.type) ||
+        [
+          'CatalogReconciliationRequested',
+          'SubgraphExpanded',
+          'ControllerItemClaimPublished',
+          'NodeGenerationInactivated',
+          'NodeGenerationActivated',
+          'SubgraphTombstoned',
+          'ManagedRunAcquisitionFailed',
+          'ManagedRunAcquired',
+          'ManagedRunStarted',
+          'ManagedRunCancelRequested',
+          'ManagedRunTerminated',
+        ].includes(event.type) ||
         'nodeGenerationId' in event || 'requestId' in event
       ) as InstanceRuntimeEvent[]
     );

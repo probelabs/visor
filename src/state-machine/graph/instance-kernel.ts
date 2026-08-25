@@ -227,6 +227,62 @@ export function deriveCatalogRequestId(input: {
   return sha256Canonical({ v: 1, type: 'catalog-reconciliation', ...input });
 }
 
+export interface ManagedRunBindingV1 {
+  readonly managedRunId: string;
+  readonly sessionId: string;
+  readonly checkId: string;
+  readonly scope: KeyedScopePath;
+  readonly nodeInstanceId: string;
+  readonly nodeGenerationId: string;
+  readonly attemptId: string;
+  readonly fence: number;
+}
+
+export type ManagedRunCleanupStatus = 'clean' | 'unverified';
+export type ManagedRunControllerDecision = 'completed' | 'failed';
+export type ManagedRunFailureCode =
+  | 'MANAGED_HANDLE_INVALID'
+  | 'MANAGED_BINDING_MISMATCH'
+  | 'MANAGED_START_FAILED'
+  | 'MANAGED_STARTED_RECEIPT_INVALID'
+  | 'MANAGED_OUTCOME_FAILED'
+  | 'MANAGED_OUTCOME_RECEIPT_INVALID'
+  | 'MANAGED_DEADLINE_EXCEEDED'
+  | 'MANAGED_CANCEL_FAILED'
+  | 'MANAGED_CANCEL_RECEIPT_INVALID'
+  | 'MANAGED_CLOSE_FAILED'
+  | 'MANAGED_CLEANUP_RECEIPT_INVALID'
+  | 'MANAGED_SANDBOX_UNSUPPORTED'
+  | 'MANAGED_DEBOUNCE_UNSUPPORTED'
+  | 'MANAGED_FATAL_SUMMARY'
+  | 'MANAGED_FAIL_IF'
+  | 'MANAGED_HALT_EXECUTION'
+  | 'MANAGED_CLAIM_VALIDATION_FAILED'
+  | 'MANAGED_POST_PROVIDER_FAILED';
+
+export type ManagedRunAcquisitionFailureCode =
+  | 'MANAGED_HANDLE_INVALID'
+  | 'MANAGED_BINDING_MISMATCH'
+  | 'MANAGED_START_FAILED'
+  | 'MANAGED_SANDBOX_UNSUPPORTED'
+  | 'MANAGED_DEBOUNCE_UNSUPPORTED';
+
+export function deriveManagedRunId(
+  input: Omit<ManagedRunBindingV1, 'managedRunId'>
+): string {
+  return sha256Canonical({
+    v: 1,
+    type: 'managed-run',
+    sessionId: input.sessionId,
+    checkId: input.checkId,
+    scope: validateTaggedScopePath(input.scope),
+    nodeInstanceId: input.nodeInstanceId,
+    nodeGenerationId: input.nodeGenerationId,
+    attemptId: input.attemptId,
+    fence: input.fence,
+  });
+}
+
 interface InstanceEventBase {
   readonly version: 1;
   readonly eventId: number;
@@ -359,6 +415,43 @@ export interface GeneratedAttemptFailedEvent extends BoundAttemptEventBase {
   readonly reason: string;
 }
 
+interface ManagedRunEventBase extends InstanceEventBase {
+  readonly scope: KeyedScopePath;
+  readonly binding: ManagedRunBindingV1;
+}
+
+export interface ManagedRunAcquisitionFailedEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedRunAcquisitionFailed';
+  readonly failureCode: ManagedRunAcquisitionFailureCode;
+}
+
+export interface ManagedRunAcquiredEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedRunAcquired';
+}
+
+export interface ManagedRunStartedEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedRunStarted';
+}
+
+export interface ManagedRunCancelRequestedEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedRunCancelRequested';
+  readonly reason: 'deadline';
+}
+
+export interface ManagedRunTerminatedEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedRunTerminated';
+  readonly cleanupStatus: ManagedRunCleanupStatus;
+  readonly controllerDecision: ManagedRunControllerDecision;
+  readonly failureCode: ManagedRunFailureCode | null;
+}
+
+type ManagedRunLifecycleEvent =
+  | ManagedRunAcquisitionFailedEvent
+  | ManagedRunAcquiredEvent
+  | ManagedRunStartedEvent
+  | ManagedRunCancelRequestedEvent
+  | ManagedRunTerminatedEvent;
+
 export interface CatalogRequestAttemptStartedEvent extends BoundAttemptEventBase {
   readonly type: 'AttemptStarted';
   readonly scope: RootScopePath;
@@ -397,6 +490,11 @@ export type InstanceRuntimeEvent =
   | GeneratedClaimPublishedEvent
   | GeneratedAttemptCompletedEvent
   | GeneratedAttemptFailedEvent
+  | ManagedRunAcquisitionFailedEvent
+  | ManagedRunAcquiredEvent
+  | ManagedRunStartedEvent
+  | ManagedRunCancelRequestedEvent
+  | ManagedRunTerminatedEvent
   | CatalogRequestAttemptStartedEvent
   | CatalogRequestCheckScheduledEvent
   | CatalogRequestAttemptCompletedEvent
@@ -474,6 +572,19 @@ export interface InstanceClaimProjection {
   readonly nodeGenerationId?: string;
 }
 
+export interface ManagedRunProjection {
+  readonly binding: ManagedRunBindingV1;
+  readonly status:
+    | 'acquisition_failed'
+    | 'acquired'
+    | 'started'
+    | 'cancel_requested'
+    | 'terminated';
+  readonly cleanupStatus?: ManagedRunCleanupStatus;
+  readonly controllerDecision?: ManagedRunControllerDecision;
+  readonly failureCode?: ManagedRunFailureCode;
+}
+
 export interface InstanceProjection {
   readonly lastEventId: number;
   readonly requestsById: Readonly<Record<string, CatalogRequestProjection>>;
@@ -485,6 +596,7 @@ export interface InstanceProjection {
   readonly activeGenerationIdByNode: Readonly<Record<string, string>>;
   readonly claimsById: Readonly<Record<string, InstanceClaimProjection>>;
   readonly attemptBindingsById: Readonly<Record<string, string>>;
+  readonly managedRunsByAttemptId: Readonly<Record<string, ManagedRunProjection>>;
 }
 
 export function createInitialInstanceProjection(): InstanceProjection {
@@ -499,6 +611,7 @@ export function createInitialInstanceProjection(): InstanceProjection {
     activeGenerationIdByNode: {},
     claimsById: {},
     attemptBindingsById: {},
+    managedRunsByAttemptId: {},
   });
 }
 
@@ -539,6 +652,7 @@ function mutableProjection(projection: InstanceProjection): {
   activeGenerationIdByNode: Record<string, string>;
   claimsById: Record<string, InstanceClaimProjection>;
   attemptBindingsById: Record<string, string>;
+  managedRunsByAttemptId: Record<string, ManagedRunProjection>;
 } {
   return {
     lastEventId: projection.lastEventId,
@@ -551,6 +665,7 @@ function mutableProjection(projection: InstanceProjection): {
     activeGenerationIdByNode: { ...projection.activeGenerationIdByNode },
     claimsById: { ...projection.claimsById },
     attemptBindingsById: { ...projection.attemptBindingsById },
+    managedRunsByAttemptId: { ...projection.managedRunsByAttemptId },
   };
 }
 
@@ -598,6 +713,303 @@ function requireAttemptBinding(
     throw new InstanceKernelError('INVALID_ATTEMPT_BINDING', `Attempt ${event.attemptId} is misbound`);
   }
   return binding;
+}
+
+const MANAGED_RUN_FAILURE_CODES: ReadonlySet<string> = new Set<ManagedRunFailureCode>([
+  'MANAGED_HANDLE_INVALID',
+  'MANAGED_BINDING_MISMATCH',
+  'MANAGED_START_FAILED',
+  'MANAGED_STARTED_RECEIPT_INVALID',
+  'MANAGED_OUTCOME_FAILED',
+  'MANAGED_OUTCOME_RECEIPT_INVALID',
+  'MANAGED_DEADLINE_EXCEEDED',
+  'MANAGED_CANCEL_FAILED',
+  'MANAGED_CANCEL_RECEIPT_INVALID',
+  'MANAGED_CLOSE_FAILED',
+  'MANAGED_CLEANUP_RECEIPT_INVALID',
+  'MANAGED_SANDBOX_UNSUPPORTED',
+  'MANAGED_DEBOUNCE_UNSUPPORTED',
+  'MANAGED_FATAL_SUMMARY',
+  'MANAGED_FAIL_IF',
+  'MANAGED_HALT_EXECUTION',
+  'MANAGED_CLAIM_VALIDATION_FAILED',
+  'MANAGED_POST_PROVIDER_FAILED',
+]);
+
+const MANAGED_RUN_ACQUISITION_FAILURE_CODES: ReadonlySet<string> = new Set<
+  ManagedRunAcquisitionFailureCode
+>([
+  'MANAGED_HANDLE_INVALID',
+  'MANAGED_BINDING_MISMATCH',
+  'MANAGED_START_FAILED',
+  'MANAGED_SANDBOX_UNSUPPORTED',
+  'MANAGED_DEBOUNCE_UNSUPPORTED',
+]);
+
+const MANAGED_RUN_UNVERIFIED_CLEANUP_FAILURE_CODES: ReadonlySet<ManagedRunFailureCode> =
+  new Set<ManagedRunFailureCode>(['MANAGED_CLOSE_FAILED', 'MANAGED_CLEANUP_RECEIPT_INVALID']);
+
+const MANAGED_RUN_CANCEL_PATH_FAILURE_CODES: ReadonlySet<ManagedRunFailureCode> = new Set<ManagedRunFailureCode>([
+  'MANAGED_DEADLINE_EXCEEDED',
+  'MANAGED_CANCEL_FAILED',
+  'MANAGED_CANCEL_RECEIPT_INVALID',
+  'MANAGED_CLOSE_FAILED',
+  'MANAGED_CLEANUP_RECEIPT_INVALID',
+]);
+
+const MANAGED_RUN_CANCEL_ONLY_FAILURE_CODES: ReadonlySet<ManagedRunFailureCode> =
+  new Set<ManagedRunFailureCode>([
+    'MANAGED_DEADLINE_EXCEEDED',
+    'MANAGED_CANCEL_FAILED',
+    'MANAGED_CANCEL_RECEIPT_INVALID',
+  ]);
+
+function managedBindingEquals(left: ManagedRunBindingV1, right: ManagedRunBindingV1): boolean {
+  return (
+    left.managedRunId === right.managedRunId &&
+    left.sessionId === right.sessionId &&
+    left.checkId === right.checkId &&
+    scopePathEquals(left.scope, right.scope) &&
+    left.nodeInstanceId === right.nodeInstanceId &&
+    left.nodeGenerationId === right.nodeGenerationId &&
+    left.attemptId === right.attemptId &&
+    left.fence === right.fence
+  );
+}
+
+function requireManagedRunBinding(value: unknown): ManagedRunBindingV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new InstanceKernelError('INVALID_MANAGED_BINDING', 'Managed run binding must be an object');
+  }
+  const binding = value as unknown as Record<string, unknown>;
+  if (
+    !hasExactKeys(binding, [
+      'managedRunId',
+      'sessionId',
+      'checkId',
+      'scope',
+      'nodeInstanceId',
+      'nodeGenerationId',
+      'attemptId',
+      'fence',
+    ])
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BINDING',
+      'Managed run binding must contain exactly eight authority fields'
+    );
+  }
+  for (const field of [
+    'managedRunId',
+    'sessionId',
+    'checkId',
+    'nodeInstanceId',
+    'nodeGenerationId',
+    'attemptId',
+  ] as const) {
+    if (typeof binding[field] !== 'string' || binding[field].length === 0) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BINDING',
+        `Managed run binding ${field} must be a non-empty string`
+      );
+    }
+  }
+  if (!Number.isSafeInteger(binding.fence) || (binding.fence as number) < 1) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BINDING',
+      'Managed run binding fence must be a positive safe integer'
+    );
+  }
+  const scope = requireKeyedScopePath(binding.scope);
+  const candidate: ManagedRunBindingV1 = {
+    managedRunId: binding.managedRunId as string,
+    sessionId: binding.sessionId as string,
+    checkId: binding.checkId as string,
+    scope,
+    nodeInstanceId: binding.nodeInstanceId as string,
+    nodeGenerationId: binding.nodeGenerationId as string,
+    attemptId: binding.attemptId as string,
+    fence: binding.fence as number,
+  };
+  if (deriveManagedRunId(candidate) !== candidate.managedRunId) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BINDING',
+      'Managed run ID is not derived from its exact controller binding'
+    );
+  }
+  return candidate;
+}
+
+function requireManagedEventShape(event: ManagedRunLifecycleEvent): void {
+  const common = ['version', 'type', 'eventId', 'sessionId', 'scope', 'binding'];
+  const expected =
+    event.type === 'ManagedRunAcquisitionFailed'
+      ? [...common, 'failureCode']
+      : event.type === 'ManagedRunCancelRequested'
+        ? [...common, 'reason']
+        : event.type === 'ManagedRunTerminated'
+          ? [...common, 'cleanupStatus', 'controllerDecision', 'failureCode']
+          : common;
+  if (!hasExactKeys(event as unknown as Record<string, unknown>, expected)) {
+    throw new InstanceKernelError('INVALID_MANAGED_EVENT', `${event.type} has unknown or missing fields`);
+  }
+}
+
+function requireCurrentManagedBinding(
+  projection: InstanceProjection,
+  event: ManagedRunLifecycleEvent
+): ManagedRunBindingV1 {
+  requireManagedEventShape(event);
+  const binding = requireManagedRunBinding(event.binding);
+  if (event.sessionId !== binding.sessionId || !scopePathEquals(event.scope, binding.scope)) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BINDING',
+      'Managed lifecycle envelope does not match its complete binding'
+    );
+  }
+  const generation = requireGeneration(projection, binding);
+  const instance = requireInstance(projection, generation.subgraphInstanceId, binding.scope);
+  if (
+    projection.attemptBindingsById[binding.attemptId] !== binding.nodeGenerationId ||
+    instance.sessionId !== binding.sessionId ||
+    generation.checkId !== binding.checkId ||
+    generation.nodeInstanceId !== binding.nodeInstanceId ||
+    generation.nodeGenerationId !== binding.nodeGenerationId ||
+    generation.status !== 'running' ||
+    generation.attemptId !== binding.attemptId ||
+    generation.fence !== binding.fence ||
+    !generation.scheduled
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BINDING',
+      'Managed run binding is not the exact current scheduled running attempt'
+    );
+  }
+  return binding;
+}
+
+function generatedAttemptMatchesManagedBinding(
+  event: GeneratedAttemptCompletedEvent | GeneratedAttemptFailedEvent,
+  binding: ManagedRunBindingV1
+): boolean {
+  return (
+    event.sessionId === binding.sessionId &&
+    event.checkId === binding.checkId &&
+    scopePathEquals(event.scope, binding.scope) &&
+    event.nodeInstanceId === binding.nodeInstanceId &&
+    event.nodeGenerationId === binding.nodeGenerationId &&
+    event.attemptId === binding.attemptId &&
+    event.fence === binding.fence
+  );
+}
+
+function reduceManagedRunLifecycle(
+  projection: InstanceProjection,
+  next: ReturnType<typeof mutableProjection>,
+  event: ManagedRunLifecycleEvent
+): void {
+  const binding = requireCurrentManagedBinding(projection, event);
+  const current = projection.managedRunsByAttemptId[binding.attemptId];
+  if (current && !managedBindingEquals(current.binding, binding)) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BINDING',
+      'Managed attempt index resolved to a different complete binding'
+    );
+  }
+
+  if (event.type === 'ManagedRunAcquisitionFailed') {
+    if (current || !MANAGED_RUN_ACQUISITION_FAILURE_CODES.has(event.failureCode)) {
+      throw new InstanceKernelError(
+        current ? 'MANAGED_RUN_ALREADY_ACQUIRED' : 'INVALID_MANAGED_FAILURE_CODE',
+        'Managed acquisition failure is duplicate or has an invalid stable code'
+      );
+    }
+    next.managedRunsByAttemptId[binding.attemptId] = {
+      binding,
+      status: 'acquisition_failed',
+      controllerDecision: 'failed',
+      failureCode: event.failureCode,
+    };
+    return;
+  }
+
+  if (event.type === 'ManagedRunAcquired') {
+    if (current) {
+      throw new InstanceKernelError('MANAGED_RUN_ALREADY_ACQUIRED', 'Managed run was already acquired');
+    }
+    next.managedRunsByAttemptId[binding.attemptId] = { binding, status: 'acquired' };
+    return;
+  }
+
+  if (!current || current.status === 'acquisition_failed' || current.status === 'terminated') {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_TRANSITION',
+      'Managed lifecycle event requires one matching nonterminal acquired run'
+    );
+  }
+
+  if (event.type === 'ManagedRunStarted') {
+    if (current.status !== 'acquired') {
+      throw new InstanceKernelError('INVALID_MANAGED_TRANSITION', 'Managed run start is duplicate or late');
+    }
+    next.managedRunsByAttemptId[binding.attemptId] = { ...current, status: 'started' };
+    return;
+  }
+
+  if (event.type === 'ManagedRunCancelRequested') {
+    if (event.reason !== 'deadline' || current.status === 'cancel_requested') {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_TRANSITION',
+        'Managed cancellation must be one current-fence deadline request'
+      );
+    }
+    next.managedRunsByAttemptId[binding.attemptId] = {
+      ...current,
+      status: 'cancel_requested',
+    };
+    return;
+  }
+
+  const completed = event.controllerDecision === 'completed';
+  const failed = event.controllerDecision === 'failed';
+  const cleanupIsValid = event.cleanupStatus === 'clean' || event.cleanupStatus === 'unverified';
+  const failureCodeIsValid =
+    event.failureCode !== null && MANAGED_RUN_FAILURE_CODES.has(event.failureCode);
+  const acquisitionCodeUsedAsTerminal =
+    event.failureCode !== null && MANAGED_RUN_ACQUISITION_FAILURE_CODES.has(event.failureCode);
+  const unverifiedCode =
+    event.failureCode !== null &&
+    MANAGED_RUN_UNVERIFIED_CLEANUP_FAILURE_CODES.has(event.failureCode);
+  const cancelPathCode =
+    event.failureCode !== null && MANAGED_RUN_CANCEL_PATH_FAILURE_CODES.has(event.failureCode);
+  const cancelOnlyCode =
+    event.failureCode !== null && MANAGED_RUN_CANCEL_ONLY_FAILURE_CODES.has(event.failureCode);
+  const cancelWasRequested = current.status === 'cancel_requested';
+  if (
+    !cleanupIsValid ||
+    (!completed && !failed) ||
+    (completed &&
+      (event.cleanupStatus !== 'clean' ||
+        event.failureCode !== null ||
+        cancelWasRequested)) ||
+    (!completed &&
+      (!failureCodeIsValid ||
+        acquisitionCodeUsedAsTerminal ||
+        (event.cleanupStatus === 'unverified') !== unverifiedCode ||
+        (cancelWasRequested ? !cancelPathCode : cancelOnlyCode)))
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_TERMINAL',
+      'Managed terminal cleanup, decision, and failure code are inconsistent'
+    );
+  }
+  next.managedRunsByAttemptId[binding.attemptId] = {
+    ...current,
+    status: 'terminated',
+    cleanupStatus: event.cleanupStatus,
+    controllerDecision: event.controllerDecision,
+    ...(event.failureCode === null ? {} : { failureCode: event.failureCode }),
+  };
 }
 
 function hasReadyOrRunningGeneration(projection: InstanceProjection): boolean {
@@ -724,6 +1136,57 @@ function reduceGeneratedLifecycle(
   }
   if (!generation.scheduled) {
     throw new InstanceKernelError('ATTEMPT_NOT_SCHEDULED', `Attempt ${event.attemptId} is not scheduled`);
+  }
+  const managed = projection.managedRunsByAttemptId[event.attemptId];
+  if (managed) {
+    if (
+      !generatedAttemptMatchesManagedBinding(
+        event as GeneratedAttemptCompletedEvent | GeneratedAttemptFailedEvent,
+        managed.binding
+      )
+    ) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BINDING',
+        'Generated event does not match the complete managed run binding'
+      );
+    }
+    if (event.type === 'ClaimPublished') {
+      if (
+        managed.status !== 'terminated' ||
+        managed.cleanupStatus !== 'clean' ||
+        managed.controllerDecision !== 'completed' ||
+        managed.failureCode !== undefined
+      ) {
+        throw new InstanceKernelError(
+          'MANAGED_TERMINAL_REQUIRED',
+          'Managed claims require a clean controller-completed terminal fact'
+        );
+      }
+    } else if (event.type === 'AttemptCompleted') {
+      if (
+        managed.status !== 'terminated' ||
+        managed.cleanupStatus !== 'clean' ||
+        managed.controllerDecision !== 'completed' ||
+        managed.failureCode !== undefined
+      ) {
+        throw new InstanceKernelError(
+          'MANAGED_TERMINAL_REQUIRED',
+          'Managed completion requires a clean controller-completed terminal fact'
+        );
+      }
+    } else if (event.type === 'AttemptFailed') {
+      if (
+        (managed.status !== 'acquisition_failed' && managed.status !== 'terminated') ||
+        managed.controllerDecision !== 'failed' ||
+        managed.failureCode === undefined ||
+        event.reason !== managed.failureCode
+      ) {
+        throw new InstanceKernelError(
+          'MANAGED_TERMINAL_REQUIRED',
+          'Managed failure requires its controller-failed lifecycle terminal and stable code'
+        );
+      }
+    }
   }
   if (event.type === 'ClaimPublished') {
     if (event.producerCheckId !== generation.checkId) {
@@ -1092,13 +1555,180 @@ export function reduceInstanceEvent(
     case 'ClaimPublished':
       reduceGeneratedLifecycle(projection, next, event);
       break;
+    case 'ManagedRunAcquisitionFailed':
+    case 'ManagedRunAcquired':
+    case 'ManagedRunStarted':
+    case 'ManagedRunCancelRequested':
+    case 'ManagedRunTerminated':
+      reduceManagedRunLifecycle(projection, next, event);
+      break;
   }
 
   return immutableCanonicalValue<InstanceProjection>(next);
 }
 
+function isGeneratedAttemptTerminal(
+  event: InstanceRuntimeEvent
+): event is GeneratedAttemptCompletedEvent | GeneratedAttemptFailedEvent {
+  return (
+    (event.type === 'AttemptCompleted' || event.type === 'AttemptFailed') &&
+    'nodeGenerationId' in event
+  );
+}
+
+function requireMatchingAttemptTerminal(
+  binding: ManagedRunBindingV1,
+  event: InstanceRuntimeEvent | undefined,
+  expectedType: 'AttemptCompleted' | 'AttemptFailed',
+  failureCode?: ManagedRunFailureCode
+): void {
+  if (
+    !event ||
+    !isGeneratedAttemptTerminal(event) ||
+    event.type !== expectedType ||
+    !generatedAttemptMatchesManagedBinding(event, binding) ||
+    (event.type === 'AttemptFailed' && event.reason !== failureCode)
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BATCH',
+      `Managed lifecycle terminal requires a matching ${expectedType} in the same batch`
+    );
+  }
+}
+
+/**
+ * Pure atomic-batch validator/reducer. Callers publish none of the input events
+ * unless this function returns the fully reduced immutable projection.
+ */
+export function reduceInstanceEventBatch(
+  projection: InstanceProjection,
+  events: readonly InstanceRuntimeEvent[]
+): InstanceProjection {
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
+    if (event.type === 'ManagedRunAcquisitionFailed') {
+      if (index !== 0 || events.length !== 2) {
+        throw new InstanceKernelError(
+          'INVALID_MANAGED_BATCH',
+          'Managed acquisition failure batch must contain exactly its two adjacent terminals'
+        );
+      }
+      requireMatchingAttemptTerminal(
+        event.binding,
+        events[index + 1],
+        'AttemptFailed',
+        event.failureCode
+      );
+    } else if (event.type === 'ManagedRunTerminated') {
+      if (event.controllerDecision === 'failed') {
+        if (index !== 0 || events.length !== 2) {
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Managed failure batch must contain exactly its two adjacent terminals'
+          );
+        }
+        requireMatchingAttemptTerminal(
+          event.binding,
+          events[index + 1],
+          'AttemptFailed',
+          event.failureCode || undefined
+        );
+      } else {
+        if (index !== 0) {
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Managed completion lifecycle terminal must begin its atomic batch'
+          );
+        }
+        const completionIndex = events.findIndex(
+          (candidate, candidateIndex) =>
+            candidateIndex > index &&
+            isGeneratedAttemptTerminal(candidate) &&
+            candidate.attemptId === event.binding.attemptId
+        );
+        const completion = completionIndex < 0 ? undefined : events[completionIndex];
+        requireMatchingAttemptTerminal(event.binding, completion, 'AttemptCompleted');
+        if (completionIndex !== events.length - 1) {
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Managed AttemptCompleted must end its atomic terminal batch'
+          );
+        }
+        let activationObserved = false;
+        for (const staged of events.slice(1, -1)) {
+          if (staged.type === 'NodeGenerationActivated') {
+            activationObserved = true;
+          } else if (staged.type !== 'ClaimPublished' || activationObserved) {
+            throw new InstanceKernelError(
+              'INVALID_MANAGED_BATCH',
+              'Managed completion batch permits claims followed by downstream activations only'
+            );
+          }
+        }
+      }
+    }
+  }
+
+  for (const event of events) {
+    if (!isGeneratedAttemptTerminal(event)) continue;
+    const existing = projection.managedRunsByAttemptId[event.attemptId];
+    const matchingLifecycle = events.find(
+      candidate =>
+        (candidate.type === 'ManagedRunAcquisitionFailed' ||
+          candidate.type === 'ManagedRunTerminated') &&
+        generatedAttemptMatchesManagedBinding(event, candidate.binding)
+    );
+    if (existing && !matchingLifecycle) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BATCH',
+        'Managed attempt terminal cannot bypass its same-batch lifecycle terminal'
+      );
+    }
+  }
+
+  return events.reduce(reduceInstanceEvent, projection);
+}
+
+/**
+ * Pure replay preserves the atomic terminal boundaries encoded by contiguous
+ * journal order. Batch-only managed terminals are never reduced as singles.
+ */
 export function replayInstanceEvents(events: readonly InstanceRuntimeEvent[]): InstanceProjection {
-  return events.reduce(reduceInstanceEvent, createInitialInstanceProjection());
+  let projection = createInitialInstanceProjection();
+  let index = 0;
+  while (index < events.length) {
+    const event = events[index];
+    if (
+      event.type === 'ManagedRunAcquisitionFailed' ||
+      (event.type === 'ManagedRunTerminated' && event.controllerDecision === 'failed')
+    ) {
+      projection = reduceInstanceEventBatch(projection, events.slice(index, index + 2));
+      index += 2;
+      continue;
+    }
+    if (event.type === 'ManagedRunTerminated') {
+      let terminalIndex = index + 1;
+      while (terminalIndex < events.length) {
+        const candidate = events[terminalIndex];
+        if (
+          isGeneratedAttemptTerminal(candidate) &&
+          candidate.attemptId === event.binding.attemptId
+        ) {
+          break;
+        }
+        terminalIndex++;
+      }
+      projection = reduceInstanceEventBatch(
+        projection,
+        events.slice(index, Math.min(terminalIndex + 1, events.length))
+      );
+      index = terminalIndex + 1;
+      continue;
+    }
+    projection = reduceInstanceEventBatch(projection, [event]);
+    index++;
+  }
+  return projection;
 }
 
 export function queryReadyGenerations(projection: InstanceProjection): readonly NodeGenerationProjection[] {

@@ -1,16 +1,21 @@
-import { sha256Canonical } from '../../../../src/state-machine/graph/claim-kernel';
+import {
+  canonicalJson,
+  sha256Canonical,
+} from '../../../../src/state-machine/graph/claim-kernel';
 import {
   canonicalCatalogKey,
   createInitialInstanceProjection,
   deriveCatalogRequestId,
   deriveControllerItemClaimId,
   deriveItemFingerprint,
+  deriveManagedRunId,
   deriveNodeGenerationId,
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
   InstanceKernelError,
   queryReadyGenerations,
   reduceInstanceEvent,
+  reduceInstanceEventBatch,
   replayInstanceEvents,
   requireKeyedScopePath,
   validateTaggedScopePath,
@@ -22,6 +27,13 @@ import {
   type InstanceProjection,
   type InstanceRuntimeEvent,
   type KeyedScopePath,
+  type ManagedRunAcquiredEvent,
+  type ManagedRunAcquisitionFailedEvent,
+  type ManagedRunBindingV1,
+  type ManagedRunCancelRequestedEvent,
+  type ManagedRunFailureCode,
+  type ManagedRunStartedEvent,
+  type ManagedRunTerminatedEvent,
   type NodeGenerationActivatedEvent,
   type NodeGenerationInactivatedEvent,
   type SubgraphExpandedEvent,
@@ -45,6 +57,33 @@ function expectKernelError(run: () => unknown, code: string): void {
     expect(error).toBeInstanceOf(InstanceKernelError);
     if (!(error instanceof InstanceKernelError)) throw error;
     expect(error.code).toBe(code);
+  }
+}
+
+function expectAnyKernelError(run: () => unknown): void {
+  try {
+    run();
+    throw new Error('Expected InstanceKernelError');
+  } catch (error) {
+    expect(error).toBeInstanceOf(InstanceKernelError);
+  }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function expectRecursivelyFrozen(value: unknown): void {
+  if (value === null || typeof value !== 'object') return;
+  expect(Object.isFrozen(value)).toBe(true);
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    expectRecursivelyFrozen(nested);
   }
 }
 
@@ -211,6 +250,78 @@ function successfulGeneration(
     eventId: firstEventId + 3,
   };
   return [started, scheduled, published, completed];
+}
+
+function managedFixture() {
+  const item = itemPublished(2, { id: 'A', revision: 1 }, 1);
+  const activation = activated(3, item);
+  const [attempt, scheduled] = successfulGeneration(4, activation);
+  const events: InstanceRuntimeEvent[] = [expanded(), item, activation, attempt, scheduled];
+  const projection = replayInstanceEvents(events);
+  const authority = {
+    sessionId,
+    checkId: attempt.checkId,
+    scope: attempt.scope,
+    nodeInstanceId: attempt.nodeInstanceId,
+    nodeGenerationId: attempt.nodeGenerationId,
+    attemptId: attempt.attemptId,
+    fence: attempt.fence,
+  };
+  const binding: ManagedRunBindingV1 = {
+    managedRunId: deriveManagedRunId(authority),
+    ...authority,
+  };
+  return { projection, events, attempt, binding };
+}
+
+function managedEnvelope(binding: ManagedRunBindingV1, eventId: number) {
+  return {
+    version: 1 as const,
+    eventId,
+    sessionId: binding.sessionId,
+    scope: binding.scope,
+    binding,
+  };
+}
+
+function managedAcquired(
+  binding: ManagedRunBindingV1,
+  eventId: number
+): ManagedRunAcquiredEvent {
+  return { ...managedEnvelope(binding, eventId), type: 'ManagedRunAcquired' };
+}
+
+function managedStarted(
+  binding: ManagedRunBindingV1,
+  eventId: number
+): ManagedRunStartedEvent {
+  return { ...managedEnvelope(binding, eventId), type: 'ManagedRunStarted' };
+}
+
+function managedTerminated(
+  binding: ManagedRunBindingV1,
+  eventId: number,
+  input:
+    | { readonly cleanupStatus: 'clean'; readonly controllerDecision: 'completed'; readonly failureCode: null }
+    | {
+        readonly cleanupStatus: 'clean' | 'unverified';
+        readonly controllerDecision: 'failed';
+        readonly failureCode: ManagedRunFailureCode;
+      }
+): ManagedRunTerminatedEvent {
+  return { ...managedEnvelope(binding, eventId), type: 'ManagedRunTerminated', ...input };
+}
+
+function managedAttemptFailed(
+  attempt: GeneratedAttemptStartedEvent,
+  eventId: number,
+  reason: ManagedRunFailureCode
+) {
+  return { ...attempt, type: 'AttemptFailed' as const, eventId, reason };
+}
+
+function managedAttemptCompleted(attempt: GeneratedAttemptStartedEvent, eventId: number) {
+  return { ...attempt, type: 'AttemptCompleted' as const, eventId };
 }
 
 describe('Graph v2 C2 instance kernel', () => {
@@ -418,5 +529,652 @@ describe('Graph v2 C2 instance kernel', () => {
     );
     expect(projection).toBe(before);
     expect(projection.generationsById[activation.nodeGenerationId].status).toBe('ready');
+  });
+});
+
+describe('Graph v2 C3 managed run lifecycle kernel', () => {
+  it('atomically accepts one acquisition failure followed by its exact failed attempt', () => {
+    const fixture = managedFixture();
+    const acquisitionFailed: ManagedRunAcquisitionFailedEvent = {
+      ...managedEnvelope(fixture.binding, 6),
+      type: 'ManagedRunAcquisitionFailed',
+      failureCode: 'MANAGED_START_FAILED',
+    };
+    const attemptFailed = managedAttemptFailed(fixture.attempt, 7, 'MANAGED_START_FAILED');
+
+    expectKernelError(
+      () => reduceInstanceEventBatch(fixture.projection, [acquisitionFailed]),
+      'INVALID_MANAGED_BATCH'
+    );
+    expect(fixture.projection.lastEventId).toBe(5);
+
+    const failed = reduceInstanceEventBatch(fixture.projection, [acquisitionFailed, attemptFailed]);
+    expect(failed.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual({
+      binding: fixture.binding,
+      status: 'acquisition_failed',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_START_FAILED',
+    });
+    expect(failed.generationsById[fixture.binding.nodeGenerationId]).toMatchObject({
+      status: 'failed',
+      reason: 'MANAGED_START_FAILED',
+    });
+    expectKernelError(
+      () => reduceInstanceEvent(failed, managedAcquired(fixture.binding, 8)),
+      'INVALID_MANAGED_BINDING'
+    );
+  });
+
+  it('accepts acquired, started, and one clean controller-completed terminal batch', () => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const started = managedStarted(fixture.binding, 7);
+    const beforeTerminal = replayInstanceEvents([...fixture.events, acquired, started]);
+    const terminated = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+      failureCode: null,
+    });
+    const completed = managedAttemptCompleted(fixture.attempt, 9);
+
+    expectKernelError(
+      () => reduceInstanceEventBatch(beforeTerminal, [completed]),
+      'INVALID_MANAGED_BATCH'
+    );
+    const final = reduceInstanceEventBatch(beforeTerminal, [terminated, completed]);
+    expect(final.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual({
+      binding: fixture.binding,
+      status: 'terminated',
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+    });
+    expect(final.generationsById[fixture.binding.nodeGenerationId].status).toBe('completed');
+    expectKernelError(
+      () => reduceInstanceEvent(final, { ...terminated, eventId: 10 }),
+      'INVALID_MANAGED_BINDING'
+    );
+  });
+
+  it.each<ManagedRunFailureCode>([
+    'MANAGED_FATAL_SUMMARY',
+    'MANAGED_FAIL_IF',
+    'MANAGED_HALT_EXECUTION',
+    'MANAGED_CLAIM_VALIDATION_FAILED',
+  ])('keeps clean cleanup separate from controller failure %s', failureCode => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const beforeTerminal = reduceInstanceEvent(fixture.projection, acquired);
+    const terminated = managedTerminated(fixture.binding, 7, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode,
+    });
+    const attemptFailed = managedAttemptFailed(fixture.attempt, 8, failureCode);
+    const final = reduceInstanceEventBatch(beforeTerminal, [terminated, attemptFailed]);
+
+    expect(final.managedRunsByAttemptId[fixture.binding.attemptId]).toMatchObject({
+      status: 'terminated',
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode,
+    });
+    expect(final.generationsById[fixture.binding.nodeGenerationId]).toMatchObject({
+      status: 'failed',
+      reason: failureCode,
+    });
+  });
+
+  it('records one deadline cancellation with unverified failed cleanup', () => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const cancelRequested: ManagedRunCancelRequestedEvent = {
+      ...managedEnvelope(fixture.binding, 7),
+      type: 'ManagedRunCancelRequested',
+      reason: 'deadline',
+    };
+    const terminated = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'unverified',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    });
+    const attemptFailed = managedAttemptFailed(fixture.attempt, 9, 'MANAGED_CLOSE_FAILED');
+    const live = reduceInstanceEventBatch(
+      replayInstanceEvents([...fixture.events, acquired, cancelRequested]),
+      [terminated, attemptFailed]
+    );
+
+    expect(live.managedRunsByAttemptId[fixture.binding.attemptId]).toMatchObject({
+      status: 'terminated',
+      cleanupStatus: 'unverified',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    });
+    expectKernelError(
+      () => reduceInstanceEvent(live, { ...cancelRequested, eventId: 10 }),
+      'INVALID_MANAGED_BINDING'
+    );
+  });
+
+  it('accepts one valid clean deadline terminal after the current-fence cancel fact', () => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const cancelRequested: ManagedRunCancelRequestedEvent = {
+      ...managedEnvelope(fixture.binding, 7),
+      type: 'ManagedRunCancelRequested',
+      reason: 'deadline',
+    };
+    const terminated = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+    });
+    const attemptFailed = managedAttemptFailed(
+      fixture.attempt,
+      9,
+      'MANAGED_DEADLINE_EXCEEDED'
+    );
+    const cancelled = replayInstanceEvents([...fixture.events, acquired, cancelRequested]);
+    const final = reduceInstanceEventBatch(cancelled, [terminated, attemptFailed]);
+
+    expect(final.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual({
+      binding: fixture.binding,
+      status: 'terminated',
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+    });
+    expect(final.generationsById[fixture.binding.nodeGenerationId]).toMatchObject({
+      status: 'failed',
+      reason: 'MANAGED_DEADLINE_EXCEEDED',
+    });
+  });
+
+  it('rejects a late managed terminal after atomic acquisition failure', () => {
+    const fixture = managedFixture();
+    const acquisitionFailed: ManagedRunAcquisitionFailedEvent = {
+      ...managedEnvelope(fixture.binding, 6),
+      type: 'ManagedRunAcquisitionFailed',
+      failureCode: 'MANAGED_START_FAILED',
+    };
+    const failed = reduceInstanceEventBatch(fixture.projection, [
+      acquisitionFailed,
+      managedAttemptFailed(fixture.attempt, 7, 'MANAGED_START_FAILED'),
+    ]);
+    const lateTerminal = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_POST_PROVIDER_FAILED',
+    });
+
+    expectAnyKernelError(() => reduceInstanceEvent(failed, lateTerminal));
+    expect(failed.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual({
+      binding: fixture.binding,
+      status: 'acquisition_failed',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_START_FAILED',
+    });
+  });
+
+  it('canonically replays every managed lifecycle shape without invoking collaborators', () => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const acquiredProjection = reduceInstanceEvent(fixture.projection, acquired);
+    const started = managedStarted(fixture.binding, 7);
+    const startedProjection = reduceInstanceEvent(acquiredProjection, started);
+    const cancelRequested: ManagedRunCancelRequestedEvent = {
+      ...managedEnvelope(fixture.binding, 7),
+      type: 'ManagedRunCancelRequested',
+      reason: 'deadline',
+    };
+    const cancelledProjection = reduceInstanceEvent(acquiredProjection, cancelRequested);
+    const acquisitionFailed: ManagedRunAcquisitionFailedEvent = {
+      ...managedEnvelope(fixture.binding, 6),
+      type: 'ManagedRunAcquisitionFailed',
+      failureCode: 'MANAGED_START_FAILED',
+    };
+    const cleanCompleted = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+      failureCode: null,
+    });
+    const cleanFailed = managedTerminated(fixture.binding, 7, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_FATAL_SUMMARY',
+    });
+    const unverifiedFailed = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'unverified',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    });
+    const acquisitionAttemptFailed = managedAttemptFailed(
+      fixture.attempt,
+      7,
+      'MANAGED_START_FAILED'
+    );
+    const completedAttempt = managedAttemptCompleted(fixture.attempt, 9);
+    const cleanFailedAttempt = managedAttemptFailed(
+      fixture.attempt,
+      8,
+      'MANAGED_FATAL_SUMMARY'
+    );
+    const unverifiedFailedAttempt = managedAttemptFailed(
+      fixture.attempt,
+      9,
+      'MANAGED_CLOSE_FAILED'
+    );
+
+    type ReplayRow = {
+      readonly name: string;
+      readonly events: readonly InstanceRuntimeEvent[];
+      readonly live: InstanceProjection;
+      readonly expectedManaged: InstanceProjection['managedRunsByAttemptId'][string];
+      readonly managedTerminalCount: number;
+      readonly attemptTerminalCount: number;
+    };
+    const rows: readonly ReplayRow[] = [
+      {
+        name: 'acquisition-failed',
+        events: [...fixture.events, acquisitionFailed, acquisitionAttemptFailed],
+        live: reduceInstanceEventBatch(fixture.projection, [
+          acquisitionFailed,
+          acquisitionAttemptFailed,
+        ]),
+        expectedManaged: {
+          binding: fixture.binding,
+          status: 'acquisition_failed',
+          controllerDecision: 'failed',
+          failureCode: 'MANAGED_START_FAILED',
+        },
+        managedTerminalCount: 1,
+        attemptTerminalCount: 1,
+      },
+      {
+        name: 'acquired',
+        events: [...fixture.events, acquired],
+        live: acquiredProjection,
+        expectedManaged: { binding: fixture.binding, status: 'acquired' },
+        managedTerminalCount: 0,
+        attemptTerminalCount: 0,
+      },
+      {
+        name: 'cancel-requested',
+        events: [...fixture.events, acquired, cancelRequested],
+        live: cancelledProjection,
+        expectedManaged: { binding: fixture.binding, status: 'cancel_requested' },
+        managedTerminalCount: 0,
+        attemptTerminalCount: 0,
+      },
+      {
+        name: 'clean-completed',
+        events: [...fixture.events, acquired, started, cleanCompleted, completedAttempt],
+        live: reduceInstanceEventBatch(startedProjection, [cleanCompleted, completedAttempt]),
+        expectedManaged: {
+          binding: fixture.binding,
+          status: 'terminated',
+          cleanupStatus: 'clean',
+          controllerDecision: 'completed',
+        },
+        managedTerminalCount: 1,
+        attemptTerminalCount: 1,
+      },
+      {
+        name: 'clean-failed',
+        events: [...fixture.events, acquired, cleanFailed, cleanFailedAttempt],
+        live: reduceInstanceEventBatch(acquiredProjection, [cleanFailed, cleanFailedAttempt]),
+        expectedManaged: {
+          binding: fixture.binding,
+          status: 'terminated',
+          cleanupStatus: 'clean',
+          controllerDecision: 'failed',
+          failureCode: 'MANAGED_FATAL_SUMMARY',
+        },
+        managedTerminalCount: 1,
+        attemptTerminalCount: 1,
+      },
+      {
+        name: 'unverified-failed',
+        events: [
+          ...fixture.events,
+          acquired,
+          cancelRequested,
+          unverifiedFailed,
+          unverifiedFailedAttempt,
+        ],
+        live: reduceInstanceEventBatch(cancelledProjection, [
+          unverifiedFailed,
+          unverifiedFailedAttempt,
+        ]),
+        expectedManaged: {
+          binding: fixture.binding,
+          status: 'terminated',
+          cleanupStatus: 'unverified',
+          controllerDecision: 'failed',
+          failureCode: 'MANAGED_CLOSE_FAILED',
+        },
+        managedTerminalCount: 1,
+        attemptTerminalCount: 1,
+      },
+    ];
+    expect(rows.map(row => row.name)).toEqual([
+      'acquisition-failed',
+      'acquired',
+      'cancel-requested',
+      'clean-completed',
+      'clean-failed',
+      'unverified-failed',
+    ]);
+
+    for (const row of rows) {
+      const parsed = deepFreeze<InstanceRuntimeEvent[]>(
+        JSON.parse(canonicalJson(row.events))
+      );
+      expectRecursivelyFrozen(parsed);
+      expect(canonicalJson(parsed)).toBe(canonicalJson(row.events));
+
+      const replayed = replayInstanceEvents(parsed);
+      expect(replayed).toEqual(row.live);
+      expectRecursivelyFrozen(replayed);
+      expect(replayed.managedRunsByAttemptId).toEqual(row.live.managedRunsByAttemptId);
+      expect(row.live.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual(
+        row.expectedManaged
+      );
+      expect(replayed.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual(
+        row.expectedManaged
+      );
+      expect(replayed.managedRunsByAttemptId[fixture.binding.attemptId].binding).toEqual(
+        fixture.binding
+      );
+
+      const managedTerminal = (event: InstanceRuntimeEvent) =>
+        event.type === 'ManagedRunAcquisitionFailed' || event.type === 'ManagedRunTerminated';
+      const attemptTerminal = (event: InstanceRuntimeEvent) =>
+        event.type === 'AttemptCompleted' || event.type === 'AttemptFailed';
+      expect(row.events.filter(managedTerminal)).toHaveLength(row.managedTerminalCount);
+      expect(parsed.filter(managedTerminal)).toHaveLength(row.managedTerminalCount);
+      expect(row.events.filter(attemptTerminal)).toHaveLength(row.attemptTerminalCount);
+      expect(parsed.filter(attemptTerminal)).toHaveLength(row.attemptTerminalCount);
+      expect(
+        Object.values(replayed.managedRunsByAttemptId).filter(run =>
+          run.status === 'acquisition_failed' || run.status === 'terminated'
+        )
+      ).toHaveLength(row.managedTerminalCount);
+
+      const readyBeforeSerialization = queryReadyGenerations(row.live).map(
+        generation => generation.nodeGenerationId
+      );
+      const readyAfterReplay = queryReadyGenerations(replayed).map(
+        generation => generation.nodeGenerationId
+      );
+      expect(readyAfterReplay).toEqual(readyBeforeSerialization);
+      expect(readyAfterReplay).toEqual([]);
+    }
+
+  });
+
+  it('rejects replayed managed terminal prefixes and non-adjacent terminal pairs', () => {
+    const fixture = managedFixture();
+    const acquisitionFailed: ManagedRunAcquisitionFailedEvent = {
+      ...managedEnvelope(fixture.binding, 6),
+      type: 'ManagedRunAcquisitionFailed',
+      failureCode: 'MANAGED_START_FAILED',
+    };
+    const attemptFailed = managedAttemptFailed(fixture.attempt, 7, 'MANAGED_START_FAILED');
+
+    expectKernelError(
+      () => replayInstanceEvents([...fixture.events, acquisitionFailed]),
+      'INVALID_MANAGED_BATCH'
+    );
+    expectKernelError(
+      () =>
+        replayInstanceEvents([
+          ...fixture.events,
+          acquisitionFailed,
+          managedAcquired(fixture.binding, 7),
+          { ...attemptFailed, eventId: 8 },
+        ]),
+      'INVALID_MANAGED_BATCH'
+    );
+
+    const acquired = managedAcquired(fixture.binding, 6);
+    const terminated = managedTerminated(fixture.binding, 7, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_FATAL_SUMMARY',
+    });
+    expectKernelError(
+      () => replayInstanceEvents([...fixture.events, acquired, terminated]),
+      'INVALID_MANAGED_BATCH'
+    );
+  });
+
+  it('enforces cleanup, decision, failure-code, and cancel-state coherence', () => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const acquiredProjection = reduceInstanceEvent(fixture.projection, acquired);
+    const cancelRequested: ManagedRunCancelRequestedEvent = {
+      ...managedEnvelope(fixture.binding, 7),
+      type: 'ManagedRunCancelRequested',
+      reason: 'deadline',
+    };
+    const cancelledProjection = reduceInstanceEvent(acquiredProjection, cancelRequested);
+
+    const invalidRows: Array<{
+      readonly projection: InstanceProjection;
+      readonly eventId: number;
+      readonly cleanupStatus: unknown;
+      readonly controllerDecision: unknown;
+      readonly failureCode: ManagedRunFailureCode;
+    }> = [
+      {
+        projection: acquiredProjection,
+        eventId: 7,
+        cleanupStatus: 'dirty',
+        controllerDecision: 'failed',
+        failureCode: 'MANAGED_FATAL_SUMMARY',
+      },
+      {
+        projection: acquiredProjection,
+        eventId: 7,
+        cleanupStatus: 'clean',
+        controllerDecision: 'unknown',
+        failureCode: 'MANAGED_FATAL_SUMMARY',
+      },
+      {
+        projection: acquiredProjection,
+        eventId: 7,
+        cleanupStatus: 'clean',
+        controllerDecision: 'failed',
+        failureCode: 'MANAGED_CLOSE_FAILED',
+      },
+      {
+        projection: acquiredProjection,
+        eventId: 7,
+        cleanupStatus: 'unverified',
+        controllerDecision: 'failed',
+        failureCode: 'MANAGED_FATAL_SUMMARY',
+      },
+      {
+        projection: acquiredProjection,
+        eventId: 7,
+        cleanupStatus: 'clean',
+        controllerDecision: 'failed',
+        failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+      },
+      {
+        projection: cancelledProjection,
+        eventId: 8,
+        cleanupStatus: 'clean',
+        controllerDecision: 'failed',
+        failureCode: 'MANAGED_FATAL_SUMMARY',
+      },
+      {
+        projection: acquiredProjection,
+        eventId: 7,
+        cleanupStatus: 'clean',
+        controllerDecision: 'failed',
+        failureCode: 'MANAGED_START_FAILED',
+      },
+    ];
+
+    for (const row of invalidRows) {
+      const terminated = {
+        ...managedEnvelope(fixture.binding, row.eventId),
+        type: 'ManagedRunTerminated',
+        cleanupStatus: row.cleanupStatus,
+        controllerDecision: row.controllerDecision,
+        failureCode: row.failureCode,
+      } as unknown as ManagedRunTerminatedEvent;
+      const failed = managedAttemptFailed(
+        fixture.attempt,
+        row.eventId + 1,
+        row.failureCode
+      );
+      if (row.controllerDecision === 'unknown') {
+        expectKernelError(
+          () => reduceInstanceEvent(row.projection, terminated),
+          'INVALID_MANAGED_TERMINAL'
+        );
+      } else {
+        expectKernelError(
+          () => reduceInstanceEventBatch(row.projection, [terminated, failed]),
+          'INVALID_MANAGED_TERMINAL'
+        );
+      }
+    }
+
+    const ordinaryCloseFailure = managedTerminated(fixture.binding, 7, {
+      cleanupStatus: 'unverified',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    });
+    expect(
+      reduceInstanceEventBatch(acquiredProjection, [
+        ordinaryCloseFailure,
+        managedAttemptFailed(fixture.attempt, 8, 'MANAGED_CLOSE_FAILED'),
+      ]).managedRunsByAttemptId[fixture.binding.attemptId]
+    ).toMatchObject({
+      status: 'terminated',
+      cleanupStatus: 'unverified',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    });
+  });
+
+  it('compares all eight binding fields including deep exact scope without partial mutation', () => {
+    const fixture = managedFixture();
+    const otherScope = instanceIdentity('B').scope;
+    const mutations: Array<{
+      readonly name: string;
+      readonly values: Partial<ManagedRunBindingV1>;
+      readonly preserveRunId?: boolean;
+    }> = [
+      { name: 'session', values: { sessionId: 'wrong-session' } },
+      { name: 'check', values: { checkId: 'wrong-check' } },
+      { name: 'scope', values: { scope: otherScope } },
+      { name: 'run', values: { managedRunId: sha256Canonical('wrong-run') }, preserveRunId: true },
+      { name: 'instance', values: { nodeInstanceId: sha256Canonical('wrong-instance') } },
+      { name: 'generation', values: { nodeGenerationId: sha256Canonical('wrong-generation') } },
+      { name: 'attempt', values: { attemptId: sha256Canonical('wrong-attempt') } },
+      { name: 'fence', values: { fence: fixture.binding.fence + 1 } },
+    ];
+
+    for (const mutation of mutations) {
+      const changed = { ...fixture.binding, ...mutation.values };
+      const authority = {
+        sessionId: changed.sessionId,
+        checkId: changed.checkId,
+        scope: changed.scope,
+        nodeInstanceId: changed.nodeInstanceId,
+        nodeGenerationId: changed.nodeGenerationId,
+        attemptId: changed.attemptId,
+        fence: changed.fence,
+      };
+      const binding: ManagedRunBindingV1 = {
+        ...changed,
+        managedRunId: mutation.preserveRunId
+          ? changed.managedRunId
+          : deriveManagedRunId(authority),
+      };
+      const event = managedAcquired(binding, 6);
+      expectAnyKernelError(() => reduceInstanceEvent(fixture.projection, event));
+      expect(fixture.projection.lastEventId).toBe(5);
+      expect(fixture.projection.managedRunsByAttemptId).toEqual({});
+    }
+  });
+
+  it('associates an attempt terminal with the complete lifecycle binding', () => {
+    const fixture = managedFixture();
+    const acquiredProjection = reduceInstanceEvent(
+      fixture.projection,
+      managedAcquired(fixture.binding, 6)
+    );
+    const terminated = managedTerminated(fixture.binding, 7, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_FATAL_SUMMARY',
+    });
+    const mutations: Array<Partial<GeneratedAttemptStartedEvent>> = [
+      { sessionId: 'wrong-session' },
+      { checkId: 'wrong-check' },
+      { scope: instanceIdentity('B').scope },
+      { nodeInstanceId: sha256Canonical('wrong-instance') },
+      { nodeGenerationId: sha256Canonical('wrong-generation') },
+      { attemptId: sha256Canonical('wrong-attempt') },
+      { fence: fixture.attempt.fence + 1 },
+    ];
+
+    for (const mutation of mutations) {
+      const failed = {
+        ...managedAttemptFailed(fixture.attempt, 8, 'MANAGED_FATAL_SUMMARY'),
+        ...mutation,
+      };
+      expectKernelError(
+        () => reduceInstanceEventBatch(acquiredProjection, [terminated, failed]),
+        'INVALID_MANAGED_BATCH'
+      );
+      expect(acquiredProjection.lastEventId).toBe(6);
+      expect(acquiredProjection.managedRunsByAttemptId[fixture.binding.attemptId].status).toBe(
+        'acquired'
+      );
+    }
+  });
+
+  it('rejects duplicate, late, wrong-code, and plain acquired-attempt terminal events', () => {
+    const fixture = managedFixture();
+    const acquired = managedAcquired(fixture.binding, 6);
+    const acquiredProjection = reduceInstanceEvent(fixture.projection, acquired);
+    expectKernelError(
+      () => reduceInstanceEvent(acquiredProjection, { ...acquired, eventId: 7 }),
+      'MANAGED_RUN_ALREADY_ACQUIRED'
+    );
+    expectKernelError(
+      () =>
+        reduceInstanceEvent(
+          acquiredProjection,
+          managedAttemptFailed(fixture.attempt, 7, 'MANAGED_POST_PROVIDER_FAILED')
+        ),
+      'MANAGED_TERMINAL_REQUIRED'
+    );
+
+    const started = managedStarted(fixture.binding, 7);
+    const startedProjection = reduceInstanceEvent(acquiredProjection, started);
+    expectKernelError(
+      () => reduceInstanceEvent(startedProjection, { ...started, eventId: 8 }),
+      'INVALID_MANAGED_TRANSITION'
+    );
+    const terminated = managedTerminated(fixture.binding, 8, {
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_FAIL_IF',
+    });
+    expectKernelError(
+      () =>
+        reduceInstanceEventBatch(startedProjection, [
+          terminated,
+          managedAttemptFailed(fixture.attempt, 9, 'MANAGED_FATAL_SUMMARY'),
+        ]),
+      'INVALID_MANAGED_BATCH'
+    );
+    expect(startedProjection.lastEventId).toBe(7);
   });
 });
