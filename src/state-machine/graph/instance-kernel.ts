@@ -20,7 +20,9 @@ export interface KeyedScopeSegment {
 export type TaggedScopeSegment = IndexedScopeSegment | KeyedScopeSegment;
 export type TaggedScopePath = readonly TaggedScopeSegment[];
 export type RootScopePath = readonly [];
-export type KeyedScopePath = readonly [KeyedScopeSegment];
+export type LevelOneKeyedScopePath = readonly [KeyedScopeSegment];
+export type LevelTwoKeyedScopePath = readonly [KeyedScopeSegment, KeyedScopeSegment];
+export type KeyedScopePath = LevelOneKeyedScopePath | LevelTwoKeyedScopePath;
 
 export type NodeGenerationStatus = 'ready' | 'running' | 'completed' | 'failed' | 'inactive';
 export type CatalogRequestStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -61,7 +63,7 @@ export function canonicalCatalogKey(value: unknown): string {
 
 /**
  * Validate and clone a tagged scope. Root and legacy indexed paths are valid;
- * a C2 keyed path is exactly one root-child segment. Mixed paths fail closed.
+ * a graph-v2 keyed path has exactly one or two segments. Mixed paths fail closed.
  */
 export function validateTaggedScopePath(value: unknown): TaggedScopePath {
   if (!Array.isArray(value)) {
@@ -124,8 +126,8 @@ export function validateTaggedScopePath(value: unknown): TaggedScopePath {
   if (kinds.size !== 1) {
     throw new InstanceKernelError('INVALID_SCOPE', 'Indexed and keyed scope segments cannot mix');
   }
-  if (segments[0].kind === 'keyed' && segments.length !== 1) {
-    throw new InstanceKernelError('INVALID_SCOPE', 'C2 supports exactly one keyed scope segment');
+  if (segments[0].kind === 'keyed' && segments.length > 2) {
+    throw new InstanceKernelError('INVALID_SCOPE', 'Graph v2 supports at most two keyed scope segments');
   }
   return Object.freeze(segments);
 }
@@ -140,26 +142,19 @@ export function requireRootScopePath(value: unknown): RootScopePath {
 
 export function requireKeyedScopePath(
   value: unknown,
-  expected?: {
-    readonly expansionOwnerCheck: string;
-    readonly key: string;
-    readonly subgraphInstanceId: string;
-  }
+  expected?: KeyedScopeSegment | KeyedScopePath
 ): KeyedScopePath {
   const scope = validateTaggedScopePath(value);
-  if (scope.length !== 1 || scope[0].kind !== 'keyed') {
-    throw new InstanceKernelError('INVALID_SCOPE', 'Expected exact C2 keyed scope');
+  if ((scope.length !== 1 && scope.length !== 2) || scope.some(segment => segment.kind !== 'keyed')) {
+    throw new InstanceKernelError('INVALID_SCOPE', 'Expected exact graph-v2 keyed scope');
   }
-  const segment = scope[0];
-  if (
-    expected &&
-    (segment.expansionOwnerCheck !== expected.expansionOwnerCheck ||
-      segment.key !== expected.key ||
-      segment.subgraphInstanceId !== expected.subgraphInstanceId)
-  ) {
+  const expectedScope = expected
+    ? Array.isArray(expected) ? expected : [expected]
+    : undefined;
+  if (expectedScope && !scopePathEquals(scope, expectedScope)) {
     throw new InstanceKernelError(
       'INVALID_SCOPE',
-      'Keyed scope does not match its projected owner, key, and instance ID'
+      'Keyed scope does not match its complete projected ancestor chain'
     );
   }
   return scope as KeyedScopePath;
@@ -169,13 +164,22 @@ export function scopePathEquals(left: unknown, right: unknown): boolean {
   return canonicalJson(validateTaggedScopePath(left)) === canonicalJson(validateTaggedScopePath(right));
 }
 
-export function deriveSubgraphInstanceId(input: {
-  readonly graphSemanticDigest: string;
-  readonly expansionOwnerCheck: string;
-  readonly parentSubgraphInstanceId: null;
-  readonly templateDigest: string;
-  readonly itemKey: string;
-}): string {
+export function deriveSubgraphInstanceId(input:
+  | {
+      readonly graphSemanticDigest: string;
+      readonly expansionOwnerCheck: string;
+      readonly parentSubgraphInstanceId: null;
+      readonly templateDigest: string;
+      readonly itemKey: string;
+    }
+  | {
+      readonly graphSemanticDigest: string;
+      readonly parentSubgraphInstanceId: string;
+      readonly expansionOwnerNodeInstanceId: string;
+      readonly templateDigest: string;
+      readonly itemKey: string;
+    }
+): string {
   return sha256Canonical({ v: 1, ...input });
 }
 
@@ -306,7 +310,9 @@ export interface SubgraphExpandedEvent extends InstanceEventBase {
   readonly graphSemanticDigest: string;
   readonly expansionSpecDigest: string;
   readonly templateDigest: string;
-  readonly parentSubgraphInstanceId: null;
+  readonly parentSubgraphInstanceId: string | null;
+  readonly expansionOwnerNodeInstanceId?: string;
+  readonly catalogClaimRef?: string;
   readonly catalogClaimId: string;
   readonly itemKey: string;
   readonly subgraphInstanceId: string;
@@ -352,6 +358,7 @@ export interface NodeGenerationActivatedEvent extends InstanceEventBase {
   readonly itemFingerprint: string;
   readonly executionConfigDigest: string;
   readonly activeInputClaimIds: readonly string[];
+  readonly nestedExpansionCatalogClaimRef?: string;
 }
 
 export interface SubgraphTombstonedEvent extends InstanceEventBase {
@@ -521,6 +528,10 @@ export interface SubgraphInstanceProjection {
   readonly subgraphInstanceId: string;
   readonly scope: KeyedScopePath;
   readonly catalogClaimId: string;
+  readonly parentSubgraphInstanceId?: string;
+  readonly expansionOwnerNodeInstanceId?: string;
+  readonly catalogClaimRef?: string;
+  readonly catalogProducerNodeGenerationId?: string;
   readonly nodeInstanceIdsByTemplateNode: Readonly<Record<string, string>>;
   readonly status: 'active' | 'tombstoned';
   readonly incarnation: number;
@@ -546,6 +557,7 @@ export interface NodeGenerationProjection {
   readonly itemFingerprint: string;
   readonly executionConfigDigest: string;
   readonly activeInputClaimIds: readonly string[];
+  readonly nestedExpansionCatalogClaimRef?: string;
   readonly status: NodeGenerationStatus;
   readonly attemptId?: string;
   readonly fence?: number;
@@ -619,8 +631,20 @@ export function immutableInstanceEvent<T extends InstanceRuntimeEvent>(event: T)
   return immutableCanonicalValue(event);
 }
 
-function ownerKey(expansionOwnerCheck: string, itemKey: string): string {
-  return canonicalJson([expansionOwnerCheck, itemKey]);
+function ownerKey(
+  expansionOwnerCheck: string,
+  itemKey: string,
+  parentSubgraphInstanceId: string | null = null,
+  expansionOwnerNodeInstanceId?: string
+): string {
+  return parentSubgraphInstanceId === null
+    ? canonicalJson([expansionOwnerCheck, itemKey])
+    : canonicalJson([
+        expansionOwnerCheck,
+        parentSubgraphInstanceId,
+        expansionOwnerNodeInstanceId,
+        itemKey,
+      ]);
 }
 
 function sortedUnique(values: readonly string[], label: string): readonly string[] {
@@ -672,14 +696,92 @@ function mutableProjection(projection: InstanceProjection): {
 function requireInstance(
   projection: InstanceProjection,
   subgraphInstanceId: string,
-  scope: unknown
+  scope: unknown,
+  allowNestedTombstone = false
 ): SubgraphInstanceProjection {
   const instance = projection.instancesById[subgraphInstanceId];
-  if (!instance || instance.status !== 'active') {
+  if (
+    !instance ||
+    (instance.status !== 'active' && !(allowNestedTombstone && instance.parentSubgraphInstanceId))
+  ) {
     throw new InstanceKernelError('INACTIVE_INSTANCE', `Instance ${subgraphInstanceId} is not active`);
   }
-  requireKeyedScopePath(scope, instance.scope[0]);
+  const exactScope = requireKeyedScopePath(scope, instance.scope);
+  const segment = exactScope[exactScope.length - 1];
+  if (
+    segment.expansionOwnerCheck !== instance.expansionOwnerCheck ||
+    segment.key !== instance.itemKey ||
+    segment.subgraphInstanceId !== instance.subgraphInstanceId
+  ) {
+    throw new InstanceKernelError('INVALID_SCOPE', 'Instance scope leaf is not exact');
+  }
+  if (instance.parentSubgraphInstanceId) {
+    if (exactScope.length !== 2 || !instance.expansionOwnerNodeInstanceId) {
+      throw new InstanceKernelError('INVALID_SCOPE', 'Nested instance lacks its exact parent chain');
+    }
+    const parent = projection.instancesById[instance.parentSubgraphInstanceId];
+    const ownerNode = projection.nodesById[instance.expansionOwnerNodeInstanceId];
+    if (
+      !parent ||
+      parent.status !== 'active' ||
+      parent.scope.length !== 1 ||
+      !scopePathEquals([exactScope[0]], parent.scope) ||
+      !ownerNode ||
+      ownerNode.subgraphInstanceId !== parent.subgraphInstanceId ||
+      !scopePathEquals(ownerNode.scope, parent.scope)
+    ) {
+      throw new InstanceKernelError('INVALID_SCOPE', 'Nested instance ancestor chain is invalid');
+    }
+  } else if (exactScope.length !== 1) {
+    throw new InstanceKernelError('INVALID_SCOPE', 'Root-expanded instance scope must have one segment');
+  }
   return instance;
+}
+
+function requireNestedCatalogAuthority(
+  projection: InstanceProjection,
+  input: {
+    readonly parentSubgraphInstanceId: string;
+    readonly expansionOwnerNodeInstanceId: string;
+    readonly catalogClaimId: string;
+  }
+): NodeGenerationProjection {
+  const parent = requireInstance(
+    projection,
+    input.parentSubgraphInstanceId,
+    projection.instancesById[input.parentSubgraphInstanceId]?.scope
+  );
+  const ownerNode = projection.nodesById[input.expansionOwnerNodeInstanceId];
+  const catalog = projection.claimsById[input.catalogClaimId];
+  const generation = catalog?.nodeGenerationId
+    ? projection.generationsById[catalog.nodeGenerationId]
+    : undefined;
+  if (
+    !ownerNode ||
+    ownerNode.subgraphInstanceId !== parent.subgraphInstanceId ||
+    !generation ||
+    !generation.nestedExpansionCatalogClaimRef ||
+    !catalog.active ||
+    catalog.kind !== 'generated-output' ||
+    catalog.claim !== generation.nestedExpansionCatalogClaimRef ||
+    catalog.subgraphInstanceId !== parent.subgraphInstanceId ||
+    catalog.nodeGenerationId !== generation.nodeGenerationId ||
+    generation.nodeInstanceId !== ownerNode.nodeInstanceId ||
+    generation.subgraphInstanceId !== parent.subgraphInstanceId ||
+    generation.status !== 'running' ||
+    !generation.scheduled ||
+    projection.activeGenerationIdByNode[ownerNode.nodeInstanceId] !== generation.nodeGenerationId ||
+    catalog.producerAttemptId !== generation.attemptId ||
+    catalog.producerFence !== generation.fence ||
+    catalog.producerCheckId !== generation.checkId ||
+    !scopePathEquals(catalog.scope, parent.scope)
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_NESTED_CATALOG_LINEAGE',
+      'Nested catalog is not the exact active output of its current fenced owner generation'
+    );
+  }
+  return generation;
 }
 
 function requireGeneration(
@@ -1220,7 +1322,7 @@ function reduceGeneratedLifecycle(
       producerAttemptId: event.attemptId,
       producerFence: event.fence,
       parentClaimIds: [...event.parentClaimIds],
-      scope: requireKeyedScopePath(event.scope, instance.scope[0]),
+      scope: requireKeyedScopePath(event.scope, instance.scope),
       active: true,
       kind: 'generated-output',
       subgraphInstanceId: instance.subgraphInstanceId,
@@ -1289,22 +1391,92 @@ export function reduceInstanceEvent(
     }
     case 'SubgraphExpanded': {
       const itemKey = canonicalCatalogKey(event.itemKey);
-      const expectedId = deriveSubgraphInstanceId({
-        graphSemanticDigest: event.graphSemanticDigest,
-        expansionOwnerCheck: event.expansionOwnerCheck,
-        parentSubgraphInstanceId: null,
-        templateDigest: event.templateDigest,
-        itemKey,
-      });
-      const scope = requireKeyedScopePath(event.scope, {
-        expansionOwnerCheck: event.expansionOwnerCheck,
-        key: itemKey,
-        subgraphInstanceId: expectedId,
-      });
-      if (event.parentSubgraphInstanceId !== null || event.subgraphInstanceId !== expectedId) {
+      const commonKeys = [
+        'version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck',
+        'graphSemanticDigest', 'expansionSpecDigest', 'templateDigest',
+        'parentSubgraphInstanceId', 'catalogClaimId', 'itemKey', 'subgraphInstanceId',
+        'nodeInstanceIdsByTemplateNode',
+      ];
+      const nested = event.parentSubgraphInstanceId !== null;
+      if (!hasExactKeys(
+        event as unknown as Record<string, unknown>,
+        nested
+          ? [...commonKeys, 'expansionOwnerNodeInstanceId', 'catalogClaimRef']
+          : commonKeys
+      )) {
+        throw new InstanceKernelError('INVALID_EXPANSION', 'Expanded subgraph event shape is invalid');
+      }
+      let catalogProducer: NodeGenerationProjection | undefined;
+      let expectedId: string;
+      let expectedScope: KeyedScopePath;
+      if (nested) {
+        if (!event.expansionOwnerNodeInstanceId) {
+          throw new InstanceKernelError('INVALID_INSTANCE_ID', 'Nested owner node is required');
+        }
+        requireNonEmpty(event.catalogClaimRef, 'Nested catalog claim reference');
+        const parent = requireInstance(
+          projection,
+          event.parentSubgraphInstanceId as string,
+          projection.instancesById[event.parentSubgraphInstanceId as string]?.scope
+        );
+        if (parent.sessionId !== event.sessionId) {
+          throw new InstanceKernelError('INVALID_INSTANCE_ID', 'Nested parent session is invalid');
+        }
+        catalogProducer = requireNestedCatalogAuthority(projection, {
+          parentSubgraphInstanceId: parent.subgraphInstanceId,
+          expansionOwnerNodeInstanceId: event.expansionOwnerNodeInstanceId,
+          catalogClaimId: event.catalogClaimId,
+        });
+        if (
+          event.catalogClaimRef !== catalogProducer.nestedExpansionCatalogClaimRef
+        ) {
+          throw new InstanceKernelError(
+            'INVALID_NESTED_CATALOG_LINEAGE',
+            'Nested child catalog declaration does not match its parent generation authority'
+          );
+        }
+        expectedId = deriveSubgraphInstanceId({
+          graphSemanticDigest: event.graphSemanticDigest,
+          parentSubgraphInstanceId: parent.subgraphInstanceId,
+          expansionOwnerNodeInstanceId: event.expansionOwnerNodeInstanceId,
+          templateDigest: event.templateDigest,
+          itemKey,
+        });
+        expectedScope = Object.freeze([
+          ...parent.scope,
+          {
+            kind: 'keyed' as const,
+            expansionOwnerCheck: event.expansionOwnerCheck,
+            key: itemKey,
+            subgraphInstanceId: expectedId,
+          },
+        ]) as KeyedScopePath;
+      } else {
+        expectedId = deriveSubgraphInstanceId({
+          graphSemanticDigest: event.graphSemanticDigest,
+          expansionOwnerCheck: event.expansionOwnerCheck,
+          parentSubgraphInstanceId: null,
+          templateDigest: event.templateDigest,
+          itemKey,
+        });
+        expectedScope = Object.freeze([{
+          kind: 'keyed' as const,
+          expansionOwnerCheck: event.expansionOwnerCheck,
+          key: itemKey,
+          subgraphInstanceId: expectedId,
+        }]);
+      }
+      const scope = requireKeyedScopePath(event.scope, expectedScope);
+      if (event.subgraphInstanceId !== expectedId) {
         throw new InstanceKernelError('INVALID_INSTANCE_ID', 'Subgraph instance identity is invalid');
       }
-      if (projection.instanceIdByOwnerAndKey[ownerKey(event.expansionOwnerCheck, itemKey)]) {
+      const indexKey = ownerKey(
+        event.expansionOwnerCheck,
+        itemKey,
+        event.parentSubgraphInstanceId,
+        event.expansionOwnerNodeInstanceId
+      );
+      if (projection.instanceIdByOwnerAndKey[indexKey]) {
         throw new InstanceKernelError(
           'TOMBSTONED_KEY_READD_UNSUPPORTED',
           `Expansion key ${itemKey} was already observed`
@@ -1341,16 +1513,53 @@ export function reduceInstanceEvent(
         subgraphInstanceId: expectedId,
         scope,
         catalogClaimId: event.catalogClaimId,
+        ...(nested
+          ? {
+              parentSubgraphInstanceId: event.parentSubgraphInstanceId as string,
+              expansionOwnerNodeInstanceId: event.expansionOwnerNodeInstanceId as string,
+              catalogClaimRef: catalogProducer!.nestedExpansionCatalogClaimRef as string,
+              catalogProducerNodeGenerationId: catalogProducer!.nodeGenerationId,
+            }
+          : {}),
         nodeInstanceIdsByTemplateNode: { ...event.nodeInstanceIdsByTemplateNode },
         status: 'active',
         incarnation: 0,
       };
-      next.instanceIdByOwnerAndKey[ownerKey(event.expansionOwnerCheck, itemKey)] = expectedId;
+      next.instanceIdByOwnerAndKey[indexKey] = expectedId;
       break;
     }
     case 'ControllerItemClaimPublished': {
-      const instance = requireInstance(projection, event.subgraphInstanceId, event.scope);
+      const knownInstance = projection.instancesById[event.subgraphInstanceId];
+      const instance = requireInstance(
+        projection,
+        event.subgraphInstanceId,
+        event.scope,
+        knownInstance?.status === 'tombstoned'
+      );
+      let catalogProducer: NodeGenerationProjection | undefined;
+      if (instance.parentSubgraphInstanceId) {
+        if (!instance.expansionOwnerNodeInstanceId || !instance.catalogClaimRef) {
+          throw new InstanceKernelError(
+            'INVALID_NESTED_CATALOG_LINEAGE',
+            'Nested controller claim requires its immutable catalog authority binding'
+          );
+        }
+        catalogProducer = requireNestedCatalogAuthority(projection, {
+          parentSubgraphInstanceId: instance.parentSubgraphInstanceId,
+          expansionOwnerNodeInstanceId: instance.expansionOwnerNodeInstanceId,
+          catalogClaimId: event.catalogClaimId,
+        });
+        if (
+          instance.catalogClaimRef !== catalogProducer.nestedExpansionCatalogClaimRef
+        ) {
+          throw new InstanceKernelError(
+            'INVALID_NESTED_CATALOG_LINEAGE',
+            'Nested controller claim does not match the parent generation authority'
+          );
+        }
+      }
       if (
+        event.sessionId !== instance.sessionId ||
         event.expansionOwnerCheck !== instance.expansionOwnerCheck ||
         event.expansionSpecDigest !== instance.expansionSpecDigest ||
         event.itemKey !== instance.itemKey ||
@@ -1370,7 +1579,7 @@ export function reduceInstanceEvent(
         throw new InstanceKernelError('EXPANSION_BUSY', 'Old instance generations are still active');
       }
       const payloadFingerprint = deriveItemFingerprint(event.payload);
-      const scope = requireKeyedScopePath(event.scope, instance.scope[0]);
+      const scope = requireKeyedScopePath(event.scope, instance.scope);
       const claimId = deriveControllerItemClaimId({
         claim: event.claim,
         payloadFingerprint,
@@ -1407,8 +1616,17 @@ export function reduceInstanceEvent(
         subgraphInstanceId: instance.subgraphInstanceId,
         incarnation: event.incarnation,
       };
+      const { tombstoneCatalogClaimId: _tombstoneCatalogClaimId, ...reactivated } = instance;
+      void _tombstoneCatalogClaimId;
       next.instancesById[instance.subgraphInstanceId] = {
-        ...instance,
+        ...reactivated,
+        ...(catalogProducer
+          ? {
+              catalogClaimId: event.catalogClaimId,
+              catalogProducerNodeGenerationId: catalogProducer.nodeGenerationId,
+            }
+          : {}),
+        status: 'active',
         incarnation: event.incarnation,
         activeItemClaimId: claimId,
       };
@@ -1417,6 +1635,12 @@ export function reduceInstanceEvent(
     case 'NodeGenerationActivated': {
       const instance = requireInstance(projection, event.subgraphInstanceId, event.scope);
       const node = projection.nodesById[event.nodeInstanceId];
+      if (event.nestedExpansionCatalogClaimRef !== undefined) {
+        requireNonEmpty(
+          event.nestedExpansionCatalogClaimRef,
+          'Nested expansion catalog authority'
+        );
+      }
       if (
         !node ||
         node.subgraphInstanceId !== instance.subgraphInstanceId ||
@@ -1458,11 +1682,14 @@ export function reduceInstanceEvent(
         subgraphInstanceId: instance.subgraphInstanceId,
         templateNodeKey: node.templateNodeKey,
         checkId: event.checkId,
-        scope: requireKeyedScopePath(event.scope, instance.scope[0]),
+        scope: requireKeyedScopePath(event.scope, instance.scope),
         incarnation: event.incarnation,
         itemFingerprint: event.itemFingerprint,
         executionConfigDigest: event.executionConfigDigest,
         activeInputClaimIds: inputIds,
+        ...(event.nestedExpansionCatalogClaimRef
+          ? { nestedExpansionCatalogClaimRef: event.nestedExpansionCatalogClaimRef }
+          : {}),
         status: 'ready',
         scheduled: false,
         completedOutputClaimIds: [],
@@ -1481,6 +1708,18 @@ export function reduceInstanceEvent(
         generation.status === 'running'
       ) {
         throw new InstanceKernelError('EXPANSION_BUSY', 'Generation cannot be inactivated now');
+      }
+      if (
+        Object.values(projection.instancesById).some(
+          candidate =>
+            candidate.status === 'active' &&
+            candidate.catalogProducerNodeGenerationId === generation.nodeGenerationId
+        )
+      ) {
+        throw new InstanceKernelError(
+          'ACTIVE_DESCENDANT',
+          'Nested descendants must be tombstoned before their catalog producer is inactivated'
+        );
       }
       const outputIds = sortedUnique(event.outputClaimIds, 'Inactivated output claim IDs');
       const expectedOutputs = [...generation.completedOutputClaimIds].sort();
@@ -1502,6 +1741,18 @@ export function reduceInstanceEvent(
         event.lastIncarnation !== instance.incarnation
       ) {
         throw new InstanceKernelError('INVALID_TOMBSTONE', 'Tombstone identity is invalid');
+      }
+      if (
+        Object.values(projection.instancesById).some(
+          candidate =>
+            candidate.status === 'active' &&
+            candidate.parentSubgraphInstanceId === instance.subgraphInstanceId
+        )
+      ) {
+        throw new InstanceKernelError(
+          'ACTIVE_DESCENDANT',
+          'Nested descendants must be tombstoned before their parent instance'
+        );
       }
       const activeGenerations = Object.values(projection.generationsById)
         .filter(
@@ -1596,6 +1847,120 @@ function requireMatchingAttemptTerminal(
   }
 }
 
+function isNestedReconciliationEvent(event: InstanceRuntimeEvent): boolean {
+  return (
+    event.type === 'SubgraphExpanded' ||
+    event.type === 'ControllerItemClaimPublished' ||
+    event.type === 'NodeGenerationInactivated' ||
+    event.type === 'SubgraphTombstoned'
+  );
+}
+
+function nestedCatalogClaimId(event: InstanceRuntimeEvent): string | undefined {
+  if (event.type === 'SubgraphExpanded' || event.type === 'ControllerItemClaimPublished') {
+    return event.catalogClaimId;
+  }
+  if (event.type === 'SubgraphTombstoned') return event.sourceCatalogClaimId;
+  return undefined;
+}
+
+function requireManagedNestedReconciliationAuthority(
+  projection: InstanceProjection,
+  event: InstanceRuntimeEvent,
+  binding: ManagedRunBindingV1,
+  catalogClaimId: string
+): void {
+  const scope = requireKeyedScopePath(event.scope);
+  const parentScope = scope.slice(0, binding.scope.length);
+  const parentSegment = binding.scope[binding.scope.length - 1];
+  if (
+    scope.length !== binding.scope.length + 1 ||
+    !scopePathEquals(parentScope, binding.scope)
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BATCH',
+      'Managed nested reconciliation scope must have the exact binding-scope prefix'
+    );
+  }
+  if (!('subgraphInstanceId' in event)) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BATCH',
+      'Managed nested reconciliation event lacks a child instance identity'
+    );
+  }
+
+  const ownerGeneration = projection.generationsById[binding.nodeGenerationId];
+  const catalogClaimRef = ownerGeneration?.nestedExpansionCatalogClaimRef;
+  if (!catalogClaimRef) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BATCH',
+      'Managed parent owner generation lacks nested catalog authority'
+    );
+  }
+  if (event.type === 'SubgraphExpanded') {
+    if (
+      event.parentSubgraphInstanceId !== parentSegment.subgraphInstanceId ||
+      event.expansionOwnerNodeInstanceId !== binding.nodeInstanceId ||
+      event.catalogClaimRef !== catalogClaimRef ||
+      event.catalogClaimId !== catalogClaimId
+    ) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BATCH',
+        'Managed child expansion is bound to a foreign parent, owner node, or catalog'
+      );
+    }
+  } else {
+    const instance = projection.instancesById[event.subgraphInstanceId];
+    if (
+      !instance ||
+      instance.parentSubgraphInstanceId !== parentSegment.subgraphInstanceId ||
+      instance.expansionOwnerNodeInstanceId !== binding.nodeInstanceId ||
+      instance.catalogClaimRef !== catalogClaimRef
+    ) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BATCH',
+        'Managed nested event is not bound to the exact parent instance and owner node'
+      );
+    }
+    if (
+      event.type === 'ControllerItemClaimPublished' &&
+      event.catalogClaimId !== catalogClaimId
+    ) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BATCH',
+        'Managed controller item claim is bound to a foreign catalog'
+      );
+    }
+    if (
+      event.type === 'SubgraphTombstoned' &&
+      event.sourceCatalogClaimId !== catalogClaimId
+    ) {
+      throw new InstanceKernelError(
+        'INVALID_MANAGED_BATCH',
+        'Managed child tombstone is bound to a foreign catalog'
+      );
+    }
+  }
+
+  const producer = requireNestedCatalogAuthority(projection, {
+    parentSubgraphInstanceId: parentSegment.subgraphInstanceId,
+    expansionOwnerNodeInstanceId: binding.nodeInstanceId,
+    catalogClaimId,
+  });
+  if (
+    producer.nodeGenerationId !== binding.nodeGenerationId ||
+    producer.nodeInstanceId !== binding.nodeInstanceId ||
+    producer.attemptId !== binding.attemptId ||
+    producer.fence !== binding.fence ||
+    producer.checkId !== binding.checkId
+  ) {
+    throw new InstanceKernelError(
+      'INVALID_MANAGED_BATCH',
+      'Managed nested catalog does not have the current complete fenced binding lineage'
+    );
+  }
+}
+
 /**
  * Pure atomic-batch validator/reducer. Callers publish none of the input events
  * unless this function returns the fully reduced immutable projection.
@@ -1654,16 +2019,65 @@ export function reduceInstanceEventBatch(
             'Managed AttemptCompleted must end its atomic terminal batch'
           );
         }
-        let activationObserved = false;
-        for (const staged of events.slice(1, -1)) {
-          if (staged.type === 'NodeGenerationActivated') {
-            activationObserved = true;
-          } else if (staged.type !== 'ClaimPublished' || activationObserved) {
-            throw new InstanceKernelError(
-              'INVALID_MANAGED_BATCH',
-              'Managed completion batch permits claims followed by downstream activations only'
-            );
+        const interior = events.slice(1, -1);
+        const nestedEvents = interior.filter(candidate =>
+          isNestedReconciliationEvent(candidate) ||
+          (candidate.type === 'NodeGenerationActivated' &&
+            candidate.scope.length === event.binding.scope.length + 1)
+        );
+        const nestedCatalogClaimIds = new Set(
+          nestedEvents
+            .map(nestedCatalogClaimId)
+            .filter((claimId): claimId is string => claimId !== undefined)
+        );
+        if (nestedEvents.length > 0 && nestedCatalogClaimIds.size !== 1) {
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Managed nested reconciliation requires one exact catalog authority'
+          );
+        }
+        const catalogClaimId = [...nestedCatalogClaimIds][0];
+        let nonClaimObserved = false;
+        let stagedProjection = reduceInstanceEvent(projection, event);
+        for (const staged of interior) {
+          if (staged.type === 'ClaimPublished') {
+            if (nonClaimObserved) {
+              throw new InstanceKernelError(
+                'INVALID_MANAGED_BATCH',
+                'Managed completion claims must precede reconciliation and downstream activation'
+              );
+            }
+            stagedProjection = reduceInstanceEvent(stagedProjection, staged);
+            continue;
           }
+          nonClaimObserved = true;
+          const nested =
+            isNestedReconciliationEvent(staged) ||
+            (staged.type === 'NodeGenerationActivated' &&
+              staged.scope.length === event.binding.scope.length + 1);
+          if (nested && catalogClaimId) {
+            requireManagedNestedReconciliationAuthority(
+              stagedProjection,
+              staged,
+              event.binding,
+              catalogClaimId
+            );
+            stagedProjection = reduceInstanceEvent(stagedProjection, staged);
+            continue;
+          }
+          if (
+            staged.type === 'NodeGenerationActivated' &&
+            scopePathEquals(staged.scope, event.binding.scope) &&
+            staged.subgraphInstanceId ===
+              event.binding.scope[event.binding.scope.length - 1].subgraphInstanceId
+          ) {
+            stagedProjection = reduceInstanceEvent(stagedProjection, staged);
+            continue;
+          }
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Managed completion batch contains an event outside the exact nested reconciliation grammar'
+          );
         }
       }
     }

@@ -50,12 +50,17 @@ import {
   type RootScopePath,
   type GeneratedAttemptStartedEvent,
   type GeneratedCheckScheduledEvent,
+  type GeneratedClaimPublishedEvent,
   type ManagedRunAcquisitionFailureCode,
   type ManagedRunBindingV1,
   type ManagedRunCleanupStatus,
   type ManagedRunFailureCode,
 } from './state-machine/graph/instance-kernel';
-import { resolveJsonPointer } from './state-machine/graph/instance-plan';
+import {
+  qualifiedNestedExpansionOwner,
+  resolveJsonPointer,
+  type CompiledExpansion,
+} from './state-machine/graph/instance-plan';
 
 export type ScopePath = Array<{ check: string; index: number }>;
 
@@ -276,11 +281,29 @@ export class ExecutionJournal {
     });
   }
 
+  private compiledExpansionForInstance(subgraphInstanceId: string): CompiledExpansion {
+    const instance = this.instanceProjection.instancesById[subgraphInstanceId];
+    if (!instance) {
+      throw new ClaimKernelError('UNKNOWN_INSTANCE', `Unknown instance ${subgraphInstanceId}`);
+    }
+    const expansionPlan = this.requireClaimPlan().expansionPlan!;
+    const expansion = instance.parentSubgraphInstanceId
+      ? expansionPlan.byNestedOwner[instance.expansionOwnerCheck]
+      : expansionPlan.byOwner[instance.expansionOwnerCheck];
+    if (!expansion || expansion.expansionSpecDigest !== instance.expansionSpecDigest) {
+      throw new ClaimKernelError(
+        'INVALID_EXPANSION_AUTHORITY',
+        `Instance ${subgraphInstanceId} is not bound to one exact compiled expansion`
+      );
+    }
+    return expansion;
+  }
+
   getGeneratedExecution(nodeGenerationId: string) {
     const generation = this.instanceProjection.generationsById[nodeGenerationId];
     if (!generation) throw new ClaimKernelError('UNKNOWN_GENERATION', `Unknown generation ${nodeGenerationId}`);
     const instance = this.instanceProjection.instancesById[generation.subgraphInstanceId];
-    const expansion = this.requireClaimPlan().expansionPlan!.byOwner[instance.expansionOwnerCheck];
+    const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
     const claims: Record<string, CandidateClaimInput> = {};
     for (const consumption of node.consumptions) {
@@ -496,8 +519,13 @@ export class ExecutionJournal {
     const before = this.instanceProjection;
     const generation = before.generationsById[attempt.nodeGenerationId];
     const instance = before.instancesById[generation.subgraphInstanceId];
-    const expansion = this.requireClaimPlan().expansionPlan!.byOwner[instance.expansionOwnerCheck];
+    const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
+    const nestedOwner = qualifiedNestedExpansionOwner(
+      expansion.template.name,
+      generation.templateNodeKey
+    );
+    const nestedExpansion = this.requireClaimPlan().expansionPlan!.byNestedOwner[nestedOwner];
     let staged = before;
     const events: InstanceRuntimeEvent[] = [];
     const stage = (event: InstanceRuntimeEvent): void => {
@@ -506,13 +534,15 @@ export class ExecutionJournal {
       events.push(stored);
     };
     for (const event of prefix) stage(event);
+    const publications: GeneratedClaimPublishedEvent[] = [];
     for (const emission of node.emissions) {
       this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
       const immutablePayload = immutableCanonicalValue(payload);
       const payloadFingerprint = sha256Canonical(immutablePayload);
       const parentClaimIds = [...generation.activeInputClaimIds].sort();
-      const eventId = Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1;
-      stage({
+      const eventId =
+        Math.max(this.claimProjection.lastEventId, staged.lastEventId) + publications.length + 1;
+      const published: GeneratedClaimPublishedEvent = {
         version: 1, type: 'ClaimPublished', eventId,
         sessionId: attempt.sessionId, checkId: attempt.checkId, scope: attempt.scope,
         attemptId: attempt.attemptId, fence: attempt.fence,
@@ -522,7 +552,35 @@ export class ExecutionJournal {
         claimId: sha256Canonical({ claim: emission.claim, payloadFingerprint,
           producerCheckId: attempt.checkId, scope: attempt.scope, attemptId: attempt.attemptId,
           fence: attempt.fence, parentClaimIds }),
+      };
+      publications.push(published);
+    }
+    const nestedCatalogPublications = nestedExpansion
+      ? publications.filter(publication =>
+          publication.claim === nestedExpansion.catalogClaimRef
+        )
+      : [];
+    if (nestedExpansion && nestedCatalogPublications.length !== 1) {
+      throw new ClaimKernelError(
+        'INVALID_NESTED_CATALOG_AUTHORITY',
+        `Nested expansion owner ${nestedOwner} requires exactly one catalog publication`
+      );
+    }
+    for (const publication of publications) stage(publication);
+    if (nestedExpansion) {
+      const catalogPublication = nestedCatalogPublications[0];
+      const reconciled = this.reconcileCatalog({
+        sessionId: attempt.sessionId,
+        expansion: nestedExpansion,
+        payload: catalogPublication.payload,
+        catalogClaimId: catalogPublication.claimId,
+        startEventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1,
+        projection: staged,
+        parentSubgraphInstanceId: instance.subgraphInstanceId,
+        expansionOwnerNodeInstanceId: generation.nodeInstanceId,
       });
+      events.push(...reconciled.events);
+      staged = reconciled.projection;
     }
     for (const nodeKey of expansion.template.topology) {
       const candidate = expansion.template.nodesByKey[nodeKey];
@@ -576,13 +634,19 @@ export class ExecutionJournal {
       const nodeGenerationId = deriveNodeGenerationId({ nodeInstanceId,
         incarnation: instance.incarnation, itemFingerprint: item.payloadFingerprint,
         executionConfigDigest: candidate.executionConfigDigest, activeInputClaimIds: inputIds });
+      const nestedCatalogClaimRef = this.requireClaimPlan().expansionPlan!.byNestedOwner[
+        qualifiedNestedExpansionOwner(expansion.template.name, nodeKey)
+      ]?.catalogClaimRef;
       stage({ version: 1, type: 'NodeGenerationActivated',
         eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1,
         sessionId: attempt.sessionId, scope: instance.scope,
         subgraphInstanceId: instance.subgraphInstanceId, nodeInstanceId, nodeGenerationId,
         templateNodeKey: nodeKey, checkId: nodeKey, incarnation: instance.incarnation,
         itemFingerprint: item.payloadFingerprint, executionConfigDigest: candidate.executionConfigDigest,
-        activeInputClaimIds: inputIds });
+        activeInputClaimIds: inputIds,
+        ...(nestedCatalogClaimRef
+          ? { nestedExpansionCatalogClaimRef: nestedCatalogClaimRef }
+          : {}) });
     }
     stage({ ...attempt, type: 'AttemptCompleted',
       eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1 });
@@ -679,13 +743,58 @@ export class ExecutionJournal {
 
   private reconcileCatalog(input: {
     sessionId: string;
-    owner: string;
+    expansion: CompiledExpansion;
     payload: unknown;
     catalogClaimId: string;
     startEventId: number;
+    projection: InstanceProjection;
+    parentSubgraphInstanceId: string | null;
+    expansionOwnerNodeInstanceId?: string;
   }): { events: InstanceRuntimeEvent[]; projection: InstanceProjection } {
-    const expansion = this.requireClaimPlan().expansionPlan?.byOwner[input.owner];
-    if (!expansion) return { events: [], projection: this.instanceProjection };
+    const expansion = input.expansion;
+    const nested = input.parentSubgraphInstanceId !== null;
+    const parent = nested
+      ? input.projection.instancesById[input.parentSubgraphInstanceId as string]
+      : undefined;
+    if (
+      nested &&
+      (!parent ||
+        parent.status !== 'active' ||
+        !input.expansionOwnerNodeInstanceId ||
+        input.projection.nodesById[input.expansionOwnerNodeInstanceId]?.subgraphInstanceId !==
+          parent.subgraphInstanceId)
+    ) {
+      throw new ClaimKernelError(
+        'INVALID_NESTED_EXPANSION_OWNER',
+        'Nested reconciliation requires one exact active parent and owner node'
+      );
+    }
+    if (nested) {
+      const catalog = input.projection.claimsById[input.catalogClaimId];
+      const producer = catalog?.nodeGenerationId
+        ? input.projection.generationsById[catalog.nodeGenerationId]
+        : undefined;
+      if (
+        !catalog?.active ||
+        catalog.kind !== 'generated-output' ||
+        catalog.claim !== expansion.catalogClaimRef ||
+        catalog.subgraphInstanceId !== parent!.subgraphInstanceId ||
+        !producer ||
+        producer.nodeInstanceId !== input.expansionOwnerNodeInstanceId ||
+        producer.nestedExpansionCatalogClaimRef !== expansion.catalogClaimRef ||
+        producer.status !== 'running' ||
+        !producer.scheduled ||
+        input.projection.activeGenerationIdByNode[producer.nodeInstanceId] !==
+          producer.nodeGenerationId ||
+        catalog.producerAttemptId !== producer.attemptId ||
+        catalog.producerFence !== producer.fence
+      ) {
+        throw new ClaimKernelError(
+          'INVALID_NESTED_CATALOG_LINEAGE',
+          'Nested catalog must be the exact active output of its current fenced owner generation'
+        );
+      }
+    }
     expansion.catalogValidator(input.payload);
     const rawItems = resolveJsonPointer(input.payload, expansion.itemsPointer);
     if (!Array.isArray(rawItems)) {
@@ -704,7 +813,7 @@ export class ExecutionJournal {
       items.set(key, immutableCanonicalValue(item));
     }
 
-    let projection = this.instanceProjection;
+    let projection = input.projection;
     const events: InstanceRuntimeEvent[] = [];
     let nextId = input.startEventId;
     const stage = (event: StagedInstanceRuntimeEvent): void => {
@@ -714,15 +823,20 @@ export class ExecutionJournal {
     };
 
     const allByKey = new Map(
-      Object.values(this.instanceProjection.instancesById)
-        .filter(instance => instance.expansionOwnerCheck === input.owner)
+      Object.values(input.projection.instancesById)
+        .filter(instance =>
+          instance.expansionOwnerCheck === expansion.expansionOwnerCheck &&
+          (instance.parentSubgraphInstanceId || null) === input.parentSubgraphInstanceId &&
+          (!nested ||
+            instance.expansionOwnerNodeInstanceId === input.expansionOwnerNodeInstanceId)
+        )
         .map(instance => [instance.itemKey, instance] as const)
     );
     const active = [...allByKey.values()].filter(instance => instance.status === 'active');
     const sortedItems = [...items.entries()].sort(([left], [right]) => left.localeCompare(right));
 
     for (const [key] of sortedItems) {
-      if (allByKey.get(key)?.status === 'tombstoned') {
+      if (!nested && allByKey.get(key)?.status === 'tombstoned') {
         throw new ClaimKernelError(
           'TOMBSTONED_KEY_READD_UNSUPPORTED',
           `Key ${key} was tombstoned`
@@ -734,10 +848,14 @@ export class ExecutionJournal {
       const instance = allByKey.get(key);
       if (!instance?.activeItemClaimId || instance.status !== 'active') return false;
       return (
-        this.instanceProjection.claimsById[instance.activeItemClaimId].payloadFingerprint !==
-        deriveItemFingerprint(item)
+        input.projection.claimsById[instance.activeItemClaimId].payloadFingerprint !==
+          deriveItemFingerprint(item) ||
+        (nested && instance.catalogClaimId !== input.catalogClaimId)
       );
     });
+    const revived = nested
+      ? sortedItems.filter(([key]) => allByKey.get(key)?.status === 'tombstoned')
+      : [];
     const added = sortedItems.filter(([key]) => !allByKey.has(key));
 
     const activateSources = (
@@ -747,6 +865,9 @@ export class ExecutionJournal {
       const instance = projection.instancesById[instanceId];
       for (const nodeKey of expansion.template.sourceNodeKeys) {
         const node = expansion.template.nodesByKey[nodeKey];
+        const nestedCatalogClaimRef = this.requireClaimPlan().expansionPlan!.byNestedOwner[
+          qualifiedNestedExpansionOwner(expansion.template.name, nodeKey)
+        ]?.catalogClaimRef;
         const inputIds: string[] = [];
         let ready = true;
         for (const consumption of node.consumptions) {
@@ -788,6 +909,9 @@ export class ExecutionJournal {
           itemFingerprint,
           executionConfigDigest: node.executionConfigDigest,
           activeInputClaimIds: inputIds,
+          ...(nestedCatalogClaimRef
+            ? { nestedExpansionCatalogClaimRef: nestedCatalogClaimRef }
+            : {}),
         });
       }
     };
@@ -814,7 +938,7 @@ export class ExecutionJournal {
         type: 'ControllerItemClaimPublished',
         sessionId: input.sessionId,
         scope: instance.scope,
-        expansionOwnerCheck: input.owner,
+        expansionOwnerCheck: expansion.expansionOwnerCheck,
         expansionSpecDigest: expansion.expansionSpecDigest,
         catalogClaimId: input.catalogClaimId,
         itemKey: key,
@@ -830,31 +954,58 @@ export class ExecutionJournal {
       activateSources(instance.subgraphInstanceId, payloadFingerprint);
     };
 
-    for (const instance of active
-      .filter(candidate => !items.has(candidate.itemKey))
-      .sort((left, right) => left.itemKey.localeCompare(right.itemKey))) {
-      const generations = Object.values(projection.generationsById).filter(
-        generation =>
+    const tombstoneTree = (instanceId: string, sourceCatalogClaimId: string): void => {
+      const descendants = Object.values(projection.instancesById)
+        .filter(candidate =>
+          candidate.status === 'active' &&
+          candidate.parentSubgraphInstanceId === instanceId
+        )
+        .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+      for (const descendant of descendants) {
+        tombstoneTree(descendant.subgraphInstanceId, descendant.catalogClaimId);
+      }
+      const instance = projection.instancesById[instanceId];
+      const generations = Object.values(projection.generationsById)
+        .filter(generation =>
           generation.subgraphInstanceId === instance.subgraphInstanceId &&
           generation.status !== 'inactive'
-      );
+        )
+        .sort((left, right) => left.nodeGenerationId.localeCompare(right.nodeGenerationId));
       stage({
         version: 1,
         type: 'SubgraphTombstoned',
         sessionId: input.sessionId,
         scope: instance.scope,
-        expansionOwnerCheck: input.owner,
-        sourceCatalogClaimId: input.catalogClaimId,
+        expansionOwnerCheck: instance.expansionOwnerCheck,
+        sourceCatalogClaimId,
         itemKey: instance.itemKey,
         subgraphInstanceId: instance.subgraphInstanceId,
         lastIncarnation: instance.incarnation,
         nodeGenerationIds: generations.map(value => value.nodeGenerationId).sort(),
         outputClaimIds: generations.flatMap(value => value.completedOutputClaimIds).sort(),
       });
+    };
+    const tombstoneDescendants = (instanceId: string): void => {
+      const descendants = Object.values(projection.instancesById)
+        .filter(candidate =>
+          candidate.status === 'active' &&
+          candidate.parentSubgraphInstanceId === instanceId
+        )
+        .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+      for (const descendant of descendants) {
+        tombstoneTree(descendant.subgraphInstanceId, descendant.catalogClaimId);
+      }
+    };
+
+    for (const instance of active
+      .filter(candidate => !items.has(candidate.itemKey))
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey))) {
+      tombstoneTree(instance.subgraphInstanceId, input.catalogClaimId);
     }
 
     for (const [key, item] of changed) {
       let instance = projection.instancesById[allByKey.get(key)!.subgraphInstanceId];
+      tombstoneDescendants(instance.subgraphInstanceId);
       for (const nodeKey of expansion.template.reverseTopology) {
         const nodeInstanceId = instance.nodeInstanceIdsByTemplateNode[nodeKey];
         const generationId = projection.activeGenerationIdByNode[nodeInstanceId];
@@ -877,32 +1028,52 @@ export class ExecutionJournal {
       publishItemAndActivateSources(instance.subgraphInstanceId, key, item);
     }
 
+    for (const [key, item] of revived) {
+      const instance = projection.instancesById[allByKey.get(key)!.subgraphInstanceId];
+      publishItemAndActivateSources(instance.subgraphInstanceId, key, item);
+    }
+
     for (const [key, item] of added) {
-      const subgraphInstanceId = deriveSubgraphInstanceId({
-        graphSemanticDigest: expansion.graphSemanticDigest,
-        expansionOwnerCheck: input.owner,
-        parentSubgraphInstanceId: null,
-        templateDigest: expansion.templateDigest,
-        itemKey: key,
-      });
+      const subgraphInstanceId = nested
+        ? deriveSubgraphInstanceId({
+            graphSemanticDigest: expansion.graphSemanticDigest,
+            parentSubgraphInstanceId: parent!.subgraphInstanceId,
+            expansionOwnerNodeInstanceId: input.expansionOwnerNodeInstanceId as string,
+            templateDigest: expansion.templateDigest,
+            itemKey: key,
+          })
+        : deriveSubgraphInstanceId({
+            graphSemanticDigest: expansion.graphSemanticDigest,
+            expansionOwnerCheck: expansion.expansionOwnerCheck,
+            parentSubgraphInstanceId: null,
+            templateDigest: expansion.templateDigest,
+            itemKey: key,
+          });
       const scope: KeyedScopePath = Object.freeze([
+        ...(nested ? parent!.scope : []),
         {
-          kind: 'keyed',
-          expansionOwnerCheck: input.owner,
+          kind: 'keyed' as const,
+          expansionOwnerCheck: expansion.expansionOwnerCheck,
           key,
           subgraphInstanceId,
         },
-      ]);
+      ]) as KeyedScopePath;
       stage({
         version: 1,
         type: 'SubgraphExpanded',
         sessionId: input.sessionId,
         scope,
-        expansionOwnerCheck: input.owner,
+        expansionOwnerCheck: expansion.expansionOwnerCheck,
         graphSemanticDigest: expansion.graphSemanticDigest,
         expansionSpecDigest: expansion.expansionSpecDigest,
         templateDigest: expansion.templateDigest,
-        parentSubgraphInstanceId: null,
+        parentSubgraphInstanceId: input.parentSubgraphInstanceId,
+        ...(nested
+          ? {
+              expansionOwnerNodeInstanceId: input.expansionOwnerNodeInstanceId as string,
+              catalogClaimRef: expansion.catalogClaimRef,
+            }
+          : {}),
         catalogClaimId: input.catalogClaimId,
         itemKey: key,
         subgraphInstanceId,
@@ -969,16 +1140,19 @@ export class ExecutionJournal {
       claimIds.push(event.claimId);
     }
 
+    const rootExpansion = plan.expansionPlan?.byOwner[input.checkId];
     const catalogClaimId = claimIds.find(id =>
-      stagedProjection.claims[id]?.claim === plan.expansionPlan?.byOwner[input.checkId]?.catalogClaimRef
+      stagedProjection.claims[id]?.claim === rootExpansion?.catalogClaimRef
     );
-    const reconciled = catalogClaimId
+    const reconciled = catalogClaimId && rootExpansion
       ? this.reconcileCatalog({
           sessionId: input.sessionId,
-          owner: input.checkId,
+          expansion: rootExpansion,
           payload: input.payload,
           catalogClaimId,
           startEventId: Math.max(stagedProjection.lastEventId, this.instanceProjection.lastEventId) + 1,
+          projection: this.instanceProjection,
+          parentSubgraphInstanceId: null,
         })
       : { events: [] as InstanceRuntimeEvent[], projection: this.instanceProjection };
     const requestId = this.instanceProjection.attemptBindingsById[input.attemptId];

@@ -12,9 +12,14 @@ import type {
   ManagedRunCancelReceiptV1,
   ManagedRunCleanupReceiptV1,
 } from '../../src/providers/check-provider.interface';
-import type {
-  GeneratedAttemptStartedEvent,
-  ManagedRunBindingV1,
+import {
+  deriveControllerItemClaimId,
+  deriveNodeGenerationId,
+  reduceInstanceEventBatch,
+  type GeneratedAttemptStartedEvent,
+  type InstanceProjection,
+  type InstanceRuntimeEvent,
+  type ManagedRunBindingV1,
 } from '../../src/state-machine/graph/instance-kernel';
 
 function makeResult(val: any) {
@@ -114,6 +119,151 @@ function c2Config(templateShape: C2TemplateShape = 'linear'): any {
 
 function c2Journal(templateShape: C2TemplateShape = 'linear'): ExecutionJournal {
   return new ExecutionJournal(compileClaimPlan(c2Config(templateShape)));
+}
+
+function c4Config(): any {
+  const itemSchema = (required: string[]) => ({
+    type: 'object',
+    additionalProperties: false,
+    required,
+    properties: {
+      id: { type: 'string', minLength: 1 },
+      revision: { type: 'integer', minimum: 1 },
+      source: { type: 'string', minLength: 1 },
+      stage: { type: 'string', minLength: 1 },
+    },
+  });
+  return {
+    version: '1.0',
+    claim_types: {
+      'component.catalog@1': { schema: { type: 'object' } },
+      'component.item@1': { schema: itemSchema(['id', 'revision']) },
+      'spec.catalog@1': { schema: { type: 'object' } },
+      'spec.enumeration-evidence@1': { schema: { type: 'object' } },
+      'spec.item@1': { schema: itemSchema(['id', 'revision', 'source']) },
+      'spec.authored@1': { schema: itemSchema(['id', 'stage']) },
+      'spec.reviewed@1': { schema: itemSchema(['id', 'stage']) },
+    },
+    subgraphs: {
+      component: {
+        input: { name: 'component', claim: 'component.item@1' },
+        checks: {
+          enumerate: {
+            type: 'noop',
+            consumes: [{ claim: 'component.item@1', as: 'component' }],
+            emits: [
+              { claim: 'spec.catalog@1', from: 'output' },
+              { claim: 'spec.enumeration-evidence@1', from: 'output' },
+            ],
+            expand: {
+              claim: 'spec.catalog@1',
+              template: 'spec-review',
+              items_pointer: '/specs',
+              key_pointer: '/id',
+              item_claim: 'spec.item@1',
+            },
+          },
+        },
+      },
+      'spec-review': {
+        input: { name: 'spec', claim: 'spec.item@1' },
+        checks: {
+          author: {
+            type: 'noop',
+            consumes: [{ claim: 'spec.item@1', as: 'spec' }],
+            emits: [{ claim: 'spec.authored@1', from: 'output' }],
+          },
+          review: {
+            type: 'noop',
+            consumes: [{ claim: 'spec.authored@1', as: 'authored' }],
+            emits: [{ claim: 'spec.reviewed@1', from: 'output' }],
+          },
+        },
+      },
+    },
+    checks: {
+      discover: {
+        type: 'noop',
+        emits: [{ claim: 'component.catalog@1', from: 'output' }],
+        expand: {
+          claim: 'component.catalog@1',
+          template: 'component',
+          items_pointer: '/components',
+          key_pointer: '/id',
+          item_claim: 'component.item@1',
+        },
+      },
+    },
+  };
+}
+
+function c4Journal(): ExecutionJournal {
+  return new ExecutionJournal(compileClaimPlan(c4Config()));
+}
+
+function completeReadySpecWork(journal: ExecutionJournal): void {
+  while (journal.queryReadyWork().some(generation => generation.scope.length === 2)) {
+    for (const generation of journal.queryReadyWork().filter(value => value.scope.length === 2)) {
+      const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(attempt);
+      journal.completeGeneratedAttempt({
+        attempt,
+        payload: {
+          id: generation.scope[generation.scope.length - 1].key,
+          stage: generation.checkId,
+        },
+      });
+    }
+  }
+}
+
+function managedNestedBatchFixture(componentKey = 'A'): {
+  readonly journal: ExecutionJournal;
+  readonly beforeProjection: InstanceProjection;
+  readonly batch: readonly InstanceRuntimeEvent[];
+  readonly binding: ManagedRunBindingV1;
+} {
+  const journal = c4Journal();
+  publishCatalog(journal, {
+    components: [
+      { id: 'A', revision: 1 },
+      { id: 'B', revision: 1 },
+    ],
+  });
+  const enumerate = journal.queryReadyWork().find(candidate =>
+    candidate.checkId === 'enumerate' &&
+    candidate.scope[candidate.scope.length - 1].key === componentKey
+  )!;
+  const attempt = journal.startGeneratedAttempt(enumerate.nodeGenerationId);
+  journal.scheduleGeneratedAttempt(attempt);
+  const binding = journal.deriveManagedRunBinding(attempt);
+  journal.recordManagedRunAcquired(binding);
+  journal.recordManagedRunStarted(binding);
+  const beforeProjection = journal.getInstanceProjection();
+  const beforeEventCount = journal.readRuntimeEvents().length;
+  journal.completeManagedGeneratedAttempt({
+    attempt,
+    binding,
+    payload: {
+      specs: [{ id: 'spec-1', revision: 1, source: `${componentKey}/one` }],
+    },
+  });
+  return {
+    journal,
+    beforeProjection,
+    batch: journal.readRuntimeEvents().slice(beforeEventCount) as readonly InstanceRuntimeEvent[],
+    binding,
+  };
+}
+
+function renumberBatch(
+  projection: InstanceProjection,
+  events: readonly InstanceRuntimeEvent[]
+): readonly InstanceRuntimeEvent[] {
+  return events.map((event, index) => ({
+    ...event,
+    eventId: projection.lastEventId + index + 1,
+  })) as readonly InstanceRuntimeEvent[];
 }
 
 function scheduleCatalogAttempt(journal: ExecutionJournal) {
@@ -345,6 +495,11 @@ describe('snapshot-store (journal + context view)', () => {
       { type: 'ControllerItemClaimPublished', itemKey: 'B' },
       { type: 'NodeGenerationActivated', itemKey: 'B' },
     ]);
+    expect(
+      (journal.readRuntimeEvents() as readonly any[])
+        .filter(event => event.type === 'SubgraphExpanded' && event.scope.length === 1)
+        .every(event => !Object.prototype.hasOwnProperty.call(event, 'catalogClaimRef'))
+    ).toBe(true);
   });
 
   it('exposes exact deeply immutable controller and generated provenance', () => {
@@ -362,6 +517,12 @@ describe('snapshot-store (journal + context view)', () => {
     expect(catalogClaim).toBeDefined();
     expect(itemClaim).toBeDefined();
     expect(inspect).toBeDefined();
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        journal.getInstanceProjection().generationsById[inspect!.nodeGenerationId],
+        'nestedExpansionCatalogClaimRef'
+      )
+    ).toBe(false);
 
     const controllerExecution = journal.getGeneratedExecution(inspect!.nodeGenerationId);
     expect(controllerExecution.claims).toEqual({
@@ -449,6 +610,447 @@ describe('snapshot-store (journal + context view)', () => {
     const joinExecution = journal.getGeneratedExecution(join.nodeGenerationId);
     expect(joinExecution.node.dependencyNodeKeys).toEqual(['first', 'second']);
     expect(joinExecution.claims.firstResult.claim).toBe('component.first@1');
+  });
+
+  it('atomically publishes a managed nested catalog and exposes exact child provenance', () => {
+    const journal = c4Journal();
+    publishCatalog(journal, { components: [{ id: 'A', revision: 1 }] });
+    const enumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    expect(
+      journal.getInstanceProjection().generationsById[enumerate.nodeGenerationId]
+        .nestedExpansionCatalogClaimRef
+    ).toBe('spec.catalog@1');
+    const attempt = journal.startGeneratedAttempt(enumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    journal.recordManagedRunAcquired(binding);
+    journal.recordManagedRunStarted(binding);
+    const before = journal.readRuntimeEvents();
+
+    journal.completeManagedGeneratedAttempt({
+      attempt,
+      binding,
+      payload: {
+        specs: [
+          { id: 'spec-2', revision: 1, source: 'A/two' },
+          { id: 'spec-1', revision: 1, source: 'A/one' },
+        ],
+      },
+    });
+
+    const committed = journal.readRuntimeEvents().slice(before.length) as readonly any[];
+    const projection = journal.getInstanceProjection();
+    const parent = projection.instancesById[enumerate.subgraphInstanceId];
+    const children = Object.values(projection.instancesById)
+      .filter(instance => instance.parentSubgraphInstanceId === parent.subgraphInstanceId)
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+    expect(committed[0].type).toBe('ManagedRunTerminated');
+    expect(committed.at(-1)?.type).toBe('AttemptCompleted');
+    expect(children.map(child => child.itemKey)).toEqual(['spec-1', 'spec-2']);
+    expect(children.every(child => child.scope.length === 2)).toBe(true);
+    expect(children.every(child => child.scope[0].subgraphInstanceId === parent.subgraphInstanceId)).toBe(true);
+    expect(children.every(child => child.expansionOwnerNodeInstanceId === enumerate.nodeInstanceId)).toBe(true);
+    expect(children.every(child => child.catalogClaimRef === 'spec.catalog@1')).toBe(true);
+    expect(children.every(child => child.catalogProducerNodeGenerationId === enumerate.nodeGenerationId)).toBe(true);
+
+    const catalogIndex = committed.findIndex(
+      event => event.type === 'ClaimPublished' && event.claim === 'spec.catalog@1'
+    );
+    const evidenceIndex = committed.findIndex(
+      event =>
+        event.type === 'ClaimPublished' &&
+        event.claim === 'spec.enumeration-evidence@1'
+    );
+    const firstChildIndex = committed.findIndex(event => event.type === 'SubgraphExpanded');
+    expect(catalogIndex).toBeGreaterThanOrEqual(0);
+    expect(evidenceIndex).toBeGreaterThanOrEqual(0);
+    expect(firstChildIndex).toBeGreaterThan(catalogIndex);
+    expect(firstChildIndex).toBeGreaterThan(evidenceIndex);
+    for (const generation of journal.queryReadyWork().filter(value => value.scope.length === 2)) {
+      const execution = journal.getGeneratedExecution(generation.nodeGenerationId);
+      expect(Object.keys(execution.claims)).toEqual(['spec']);
+      expect(execution.claims.spec).toMatchObject({
+        claim: 'spec.item@1',
+        provenance: 'controller',
+        scope: generation.scope,
+      });
+      expect(execution.claims.spec.parentClaimIds).toEqual([
+        projection.instancesById[generation.subgraphInstanceId].catalogClaimId,
+      ]);
+    }
+    expect(projection.managedRunsByAttemptId[attempt.attemptId]).toMatchObject({
+      status: 'terminated',
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+    });
+    expect(journal.replayInstanceProjection()).toEqual(projection);
+  });
+
+  it('rejects a duplicate nested key without partially publishing its catalog or children', () => {
+    const journal = c4Journal();
+    publishCatalog(journal, { components: [{ id: 'A', revision: 1 }] });
+    const enumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const attempt = journal.startGeneratedAttempt(enumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const eventsBefore = journal.readRuntimeEvents();
+    const projectionBefore = journal.getInstanceProjection();
+
+    expectErrorCode(
+      () => journal.completeGeneratedAttempt({
+        attempt,
+        payload: {
+          specs: [
+            { id: 'duplicate', revision: 1, source: 'A/one' },
+            { id: 'duplicate', revision: 1, source: 'A/two' },
+          ],
+        },
+      }),
+      'DUPLICATE_CATALOG_KEY'
+    );
+    expect(journal.readRuntimeEvents()).toEqual(eventsBefore);
+    expect(journal.getInstanceProjection()).toEqual(projectionBefore);
+
+    journal.failGeneratedAttempt(attempt, 'invalid nested catalog');
+    expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+  });
+
+  it('rejects a malformed nested item without publishing any generated output or child event', () => {
+    const journal = c4Journal();
+    publishCatalog(journal, { components: [{ id: 'A', revision: 1 }] });
+    const enumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const attempt = journal.startGeneratedAttempt(enumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const eventsBefore = journal.readRuntimeEvents();
+    const projectionBefore = journal.getInstanceProjection();
+
+    expectErrorCode(
+      () => journal.completeGeneratedAttempt({
+        attempt,
+        payload: { specs: [{ id: 'missing-source', revision: 1 }] },
+      }),
+      'CLAIM_SCHEMA_INVALID'
+    );
+    expect(journal.readRuntimeEvents()).toEqual(eventsBefore);
+    expect(journal.getInstanceProjection()).toEqual(projectionBefore);
+    journal.failGeneratedAttempt(attempt, 'malformed nested item');
+    expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+  });
+
+  it('tombstones descendants first and revives stable child identities with fresh claims on replacement', () => {
+    const journal = c4Journal();
+    publishCatalog(journal, { components: [{ id: 'A', revision: 1 }] });
+    const firstEnumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const firstAttempt = journal.startGeneratedAttempt(firstEnumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(firstAttempt);
+    journal.completeGeneratedAttempt({
+      attempt: firstAttempt,
+      payload: {
+        specs: [
+          { id: 'spec-1', revision: 1, source: 'A/one' },
+          { id: 'spec-2', revision: 1, source: 'A/two' },
+        ],
+      },
+    });
+    completeReadySpecWork(journal);
+
+    const firstProjection = journal.getInstanceProjection();
+    const firstChildren = Object.values(firstProjection.instancesById)
+      .filter(instance => instance.parentSubgraphInstanceId === firstEnumerate.subgraphInstanceId)
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+    const firstByKey = Object.fromEntries(firstChildren.map(child => [child.itemKey, {
+      subgraphInstanceId: child.subgraphInstanceId,
+      activeItemClaimId: child.activeItemClaimId,
+      incarnation: child.incarnation,
+      nodeInstanceIdsByTemplateNode: child.nodeInstanceIdsByTemplateNode,
+      sourceGenerationId:
+        firstProjection.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.author],
+    }]));
+    const beforeReplacement = journal.readRuntimeEvents().length;
+
+    publishCatalog(journal, { components: [{ id: 'A', revision: 2 }] });
+    const replacementEvents = journal.readRuntimeEvents().slice(beforeReplacement) as readonly any[];
+    const childTombstoneIndexes = replacementEvents
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) =>
+        event.type === 'SubgraphTombstoned' &&
+        firstChildren.some(child => child.subgraphInstanceId === event.subgraphInstanceId)
+      )
+      .map(({ index }) => index);
+    const parentInactivationIndex = replacementEvents.findIndex(
+      event =>
+        event.type === 'NodeGenerationInactivated' &&
+        event.nodeGenerationId === firstEnumerate.nodeGenerationId
+    );
+    expect(childTombstoneIndexes).toHaveLength(2);
+    expect(parentInactivationIndex).toBeGreaterThan(Math.max(...childTombstoneIndexes));
+    expect(firstChildren.every(child =>
+      journal.getInstanceProjection().instancesById[child.subgraphInstanceId].status === 'tombstoned'
+    )).toBe(true);
+
+    const secondEnumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const secondAttempt = journal.startGeneratedAttempt(secondEnumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(secondAttempt);
+    journal.completeGeneratedAttempt({
+      attempt: secondAttempt,
+      payload: {
+        specs: [
+          { id: 'spec-2', revision: 1, source: 'A/two' },
+          { id: 'spec-1', revision: 1, source: 'A/one' },
+        ],
+      },
+    });
+
+    const revivedProjection = journal.getInstanceProjection();
+    const revivedChildren = Object.values(revivedProjection.instancesById)
+      .filter(instance => instance.parentSubgraphInstanceId === secondEnumerate.subgraphInstanceId)
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey));
+    expect(revivedChildren).toHaveLength(2);
+    for (const child of revivedChildren) {
+      const first = firstByKey[child.itemKey];
+      expect(child.status).toBe('active');
+      expect(child.subgraphInstanceId).toBe(first.subgraphInstanceId);
+      expect(child.nodeInstanceIdsByTemplateNode).toEqual(first.nodeInstanceIdsByTemplateNode);
+      expect(child.incarnation).toBe(first.incarnation + 1);
+      expect(child.activeItemClaimId).not.toBe(first.activeItemClaimId);
+      expect(revivedProjection.claimsById[first.activeItemClaimId!].active).toBe(false);
+      expect(
+        revivedProjection.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.author]
+      ).not.toBe(first.sourceGenerationId);
+    }
+    expect(secondEnumerate.nodeInstanceId).toBe(firstEnumerate.nodeInstanceId);
+    expect(secondEnumerate.nodeGenerationId).not.toBe(firstEnumerate.nodeGenerationId);
+    completeReadySpecWork(journal);
+    expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+  });
+
+  it('applies explicit keyed child removal and addition without reusing the removed identity', () => {
+    const journal = c4Journal();
+    publishCatalog(journal, { components: [{ id: 'A', revision: 1 }] });
+    const firstEnumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const firstAttempt = journal.startGeneratedAttempt(firstEnumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(firstAttempt);
+    journal.completeGeneratedAttempt({
+      attempt: firstAttempt,
+      payload: {
+        specs: [
+          { id: 'keep', revision: 1, source: 'A/keep' },
+          { id: 'remove', revision: 1, source: 'A/remove' },
+        ],
+      },
+    });
+    completeReadySpecWork(journal);
+    const firstProjection = journal.getInstanceProjection();
+    const retainedBefore = Object.values(firstProjection.instancesById).find(
+      instance => instance.parentSubgraphInstanceId === firstEnumerate.subgraphInstanceId &&
+        instance.itemKey === 'keep'
+    )!;
+    const removedBefore = Object.values(firstProjection.instancesById).find(
+      instance => instance.parentSubgraphInstanceId === firstEnumerate.subgraphInstanceId &&
+        instance.itemKey === 'remove'
+    )!;
+
+    publishCatalog(journal, { components: [{ id: 'A', revision: 2 }] });
+    const secondEnumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const secondAttempt = journal.startGeneratedAttempt(secondEnumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(secondAttempt);
+    journal.completeGeneratedAttempt({
+      attempt: secondAttempt,
+      payload: {
+        specs: [
+          { id: 'add', revision: 1, source: 'A/add' },
+          { id: 'keep', revision: 1, source: 'A/keep' },
+        ],
+      },
+    });
+
+    const projection = journal.getInstanceProjection();
+    const retainedAfter = projection.instancesById[retainedBefore.subgraphInstanceId];
+    const removedAfter = projection.instancesById[removedBefore.subgraphInstanceId];
+    const added = Object.values(projection.instancesById).find(
+      instance => instance.parentSubgraphInstanceId === secondEnumerate.subgraphInstanceId &&
+        instance.itemKey === 'add'
+    )!;
+    expect(retainedAfter.status).toBe('active');
+    expect(retainedAfter.subgraphInstanceId).toBe(retainedBefore.subgraphInstanceId);
+    expect(retainedAfter.activeItemClaimId).not.toBe(retainedBefore.activeItemClaimId);
+    expect(removedAfter.status).toBe('tombstoned');
+    expect(added.status).toBe('active');
+    expect(added.subgraphInstanceId).not.toBe(removedBefore.subgraphInstanceId);
+    expect(journal.replayInstanceProjection()).toEqual(projection);
+  });
+
+  it.each([
+    ['swapped parent scope', 'INVALID_MANAGED_BATCH'],
+    ['foreign owner node', 'INVALID_MANAGED_BATCH'],
+    ['foreign catalog lineage', 'INVALID_MANAGED_BATCH'],
+    ['stale nested fence', 'STALE_FENCE'],
+    ['cross-parent child event', 'INVALID_MANAGED_BATCH'],
+    ['post-reconciliation claim', 'INVALID_MANAGED_BATCH'],
+  ])('atomically rejects %s in a managed nested terminal batch', (scenario, code) => {
+    const fixture = managedNestedBatchFixture('A');
+    const batch = fixture.batch as readonly any[];
+    const childIndex = batch.findIndex(event => event.type === 'SubgraphExpanded');
+    const catalogIndex = batch.findIndex(
+      event => event.type === 'ClaimPublished' && event.claim === 'spec.catalog@1'
+    );
+    const evidenceIndex = batch.findIndex(
+      event =>
+        event.type === 'ClaimPublished' &&
+        event.claim === 'spec.enumeration-evidence@1'
+    );
+    const parentB = Object.values(fixture.beforeProjection.instancesById).find(
+      instance => instance.itemKey === 'B' && !instance.parentSubgraphInstanceId
+    )!;
+    let forged: readonly InstanceRuntimeEvent[];
+
+    if (scenario === 'swapped parent scope') {
+      forged = batch.map((event, index) => index === childIndex
+        ? { ...event, scope: [parentB.scope[0], event.scope[1]] }
+        : event
+      ) as readonly InstanceRuntimeEvent[];
+    } else if (scenario === 'foreign owner node') {
+      forged = batch.map((event, index) => index === childIndex
+        ? {
+            ...event,
+            expansionOwnerNodeInstanceId: parentB.nodeInstanceIdsByTemplateNode.enumerate,
+          }
+        : event
+      ) as readonly InstanceRuntimeEvent[];
+    } else if (scenario === 'foreign catalog lineage') {
+      const evidenceClaimId = batch[evidenceIndex].claimId;
+      const controller = batch.find(
+        event => event.type === 'ControllerItemClaimPublished'
+      );
+      const activation = batch.find(
+        event => event.type === 'NodeGenerationActivated' && event.scope.length === 2
+      );
+      const controllerClaimId = deriveControllerItemClaimId({
+        claim: controller.claim,
+        payloadFingerprint: controller.payloadFingerprint,
+        expansionSpecDigest: controller.expansionSpecDigest,
+        catalogClaimId: evidenceClaimId,
+        subgraphInstanceId: controller.subgraphInstanceId,
+        incarnation: controller.incarnation,
+        scope: controller.scope,
+      });
+      const nodeGenerationId = deriveNodeGenerationId({
+        nodeInstanceId: activation.nodeInstanceId,
+        incarnation: activation.incarnation,
+        itemFingerprint: activation.itemFingerprint,
+        executionConfigDigest: activation.executionConfigDigest,
+        activeInputClaimIds: [controllerClaimId],
+      });
+      forged = batch.map(event => {
+        if (event.type === 'SubgraphExpanded') {
+          return {
+            ...event,
+            catalogClaimRef: 'spec.enumeration-evidence@1',
+            catalogClaimId: evidenceClaimId,
+          };
+        }
+        if (event.type === 'ControllerItemClaimPublished') {
+          return {
+            ...event,
+            catalogClaimId: evidenceClaimId,
+            parentClaimIds: [evidenceClaimId],
+            claimId: controllerClaimId,
+          };
+        }
+        if (event.type === 'NodeGenerationActivated' && event.scope.length === 2) {
+          return {
+            ...event,
+            activeInputClaimIds: [controllerClaimId],
+            nodeGenerationId,
+          };
+        }
+        return event;
+      }) as readonly InstanceRuntimeEvent[];
+    } else if (scenario === 'stale nested fence') {
+      forged = batch.map((event, index) => index === catalogIndex
+        ? { ...event, fence: event.fence + 1 }
+        : event
+      ) as readonly InstanceRuntimeEvent[];
+    } else if (scenario === 'cross-parent child event') {
+      const foreign = managedNestedBatchFixture('B').batch.find(
+        event => event.type === 'SubgraphExpanded'
+      )!;
+      forged = batch.map((event, index) => index === childIndex
+        ? { ...foreign, eventId: event.eventId }
+        : event
+      ) as readonly InstanceRuntimeEvent[];
+    } else {
+      const reordered = batch.filter((_, index) => index !== evidenceIndex);
+      const reconciliationIndex = reordered.findIndex(
+        event => event.type === 'SubgraphExpanded'
+      );
+      reordered.splice(reconciliationIndex + 1, 0, batch[evidenceIndex]);
+      forged = renumberBatch(fixture.beforeProjection, reordered);
+    }
+
+    const projectionBefore = JSON.stringify(fixture.beforeProjection);
+    expectErrorCode(
+      () => reduceInstanceEventBatch(fixture.beforeProjection, forged),
+      code
+    );
+    expect(JSON.stringify(fixture.beforeProjection)).toBe(projectionBefore);
+    expect(fixture.journal.replayInstanceProjection()).toEqual(
+      fixture.journal.getInstanceProjection()
+    );
+  });
+
+  it('isolates one failed child while its sibling completes the review subgraph', () => {
+    const journal = c4Journal();
+    publishCatalog(journal, { components: [{ id: 'A', revision: 1 }] });
+    const enumerate = journal.queryReadyWork().find(candidate => candidate.checkId === 'enumerate')!;
+    const enumerateAttempt = journal.startGeneratedAttempt(enumerate.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(enumerateAttempt);
+    journal.completeGeneratedAttempt({
+      attempt: enumerateAttempt,
+      payload: {
+        specs: [
+          { id: 'spec-1', revision: 1, source: 'A/one' },
+          { id: 'spec-2', revision: 1, source: 'A/two' },
+        ],
+      },
+    });
+
+    const authors = journal.queryReadyWork().filter(candidate => candidate.checkId === 'author');
+    const failed = authors.find(candidate => candidate.scope[candidate.scope.length - 1].key === 'spec-1')!;
+    const sibling = authors.find(candidate => candidate.scope[candidate.scope.length - 1].key === 'spec-2')!;
+    const failedAttempt = journal.startGeneratedAttempt(failed.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(failedAttempt);
+    const siblingAttempt = journal.startGeneratedAttempt(sibling.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(siblingAttempt);
+    journal.failGeneratedAttempt(failedAttempt, 'isolated author failure');
+    journal.completeGeneratedAttempt({
+      attempt: siblingAttempt,
+      payload: { id: 'spec-2', stage: 'author' },
+    });
+    const review = journal.queryReadyWork().find(candidate =>
+      candidate.checkId === 'review' &&
+      candidate.subgraphInstanceId === sibling.subgraphInstanceId
+    )!;
+    const reviewAttempt = journal.startGeneratedAttempt(review.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(reviewAttempt);
+    journal.completeGeneratedAttempt({
+      attempt: reviewAttempt,
+      payload: { id: 'spec-2', stage: 'review' },
+    });
+
+    const projection = journal.getInstanceProjection();
+    expect(projection.generationsById[failed.nodeGenerationId].status).toBe('failed');
+    expect(projection.generationsById[review.nodeGenerationId].status).toBe('completed');
+    expect(Object.values(projection.claimsById).some(claim =>
+      claim.active &&
+      claim.claim === 'spec.reviewed@1' &&
+      claim.subgraphInstanceId === sibling.subgraphInstanceId
+    )).toBe(true);
+    expect(Object.values(projection.claimsById).some(claim =>
+      claim.active &&
+      claim.claim === 'spec.reviewed@1' &&
+      claim.subgraphInstanceId === failed.subgraphInstanceId
+    )).toBe(false);
+    expect(journal.replayInstanceProjection()).toEqual(projection);
   });
 
   it('atomically records a controller-derived managed acquisition failure', () => {

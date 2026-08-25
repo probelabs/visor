@@ -1,6 +1,7 @@
 import {
   compileJsonPointer,
   InstancePlanError,
+  qualifiedNestedExpansionOwner,
   resolveJsonPointer,
 } from '../../../../src/state-machine/graph/instance-plan';
 import { compileClaimPlan } from '../../../../src/state-machine/graph/claim-plan';
@@ -119,6 +120,48 @@ describe('Graph v2 C2 expansion plan', () => {
     expect(third.graphSemanticDigest).not.toBe(first.graphSemanticDigest);
   });
 
+  it('compiles one parent-template-qualified depth-two expansion owner', () => {
+    const value = config();
+    value.claim_types['spec.catalog@1'] = {
+      schema: { type: 'object', required: ['specs'], properties: { specs: { type: 'array' } } },
+    };
+    value.claim_types['spec.item@1'] = {
+      schema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+    };
+    value.subgraphs['review-spec'] = {
+      input: { name: 'spec', claim: 'spec.item@1' },
+      checks: {
+        review: {
+          type: 'noop',
+          consumes: [{ claim: 'spec.item@1', as: 'spec' }],
+        },
+      },
+    };
+    const inspect = value.subgraphs['onboard-component'].checks.inspect;
+    inspect.emits.push({ claim: 'spec.catalog@1', from: 'output' });
+    inspect.expand = {
+      claim: 'spec.catalog@1',
+      template: 'review-spec',
+      items_pointer: '/specs',
+      key_pointer: '/id',
+      item_claim: 'spec.item@1',
+    };
+
+    const plan = compileClaimPlan(value).expansionPlan;
+    const owner = qualifiedNestedExpansionOwner('onboard-component', 'inspect');
+    expect(plan.byNestedOwner[owner]).toMatchObject({
+      expansionOwnerCheck: owner,
+      depth: 2,
+      parentTemplateName: 'onboard-component',
+      parentTemplateNodeKey: 'inspect',
+      catalogClaimRef: 'spec.catalog@1',
+      itemClaimRef: 'spec.item@1',
+      templateName: 'review-spec',
+    });
+    expect(plan.byOwner.discover.depth).toBe(1);
+    expect(plan.byNestedOwner[owner].expansionSpecDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it('strictly compiles and resolves RFC 6901 pointers', () => {
     const pointer = compileJsonPointer('/a~1b/~0key/0', 'fixture');
     expect(pointer.tokens).toEqual(['a/b', '~key', '0']);
@@ -148,11 +191,18 @@ describe('Graph v2 C2 expansion plan', () => {
       code: 'ITEM_CLAIM_MISMATCH',
     },
     {
-      name: 'nested expansion',
-      mutate: (value: any) =>
-        (value.subgraphs['onboard-component'].checks.inspect.expand =
-          value.checks.discover.expand),
-      code: 'UNSUPPORTED_TEMPLATE_EXECUTION',
+      name: 'recursive depth-three expansion',
+      mutate: (value: any) => {
+        value.subgraphs['onboard-component'].checks.inspect.emits.push({
+          claim: 'component.catalog@1',
+          from: 'output',
+        });
+        value.subgraphs['onboard-component'].checks.inspect.expand = {
+          ...value.checks.discover.expand,
+          template: 'onboard-component',
+        };
+      },
+      code: 'NESTED_EXPANSION_DEPTH_EXCEEDED',
     },
     {
       name: 'template routing',
