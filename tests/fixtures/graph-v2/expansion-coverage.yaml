@@ -34,12 +34,19 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [class]
+      required: [class, invocationDigest, resultDigest, data]
       properties:
         class:
           enum: [completed_clean, completed_with_findings, guardrail_blocked]
         findings:
           type: array
+        invocationDigest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+        resultDigest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+        data: {}
 
 subgraphs:
   assess-operation:

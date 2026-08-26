@@ -637,6 +637,8 @@ export interface ExpansionCoverageProjection {
     key: string;
     itemFingerprint: string;
     terminalClass: ExpansionCoverageClass | null;
+    outcomeClaimId: string | null;
+    outcomePayloadFingerprint: string | null;
   }>[];
   readonly closure: 'open' | 'closed';
   readonly disposition: 'clean' | 'findings' | 'unverifiable';
@@ -712,6 +714,8 @@ export function projectExpansionCoverage(
       instance.itemKey === selected.key
     );
     let terminalClass: ExpansionCoverageClass | null = null;
+    let outcomeClaimId: string | null = null;
+    let outcomePayloadFingerprint: string | null = null;
     const instance = instances.length === 1 ? instances[0] : undefined;
     const itemClaim = instance?.activeItemClaimId
       ? projection.claimsById[instance.activeItemClaimId]
@@ -719,14 +723,14 @@ export function projectExpansionCoverage(
     if (!instance || instance.status !== 'active' || !itemClaim?.active ||
         itemClaim.payloadFingerprint !== selected.itemFingerprint) {
       diagnostics.push(`${selected.key}:lineage`);
-      return { ...selected, terminalClass };
+      return { ...selected, terminalClass, outcomeClaimId, outcomePayloadFingerprint };
     }
     const emitterNodeId = instance.nodeInstanceIdsByTemplateNode[expansion.coverage!.emitterNodeKey];
     const generationId = emitterNodeId ? projection.activeGenerationIdByNode[emitterNodeId] : undefined;
     const generation = generationId ? projection.generationsById[generationId] : undefined;
     if (!generation || generation.itemFingerprint !== selected.itemFingerprint) {
       diagnostics.push(`${selected.key}:lineage`);
-      return { ...selected, terminalClass };
+      return { ...selected, terminalClass, outcomeClaimId, outcomePayloadFingerprint };
     }
     const outcomes = generation.completedOutputClaimIds
       .map(claimId => projection.claimsById[claimId])
@@ -752,6 +756,8 @@ export function projectExpansionCoverage(
         const value = resolveJsonPointer(outcomes[0].payload, expansion.coverage!.classPointer);
         if (typeof value === 'string' && PROVIDER_COVERAGE_CLASSES.has(value)) {
           terminalClass = value as ExpansionCoverageClass;
+          outcomeClaimId = outcomes[0].claimId;
+          outcomePayloadFingerprint = outcomes[0].payloadFingerprint;
         } else diagnostics.push(`${selected.key}:invalid-class`);
       } catch {
         diagnostics.push(`${selected.key}:invalid-class`);
@@ -761,7 +767,7 @@ export function projectExpansionCoverage(
     else if (outcomes.length > 1 || (outcomes.length > 0 && generation.status !== 'completed')) {
       diagnostics.push(`${selected.key}:conflicting-terminal`);
     } else diagnostics.push(`${selected.key}:nonterminal`);
-    return { ...selected, terminalClass };
+    return { ...selected, terminalClass, outcomeClaimId, outcomePayloadFingerprint };
   });
   for (const instance of Object.values(projection.instancesById)) {
     if (instance.sessionId !== request.sessionId ||
@@ -787,11 +793,12 @@ export function projectExpansionCoverage(
   ) ? 'unverifiable' as const : classes.some(value => value === 'completed_with_findings')
     ? 'findings' as const : 'clean' as const;
   const semantic = { expansionOwnerCheck: request.expansionOwnerCheck, denominator,
-    classes: items.map(item => ({ key: item.key, terminalClass: item.terminalClass })),
+    outcomes: items.map(item => ({ key: item.key, terminalClass: item.terminalClass,
+      outcomePayloadFingerprint: item.outcomePayloadFingerprint })),
     closure, disposition, terminalItems, diagnostics: canonicalDiagnostics };
   return immutableCanonicalValue({ requestId, expansionOwnerCheck: request.expansionOwnerCheck,
     denominator, items, closure, disposition, terminalItems, diagnostics: canonicalDiagnostics,
-    semanticDigest: sha256Canonical({ v: 1, ...semantic }),
+    semanticDigest: sha256Canonical({ v: 2, ...semantic }),
     provenance: { ...(request.catalogClaimId ? { catalogClaimId: request.catalogClaimId } : {}),
       lastEventId: projection.lastEventId } });
 }
