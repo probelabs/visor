@@ -679,19 +679,27 @@ export class ExecutionJournal {
     if (!expansion) {
       throw new ClaimKernelError('UNKNOWN_COVERAGE_REQUEST', `Unknown coverage request ${requestId}`);
     }
-    return projectExpansionCoverage(this.instanceProjection, expansion, requestId);
+    return projectExpansionCoverage(this.claimProjection, this.instanceProjection, expansion, requestId);
+  }
+
+  getExpansionCoverageRequestIds(ownerCheck?: string): readonly string[] {
+    return Object.freeze(this.instanceProjection.requestOrder.filter(requestId =>
+      ownerCheck === undefined ||
+      this.instanceProjection.requestsById[requestId].expansionOwnerCheck === ownerCheck
+    ));
   }
 
   replayExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection {
-    const projection = this.replayInstanceProjection();
-    const request = projection.requestsById[requestId];
+    const instanceProjection = this.replayInstanceProjection();
+    const claimProjection = this.replayClaimProjection();
+    const request = instanceProjection.requestsById[requestId];
     const expansion = request
       ? this.requireClaimPlan().expansionPlan?.byOwner[request.expansionOwnerCheck]
       : undefined;
     if (!expansion) {
       throw new ClaimKernelError('UNKNOWN_COVERAGE_REQUEST', `Unknown coverage request ${requestId}`);
     }
-    return projectExpansionCoverage(projection, expansion, requestId);
+    return projectExpansionCoverage(claimProjection, instanceProjection, expansion, requestId);
   }
 
   replayInstanceProjection(): InstanceProjection {
@@ -1181,26 +1189,6 @@ export class ExecutionJournal {
         })
       : { events: [] as InstanceRuntimeEvent[], projection: this.instanceProjection };
     const requestId = this.instanceProjection.attemptBindingsById[input.attemptId];
-    const selectedItems = requestId
-      ? Object.values(reconciled.projection.instancesById)
-          .filter(instance =>
-            instance.sessionId === input.sessionId &&
-            instance.expansionOwnerCheck === input.checkId &&
-            !instance.parentSubgraphInstanceId &&
-            instance.status === 'active'
-          )
-          .map(instance => {
-            const item = instance.activeItemClaimId
-              ? reconciled.projection.claimsById[instance.activeItemClaimId]
-              : undefined;
-            if (!item?.active) {
-              throw new ClaimKernelError('INACTIVE_ITEM_CLAIM',
-                `Catalog request ${requestId} lacks active lineage for ${instance.itemKey}`);
-            }
-            return { key: instance.itemKey, itemFingerprint: item.payloadFingerprint };
-          })
-          .sort((left, right) => left.key.localeCompare(right.key))
-      : undefined;
     if (requestId && !catalogClaimId) {
       throw new ClaimKernelError('INVALID_REQUEST_CATALOG',
         `Catalog request ${requestId} did not publish its configured catalog claim`);
@@ -1216,7 +1204,7 @@ export class ExecutionJournal {
       attemptId: input.attemptId,
       fence: input.fence,
       ...(requestId
-        ? { requestId, catalogClaimId: catalogClaimId as string, selectedItems: selectedItems! }
+        ? { requestId, catalogClaimId: catalogClaimId as string }
         : {}),
     });
     stagedProjection = reduceClaimEvent(stagedProjection, completed, plan);

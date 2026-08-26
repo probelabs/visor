@@ -1,7 +1,9 @@
 import {
+  attemptProjectionKey,
   canonicalJson,
   immutableCanonicalValue,
   sha256Canonical,
+  type ClaimProjection,
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 
@@ -478,7 +480,6 @@ export interface CatalogRequestAttemptCompletedEvent extends BoundAttemptEventBa
   readonly scope: RootScopePath;
   readonly requestId: string;
   readonly catalogClaimId: string;
-  readonly selectedItems: readonly CatalogSelectedItem[];
 }
 
 export interface CatalogRequestAttemptFailedEvent extends BoundAttemptEventBase {
@@ -522,7 +523,6 @@ export interface CatalogRequestProjection {
   readonly expansionOwnerCheck: string;
   readonly status: CatalogRequestStatus;
   readonly catalogClaimId?: string;
-  readonly selectedItems?: readonly CatalogSelectedItem[];
   readonly attemptId?: string;
   readonly fence?: number;
   readonly reason?: string;
@@ -646,12 +646,13 @@ export interface ExpansionCoverageProjection {
   readonly provenance: Readonly<{ catalogClaimId?: string; lastEventId: number }>;
 }
 
-const COVERAGE_CLASSES: ReadonlySet<string> = new Set<ExpansionCoverageClass>([
-  'completed_clean', 'completed_with_findings', 'error', 'guardrail_blocked', 'cancelled',
+const PROVIDER_COVERAGE_CLASSES: ReadonlySet<string> = new Set<ExpansionCoverageClass>([
+  'completed_clean', 'completed_with_findings', 'guardrail_blocked',
 ]);
 
 /** Derive one request-bound coverage read model from immutable C2 facts. */
 export function projectExpansionCoverage(
+  claimProjection: ClaimProjection,
   projection: InstanceProjection,
   expansion: CompiledExpansion,
   requestId: string
@@ -663,8 +664,44 @@ export function projectExpansionCoverage(
   if (!expansion.coverage) {
     throw new InstanceKernelError('COVERAGE_NOT_CONFIGURED', `Expansion ${expansion.expansionOwnerCheck} has no coverage contract`);
   }
-  const denominator = [...(request.selectedItems || [])].map(item => ({ ...item }));
   const diagnostics: string[] = [];
+  const denominator: CatalogSelectedItem[] = [];
+  const catalog = request.catalogClaimId ? claimProjection.claims[request.catalogClaimId] : undefined;
+  const attempt = claimProjection.attempts[
+    attemptProjectionKey(request.sessionId, request.expansionOwnerCheck, [])
+  ];
+  const exactCatalog = catalog &&
+    catalog.claimId === request.catalogClaimId &&
+    catalog.claim === expansion.catalogClaimRef &&
+    catalog.producerCheckId === request.expansionOwnerCheck &&
+    catalog.attemptId === request.attemptId &&
+    catalog.fence === request.fence &&
+    catalog.scope.length === 0 &&
+    attempt?.sessionId === request.sessionId &&
+    attempt.checkId === request.expansionOwnerCheck &&
+    attempt.scope.length === 0 &&
+    attempt.attemptId === request.attemptId &&
+    attempt.fence === request.fence &&
+    attempt.status === 'completed' &&
+    request.status === 'completed';
+  if (exactCatalog) {
+    try {
+      expansion.catalogValidator(catalog.payload);
+      const rawItems = resolveJsonPointer(catalog.payload, expansion.itemsPointer);
+      if (!Array.isArray(rawItems)) throw new Error('items-not-array');
+      const seen = new Set<string>();
+      for (const item of rawItems) {
+        expansion.itemValidator(item);
+        const key = canonicalCatalogKey(resolveJsonPointer(item, expansion.keyPointer));
+        if (seen.has(key)) throw new Error('duplicate-key');
+        seen.add(key);
+        denominator.push({ key, itemFingerprint: deriveItemFingerprint(item) });
+      }
+      denominator.sort((left, right) => left.key.localeCompare(right.key));
+    } catch {
+      diagnostics.push('catalog:invalid');
+    }
+  } else diagnostics.push('catalog:lineage');
   const observedClaimIds = new Set<string>();
   const selectedKeys = new Set(denominator.map(item => item.key));
   const items = denominator.map(selected => {
@@ -696,12 +733,24 @@ export function projectExpansionCoverage(
       .filter(claim => claim?.active && claim.claim === expansion.coverage!.outcomeClaimRef);
     outcomes.forEach(claim => observedClaimIds.add(claim.claimId));
     const managed = generation.attemptId ? projection.managedRunsByAttemptId[generation.attemptId] : undefined;
-    const cancelled = generation.status === 'failed' && managed?.status === 'terminated' &&
-      managed.controllerDecision === 'failed' && managed.cancellationRequested === true;
+    const cancelled = generation.status === 'failed' &&
+      generation.reason === 'MANAGED_DEADLINE_EXCEEDED' &&
+      managed?.status === 'terminated' &&
+      managed.cleanupStatus === 'clean' &&
+      managed.controllerDecision === 'failed' &&
+      managed.failureCode === 'MANAGED_DEADLINE_EXCEEDED' &&
+      managed.cancellationRequested === true &&
+      managed.binding.sessionId === request.sessionId &&
+      managed.binding.checkId === generation.checkId &&
+      managed.binding.nodeInstanceId === generation.nodeInstanceId &&
+      managed.binding.nodeGenerationId === generation.nodeGenerationId &&
+      managed.binding.attemptId === generation.attemptId &&
+      managed.binding.fence === generation.fence &&
+      scopePathEquals(managed.binding.scope, generation.scope);
     if (outcomes.length === 1 && generation.status === 'completed') {
       try {
         const value = resolveJsonPointer(outcomes[0].payload, expansion.coverage!.classPointer);
-        if (typeof value === 'string' && COVERAGE_CLASSES.has(value)) {
+        if (typeof value === 'string' && PROVIDER_COVERAGE_CLASSES.has(value)) {
           terminalClass = value as ExpansionCoverageClass;
         } else diagnostics.push(`${selected.key}:invalid-class`);
       } catch {
@@ -729,9 +778,6 @@ export function projectExpansionCoverage(
       diagnostics.push(`${instance.itemKey}:unknown-terminal`);
     }
   }
-  if (request.status !== 'completed' || !request.catalogClaimId || !request.selectedItems) {
-    diagnostics.push(`request:${request.status}`);
-  }
   const canonicalDiagnostics = [...new Set(diagnostics)].sort();
   const terminalItems = items.filter(item => item.terminalClass !== null).length;
   const closure = canonicalDiagnostics.length === 0 && terminalItems === items.length ? 'closed' as const : 'open' as const;
@@ -740,9 +786,11 @@ export function projectExpansionCoverage(
     value === 'error' || value === 'guardrail_blocked' || value === 'cancelled'
   ) ? 'unverifiable' as const : classes.some(value => value === 'completed_with_findings')
     ? 'findings' as const : 'clean' as const;
-  const semantic = { requestId, expansionOwnerCheck: request.expansionOwnerCheck, denominator,
-    items, closure, disposition, terminalItems, diagnostics: canonicalDiagnostics };
-  return immutableCanonicalValue({ ...semantic,
+  const semantic = { expansionOwnerCheck: request.expansionOwnerCheck, denominator,
+    classes: items.map(item => ({ key: item.key, terminalClass: item.terminalClass })),
+    closure, disposition, terminalItems, diagnostics: canonicalDiagnostics };
+  return immutableCanonicalValue({ requestId, expansionOwnerCheck: request.expansionOwnerCheck,
+    denominator, items, closure, disposition, terminalItems, diagnostics: canonicalDiagnostics,
     semanticDigest: sha256Canonical({ v: 1, ...semantic }),
     provenance: { ...(request.catalogClaimId ? { catalogClaimId: request.catalogClaimId } : {}),
       lastEventId: projection.lastEventId } });
@@ -1320,15 +1368,8 @@ function reduceRequestLifecycle(
     if (!SHA256_PATTERN.test(event.catalogClaimId)) {
       throw new InstanceKernelError('INVALID_REQUEST_CATALOG', 'Completed request catalog claim ID is invalid');
     }
-    const selectedItems = event.selectedItems.map(item => ({ ...item }));
-    if (selectedItems.some(item => typeof item.key !== 'string' || item.key.length === 0 ||
-        !SHA256_PATTERN.test(item.itemFingerprint)) ||
-        selectedItems.some((item, index) => index > 0 && selectedItems[index - 1].key >= item.key)) {
-      throw new InstanceKernelError('INVALID_REQUEST_CATALOG',
-        'Completed request denominator must contain unique canonically sorted keys and fingerprints');
-    }
     next.requestsById[event.requestId] = { ...request, status: 'completed',
-      catalogClaimId: event.catalogClaimId, selectedItems };
+      catalogClaimId: event.catalogClaimId };
     return;
   }
   next.requestsById[event.requestId] = {
