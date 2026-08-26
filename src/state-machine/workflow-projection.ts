@@ -78,6 +78,9 @@ export function projectWorkflowToGraph(
     ...(workflow.sandboxes && { sandboxes: workflow.sandboxes }),
     ...(workflow.sandbox && { sandbox: workflow.sandbox }),
     ...(workflow.sandbox_defaults && { sandbox_defaults: workflow.sandbox_defaults }),
+    ...((workflow as any)['x-visor'] !== undefined && {
+      ['x-visor']: (workflow as any)['x-visor'],
+    }),
   };
 
   if ((logger as any).isDebugEnabled?.()) {

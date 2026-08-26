@@ -343,6 +343,17 @@ export async function handleLevelDispatch(
   transition: (newState: EngineState) => void,
   emitEvent: (event: EngineEvent) => void
 ): Promise<void> {
+  if ((context.config as any)['x-visor']?.dispatch === 'ready') {
+    if (!isFreshInitialReadyWave(state)) {
+      throw new Error(
+        'Ready dispatch is supported only for a fresh initial wave; ' +
+          `wave=${state.wave}, kind=${(state as any).flags?.waveKind || 'unknown'}`
+      );
+    }
+    await executeReadyNodeWave(context, state, transition, emitEvent);
+    return;
+  }
+
   // Pop next level from queue
   const level = state.levelQueue.shift();
 
@@ -431,6 +442,202 @@ export async function handleLevelDispatch(
   } else {
     logger.info('[LevelDispatch] Skipping transition to WavePlanning - already in Error state');
   }
+}
+
+type ReadyNodeResult = {
+  checkId: string;
+  result: ReviewSummary;
+  error?: Error;
+  duration?: number;
+};
+
+function isFreshInitialReadyWave(state: RunState): boolean {
+  const flags = (state as any).flags || {};
+  const hasPending =
+    (state.pendingRunScopes?.size || 0) > 0 || (state.pendingRunArgs?.size || 0) > 0;
+  return (
+    state.wave === 1 &&
+    flags.waveKind === 'initial' &&
+    !flags.forwardRunActive &&
+    !flags.forwardRunRequested &&
+    state.completedChecks.size === 0 &&
+    state.stats.size === 0 &&
+    state.activeDispatches.size === 0 &&
+    !hasPending
+  );
+}
+
+function readyNodeIds(state: RunState): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const level of state.levelQueue) {
+    for (const checkId of level.parallel) {
+      if (!seen.has(checkId)) {
+        seen.add(checkId);
+        ids.push(checkId);
+      }
+    }
+  }
+  return ids;
+}
+
+function readyDispatchViolations(context: EngineContext, state: RunState, ids: string[]): string[] {
+  const violations: string[] = [];
+  const queuedIds = new Set(ids);
+  const flags = (state as any).flags || {};
+  const waveKind = flags.waveKind || 'unknown';
+
+  if (state.wave !== 1 || waveKind !== 'initial' || flags.forwardRunActive || flags.forwardRunRequested) {
+    violations.push(`wave is not a fresh initial wave (wave=${state.wave}, kind=${waveKind})`);
+  }
+  if ((state.pendingRunScopes?.size || 0) > 0) violations.push('pending scopes are present');
+  if ((state.pendingRunArgs?.size || 0) > 0) violations.push('pending args are present');
+  if (state.eventQueue.some(event => event.type === 'ForwardRunRequested' || event.type === 'WaveRetry')) {
+    violations.push('pending forward/retry events are present');
+  }
+
+  for (const checkId of ids) {
+    const cfg: any = context.config.checks?.[checkId];
+    const metadata: any = context.checks[checkId];
+    if (!cfg) {
+      violations.push(`${checkId}: configuration is missing`);
+      continue;
+    }
+
+    const rawDeps = Array.isArray(cfg.depends_on) ? cfg.depends_on : [cfg.depends_on];
+    if (rawDeps.some((dep: unknown) => typeof dep === 'string' && dep.includes('|'))) {
+      violations.push(`${checkId}.depends_on contains an OR dependency`);
+    }
+    for (const dep of rawDeps) {
+      if (typeof dep === 'string' && !dep.includes('|') && !queuedIds.has(dep)) {
+        violations.push(`${checkId}.depends_on references '${dep}' outside the queued graph`);
+      }
+    }
+    if (cfg.forEach === true) violations.push(`${checkId}.forEach is unsupported`);
+    if (cfg.fanout !== undefined) violations.push(`${checkId}.fanout is unsupported`);
+    if (cfg.reduce === true) violations.push(`${checkId}.reduce is unsupported`);
+    if (cfg.type === 'human-input' || metadata?.providerType === 'human-input') {
+      violations.push(`${checkId} is human-input/pause-capable and unsupported`);
+    }
+    if (cfg.reuse_ai_session !== undefined) {
+      violations.push(`${checkId}.reuse_ai_session is unsupported`);
+    }
+    if (cfg.session_mode !== undefined) violations.push(`${checkId}.session_mode is unsupported`);
+    if (cfg.sessionProvider !== undefined || metadata?.sessionProvider !== undefined) {
+      violations.push(`${checkId}.sessionProvider is unsupported`);
+    }
+
+    for (const blockName of ['on_init', 'on_success', 'on_fail', 'on_finish']) {
+      const block = cfg[blockName];
+      if (block === undefined || block === null) continue;
+      const keys = ['run', 'run_js', 'goto', 'goto_js', 'retry', 'transitions'].filter(
+        key => block[key] !== undefined
+      );
+      violations.push(
+        keys.length > 0
+          ? `${checkId}.${blockName}.${keys.join(',')} is unsupported`
+          : `${checkId}.${blockName} is unsupported`
+      );
+    }
+    for (const field of ['run', 'run_js', 'goto', 'goto_js', 'retry', 'transitions', 'debounce']) {
+      if (cfg[field] !== undefined) violations.push(`${checkId}.${field} is unsupported`);
+    }
+  }
+
+  if ((context.config as any).routing !== undefined) {
+    violations.push('global routing configuration is unsupported');
+  }
+  return violations;
+}
+
+async function executeReadyNodeWave(
+  context: EngineContext,
+  state: RunState,
+  transition: (newState: EngineState) => void,
+  emitEvent: (event: EngineEvent) => void
+): Promise<void> {
+  const ids = readyNodeIds(state);
+  const violations = readyDispatchViolations(context, state, ids);
+  if (violations.length > 0) {
+    throw new Error(`Ready dispatch unsupported for static DAG: ${violations.join('; ')}`);
+  }
+
+  const maxParallelism = Math.max(1, context.maxParallelism || 10);
+  const pending = new Set(ids);
+  const terminal = new Set<string>();
+  const running = new Map<string, Promise<ReadyNodeResult>>();
+  const dependenciesOf = (checkId: string): string[] => {
+    const raw = (context.config.checks?.[checkId] as any)?.depends_on;
+    return (Array.isArray(raw) ? raw : raw ? [raw] : []) as string[];
+  };
+  const isReady = (checkId: string) => dependenciesOf(checkId).every(dep => terminal.has(dep));
+  const admit = () => {
+    while (!state.flags.failFastTriggered && running.size < maxParallelism) {
+      const checkId = ids.find(id => pending.has(id) && isReady(id));
+      if (!checkId) break;
+      pending.delete(checkId);
+      const startedAt = Date.now();
+      const promise = (async (): Promise<ReadyNodeResult> => {
+        try {
+          const result = await executeSingleCheck(checkId, context, state, emitEvent, transition);
+          return { checkId, result, duration: Date.now() - startedAt };
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          return { checkId, result: { issues: [] }, error: err, duration: Date.now() - startedAt };
+        }
+      })();
+      running.set(checkId, promise);
+      state.currentLevelChecks.add(checkId);
+    }
+  };
+
+  const firstLevel = state.levelQueue[0];
+  state.currentLevel = firstLevel?.level;
+  state.currentLevelChecks.clear();
+  setSpanAttributes({
+    level_size: ids.length,
+    level_checks_preview: ids.slice(0, 5).join(','),
+  });
+  const initiallyReady = ids.filter(isReady);
+  emitEvent({
+    type: 'LevelReady',
+    level: { level: firstLevel?.level || 0, parallel: initiallyReady },
+    wave: state.wave,
+  });
+
+  admit();
+  while (running.size > 0) {
+    const settled = await Promise.race(running.values());
+    running.delete(settled.checkId);
+    state.currentLevelChecks.delete(settled.checkId);
+    const settledResult = settled.result as any;
+    if (
+      settled.error ||
+      (!settledResult?.__skipped && !settledResult?.isForEach)
+    ) {
+      updateStats([settled], state);
+    }
+    state.completedChecks.add(settled.checkId);
+    terminal.add(settled.checkId);
+
+    if (
+      context.failFast &&
+      (settled.error !== undefined || shouldFailFast([settled]))
+    ) {
+      state.flags.failFastTriggered = true;
+      pending.clear();
+    }
+    admit();
+  }
+
+  if (pending.size > 0) {
+    throw new Error(`Ready dispatch stalled with pending nodes: ${Array.from(pending).join(', ')}`);
+  }
+
+  state.levelQueue = [];
+  emitEvent({ type: 'LevelDepleted', level: firstLevel?.level || 0, wave: state.wave });
+  state.currentLevelChecks.clear();
+  if (state.currentState !== 'Error') transition('WavePlanning');
 }
 
 /**
