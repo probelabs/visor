@@ -1186,7 +1186,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17104-33145-src_types_config.ts-0-65302%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17422-33463-src_types_config.ts-0-65620%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1203,7 +1203,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17104-33145-src_types_config.ts-0-65302%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17422-33463-src_types_config.ts-0-65620%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1832,6 +1832,26 @@ export const configSchema = {
           type: 'string',
           description: 'Claim published by the controller for one schema-valid item.',
         },
+        coverage: {
+          type: 'object',
+          properties: {
+            outcome_claim: {
+              type: 'string',
+              description: "Claim emitted exactly once by the template's terminal sink operation.",
+            },
+            class_pointer: {
+              type: 'string',
+              description: 'RFC 6901 pointer from the outcome payload to its terminal class.',
+            },
+          },
+          required: ['outcome_claim', 'class_pointer'],
+          additionalProperties: false,
+          description:
+            'Optional deterministic terminal coverage projection for the selected catalog.',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
       },
       required: ['claim', 'template', 'items_pointer', 'key_pointer', 'item_claim'],
       additionalProperties: false,
@@ -2020,7 +2040,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17104-33145-src_types_config.ts-0-65302%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17422-33463-src_types_config.ts-0-65620%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -2035,14 +2055,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-17104-33145-src_types_config.ts-0-65302>>':
+    'Record<string,Partial<interface-src_types_config.ts-17422-33463-src_types_config.ts-0-65620>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-17104-33145-src_types_config.ts-0-65302%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-17422-33463-src_types_config.ts-0-65620%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-17104-33145-src_types_config.ts-0-65302>': {
+    'Partial<interface-src_types_config.ts-17422-33463-src_types_config.ts-0-65620>': {
       type: 'object',
       additionalProperties: false,
     },

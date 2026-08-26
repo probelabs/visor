@@ -3,6 +3,7 @@ import {
   immutableCanonicalValue,
   sha256Canonical,
 } from './claim-kernel';
+import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -476,6 +477,8 @@ export interface CatalogRequestAttemptCompletedEvent extends BoundAttemptEventBa
   readonly type: 'AttemptCompleted';
   readonly scope: RootScopePath;
   readonly requestId: string;
+  readonly catalogClaimId: string;
+  readonly selectedItems: readonly CatalogSelectedItem[];
 }
 
 export interface CatalogRequestAttemptFailedEvent extends BoundAttemptEventBase {
@@ -507,12 +510,19 @@ export type InstanceRuntimeEvent =
   | CatalogRequestAttemptCompletedEvent
   | CatalogRequestAttemptFailedEvent;
 
+export interface CatalogSelectedItem {
+  readonly key: string;
+  readonly itemFingerprint: string;
+}
+
 export interface CatalogRequestProjection {
   readonly requestId: string;
   readonly requestOrdinal: number;
   readonly sessionId: string;
   readonly expansionOwnerCheck: string;
   readonly status: CatalogRequestStatus;
+  readonly catalogClaimId?: string;
+  readonly selectedItems?: readonly CatalogSelectedItem[];
   readonly attemptId?: string;
   readonly fence?: number;
   readonly reason?: string;
@@ -595,6 +605,7 @@ export interface ManagedRunProjection {
   readonly cleanupStatus?: ManagedRunCleanupStatus;
   readonly controllerDecision?: ManagedRunControllerDecision;
   readonly failureCode?: ManagedRunFailureCode;
+  readonly cancellationRequested?: true;
 }
 
 export interface InstanceProjection {
@@ -609,6 +620,132 @@ export interface InstanceProjection {
   readonly claimsById: Readonly<Record<string, InstanceClaimProjection>>;
   readonly attemptBindingsById: Readonly<Record<string, string>>;
   readonly managedRunsByAttemptId: Readonly<Record<string, ManagedRunProjection>>;
+}
+
+export type ExpansionCoverageClass =
+  | 'completed_clean'
+  | 'completed_with_findings'
+  | 'error'
+  | 'guardrail_blocked'
+  | 'cancelled';
+
+export interface ExpansionCoverageProjection {
+  readonly requestId: string;
+  readonly expansionOwnerCheck: string;
+  readonly denominator: readonly CatalogSelectedItem[];
+  readonly items: readonly Readonly<{
+    key: string;
+    itemFingerprint: string;
+    terminalClass: ExpansionCoverageClass | null;
+  }>[];
+  readonly closure: 'open' | 'closed';
+  readonly disposition: 'clean' | 'findings' | 'unverifiable';
+  readonly terminalItems: number;
+  readonly diagnostics: readonly string[];
+  readonly semanticDigest: string;
+  readonly provenance: Readonly<{ catalogClaimId?: string; lastEventId: number }>;
+}
+
+const COVERAGE_CLASSES: ReadonlySet<string> = new Set<ExpansionCoverageClass>([
+  'completed_clean', 'completed_with_findings', 'error', 'guardrail_blocked', 'cancelled',
+]);
+
+/** Derive one request-bound coverage read model from immutable C2 facts. */
+export function projectExpansionCoverage(
+  projection: InstanceProjection,
+  expansion: CompiledExpansion,
+  requestId: string
+): ExpansionCoverageProjection {
+  const request = projection.requestsById[requestId];
+  if (!request || request.expansionOwnerCheck !== expansion.expansionOwnerCheck) {
+    throw new InstanceKernelError('UNKNOWN_COVERAGE_REQUEST', `Unknown coverage request ${requestId}`);
+  }
+  if (!expansion.coverage) {
+    throw new InstanceKernelError('COVERAGE_NOT_CONFIGURED', `Expansion ${expansion.expansionOwnerCheck} has no coverage contract`);
+  }
+  const denominator = [...(request.selectedItems || [])].map(item => ({ ...item }));
+  const diagnostics: string[] = [];
+  const observedClaimIds = new Set<string>();
+  const selectedKeys = new Set(denominator.map(item => item.key));
+  const items = denominator.map(selected => {
+    const instances = Object.values(projection.instancesById).filter(instance =>
+      instance.sessionId === request.sessionId &&
+      instance.expansionOwnerCheck === request.expansionOwnerCheck &&
+      !instance.parentSubgraphInstanceId &&
+      instance.itemKey === selected.key
+    );
+    let terminalClass: ExpansionCoverageClass | null = null;
+    const instance = instances.length === 1 ? instances[0] : undefined;
+    const itemClaim = instance?.activeItemClaimId
+      ? projection.claimsById[instance.activeItemClaimId]
+      : undefined;
+    if (!instance || instance.status !== 'active' || !itemClaim?.active ||
+        itemClaim.payloadFingerprint !== selected.itemFingerprint) {
+      diagnostics.push(`${selected.key}:lineage`);
+      return { ...selected, terminalClass };
+    }
+    const emitterNodeId = instance.nodeInstanceIdsByTemplateNode[expansion.coverage!.emitterNodeKey];
+    const generationId = emitterNodeId ? projection.activeGenerationIdByNode[emitterNodeId] : undefined;
+    const generation = generationId ? projection.generationsById[generationId] : undefined;
+    if (!generation || generation.itemFingerprint !== selected.itemFingerprint) {
+      diagnostics.push(`${selected.key}:lineage`);
+      return { ...selected, terminalClass };
+    }
+    const outcomes = generation.completedOutputClaimIds
+      .map(claimId => projection.claimsById[claimId])
+      .filter(claim => claim?.active && claim.claim === expansion.coverage!.outcomeClaimRef);
+    outcomes.forEach(claim => observedClaimIds.add(claim.claimId));
+    const managed = generation.attemptId ? projection.managedRunsByAttemptId[generation.attemptId] : undefined;
+    const cancelled = generation.status === 'failed' && managed?.status === 'terminated' &&
+      managed.controllerDecision === 'failed' && managed.cancellationRequested === true;
+    if (outcomes.length === 1 && generation.status === 'completed') {
+      try {
+        const value = resolveJsonPointer(outcomes[0].payload, expansion.coverage!.classPointer);
+        if (typeof value === 'string' && COVERAGE_CLASSES.has(value)) {
+          terminalClass = value as ExpansionCoverageClass;
+        } else diagnostics.push(`${selected.key}:invalid-class`);
+      } catch {
+        diagnostics.push(`${selected.key}:invalid-class`);
+      }
+    } else if (outcomes.length === 0 && cancelled) terminalClass = 'cancelled';
+    else if (outcomes.length === 0 && generation.status === 'failed') terminalClass = 'error';
+    else if (outcomes.length > 1 || (outcomes.length > 0 && generation.status !== 'completed')) {
+      diagnostics.push(`${selected.key}:conflicting-terminal`);
+    } else diagnostics.push(`${selected.key}:nonterminal`);
+    return { ...selected, terminalClass };
+  });
+  for (const instance of Object.values(projection.instancesById)) {
+    if (instance.sessionId !== request.sessionId ||
+        instance.expansionOwnerCheck !== request.expansionOwnerCheck ||
+        instance.parentSubgraphInstanceId || instance.status !== 'active') continue;
+    if (!selectedKeys.has(instance.itemKey)) diagnostics.push(`${instance.itemKey}:unknown`);
+  }
+  for (const claim of Object.values(projection.claimsById)) {
+    if (!claim.active || claim.claim !== expansion.coverage.outcomeClaimRef) continue;
+    const instance = projection.instancesById[claim.subgraphInstanceId];
+    if (instance?.sessionId === request.sessionId &&
+        instance.expansionOwnerCheck === request.expansionOwnerCheck &&
+        !instance.parentSubgraphInstanceId && !observedClaimIds.has(claim.claimId)) {
+      diagnostics.push(`${instance.itemKey}:unknown-terminal`);
+    }
+  }
+  if (request.status !== 'completed' || !request.catalogClaimId || !request.selectedItems) {
+    diagnostics.push(`request:${request.status}`);
+  }
+  const canonicalDiagnostics = [...new Set(diagnostics)].sort();
+  const terminalItems = items.filter(item => item.terminalClass !== null).length;
+  const closure = canonicalDiagnostics.length === 0 && terminalItems === items.length ? 'closed' as const : 'open' as const;
+  const classes = items.map(item => item.terminalClass);
+  const disposition = closure === 'open' || classes.some(value =>
+    value === 'error' || value === 'guardrail_blocked' || value === 'cancelled'
+  ) ? 'unverifiable' as const : classes.some(value => value === 'completed_with_findings')
+    ? 'findings' as const : 'clean' as const;
+  const semantic = { requestId, expansionOwnerCheck: request.expansionOwnerCheck, denominator,
+    items, closure, disposition, terminalItems, diagnostics: canonicalDiagnostics };
+  return immutableCanonicalValue({ ...semantic,
+    semanticDigest: sha256Canonical({ v: 1, ...semantic }),
+    provenance: { ...(request.catalogClaimId ? { catalogClaimId: request.catalogClaimId } : {}),
+      lastEventId: projection.lastEventId } });
 }
 
 export function createInitialInstanceProjection(): InstanceProjection {
@@ -1068,6 +1205,7 @@ function reduceManagedRunLifecycle(
     next.managedRunsByAttemptId[binding.attemptId] = {
       ...current,
       status: 'cancel_requested',
+      cancellationRequested: true,
     };
     return;
   }
@@ -1178,10 +1316,25 @@ function reduceRequestLifecycle(
     throw new InstanceKernelError('INVALID_REQUEST_STATE', `Request ${event.requestId} is not running`);
   }
   if (event.type === 'CheckScheduled') return;
+  if (event.type === 'AttemptCompleted') {
+    if (!SHA256_PATTERN.test(event.catalogClaimId)) {
+      throw new InstanceKernelError('INVALID_REQUEST_CATALOG', 'Completed request catalog claim ID is invalid');
+    }
+    const selectedItems = event.selectedItems.map(item => ({ ...item }));
+    if (selectedItems.some(item => typeof item.key !== 'string' || item.key.length === 0 ||
+        !SHA256_PATTERN.test(item.itemFingerprint)) ||
+        selectedItems.some((item, index) => index > 0 && selectedItems[index - 1].key >= item.key)) {
+      throw new InstanceKernelError('INVALID_REQUEST_CATALOG',
+        'Completed request denominator must contain unique canonically sorted keys and fingerprints');
+    }
+    next.requestsById[event.requestId] = { ...request, status: 'completed',
+      catalogClaimId: event.catalogClaimId, selectedItems };
+    return;
+  }
   next.requestsById[event.requestId] = {
     ...request,
-    status: event.type === 'AttemptCompleted' ? 'completed' : 'failed',
-    ...(event.type === 'AttemptFailed' ? { reason: event.reason } : {}),
+    status: 'failed',
+    reason: event.reason,
   };
 }
 

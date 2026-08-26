@@ -534,6 +534,13 @@ export interface ExpansionConfig {
   key_pointer: string;
   /** Claim published by the controller for one schema-valid item. */
   item_claim: string;
+  /** Optional deterministic terminal coverage projection for the selected catalog. */
+  coverage?: {
+    /** Claim emitted exactly once by the template's terminal sink operation. */
+    outcome_claim: string;
+    /** RFC 6901 pointer from the outcome payload to its terminal class. */
+    class_pointer: string;
+  };
 }
 
 /** One externally supplied claim binding for a generated subgraph template. */

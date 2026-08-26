@@ -646,6 +646,19 @@ export class StateMachineExecutionEngine {
     return runner.requestCatalogReconciliation(ownerCheck);
   }
 
+  /** Read the deterministic request-bound expansion coverage projection. */
+  public getExpansionCoverageProjection(requestId: string) {
+    const journal = (this as any)._lastContext?.journal as ExecutionJournal | undefined;
+    if (!journal) {
+      const error = new Error('Expansion coverage requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.getExpansionCoverageProjection(requestId);
+  }
+
   /**
    * Get output history snapshot for test framework compatibility
    * Extracts output history from the journal
