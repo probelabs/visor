@@ -5,6 +5,7 @@ import type { PRInfo } from './pr-analyzer';
 import { StateMachineRunner } from './state-machine/runner';
 import type { EngineContext } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
+import type { InstanceProjection } from './state-machine/graph/instance-kernel';
 import { logger } from './logger';
 import type { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import { SandboxManager } from './sandbox/sandbox-manager';
@@ -644,6 +645,30 @@ export class StateMachineExecutionEngine {
       throw error;
     }
     return runner.requestCatalogReconciliation(ownerCheck);
+  }
+
+  public getInstanceProjection(): InstanceProjection {
+    const journal = this._lastContext?.journal;
+    if (!journal) {
+      const error = new Error('Instance projection requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.getInstanceProjection();
+  }
+
+  public replayInstanceProjection(): InstanceProjection {
+    const journal = this._lastContext?.journal;
+    if (!journal) {
+      const error = new Error('Instance projection requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.replayInstanceProjection();
   }
 
   /** Read the deterministic request-bound expansion coverage projection. */

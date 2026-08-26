@@ -10,7 +10,13 @@ import type { AnalysisResult } from './output-formatters';
 import type { VisorConfig, TagFilter, HumanInputRequest } from './types/config';
 import type { ExecutionContext } from './providers/check-provider.interface';
 
+export { StateMachineExecutionEngine };
 export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
+export type {
+  ExpansionCoverageProjection,
+  InstanceClaimProjection,
+  InstanceProjection,
+} from './state-machine/graph/instance-kernel';
 
 export interface VisorOptions {
   cwd?: string;
