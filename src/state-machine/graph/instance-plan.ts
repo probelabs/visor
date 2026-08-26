@@ -68,6 +68,11 @@ export interface CompiledExpansion {
   readonly itemClaimRef: string;
   readonly itemValidator: ClaimSchemaValidator;
   readonly template: CompiledSubgraphTemplate;
+  readonly coverage?: Readonly<{
+    outcomeClaimRef: string;
+    classPointer: CompiledJsonPointer;
+    emitterNodeKey: string;
+  }>;
   readonly graphSemanticDigest: string;
 }
 
@@ -512,6 +517,7 @@ export function compileExpansionPlan(
     template: CompiledSubgraphTemplate;
     itemsPointer: CompiledJsonPointer;
     keyPointer: CompiledJsonPointer;
+    coverage?: CompiledExpansion['coverage'];
     expansionSpecDigest: string;
   }> = [];
   for (const [owner, check] of owners.sort(([a], [b]) => a.localeCompare(b))) {
@@ -577,6 +583,43 @@ export function compileExpansionPlan(
       expansion.key_pointer,
       `checks.${owner}.expand.key_pointer`
     );
+    let coverage: CompiledExpansion['coverage'];
+    if (expansion.coverage !== undefined) {
+      if (!expansion.coverage || typeof expansion.coverage !== 'object' || Array.isArray(expansion.coverage)) {
+        throw new InstancePlanError('INVALID_COVERAGE_CONFIG', `Check "${owner}" coverage must be an object`);
+      }
+      const outcomeClaimRef = requireNonEmptyString(
+        expansion.coverage.outcome_claim,
+        `checks.${owner}.expand.coverage.outcome_claim`
+      );
+      if (
+        !CLAIM_REF_PATTERN.test(outcomeClaimRef) ||
+        !authority.validatorsByClaim[outcomeClaimRef] ||
+        outcomeClaimRef === catalogClaim ||
+        outcomeClaimRef === itemClaim ||
+        outcomeClaimRef === template.input.claim
+      ) {
+        throw new InstancePlanError(
+          'INVALID_COVERAGE_OUTCOME_CLAIM',
+          `Check "${owner}" coverage outcome must be a distinct declared template claim`
+        );
+      }
+      const emitterNodeKey = template.emitterByClaim[outcomeClaimRef];
+      if (!emitterNodeKey || template.dependentsByNode[emitterNodeKey].length !== 0) {
+        throw new InstancePlanError(
+          'INVALID_COVERAGE_OUTCOME_EMITTER',
+          `Check "${owner}" coverage outcome must have exactly one sink emitter`
+        );
+      }
+      coverage = Object.freeze({
+        outcomeClaimRef,
+        emitterNodeKey,
+        classPointer: compileJsonPointer(
+          expansion.coverage.class_pointer,
+          `checks.${owner}.expand.coverage.class_pointer`
+        ),
+      });
+    }
     const expansionSpecDigest = sha256Canonical({
       v: 1,
       expansionOwnerCheck: owner,
@@ -586,6 +629,15 @@ export function compileExpansionPlan(
       itemsPointer: itemsPointer.source,
       keyPointer: keyPointer.source,
       itemClaimRef: itemClaim,
+      ...(coverage
+        ? {
+            coverage: {
+              outcomeClaimRef: coverage.outcomeClaimRef,
+              classPointer: coverage.classPointer.source,
+              emitterNodeKey: coverage.emitterNodeKey,
+            },
+          }
+        : {}),
     });
     precompiled.push({
       owner,
@@ -593,6 +645,7 @@ export function compileExpansionPlan(
       template,
       itemsPointer,
       keyPointer,
+      coverage,
       expansionSpecDigest,
     });
   }
@@ -631,6 +684,7 @@ export function compileExpansionPlan(
       itemClaimRef: expansion.item_claim,
       itemValidator: authority.validatorsByClaim[expansion.item_claim],
       template: compiled.template,
+      ...(compiled.coverage ? { coverage: compiled.coverage } : {}),
       graphSemanticDigest,
     });
   }

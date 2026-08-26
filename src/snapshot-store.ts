@@ -40,11 +40,13 @@ import {
   reduceInstanceEvent,
   reduceInstanceEventBatch,
   replayInstanceEvents,
+  projectExpansionCoverage,
   type CatalogReconciliationRequestedEvent,
   type CatalogRequestAttemptStartedEvent,
   type CatalogRequestCheckScheduledEvent,
   type InstanceProjection,
   type InstanceRuntimeEvent,
+  type ExpansionCoverageProjection,
   type NodeGenerationProjection,
   type KeyedScopePath,
   type RootScopePath,
@@ -669,6 +671,37 @@ export class ExecutionJournal {
     return immutableCanonicalValue(this.instanceProjection);
   }
 
+  getExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection {
+    const request = this.instanceProjection.requestsById[requestId];
+    const expansion = request
+      ? this.requireClaimPlan().expansionPlan?.byOwner[request.expansionOwnerCheck]
+      : undefined;
+    if (!expansion) {
+      throw new ClaimKernelError('UNKNOWN_COVERAGE_REQUEST', `Unknown coverage request ${requestId}`);
+    }
+    return projectExpansionCoverage(this.claimProjection, this.instanceProjection, expansion, requestId);
+  }
+
+  getExpansionCoverageRequestIds(ownerCheck?: string): readonly string[] {
+    return Object.freeze(this.instanceProjection.requestOrder.filter(requestId =>
+      ownerCheck === undefined ||
+      this.instanceProjection.requestsById[requestId].expansionOwnerCheck === ownerCheck
+    ));
+  }
+
+  replayExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection {
+    const instanceProjection = this.replayInstanceProjection();
+    const claimProjection = this.replayClaimProjection();
+    const request = instanceProjection.requestsById[requestId];
+    const expansion = request
+      ? this.requireClaimPlan().expansionPlan?.byOwner[request.expansionOwnerCheck]
+      : undefined;
+    if (!expansion) {
+      throw new ClaimKernelError('UNKNOWN_COVERAGE_REQUEST', `Unknown coverage request ${requestId}`);
+    }
+    return projectExpansionCoverage(claimProjection, instanceProjection, expansion, requestId);
+  }
+
   replayInstanceProjection(): InstanceProjection {
     return replayInstanceEvents(
       this.runtimeEvents.filter(event =>
@@ -1156,6 +1189,10 @@ export class ExecutionJournal {
         })
       : { events: [] as InstanceRuntimeEvent[], projection: this.instanceProjection };
     const requestId = this.instanceProjection.attemptBindingsById[input.attemptId];
+    if (requestId && !catalogClaimId) {
+      throw new ClaimKernelError('INVALID_REQUEST_CATALOG',
+        `Catalog request ${requestId} did not publish its configured catalog claim`);
+    }
 
     const completed = immutableRuntimeEvent({
       version: 1,
@@ -1166,7 +1203,9 @@ export class ExecutionJournal {
       scope: input.scope.map(part => ({ ...part })),
       attemptId: input.attemptId,
       fence: input.fence,
-      ...(requestId ? { requestId } : {}),
+      ...(requestId
+        ? { requestId, catalogClaimId: catalogClaimId as string }
+        : {}),
     });
     stagedProjection = reduceClaimEvent(stagedProjection, completed, plan);
     stagedEvents.push(completed);

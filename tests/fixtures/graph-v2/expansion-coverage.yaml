@@ -1,0 +1,65 @@
+version: '1.0'
+max_parallelism: 5
+workspace: {enabled: false}
+
+claim_types:
+  operation.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [operations]
+      properties:
+        operations:
+          type: array
+          items: {$ref: '#/$defs/operation'}
+      $defs:
+        operation:
+          type: object
+          additionalProperties: false
+          required: [id, mode, revision]
+          properties:
+            id: {type: string, minLength: 1}
+            mode: {type: string, minLength: 1}
+            revision: {type: integer, minimum: 1}
+  operation.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, mode, revision]
+      properties:
+        id: {type: string, minLength: 1}
+        mode: {type: string, minLength: 1}
+        revision: {type: integer, minimum: 1}
+  operation.outcome@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [class]
+      properties:
+        class:
+          enum: [completed_clean, completed_with_findings, guardrail_blocked]
+        findings:
+          type: array
+
+subgraphs:
+  assess-operation:
+    input: {name: operation, claim: operation.item@1}
+    checks:
+      assess:
+        type: noop
+        consumes: [{claim: operation.item@1, as: operation}]
+        emits: [{claim: operation.outcome@1, from: output}]
+
+checks:
+  discover-operations:
+    type: noop
+    emits: [{claim: operation.catalog@1, from: output}]
+    expand:
+      claim: operation.catalog@1
+      template: assess-operation
+      items_pointer: /operations
+      key_pointer: /id
+      item_claim: operation.item@1
+      coverage:
+        outcome_claim: operation.outcome@1
+        class_pointer: /class

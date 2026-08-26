@@ -1,8 +1,11 @@
 import {
+  attemptProjectionKey,
   canonicalJson,
   immutableCanonicalValue,
   sha256Canonical,
+  type ClaimProjection,
 } from './claim-kernel';
+import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -476,6 +479,7 @@ export interface CatalogRequestAttemptCompletedEvent extends BoundAttemptEventBa
   readonly type: 'AttemptCompleted';
   readonly scope: RootScopePath;
   readonly requestId: string;
+  readonly catalogClaimId: string;
 }
 
 export interface CatalogRequestAttemptFailedEvent extends BoundAttemptEventBase {
@@ -507,12 +511,18 @@ export type InstanceRuntimeEvent =
   | CatalogRequestAttemptCompletedEvent
   | CatalogRequestAttemptFailedEvent;
 
+export interface CatalogSelectedItem {
+  readonly key: string;
+  readonly itemFingerprint: string;
+}
+
 export interface CatalogRequestProjection {
   readonly requestId: string;
   readonly requestOrdinal: number;
   readonly sessionId: string;
   readonly expansionOwnerCheck: string;
   readonly status: CatalogRequestStatus;
+  readonly catalogClaimId?: string;
   readonly attemptId?: string;
   readonly fence?: number;
   readonly reason?: string;
@@ -595,6 +605,7 @@ export interface ManagedRunProjection {
   readonly cleanupStatus?: ManagedRunCleanupStatus;
   readonly controllerDecision?: ManagedRunControllerDecision;
   readonly failureCode?: ManagedRunFailureCode;
+  readonly cancellationRequested?: true;
 }
 
 export interface InstanceProjection {
@@ -609,6 +620,180 @@ export interface InstanceProjection {
   readonly claimsById: Readonly<Record<string, InstanceClaimProjection>>;
   readonly attemptBindingsById: Readonly<Record<string, string>>;
   readonly managedRunsByAttemptId: Readonly<Record<string, ManagedRunProjection>>;
+}
+
+export type ExpansionCoverageClass =
+  | 'completed_clean'
+  | 'completed_with_findings'
+  | 'error'
+  | 'guardrail_blocked'
+  | 'cancelled';
+
+export interface ExpansionCoverageProjection {
+  readonly requestId: string;
+  readonly expansionOwnerCheck: string;
+  readonly denominator: readonly CatalogSelectedItem[];
+  readonly items: readonly Readonly<{
+    key: string;
+    itemFingerprint: string;
+    terminalClass: ExpansionCoverageClass | null;
+  }>[];
+  readonly closure: 'open' | 'closed';
+  readonly disposition: 'clean' | 'findings' | 'unverifiable';
+  readonly terminalItems: number;
+  readonly diagnostics: readonly string[];
+  readonly semanticDigest: string;
+  readonly provenance: Readonly<{ catalogClaimId?: string; lastEventId: number }>;
+}
+
+const PROVIDER_COVERAGE_CLASSES: ReadonlySet<string> = new Set<ExpansionCoverageClass>([
+  'completed_clean', 'completed_with_findings', 'guardrail_blocked',
+]);
+
+/** Derive one request-bound coverage read model from immutable C2 facts. */
+export function projectExpansionCoverage(
+  claimProjection: ClaimProjection,
+  projection: InstanceProjection,
+  expansion: CompiledExpansion,
+  requestId: string
+): ExpansionCoverageProjection {
+  const request = projection.requestsById[requestId];
+  if (!request || request.expansionOwnerCheck !== expansion.expansionOwnerCheck) {
+    throw new InstanceKernelError('UNKNOWN_COVERAGE_REQUEST', `Unknown coverage request ${requestId}`);
+  }
+  if (!expansion.coverage) {
+    throw new InstanceKernelError('COVERAGE_NOT_CONFIGURED', `Expansion ${expansion.expansionOwnerCheck} has no coverage contract`);
+  }
+  const diagnostics: string[] = [];
+  const denominator: CatalogSelectedItem[] = [];
+  const catalog = request.catalogClaimId ? claimProjection.claims[request.catalogClaimId] : undefined;
+  const attempt = claimProjection.attempts[
+    attemptProjectionKey(request.sessionId, request.expansionOwnerCheck, [])
+  ];
+  const exactCatalog = catalog &&
+    catalog.claimId === request.catalogClaimId &&
+    catalog.claim === expansion.catalogClaimRef &&
+    catalog.producerCheckId === request.expansionOwnerCheck &&
+    catalog.attemptId === request.attemptId &&
+    catalog.fence === request.fence &&
+    catalog.scope.length === 0 &&
+    attempt?.sessionId === request.sessionId &&
+    attempt.checkId === request.expansionOwnerCheck &&
+    attempt.scope.length === 0 &&
+    attempt.attemptId === request.attemptId &&
+    attempt.fence === request.fence &&
+    attempt.status === 'completed' &&
+    request.status === 'completed';
+  if (exactCatalog) {
+    try {
+      expansion.catalogValidator(catalog.payload);
+      const rawItems = resolveJsonPointer(catalog.payload, expansion.itemsPointer);
+      if (!Array.isArray(rawItems)) throw new Error('items-not-array');
+      const seen = new Set<string>();
+      for (const item of rawItems) {
+        expansion.itemValidator(item);
+        const key = canonicalCatalogKey(resolveJsonPointer(item, expansion.keyPointer));
+        if (seen.has(key)) throw new Error('duplicate-key');
+        seen.add(key);
+        denominator.push({ key, itemFingerprint: deriveItemFingerprint(item) });
+      }
+      denominator.sort((left, right) => left.key.localeCompare(right.key));
+    } catch {
+      diagnostics.push('catalog:invalid');
+    }
+  } else diagnostics.push('catalog:lineage');
+  const observedClaimIds = new Set<string>();
+  const selectedKeys = new Set(denominator.map(item => item.key));
+  const items = denominator.map(selected => {
+    const instances = Object.values(projection.instancesById).filter(instance =>
+      instance.sessionId === request.sessionId &&
+      instance.expansionOwnerCheck === request.expansionOwnerCheck &&
+      !instance.parentSubgraphInstanceId &&
+      instance.itemKey === selected.key
+    );
+    let terminalClass: ExpansionCoverageClass | null = null;
+    const instance = instances.length === 1 ? instances[0] : undefined;
+    const itemClaim = instance?.activeItemClaimId
+      ? projection.claimsById[instance.activeItemClaimId]
+      : undefined;
+    if (!instance || instance.status !== 'active' || !itemClaim?.active ||
+        itemClaim.payloadFingerprint !== selected.itemFingerprint) {
+      diagnostics.push(`${selected.key}:lineage`);
+      return { ...selected, terminalClass };
+    }
+    const emitterNodeId = instance.nodeInstanceIdsByTemplateNode[expansion.coverage!.emitterNodeKey];
+    const generationId = emitterNodeId ? projection.activeGenerationIdByNode[emitterNodeId] : undefined;
+    const generation = generationId ? projection.generationsById[generationId] : undefined;
+    if (!generation || generation.itemFingerprint !== selected.itemFingerprint) {
+      diagnostics.push(`${selected.key}:lineage`);
+      return { ...selected, terminalClass };
+    }
+    const outcomes = generation.completedOutputClaimIds
+      .map(claimId => projection.claimsById[claimId])
+      .filter(claim => claim?.active && claim.claim === expansion.coverage!.outcomeClaimRef);
+    outcomes.forEach(claim => observedClaimIds.add(claim.claimId));
+    const managed = generation.attemptId ? projection.managedRunsByAttemptId[generation.attemptId] : undefined;
+    const cancelled = generation.status === 'failed' &&
+      generation.reason === 'MANAGED_DEADLINE_EXCEEDED' &&
+      managed?.status === 'terminated' &&
+      managed.cleanupStatus === 'clean' &&
+      managed.controllerDecision === 'failed' &&
+      managed.failureCode === 'MANAGED_DEADLINE_EXCEEDED' &&
+      managed.cancellationRequested === true &&
+      managed.binding.sessionId === request.sessionId &&
+      managed.binding.checkId === generation.checkId &&
+      managed.binding.nodeInstanceId === generation.nodeInstanceId &&
+      managed.binding.nodeGenerationId === generation.nodeGenerationId &&
+      managed.binding.attemptId === generation.attemptId &&
+      managed.binding.fence === generation.fence &&
+      scopePathEquals(managed.binding.scope, generation.scope);
+    if (outcomes.length === 1 && generation.status === 'completed') {
+      try {
+        const value = resolveJsonPointer(outcomes[0].payload, expansion.coverage!.classPointer);
+        if (typeof value === 'string' && PROVIDER_COVERAGE_CLASSES.has(value)) {
+          terminalClass = value as ExpansionCoverageClass;
+        } else diagnostics.push(`${selected.key}:invalid-class`);
+      } catch {
+        diagnostics.push(`${selected.key}:invalid-class`);
+      }
+    } else if (outcomes.length === 0 && cancelled) terminalClass = 'cancelled';
+    else if (outcomes.length === 0 && generation.status === 'failed') terminalClass = 'error';
+    else if (outcomes.length > 1 || (outcomes.length > 0 && generation.status !== 'completed')) {
+      diagnostics.push(`${selected.key}:conflicting-terminal`);
+    } else diagnostics.push(`${selected.key}:nonterminal`);
+    return { ...selected, terminalClass };
+  });
+  for (const instance of Object.values(projection.instancesById)) {
+    if (instance.sessionId !== request.sessionId ||
+        instance.expansionOwnerCheck !== request.expansionOwnerCheck ||
+        instance.parentSubgraphInstanceId || instance.status !== 'active') continue;
+    if (!selectedKeys.has(instance.itemKey)) diagnostics.push(`${instance.itemKey}:unknown`);
+  }
+  for (const claim of Object.values(projection.claimsById)) {
+    if (!claim.active || claim.claim !== expansion.coverage.outcomeClaimRef) continue;
+    const instance = projection.instancesById[claim.subgraphInstanceId];
+    if (instance?.sessionId === request.sessionId &&
+        instance.expansionOwnerCheck === request.expansionOwnerCheck &&
+        !instance.parentSubgraphInstanceId && !observedClaimIds.has(claim.claimId)) {
+      diagnostics.push(`${instance.itemKey}:unknown-terminal`);
+    }
+  }
+  const canonicalDiagnostics = [...new Set(diagnostics)].sort();
+  const terminalItems = items.filter(item => item.terminalClass !== null).length;
+  const closure = canonicalDiagnostics.length === 0 && terminalItems === items.length ? 'closed' as const : 'open' as const;
+  const classes = items.map(item => item.terminalClass);
+  const disposition = closure === 'open' || classes.some(value =>
+    value === 'error' || value === 'guardrail_blocked' || value === 'cancelled'
+  ) ? 'unverifiable' as const : classes.some(value => value === 'completed_with_findings')
+    ? 'findings' as const : 'clean' as const;
+  const semantic = { expansionOwnerCheck: request.expansionOwnerCheck, denominator,
+    classes: items.map(item => ({ key: item.key, terminalClass: item.terminalClass })),
+    closure, disposition, terminalItems, diagnostics: canonicalDiagnostics };
+  return immutableCanonicalValue({ requestId, expansionOwnerCheck: request.expansionOwnerCheck,
+    denominator, items, closure, disposition, terminalItems, diagnostics: canonicalDiagnostics,
+    semanticDigest: sha256Canonical({ v: 1, ...semantic }),
+    provenance: { ...(request.catalogClaimId ? { catalogClaimId: request.catalogClaimId } : {}),
+      lastEventId: projection.lastEventId } });
 }
 
 export function createInitialInstanceProjection(): InstanceProjection {
@@ -1068,6 +1253,7 @@ function reduceManagedRunLifecycle(
     next.managedRunsByAttemptId[binding.attemptId] = {
       ...current,
       status: 'cancel_requested',
+      cancellationRequested: true,
     };
     return;
   }
@@ -1178,10 +1364,18 @@ function reduceRequestLifecycle(
     throw new InstanceKernelError('INVALID_REQUEST_STATE', `Request ${event.requestId} is not running`);
   }
   if (event.type === 'CheckScheduled') return;
+  if (event.type === 'AttemptCompleted') {
+    if (!SHA256_PATTERN.test(event.catalogClaimId)) {
+      throw new InstanceKernelError('INVALID_REQUEST_CATALOG', 'Completed request catalog claim ID is invalid');
+    }
+    next.requestsById[event.requestId] = { ...request, status: 'completed',
+      catalogClaimId: event.catalogClaimId };
+    return;
+  }
   next.requestsById[event.requestId] = {
     ...request,
-    status: event.type === 'AttemptCompleted' ? 'completed' : 'failed',
-    ...(event.type === 'AttemptFailed' ? { reason: event.reason } : {}),
+    status: 'failed',
+    reason: event.reason,
   };
 }
 
