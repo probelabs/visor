@@ -440,6 +440,8 @@ export interface McpServerConfig {
   url?: string;
   /** Transport type */
   transport?: 'stdio' | 'sse' | 'http';
+  /** HTTP headers for SSE/HTTP transport (e.g. Authorization) */
+  headers?: Record<string, string>;
 
   // === Workflow tool reference ===
   /** Workflow ID or path (presence indicates workflow tool) */
