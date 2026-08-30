@@ -34,7 +34,12 @@ export function config(): VisorConfig {
   return {
     version: '1.0',
     max_parallelism: 2,
-    workspace: { enabled: false },
+    workspace: {
+      enabled: true,
+      base_path:
+        process.env.VISOR_CONTINUATION_WORKSPACE_PATH || '/tmp/visor-graph-continuation-workspaces',
+      cleanup_on_exit: true,
+    },
     claim_types: {
       'items.catalog@1': {
         schema: {
@@ -264,14 +269,14 @@ async function continueFrom(directory: string): Promise<void> {
       prInfo,
       maxParallelism: 2,
     });
-    const context = (engine as any)._lastContext;
     const returnedCheckpoint = JSON.parse(JSON.stringify(continued.checkpoint));
     const restored = ExecutionJournal.restoreGraphCheckpoint(
       compileClaimPlan(config()),
       returnedCheckpoint
     );
-    const projection = context.journal.getInstanceProjection();
-    const replay = restored.getInstanceProjection();
+    const projection = engine.getInstanceProjection();
+    const restoredLive = restored.getInstanceProjection();
+    const replay = restored.replayInstanceProjection();
     const canonicalReexport = restored.exportGraphCheckpoint(returnedCheckpoint.sessionId);
     const history = ((engine as any)._lastRunner.getState().historyLog as unknown[]).filter(
       event => (event as any).type === 'StateTransition'
@@ -282,6 +287,7 @@ async function continueFrom(directory: string): Promise<void> {
       calls,
       checkpoint: returnedCheckpoint,
       projection,
+      restoredLive,
       replay,
       canonicalReexport,
       transitions: history,

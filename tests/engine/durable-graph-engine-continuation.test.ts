@@ -15,6 +15,7 @@ type Artifact = {
   calls: any[];
   projection: any;
   events?: any[];
+  restoredLive?: any;
   replay?: any;
   canonicalReexport?: any;
   transitions?: any[];
@@ -28,7 +29,12 @@ function runChild(mode: 'produce' | 'continue', artifactDirectory: string): void
     ['-r', 'ts-node/register/transpile-only', fixturePath, mode, artifactDirectory],
     {
       cwd: path.resolve(__dirname, '../..'),
-      env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1' },
+      env: {
+        ...process.env,
+        TS_NODE_TRANSPILE_ONLY: '1',
+        VISOR_WORKSPACE_ENABLED: 'true',
+        VISOR_CONTINUATION_WORKSPACE_PATH: path.join(artifactDirectory, 'workspaces'),
+      },
       encoding: 'utf8',
       timeout: 120_000,
       stdio: 'pipe',
@@ -212,10 +218,15 @@ describe('durable Graph checkpoint continuation', () => {
       }
     }
 
-    expect(instanceSlice(continuation.projection, 'B')).toEqual(
-      instanceSlice(producer.projection, 'B')
-    );
     const sourceA = instanceSlice(producer.projection, 'A') as any;
+    const sourceB = instanceSlice(producer.projection, 'B') as any;
+    expect(sourceA.generations.every((generation: any) => generation.status === 'completed')).toBe(
+      true
+    );
+    expect(sourceB.generations.every((generation: any) => generation.status === 'completed')).toBe(
+      true
+    );
+    expect(instanceSlice(continuation.projection, 'B')).toEqual(sourceB);
     const continuedA = instanceSlice(continuation.projection, 'A') as any;
     expect(continuedA.nodes).toEqual(sourceA.nodes);
     const sourceAGenerationIds = new Set(
@@ -225,22 +236,41 @@ describe('durable Graph checkpoint continuation', () => {
       continuedA.generations.map((generation: any) => generation.nodeGenerationId)
     );
     for (const id of sourceAGenerationIds) expect(continuedAGenerationIds.has(id)).toBe(true);
-    expect(
-      continuedA.generations.some((generation: any) => generation.status === 'completed')
-    ).toBe(true);
-    expect(continuedA.generations.some((generation: any) => generation.status === 'inactive')).toBe(
-      true
+    const oldAGenerations = continuedA.generations.filter((generation: any) =>
+      sourceAGenerationIds.has(generation.nodeGenerationId)
     );
+    const replacementAGenerations = continuedA.generations.filter(
+      (generation: any) => !sourceAGenerationIds.has(generation.nodeGenerationId)
+    );
+    expect(oldAGenerations).toHaveLength(sourceA.generations.length);
+    expect(oldAGenerations.every((generation: any) => generation.status === 'inactive')).toBe(true);
+    expect(replacementAGenerations).toHaveLength(sourceA.generations.length);
+    expect(
+      replacementAGenerations.every((generation: any) => generation.status === 'completed')
+    ).toBe(true);
 
     expect(
       continuation.calls.map(call => `${call.kind}:${call.checkId}:${call.key || ''}`)
     ).toEqual(['owner:discover-items:', 'generated:inspect:A', 'generated:summarize:A']);
     expect(continuation.calls.some(call => call.key === 'B')).toBe(false);
     expect(continuation.calls[0].sessionId).toBe(producer.checkpoint.sessionId);
-    expect(continuation.calls[0].workingDirectory).toBe(process.cwd());
+    const workspaceBasePath = path.join(artifactDirectory, 'workspaces');
+    expect(producer.calls[0].workingDirectory).toContain(`${workspaceBasePath}${path.sep}`);
+    expect(continuation.calls[0].workingDirectory).toContain(`${workspaceBasePath}${path.sep}`);
+    expect(producer.calls[0].workingDirectory).not.toBe(process.cwd());
+    expect(continuation.calls[0].workingDirectory).not.toBe(process.cwd());
+    expect(fs.existsSync(producer.calls[0].workingDirectory)).toBe(false);
+    expect(fs.existsSync(continuation.calls[0].workingDirectory)).toBe(false);
     expect(
       continuation.calls.slice(1).every(call => call.sessionId === producer.checkpoint.sessionId)
     ).toBe(true);
+
+    const sourceCompletedGenerationIds = new Set(
+      Object.values(producer.projection.generationsById)
+        .filter((generation: any) => generation.status === 'completed')
+        .map((generation: any) => generation.nodeGenerationId)
+    );
+    expect(sourceCompletedGenerationIds.size).toBeGreaterThan(0);
 
     const rootStarts = suffix.filter(
       (event: any) => event.type === 'AttemptStarted' && !('nodeGenerationId' in event)
@@ -259,13 +289,48 @@ describe('durable Graph checkpoint continuation', () => {
     expect(suffixRequests[0].requestOrdinal).toBe(
       Math.max(0, ...priorRequests.map((event: any) => event.requestOrdinal)) + 1
     );
+    const priorRootCatalogAttempts = producer.checkpoint.events.filter(
+      (event: any) =>
+        event.type === 'AttemptStarted' &&
+        !('nodeGenerationId' in event) &&
+        event.checkId === OWNER &&
+        event.scope.length === 0
+    );
+    expect(rootStarts[0].attemptId).toBe(
+      sha256Canonical({
+        sessionId: producer.checkpoint.sessionId,
+        checkId: OWNER,
+        scope: [],
+        ordinal: priorRootCatalogAttempts.length + 1,
+      })
+    );
+    const suffixGeneratedStarts = suffix.filter(
+      (event: any) => event.type === 'AttemptStarted' && 'nodeGenerationId' in event
+    );
+    expect(suffixGeneratedStarts).toHaveLength(2);
     expect(
-      suffix
-        .filter((event: any) => event.type === 'AttemptStarted')
-        .some((event: any) =>
-          producer.events?.some((prior: any) => prior.attemptId === event.attemptId)
-        )
-    ).toBe(false);
+      suffixGeneratedStarts.every(
+        (event: any) => !sourceCompletedGenerationIds.has(event.nodeGenerationId)
+      )
+    ).toBe(true);
+    for (const event of suffixGeneratedStarts) {
+      expect(event.attemptId).toBe(
+        sha256Canonical({ nodeGenerationId: event.nodeGenerationId, ordinal: 1 })
+      );
+    }
+
+    for (const call of continuation.calls.filter(call => call.kind === 'generated')) {
+      expect(continuation.projection.generationsById[call.binding.nodeGenerationId]).toMatchObject({
+        status: 'completed',
+        attemptId: call.binding.attemptId,
+        fence: call.binding.fence,
+      });
+      expect(continuation.projection.managedRunsByAttemptId[call.binding.attemptId]).toMatchObject({
+        status: 'terminated',
+        cleanupStatus: 'clean',
+        controllerDecision: 'completed',
+      });
+    }
 
     expect(suffix.map((event: any) => event.eventId)).toEqual(
       suffix.map(
@@ -288,7 +353,8 @@ describe('durable Graph checkpoint continuation', () => {
       from: 'LevelDispatch',
       to: 'LevelDispatch',
     });
-    expect(continuation.replay).toEqual(continuation.projection);
+    expect(continuation.restoredLive).toEqual(continuation.projection);
+    expect(continuation.replay).toEqual(continuation.restoredLive);
     expect(continuation.canonicalReexport).toEqual(continuation.checkpoint);
     expect(continuation.checkpoint.frontier.eventCount).toBe(returnedEvents.length);
     expect(continuation.result).toBeDefined();
