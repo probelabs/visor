@@ -1294,7 +1294,7 @@ describe('Graph-v2 journal checkpoints', () => {
     expectDeeplyFrozen(restored.exportGraphCheckpoint('c2-session'));
   });
 
-  it('round-trips nested managed reconciliation after all generated work is quiescent', () => {
+  it('round-trips nested reconciliation after all generated work is quiescent', () => {
     const source = c4Journal();
     publishCatalog(source, { components: [{ id: 'A', revision: 1 }] });
     const enumerate = source.queryReadyWork().find(value => value.checkId === 'enumerate')!;
@@ -1522,18 +1522,34 @@ describe('Graph-v2 journal checkpoints', () => {
     ) as any;
     const checkpoint = source.exportGraphCheckpoint('c2-session');
     const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint);
-    const before = restored.readRuntimeEvents().length;
-    expectErrorCode(
-      () => restored.scheduleCheck({
-        sessionId: oldAttempt.sessionId,
-        checkId: oldAttempt.checkId,
-        scope: oldAttempt.scope,
-        attemptId: oldAttempt.attemptId,
-        fence: oldAttempt.fence,
-      }),
-      'STALE_FENCE'
+    const nextRequest = restored.requestCatalogReconciliation({
+      sessionId: 'c2-session',
+      ownerCheck: 'discover',
+    });
+    const nextAttempt = restored.startCatalogRequestAttempt(nextRequest.requestId);
+    expect(nextAttempt.fence).toBe(
+      source.readRuntimeEvents().filter(event => event.type === 'AttemptStarted').length + 1
     );
-    expect(restored.readRuntimeEvents()).toHaveLength(before);
+    const staleSchedule = () => restored.scheduleCheck({
+      sessionId: oldAttempt.sessionId,
+      checkId: oldAttempt.checkId,
+      scope: oldAttempt.scope,
+      attemptId: oldAttempt.attemptId,
+      fence: oldAttempt.fence,
+    });
+    const staleTerminal = () => restored.failAttempt({
+      sessionId: oldAttempt.sessionId,
+      checkId: oldAttempt.checkId,
+      scope: oldAttempt.scope,
+      attemptId: oldAttempt.attemptId,
+      fence: oldAttempt.fence,
+      reason: 'stale pre-checkpoint attempt',
+    });
+    for (const staleOperation of [staleSchedule, staleTerminal]) {
+      const beforeStaleCall = restored.readRuntimeEvents().length;
+      expectErrorCode(staleOperation, 'STALE_FENCE');
+      expect(restored.readRuntimeEvents()).toHaveLength(beforeStaleCall);
+    }
   });
 
   it('reconstructs shared root/catalog ordinals and repeats restore without process-local state', () => {
@@ -1568,6 +1584,28 @@ describe('Graph-v2 journal checkpoints', () => {
     const attempt = restored.startGeneratedAttempt(generation.nodeGenerationId);
     expect(attempt.attemptId).toBe(sha256Canonical({ nodeGenerationId: generation.nodeGenerationId, ordinal: 1 }));
     expectErrorCode(() => restored.startGeneratedAttempt(generation.nodeGenerationId), 'GENERATION_NOT_READY');
+    restored.scheduleGeneratedAttempt(attempt);
+    restored.completeGeneratedAttempt({ attempt, payload: { id: 'A', findings: [] } });
+    const downstream = restored.queryReadyWork().find(value => value.checkId === 'summarize')!;
+    const downstreamAttempt = restored.startGeneratedAttempt(downstream.nodeGenerationId);
+    restored.scheduleGeneratedAttempt(downstreamAttempt);
+    restored.completeGeneratedAttempt({ attempt: downstreamAttempt, payload: { done: true } });
+
+    const secondCheckpoint = restored.exportGraphCheckpoint('c2-session');
+    const secondRestore = ExecutionJournal.restoreGraphCheckpoint(
+      compileClaimPlan(c2Config()),
+      JSON.parse(JSON.stringify(secondCheckpoint))
+    );
+    const furtherRequest = secondRestore.requestCatalogReconciliation({
+      sessionId: 'c2-session',
+      ownerCheck: 'discover',
+    });
+    const furtherCatalog = secondRestore.startCatalogRequestAttempt(furtherRequest.requestId);
+    expect(furtherRequest.requestOrdinal).toBe(3);
+    expect(furtherCatalog.attemptId).toBe(sha256Canonical({
+      sessionId: 'c2-session', checkId: 'discover', scope: [], ordinal: 3,
+    }));
+    expect(furtherCatalog.fence).toBe(7);
   });
 
   it('reconstructs the next request, attempt, and global fence authority', () => {
