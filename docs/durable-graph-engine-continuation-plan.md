@@ -11,8 +11,9 @@ work reuse rather than merely reconstructing an in-memory projection.
 
 Stop instead of widening the feature if one bounded child-process test cannot
 prove same-prefix continuation through the existing journal, claim scheduler,
-and provider path. Do not add generic runner serialization, lease recovery, a
-second projection format, or process supervision to make the test pass.
+and provider path. Any need to change `src/snapshot-store.ts`, a reducer, or
+scheduler behavior is a stop, as is any need for generic runner serialization,
+lease recovery, a second projection format, or process supervision.
 
 ## Measurable outcome
 
@@ -30,7 +31,8 @@ One implementation PR adds an engine-level continuation operation which:
 - appends event IDs, request/root-attempt ordinals, generated attempt IDs, and
   global fences monotonically from the restored prefix; and
 - returns the `ExecutionResult`, request ID, and a quiescent checkpoint which
-  can be JSON-round-tripped and continued again by another fresh process.
+  can be JSON-round-tripped, restored, and replayed exactly before the test
+  stops. Phase 2 does not perform a second continuation.
 
 “Changed catalog” means changed provider output under the same compiled graph,
 not a changed `VisorConfig` or `graphSemanticDigest`. There is no separate
@@ -101,8 +103,10 @@ Test scope:
 Do not change `src/snapshot-store.ts`, the reducers, `wave-planning.ts`,
 `level-dispatch.ts`, provider implementations, legacy snapshot functions, or
 `RunState`. The `src/sdk.ts` change is type-only; no facade or runtime export
-logic is added. Any need to change scheduler/reducer behavior triggers the stop
-condition and a separate review rather than scope growth.
+logic is added. In particular, do not add a public “export current checkpoint”
+method: the producer fixture uses existing private test access. Any need to
+change scheduler/reducer behavior triggers the stop condition and a separate
+review rather than scope growth.
 
 ## Restore and fail-fast transaction
 
@@ -140,14 +144,22 @@ branch must be behavior-preserving. Do not introduce an externally visible
 optional continuation argument on `executeGroupedChecks`, mutable engine-wide
 bootstrap state, or a second copied lifecycle.
 
+Do not clear `_lastContext` or `_lastRunner` at method entry. Validation and
+setup operate on locals; any validation or setup failure leaves both engine
+fields exactly as they were before the call. A fresh engine consequently remains
+unset and reports `RUN_NOT_ACTIVE`, while an engine with a prior completed run
+continues to expose that prior state rather than losing or replacing it.
+
 On corrupt, graph-mismatched, nonquiescent, or unknown-owner input:
 
 - preserve the existing exact error code;
 - make zero provider calls;
 - do not initialize memory or workspace;
 - do not register tools or start sandbox, policy, or frontend services; and
-- leave `_lastContext` and `_lastRunner` unset, so projection/reconciliation
-  access still fails with `RUN_NOT_ACTIVE`.
+- do not mutate `_lastContext` or `_lastRunner`. Fresh-engine failure tests must
+  observe them unset and see projection/reconciliation access fail with
+  `RUN_NOT_ACTIVE`; tests must never clear pre-existing engine state to obtain
+  that result.
 
 ## Fixed runner entry
 
@@ -215,46 +227,66 @@ node -r ts-node/register/transpile-only \
 ```
 
 Use argument arrays, a bounded timeout, a temporary artifact directory, and
-JSON files/stdout only. Do not share an engine, registry singleton, module cache,
-closure, or private in-memory journal between invocations. Record and assert
-different PIDs for producer and continuations.
+JSON files/stdout only. Run exactly two fixture children. Do not share an engine,
+registry singleton, module cache, closure, or private in-memory journal between
+them. Record and assert distinct producer PID A and continuation PID B.
 
 The fixture registers a deterministic in-process test provider and uses one
 root catalog owner with two keyed items, `A` and `B`, each having an existing
 two-node affected closure (`inspect -> summarize`):
 
-1. `produce` runs the ordinary engine to full quiescence with `A@1` and `B@1`,
-   writes the JSON-round-tripped checkpoint, event/identity summary, and call
-   log, then exits.
-2. `continue-a` starts in a new process, reads only those JSON artifacts, returns
-   `A@2` and unchanged `B@1` from the owner, invokes
-   `continueGraphCheckpoint`, and writes its result, checkpoint, projection,
-   transition history, PID, and provider calls.
-3. `continue-b` starts in a third process from the checkpoint returned by step
-   2, returns unchanged `A@2` and changed `B@2`, and writes the same evidence.
+1. Producer process A (`produce`) runs the ordinary engine to full quiescence
+   with `A@1` and `B@1`. Test code extracts the source checkpoint only through
+   the existing private context:
 
-The happy-path assertions are exact:
+   ```ts
+   const context = (engine as any)._lastContext;
+   const checkpoint = context.journal.exportGraphCheckpoint(context.sessionId);
+   ```
 
-- each returned checkpoint begins with a byte/canonical-equal prior event
-  prefix and all suffix events use the original session;
+   It writes the JSON-round-tripped checkpoint, event/identity summary, PID, and
+   call log, then exits. This is fixture-only access, not a Phase 2 public engine
+   exporter.
+2. Fresh continuation process B (`continue`) reads only A's JSON artifacts,
+   returns changed `A@2` and unchanged `B@1` from the owner, invokes
+   `continueGraphCheckpoint`, and writes its result, returned checkpoint,
+   projection, transition history, PID, and provider calls. Before exiting, it
+   JSON-round-trips the returned checkpoint, restores it with
+   `ExecutionJournal.restoreGraphCheckpoint` under the same compiled plan, and
+   proves live/replay projection equality and canonical re-export equality. It
+   does not enqueue or run another reconciliation.
+
+The two-process happy-path assertions are exact:
+
+- B's returned checkpoint begins with a byte/canonical-equal A event prefix and
+  all suffix events use A's original session;
 - all pre-checkpoint instance, claim, node, and generation IDs survive; the
   unchanged item's claims/nodes/completed generation slice is deeply equal;
-- `continue-a` provider calls are exactly owner, `A.inspect`, `A.summarize`, and
-  contain no `B` call; `continue-b` is exactly owner plus the `B` closure and
-  contains no `A` generated call;
+- B's provider calls are exactly owner, `A.inspect`, `A.summarize`; they contain
+  no `B` generated call and no cold root other than the requested catalog owner;
+- the only root-scope suffix `AttemptStarted` is request-discriminated for the
+  new catalog reconciliation; no original cold-run root gets a suffix start;
 - no suffix `AttemptStarted` names any generation completed before that input
   checkpoint; changed items retain stable keyed subgraph/node identity while
   superseded generations become inactive and replacements get new IDs;
 - suffix event IDs are contiguous, request and shared root/catalog ordinals are
   the canonical next values, new generated attempts use ordinal 1, and global
   fences start at the reconstructed next fence with no gap or regression;
-- the first observer event in both continuation processes is exactly
+- the first observer event in continuation process B is exactly
   `LevelDispatch -> LevelDispatch`;
-- provider context observes the original `sessionId` and the workspace-adjusted
-  working directory; and
-- both returned checkpoints survive `JSON.stringify`/`JSON.parse`, restore to
-  live/replay-equal projections, and are quiescent. Step 3 proves the checkpoint
-  returned by step 2 is itself a repeatable continuation frontier.
+- the root catalog provider reads the original session and workspace-adjusted
+  directory only from its existing `executionContext._parentContext`; generated
+  managed providers read the original session only from the existing
+  `ManagedRunStartRequest.binding`; and
+- B's returned checkpoint is quiescent and survives
+  `JSON.stringify`/`JSON.parse`, restore, replay, and canonical re-export. The
+  test stops after this validation.
+
+Do not add fields to `ExecutionContext`, `ManagedRunStartRequest`, provider
+config, or the public continuation result to expose session/workspace evidence.
+Generated execution intentionally strips `_parentContext`; make no generated
+workspace assertion. The generated fixture provider must use its existing
+managed binding for the session assertion.
 
 The child process is the process-durability proof. Creating two engine objects
 inside one Jest process is not an acceptable substitute.
@@ -272,15 +304,19 @@ In the same focused test file, cover this matrix before the happy path:
 
 Use a child-written provider marker for cross-process negative evidence and
 focused Jest spies on `MemoryStore.initialize` and `initializeWorkspace` for
-ordering. After each failure, `getInstanceProjection()` and
-`requestCatalogReconciliation()` must still fail with `RUN_NOT_ACTIVE`. Re-hash
-fixtures intended to reach graph/quiescence gates; otherwise the integrity test
-would give false confidence by masking the target branch.
+ordering. Run validation failures on a fresh engine and require
+`getInstanceProjection()` and `requestCatalogReconciliation()` to fail with
+`RUN_NOT_ACTIVE` without test-side field clearing. Separately seed prior
+`_lastContext`/`_lastRunner` references, force a setup failure, and require exact
+referential preservation. Re-hash fixtures intended to reach graph/quiescence
+gates; otherwise the integrity test would give false confidence by masking the
+target branch.
 
 Also assert setup on success: memory initializes once, workspace initialization
-runs before the first provider call, and the provider receives the resulting
-`workingDirectory`. Workspace contents and memory values are fresh process
-services; they are not restored from the graph checkpoint.
+runs before the first provider call, and the root catalog provider reads the
+resulting `workingDirectory` from its existing
+`executionContext._parentContext`. Workspace contents and memory values are
+fresh process services; they are not restored from the graph checkpoint.
 
 ## Implementation sequence and gates
 
@@ -289,8 +325,8 @@ services; they are not restored from the graph checkpoint.
 2. Add the engine contract, direct one-request insertion, and fail-fast tests.
 3. Add the fixed `LevelDispatch`/wave-1 seed and the isolated initial-observer
    correction.
-4. Add the three-process deterministic fixture and exact prefix, call-set,
-   identity, allocator, and repeatability assertions.
+4. Add the two-process deterministic fixture and exact prefix, call-set,
+   identity, allocator, returned-checkpoint restore, and stop assertions.
 5. Build the SDK declarations and confirm the method and types are usable from
    `@probelabs/visor/sdk`; do not add a facade if the class export suffices.
 
