@@ -1177,6 +1177,7 @@ describe('snapshot-store (journal + context view)', () => {
       cleanupStatus: 'clean',
       controllerDecision: 'failed',
       failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+      cancellationRequested: true,
     });
     expect(
       journal.readRuntimeEvents().slice(-5).map(event => event.type)
