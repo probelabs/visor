@@ -271,6 +271,7 @@ function validateReservedProofAdmissionTemplate(
 
   for (const nodeKey of nodeKeys) {
     const check = resolvedChecks[nodeKey];
+    if (hasOwn(check, 'expand')) rejectReservedProfile(name, `${nodeKey} cannot use check.expand`);
     if (nodeKey !== PROOF_ADMIT_NODE_KEY && check.type === PROOF_ADMIT_PROVIDER_TYPE) {
       rejectReservedProfile(name, `provider type ${PROOF_ADMIT_PROVIDER_TYPE} is only valid at ${PROOF_ADMIT_NODE_KEY}`);
     }

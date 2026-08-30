@@ -139,6 +139,12 @@ describe('Graph v2 C2 expansion plan', () => {
     }
   });
 
+  it.each(['inspect', 'proof_admit', 'verify'])('rejects check.expand on reserved node %s', nodeKey => {
+    const value = proofAdmissionConfig();
+    value.subgraphs['onboard-component'].checks[nodeKey].expand = {};
+    expect(() => compileClaimPlan(value)).toThrow('cannot use check.expand');
+  });
+
   it('compiles exact immutable bindings, topology, pointers, and semantic digests', () => {
     const authored = config();
     const before = JSON.parse(JSON.stringify(authored));

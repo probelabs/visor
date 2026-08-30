@@ -262,7 +262,8 @@ describe('CheckProviderRegistry', () => {
 
   it.each([
     ['malformed', () => ({ kind: 'accepted', receipt: {} }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
-    ['mismatched', (candidate: any) => ({ ...admissionReceipt(candidate), candidateClaimId: 'forged' }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
+    ['mismatched', (candidate: any) => ({ kind: 'accepted', receipt: immutableCanonicalValue({ ...admissionReceipt(candidate), candidateClaimId: 'forged' }) }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
+    ['parent mismatch', (candidate: any) => ({ kind: 'accepted', receipt: immutableCanonicalValue({ ...admissionReceipt(candidate), parentClaimIds: ['forged'] }) }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
     ['mutable', (candidate: any) => ({ kind: 'accepted', receipt: admissionReceipt(candidate) }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
     ['rejected', () => ({ kind: 'rejected', reason: 'fixture' }), 'PROOF_ADMISSION_REJECTED'],
   ])('publishes no authority for %s sink result', async (_name, decision, error) => {
@@ -270,8 +271,12 @@ describe('CheckProviderRegistry', () => {
   });
 
   it('detaches a valid deeply frozen sink receipt', async () => {
-    const result = await executeAdmission((candidate: any) => ({ kind: 'accepted', receipt: immutableCanonicalValue(admissionReceipt(candidate)) }), admissionCandidate());
+    const candidate = admissionCandidate();
+    let outerDecision: any;
+    const result = await executeAdmission((value: any) => (outerDecision = { kind: 'accepted', receipt: immutableCanonicalValue(admissionReceipt(value)) }), candidate);
+    expect(Object.isFrozen(outerDecision)).toBe(false);
     expect(Object.isFrozen(result.output)).toBe(true);
     expect(Object.isFrozen((result.output as any).parentClaimIds)).toBe(true);
+    expect((result.output as any).parentClaimIds).toEqual(candidate.parentClaimIds);
   });
 });

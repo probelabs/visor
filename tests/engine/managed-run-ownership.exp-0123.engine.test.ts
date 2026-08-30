@@ -2726,12 +2726,14 @@ describe('EXP-0205 explicit proof admission node', () => {
     const receiptA = accepted.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1');
     const candidateB = rejected.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
     const ledger = (key: string) => { const scoped = generated(key); const start = scoped.findIndex(event => event.type === 'ManagedRunTerminated'); return scoped.slice(start).map(event => `${event.type}:${event.checkId || ''}:${event.claim || ''}:${event.reason || ''}`); };
+    for (const key of ['A', 'B']) { const terminated = generated(key).filter(event => event.type === 'ManagedRunTerminated'); expect(terminated).toHaveLength(1); expect(terminated[0]).toMatchObject({ controllerDecision: 'completed', cleanupStatus: 'clean' }); }
 
     expect(result.statistics.failedExecutions).toBe(1);
     expect(managedRequests).toHaveLength(2);
     expect([candidateA, receiptA, candidateB]).toEqual([expect.anything(), expect.anything(), expect.anything()]);
     expect(receiptA.parentClaimIds).toEqual([candidateA.claimId]);
     expect(receiptA.payload.candidateClaimId).toBe(candidateA.claimId);
+    expect(receiptA.payload.parentClaimIds).toEqual(candidateA.parentClaimIds);
     expect([...accepted.find(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify').activeInputClaimIds].sort()).toEqual([candidateA.claimId, receiptA.claimId].sort());
     expect(verifyClaims).toHaveLength(1);
     expect(Object.values(verifyClaims[0]).map(claim => claim.claimId).sort()).toEqual(
