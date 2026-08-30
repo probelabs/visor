@@ -9,9 +9,19 @@ import { ConfigManager } from './config';
 import type { AnalysisResult } from './output-formatters';
 import type { VisorConfig, TagFilter, HumanInputRequest } from './types/config';
 import type { ExecutionContext } from './providers/check-provider.interface';
+import type {
+  GraphCheckpointContinuationInput,
+  GraphCheckpointContinuationResult,
+} from './state-machine-execution-engine';
+import type { GraphJournalCheckpointV1 } from './snapshot-store';
 
 export { StateMachineExecutionEngine };
 export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
+export type {
+  GraphCheckpointContinuationInput,
+  GraphCheckpointContinuationResult,
+  GraphJournalCheckpointV1,
+};
 export type {
   ExpansionCoverageProjection,
   InstanceClaimProjection,

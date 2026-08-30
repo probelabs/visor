@@ -3,14 +3,41 @@ import { AnalysisResult } from './output-formatters';
 import type { VisorConfig } from './types/config';
 import type { PRInfo } from './pr-analyzer';
 import { StateMachineRunner } from './state-machine/runner';
-import type { EngineContext } from './types/engine';
+import type { EngineContext, RunState } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
+import type { GraphJournalCheckpointV1 } from './snapshot-store';
 import type { InstanceProjection } from './state-machine/graph/instance-kernel';
 import { logger } from './logger';
 import type { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import { SandboxManager } from './sandbox/sandbox-manager';
 import * as path from 'path';
 import * as fs from 'fs';
+import type {
+  BuiltGraphCheckpointContext,
+  GraphCheckpointBootstrap,
+} from './state-machine/context/build-engine-context';
+
+export interface GraphCheckpointContinuationInput {
+  checkpoint: unknown;
+  expansionOwnerCheck: string;
+  config: VisorConfig;
+  prInfo: PRInfo;
+  debug?: boolean;
+  maxParallelism?: number;
+  failFast?: boolean;
+}
+
+export interface GraphCheckpointContinuationResult {
+  requestId: string;
+  result: ExecutionResult;
+  checkpoint: GraphJournalCheckpointV1;
+}
+
+interface PreparedEngineRun {
+  readonly context: EngineContext;
+  readonly result: ExecutionResult;
+  readonly requestId?: string;
+}
 
 /**
  * State machine-based execution engine
@@ -254,6 +281,34 @@ export class StateMachineExecutionEngine {
     tagFilter?: import('./types/config').TagFilter,
     _pauseGate?: () => Promise<void>
   ): Promise<ExecutionResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      prInfo,
+      checks,
+      timeout,
+      config,
+      outputFormat,
+      debug,
+      maxParallelism,
+      failFast,
+      tagFilter,
+      _pauseGate
+    );
+    return prepared.result;
+  }
+
+  private async executeGroupedChecksInternal(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: VisorConfig,
+    outputFormat?: string,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean,
+    tagFilter?: import('./types/config').TagFilter,
+    _pauseGate?: () => Promise<void>,
+    graphCheckpointBootstrap?: GraphCheckpointBootstrap
+  ): Promise<PreparedEngineRun> {
     if (debug) {
       logger.info('[StateMachine] Using state machine engine');
     }
@@ -274,6 +329,25 @@ export class StateMachineExecutionEngine {
         }
       : config;
 
+    // Build/restore the engine context before registering tools or initializing
+    // any other service. Continuation restore and owner validation therefore
+    // remain fail-fast and side-effect free.
+    const builtContext = this.buildEngineContext(
+      configWithTagFilter,
+      prInfo,
+      debug,
+      maxParallelism,
+      failFast,
+      checks, // Pass the explicit checks list
+      graphCheckpointBootstrap
+    );
+    const context = graphCheckpointBootstrap
+      ? (builtContext as BuiltGraphCheckpointContext).context
+      : (builtContext as EngineContext);
+    const requestId = graphCheckpointBootstrap
+      ? (builtContext as BuiltGraphCheckpointContext).requestId
+      : undefined;
+
     // Register global custom tools once per run so MCP custom transport can resolve them.
     try {
       const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
@@ -285,15 +359,10 @@ export class StateMachineExecutionEngine {
       );
     }
 
-    // Build engine context
-    const context = this.buildEngineContext(
-      configWithTagFilter,
-      prInfo,
-      debug,
-      maxParallelism,
-      failFast,
-      checks // Pass the explicit checks list
-    );
+    // Continuation skips Init, so initialize its fresh memory service here.
+    if (graphCheckpointBootstrap) {
+      await context.memory.initialize();
+    }
 
     // Create SandboxManager if sandboxes are configured
     if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
@@ -383,8 +452,11 @@ export class StateMachineExecutionEngine {
     // Copy execution context (hooks, etc.) from legacy engine
     context.executionContext = this.getExecutionContext();
 
-    // Store context for later access (e.g., getOutputHistorySnapshot)
-    this._lastContext = context;
+    // Preserve the normal-run visibility point for frontend callbacks. A
+    // continuation keeps this unset until all setup has passed its gates.
+    if (!graphCheckpointBootstrap) {
+      this._lastContext = context;
+    }
 
     // Optionally enable event-driven frontends if configured
     let frontendsHost: any | undefined;
@@ -554,9 +626,36 @@ export class StateMachineExecutionEngine {
 
     // Create and run state machine with debug server support (M4)
     const runner = new StateMachineRunner(context, this.debugServer);
-    this._lastRunner = runner;
+    if (graphCheckpointBootstrap) {
+      const fresh = runner.getState();
+      const continuationState: RunState = {
+        currentState: 'LevelDispatch',
+        wave: 1,
+        levelQueue: [],
+        eventQueue: [],
+        activeDispatches: new Map(),
+        completedChecks: new Set(),
+        flags: {
+          failFastTriggered: false,
+          forwardRunRequested: false,
+          maxWorkflowDepth: fresh.flags.maxWorkflowDepth,
+          currentWorkflowDepth: 0,
+        },
+        stats: new Map(),
+        historyLog: [],
+        forwardRunGuards: new Set(),
+        currentLevelChecks: new Set(),
+        routingLoopCount: 0,
+        pendingRunScopes: new Map(),
+      };
+      runner.setState(continuationState);
+    }
 
     try {
+      // Keep these references untouched through all validation/setup gates;
+      // install the new run only at the point where execution starts.
+      this._lastContext = context;
+      this._lastRunner = runner;
       const result = await runner.run();
 
       // Stop frontends if started
@@ -599,7 +698,7 @@ export class StateMachineExecutionEngine {
         }
       }
 
-      return result;
+      return { context, result, requestId };
     } finally {
       // Cleanup sandbox containers
       if (context.sandboxManager) {
@@ -620,8 +719,9 @@ export class StateMachineExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    requestedChecks?: string[]
-  ): EngineContext {
+    requestedChecks?: string[],
+    graphCheckpointBootstrap?: GraphCheckpointBootstrap
+  ): EngineContext | BuiltGraphCheckpointContext {
     const { buildEngineContextForRun } = require('./state-machine/context/build-engine-context');
     return buildEngineContextForRun(
       this.workingDirectory,
@@ -630,8 +730,41 @@ export class StateMachineExecutionEngine {
       debug,
       maxParallelism,
       failFast,
-      requestedChecks
+      requestedChecks,
+      graphCheckpointBootstrap
     );
+  }
+
+  /**
+   * Reconcile one compiled catalog owner from a quiescent Graph-v2 checkpoint.
+   * This operation intentionally has no legacy snapshot or runner-state path.
+   */
+  public async continueGraphCheckpoint(
+    input: GraphCheckpointContinuationInput
+  ): Promise<GraphCheckpointContinuationResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      undefined,
+      {
+        checkpoint: input.checkpoint,
+        expansionOwnerCheck: input.expansionOwnerCheck,
+      }
+    );
+
+    const checkpoint = prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId);
+    return {
+      requestId: prepared.requestId!,
+      result: prepared.result,
+      checkpoint,
+    };
   }
 
   /** Queue a compiled catalog owner on the currently active runner/journal. */

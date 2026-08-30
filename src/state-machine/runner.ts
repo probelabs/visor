@@ -86,7 +86,11 @@ export class StateMachineRunner {
     this.runActive = true;
     try {
       // Emit initial state transition event
-      this.emitEvent({ type: 'StateTransition', from: 'Init', to: 'Init' });
+      this.emitEvent({
+        type: 'StateTransition',
+        from: this.state.currentState,
+        to: this.state.currentState,
+      });
 
       // Main event loop
       while (!this.isTerminalState(this.state.currentState)) {
