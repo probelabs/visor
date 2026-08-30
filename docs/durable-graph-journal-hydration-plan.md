@@ -95,11 +95,12 @@ journal, in this order:
    algorithm, session, and frontier scalar ranges.
 2. Recompute and compare the integrity digest.
 3. Compare the checkpoint and current-plan `graphSemanticDigest`.
-4. Validate contiguous event IDs and the exact single-session prefix.
+4. Validate contiguous event IDs, the exact single-session prefix, each event's
+   exact discriminated shape, and its authority under the current plan.
 5. Replay root claim events with `replayClaimEvents(events, claimPlan)` using the
-   journal's existing root-event filter.
-6. Replay instance events with `replayInstanceEvents(events)` using the journal's
-   existing instance-event filter and atomic managed-run batch grammar.
+   exact routing below.
+6. Replay instance events with `replayInstanceEvents(events)` using the exact
+   routing below and its atomic managed-run batch grammar.
 7. Require a quiescent frontier: no started root attempt, pending/running catalog
    request, ready/running node generation, or acquired/started/cancel-requested
    managed run. Phase 1 checkpoints completed expansion state only.
@@ -110,24 +111,70 @@ journal, in this order:
 Use a dedicated checkpoint error with these stable codes:
 `INVALID_CHECKPOINT_ENVELOPE`, `CHECKPOINT_INTEGRITY_MISMATCH`,
 `CHECKPOINT_GRAPH_MISMATCH`, `INVALID_CHECKPOINT_PREFIX`,
-`CHECKPOINT_SESSION_MISMATCH`, and `CHECKPOINT_NOT_QUIESCENT`. Preserve specific
-claim/instance kernel failures as causes; never turn invalid replay into an empty
-journal or partial success.
+`CHECKPOINT_SESSION_MISMATCH`, `CHECKPOINT_PLAN_AUTHORITY_MISMATCH`, and
+`CHECKPOINT_NOT_QUIESCENT`. Preserve specific claim/instance kernel failures as
+causes; never turn invalid replay into an empty journal or partial success.
+
+## Exact event routing and plan authority
+
+Validate the mixed prefix before either replay. Every event must have the exact
+required/optional keys of one existing runtime-event interface; reject extra
+keys, missing keys, wrong root/keyed scope, and hybrid discriminators.
+
+- `AttemptStarted`, `CheckScheduled`, `AttemptCompleted`, and `AttemptFailed`
+  with `nodeGenerationId` and `nodeInstanceId` (and no `requestId`) are generated
+  lifecycle events and route only to instance replay.
+- Those four lifecycle types with `requestId` (and no node discriminator) are
+  root-scope catalog-request events and route to both claim and instance replay;
+  `AttemptCompleted` also requires `catalogClaimId`.
+- Root lifecycle events with neither discriminator route only to claim replay.
+  Root `ClaimPublished` has neither discriminator and routes only to claim replay,
+  including a catalog claim published by a catalog-request attempt.
+- `ClaimPublished` with both node discriminators routes only to instance replay.
+  `ClaimPublished` with `requestId`, or any lifecycle event carrying both request
+  and node discriminators, is invalid.
+- `CatalogReconciliationRequested`, `SubgraphExpanded`,
+  `ControllerItemClaimPublished`, `NodeGenerationInactivated`,
+  `NodeGenerationActivated`, `SubgraphTombstoned`, and every `ManagedRun*` event
+  route only to instance replay. No other type or shape is admitted.
+
+Graph-digest equality is necessary but not sufficient. While scanning in event
+order, resolve each instance event against the compiled plan and the projection
+prefix before it:
+
+- every reconciliation owner must be an exact `expansionPlan.byOwner` entry;
+- every root or nested `SubgraphExpanded` must resolve to that exact compiled
+  expansion and match its `graphSemanticDigest`, `expansionSpecDigest`,
+  `templateDigest`, root/nested owner fields, catalog claim reference, complete
+  template-node key set, and derived node-instance IDs;
+- every controller item publication must match the owning expansion's owner,
+  expansion digest, `itemClaimRef`, and item validator;
+- every generation activation must name the owning compiled template node and
+  match its check ID, execution-config digest, and current nested catalog-claim
+  reference (present exactly when that node owns a nested expansion); and
+- inactivation, tombstone, generated lifecycle, and managed lifecycle events
+  must resolve to the exact already-projected instance, generation, attempt, and
+  binding authority checked by the existing instance reducer.
+
+Root claim emission/consumption and schema authority remains with
+`replayClaimEvents`. Do not accept event-carried digests or IDs as substitutes
+for current-plan lookup.
 
 ## Deterministic allocator reconstruction
 
 Stored counters are forbidden. Derive all authority from validated events:
 
-- `nextFence`: scan `AttemptStarted` events in event order. Their fences must be
-  the journal-produced strict sequence `1..N`; set the restored frontier to `N`.
-- Root and catalog attempt ordinals: group non-generated `AttemptStarted` events
-  by `canonicalJson({ sessionId, checkId, scope })`, count them in event order,
-  and verify each `attemptId` equals
+- `nextFence`: scan every root, catalog, and generated `AttemptStarted` in their
+  single interleaved event order. Fences must be the journal-produced global
+  sequence `1..N`; set the restored frontier to `N`.
+- Root and catalog attempts share one ordinal allocator. Group both kinds by
+  `canonicalJson({ sessionId, checkId, scope })`, count them together in event
+  order, and verify each `attemptId` equals
   `sha256Canonical({ sessionId, checkId, scope, ordinal })`.
-- Generated attempt ordinals: group generated `AttemptStarted` events by
-  `canonicalJson({ nodeGenerationId, scope })`, count them in event order, and
-  verify each `attemptId` equals
-  `sha256Canonical({ nodeGenerationId, ordinal })`.
+- A valid node generation can start only once. Each generated `AttemptStarted`
+  must therefore be the sole start for its `nodeGenerationId`/scope and have
+  `attemptId === sha256Canonical({ nodeGenerationId, ordinal: 1 })`; reject a
+  second start instead of reconstructing a generated ordinal greater than one.
 - Catalog request ordinals: group `CatalogReconciliationRequested` events by
   `expansionOwnerCheck`, require the event ordinal to be the next count, and
   retain the existing derived request-ID validation.
@@ -147,25 +194,36 @@ private fields.
    and require exact event equality, identical claim/instance projections,
    live/replay equality, recursive immutability, and byte-identical canonical
    re-export including the integrity digest.
-2. **Integrity and graph binding.** Independently alter an event payload, digest,
-   `graphSemanticDigest`, kind/version, add an unknown key, and restore under a
-   semantically different compiled graph. Each case must synchronously reject
-   with its exact code before a journal is returned.
+2. **Integrity, routing, and graph binding.** Independently alter an event
+   payload, digest, `graphSemanticDigest`, kind/version, add an unknown key, add
+   request+node hybrid discriminators, and alter expansion/activation authority.
+   A raw post-checkpoint mutation must first prove integrity rejection. Every
+   case intended to reach a later shape, routing, frontier, or plan-authority gate
+   must recompute the envelope integrity digest after mutation. Also restore an
+   unmodified checkpoint under a semantically different compiled graph. Each
+   case must synchronously reject with its exact code before a journal is returned.
 3. **Frontier grammar.** Cover empty and completed prefixes, mismatched
    event-count/last-event metadata, non-contiguous event IDs, mixed sessions,
    a prefix cut inside an atomic managed terminal batch, and otherwise valid
-   prefixes ending with started attempts, pending/running requests, or
-   ready/running generations. Only empty or quiescent completed prefixes restore.
+   prefixes ending with started attempts, pending/running requests,
+   ready/running generations, or managed runs in each of `acquired`, `started`,
+   and `cancel_requested`. Re-hash every deliberately edited envelope so the
+   intended frontier gate is exercised. Only empty or quiescent completed
+   prefixes restore.
 4. **Stale fence remains stale.** Restore a completed prefix, begin the next
    authorized attempt, then submit a schedule/terminal operation carrying a
    pre-checkpoint attempt ID or fence. Require `STALE_FENCE` and no appended
    runtime event.
-5. **Exact next fence and ordinals.** Restore a prefix containing the initial
-   catalog attempt, generated attempts, and at least one reconciliation request.
-   Require the next request ordinal/ID, next root/catalog attempt ordinal/ID,
-   next generated attempt ordinal/ID, and every new fence to match canonical
-   derivation from the prefix. Re-export/restore again and repeat once to exclude
-   hidden process-local allocator state.
+5. **Exact next fence and ordinals.** Restore a prefix containing an initial root
+   catalog attempt, generated attempts, and at least one reconciliation attempt
+   for that same root owner. Require root and catalog attempts to have the shared
+   authority ordinals `1, 2, ...`, while all interleaved starts consume one global
+   fence sequence. Require the next request ordinal/ID and next root/catalog
+   attempt ordinal/ID to match canonical derivation. After a changed catalog
+   activates a new generation, require its only valid start to use generated
+   ordinal 1 and the next global fence; a second start for that generation must
+   fail. Re-export/restore again and repeat once to exclude hidden process-local
+   allocator state.
 
 The implementation gate is:
 
