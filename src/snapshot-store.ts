@@ -79,6 +79,455 @@ type GeneratedScheduleAuthority = Pick<
 type WithoutEventId<T> = T extends { readonly eventId: number } ? Omit<T, 'eventId'> : never;
 type StagedInstanceRuntimeEvent = WithoutEventId<InstanceRuntimeEvent>;
 
+/** The portable, canonical Graph-v2 runtime prefix. */
+export interface GraphJournalCheckpointV1 {
+  readonly kind: 'visor.graph-journal-checkpoint';
+  readonly version: 1;
+  readonly sessionId: string;
+  readonly graphSemanticDigest: string;
+  readonly frontier: {
+    readonly eventCount: number;
+    readonly lastEventId: number;
+  };
+  readonly events: readonly (ClaimRuntimeEvent | InstanceRuntimeEvent)[];
+  readonly integrity: {
+    readonly algorithm: 'sha256';
+    readonly digest: string;
+  };
+}
+
+export class GraphJournalCheckpointError extends Error {
+  readonly code:
+  | 'INVALID_CHECKPOINT_ENVELOPE'
+  | 'CHECKPOINT_INTEGRITY_MISMATCH'
+  | 'CHECKPOINT_GRAPH_MISMATCH'
+  | 'INVALID_CHECKPOINT_PREFIX'
+  | 'CHECKPOINT_SESSION_MISMATCH'
+  | 'CHECKPOINT_PLAN_AUTHORITY_MISMATCH'
+  | 'CHECKPOINT_NOT_QUIESCENT';
+
+  constructor(
+    code: GraphJournalCheckpointError['code'],
+    message: string,
+    options?: { cause?: unknown }
+  ) {
+    super(message, options);
+    this.name = 'GraphJournalCheckpointError';
+    this.code = code;
+  }
+}
+
+const CHECKPOINT_SHA256 = /^[0-9a-f]{64}$/;
+
+function checkpointObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function checkpointHasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function checkpointString(value: unknown, field: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', `${field} must be a non-empty string`);
+  }
+}
+
+function checkpointSafeInteger(value: unknown, field: string, minimum = 0): asserts value is number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', `${field} must be a safe integer >= ${minimum}`);
+  }
+}
+
+function checkpointExactEventKeys(event: Record<string, unknown>, expected: readonly string[]): void {
+  if (!checkpointHasExactKeys(event, expected)) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', `Runtime event ${String(event.type)} has unknown or missing fields`);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!checkpointObject(value);
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function checkpointWrap(
+  code: GraphJournalCheckpointError['code'],
+  message: string,
+  error: unknown
+): GraphJournalCheckpointError {
+  if (error instanceof GraphJournalCheckpointError) return error;
+  return new GraphJournalCheckpointError(code, message, { cause: error });
+}
+
+type CheckpointRuntimeEvent = ClaimRuntimeEvent | InstanceRuntimeEvent;
+
+const ATTEMPT_BASE_KEYS = ['version', 'type', 'eventId', 'sessionId', 'checkId', 'scope', 'attemptId', 'fence'] as const;
+
+function eventHasNodeDiscriminator(event: Record<string, unknown>): boolean {
+  return hasOwn(event, 'nodeInstanceId') || hasOwn(event, 'nodeGenerationId');
+}
+
+function eventHasRequestDiscriminator(event: Record<string, unknown>): boolean {
+  return hasOwn(event, 'requestId');
+}
+
+function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
+  const event = checkpointObject(value);
+  if (!event || typeof event.type !== 'string') {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Runtime event must be an object with a discriminator');
+  }
+
+  const exact = (keys: readonly string[]): void => checkpointExactEventKeys(event, keys);
+  const base = (): void => {
+    if (event.version !== 1 || typeof event.eventId !== 'number' || !Number.isSafeInteger(event.eventId) || event.eventId < 1 ||
+        typeof event.sessionId !== 'string' || event.sessionId.length === 0 || typeof event.scope === 'undefined') {
+      throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', `Runtime event ${event.type} has invalid base fields`);
+    }
+  };
+
+  switch (event.type) {
+    case 'CatalogReconciliationRequested':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'requestId', 'requestOrdinal', 'expansionOwnerCheck', 'status']);
+      base();
+      if (typeof event.requestId !== 'string' || typeof event.expansionOwnerCheck !== 'string' || event.status !== 'pending' ||
+          typeof event.requestOrdinal !== 'number' || !Number.isSafeInteger(event.requestOrdinal) || event.requestOrdinal < 1) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Catalog request event has invalid fields');
+      }
+      return event as unknown as CatalogReconciliationRequestedEvent;
+    case 'SubgraphExpanded': {
+      const nested = event.parentSubgraphInstanceId !== null;
+      exact(nested
+        ? ['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'graphSemanticDigest', 'expansionSpecDigest', 'templateDigest', 'parentSubgraphInstanceId', 'expansionOwnerNodeInstanceId', 'catalogClaimRef', 'catalogClaimId', 'itemKey', 'subgraphInstanceId', 'nodeInstanceIdsByTemplateNode']
+        : ['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'graphSemanticDigest', 'expansionSpecDigest', 'templateDigest', 'parentSubgraphInstanceId', 'catalogClaimId', 'itemKey', 'subgraphInstanceId', 'nodeInstanceIdsByTemplateNode']);
+      base();
+      if (typeof event.expansionOwnerCheck !== 'string' || typeof event.graphSemanticDigest !== 'string' ||
+          typeof event.expansionSpecDigest !== 'string' || typeof event.templateDigest !== 'string' ||
+          (nested && (typeof event.expansionOwnerNodeInstanceId !== 'string' || typeof event.catalogClaimRef !== 'string')) ||
+          typeof event.catalogClaimId !== 'string' || typeof event.itemKey !== 'string' ||
+          typeof event.subgraphInstanceId !== 'string' || !isRecord(event.nodeInstanceIdsByTemplateNode)) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Expanded subgraph event has invalid fields');
+      }
+      return event as unknown as InstanceRuntimeEvent;
+    }
+    case 'ControllerItemClaimPublished':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'expansionSpecDigest', 'catalogClaimId', 'itemKey', 'subgraphInstanceId', 'incarnation', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'parentClaimIds']);
+      base();
+      if (typeof event.expansionOwnerCheck !== 'string' || typeof event.expansionSpecDigest !== 'string' || typeof event.catalogClaimId !== 'string' ||
+          typeof event.itemKey !== 'string' || typeof event.subgraphInstanceId !== 'string' || typeof event.incarnation !== 'number' || !Number.isSafeInteger(event.incarnation) || event.incarnation < 1 ||
+          typeof event.claimId !== 'string' || typeof event.claim !== 'string' || typeof event.payloadFingerprint !== 'string' ||
+          !Array.isArray(event.parentClaimIds)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Controller item event has invalid fields');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'NodeGenerationInactivated':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'subgraphInstanceId', 'nodeInstanceId', 'nodeGenerationId', 'incarnation', 'outputClaimIds', 'reason']);
+      base();
+      if (typeof event.subgraphInstanceId !== 'string' || typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string' ||
+          typeof event.incarnation !== 'number' || !Number.isSafeInteger(event.incarnation) || event.incarnation < 0 || !Array.isArray(event.outputClaimIds) || event.reason !== 'superseded') {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generation inactivation event has invalid fields');
+      }
+      return event as unknown as InstanceRuntimeEvent;
+    case 'NodeGenerationActivated':
+      exact(hasOwn(event, 'nestedExpansionCatalogClaimRef')
+        ? ['version', 'type', 'eventId', 'sessionId', 'scope', 'subgraphInstanceId', 'nodeInstanceId', 'nodeGenerationId', 'templateNodeKey', 'checkId', 'incarnation', 'itemFingerprint', 'executionConfigDigest', 'activeInputClaimIds', 'nestedExpansionCatalogClaimRef']
+        : ['version', 'type', 'eventId', 'sessionId', 'scope', 'subgraphInstanceId', 'nodeInstanceId', 'nodeGenerationId', 'templateNodeKey', 'checkId', 'incarnation', 'itemFingerprint', 'executionConfigDigest', 'activeInputClaimIds']);
+      base();
+      if (typeof event.subgraphInstanceId !== 'string' || typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string' || typeof event.templateNodeKey !== 'string' || typeof event.checkId !== 'string' ||
+          typeof event.incarnation !== 'number' || !Number.isSafeInteger(event.incarnation) || event.incarnation < 0 || typeof event.itemFingerprint !== 'string' || typeof event.executionConfigDigest !== 'string' || !Array.isArray(event.activeInputClaimIds) ||
+          (hasOwn(event, 'nestedExpansionCatalogClaimRef') && typeof event.nestedExpansionCatalogClaimRef !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generation activation event has invalid fields');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'SubgraphTombstoned':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'sourceCatalogClaimId', 'itemKey', 'subgraphInstanceId', 'lastIncarnation', 'nodeGenerationIds', 'outputClaimIds']);
+      base();
+      if (typeof event.expansionOwnerCheck !== 'string' || typeof event.sourceCatalogClaimId !== 'string' || typeof event.itemKey !== 'string' || typeof event.subgraphInstanceId !== 'string' || typeof event.lastIncarnation !== 'number' || !Number.isSafeInteger(event.lastIncarnation) || event.lastIncarnation < 0 || !Array.isArray(event.nodeGenerationIds) || !Array.isArray(event.outputClaimIds)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Tombstone event has invalid fields');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'ManagedRunAcquisitionFailed':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'binding', 'failureCode']);
+      base();
+      if (!isRecord(event.binding) || typeof event.failureCode !== 'string') throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed acquisition event has invalid fields');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'ManagedRunAcquired':
+    case 'ManagedRunStarted':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'binding']);
+      base();
+      if (!isRecord(event.binding)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed lifecycle event has invalid binding');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'ManagedRunCancelRequested':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'binding', 'reason']);
+      base();
+      if (!isRecord(event.binding) || event.reason !== 'deadline') throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed cancel event has invalid fields');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'ManagedRunTerminated':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'binding', 'cleanupStatus', 'controllerDecision', 'failureCode']);
+      base();
+      if (!isRecord(event.binding) || (event.cleanupStatus !== 'clean' && event.cleanupStatus !== 'unverified') || (event.controllerDecision !== 'completed' && event.controllerDecision !== 'failed') || (event.failureCode !== null && typeof event.failureCode !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed terminal event has invalid fields');
+      return event as unknown as InstanceRuntimeEvent;
+    case 'AttemptStarted':
+    case 'CheckScheduled':
+    case 'AttemptCompleted':
+    case 'AttemptFailed': {
+      const node = eventHasNodeDiscriminator(event);
+      const request = eventHasRequestDiscriminator(event);
+      if (node && request) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', `${event.type} cannot carry request and node discriminators`);
+      const keys: string[] = [...ATTEMPT_BASE_KEYS];
+      if (node) keys.push('nodeInstanceId', 'nodeGenerationId');
+      else if (request) keys.push('requestId');
+      if (event.type === 'CheckScheduled') keys.push('claimIds');
+      if (event.type === 'AttemptCompleted' && request) keys.push('catalogClaimId');
+      if (event.type === 'AttemptFailed') keys.push('reason');
+      exact(keys);
+      base();
+      if (typeof event.checkId !== 'string' || typeof event.attemptId !== 'string' || typeof event.fence !== 'number' || !Number.isSafeInteger(event.fence) || event.fence < 1 ||
+          (node && (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string')) ||
+          (request && typeof event.requestId !== 'string') || (event.type === 'CheckScheduled' && !Array.isArray(event.claimIds)) ||
+          (event.type === 'AttemptCompleted' && request && typeof event.catalogClaimId !== 'string') || (event.type === 'AttemptFailed' && typeof event.reason !== 'string')) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', `${event.type} has invalid fields`);
+      }
+      return event as unknown as CheckpointRuntimeEvent;
+    }
+    case 'ClaimPublished': {
+      const node = eventHasNodeDiscriminator(event);
+      if (eventHasRequestDiscriminator(event)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'ClaimPublished cannot carry requestId');
+      const keys = node
+        ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds']
+        : [...ATTEMPT_BASE_KEYS, 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds'];
+      exact(keys);
+      base();
+      if (typeof event.checkId !== 'string' || typeof event.attemptId !== 'string' || typeof event.fence !== 'number' || !Number.isSafeInteger(event.fence) || event.fence < 1 ||
+          typeof event.claimId !== 'string' || typeof event.claim !== 'string' || typeof event.payloadFingerprint !== 'string' || typeof event.producerCheckId !== 'string' || !Array.isArray(event.parentClaimIds) ||
+          (node && (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Claim publication has invalid fields');
+      return event as unknown as CheckpointRuntimeEvent;
+    }
+    default:
+      throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', `Unknown runtime event type ${event.type}`);
+  }
+}
+
+function routeCheckpointEvent(event: CheckpointRuntimeEvent): { claim: boolean; instance: boolean } {
+  if (event.type === 'ClaimPublished') return 'nodeGenerationId' in event ? { claim: false, instance: true } : { claim: true, instance: false };
+  if (event.type === 'AttemptStarted' || event.type === 'CheckScheduled' || event.type === 'AttemptCompleted' || event.type === 'AttemptFailed') {
+    if ('nodeGenerationId' in event) return { claim: false, instance: true };
+    if ('requestId' in event) return { claim: true, instance: true };
+    return { claim: true, instance: false };
+  }
+  return { claim: false, instance: true };
+}
+
+function checkpointAuthorityFailure(message: string): never {
+  throw new GraphJournalCheckpointError('CHECKPOINT_PLAN_AUTHORITY_MISMATCH', message);
+}
+
+function expansionForCheckpoint(
+  plan: ClaimPlan,
+  owner: string,
+  nested: boolean
+): CompiledExpansion {
+  const expansion = nested
+    ? plan.expansionPlan?.byNestedOwner[owner]
+    : plan.expansionPlan?.byOwner[owner];
+  if (!expansion) checkpointAuthorityFailure(`Unknown compiled expansion owner ${owner}`);
+  return expansion;
+}
+
+function validateCheckpointPlanAuthority(
+  event: InstanceRuntimeEvent,
+  plan: ClaimPlan,
+  claimProjection: ClaimProjection,
+  instanceProjection: InstanceProjection
+): void {
+  const expansionPlan = plan.expansionPlan;
+  if (!expansionPlan?.active) checkpointAuthorityFailure('Checkpoint requires an active expansion plan');
+  const asRecord = event as unknown as Record<string, unknown>;
+  if (event.type === 'CatalogReconciliationRequested') {
+    expansionForCheckpoint(plan, event.expansionOwnerCheck, false);
+    return;
+  }
+  if (event.type === 'SubgraphExpanded') {
+    const nested = event.parentSubgraphInstanceId !== null;
+    const expansion = expansionForCheckpoint(plan, event.expansionOwnerCheck, nested);
+    if (event.graphSemanticDigest !== expansion.graphSemanticDigest ||
+        event.expansionSpecDigest !== expansion.expansionSpecDigest ||
+        event.templateDigest !== expansion.templateDigest ||
+        event.catalogClaimId.length === 0 || event.itemKey.length === 0) {
+      checkpointAuthorityFailure('Expanded subgraph does not match the compiled expansion authority');
+    }
+    const templateKeys = [...expansion.template.templateNodeKeys].sort();
+    const eventKeys = Object.keys(event.nodeInstanceIdsByTemplateNode).sort();
+    if (canonicalJson(templateKeys) !== canonicalJson(eventKeys)) {
+      checkpointAuthorityFailure('Expanded subgraph node key set does not match the compiled template');
+    }
+    if (!nested) {
+      const catalog = claimProjection.claims[event.catalogClaimId];
+      if (!catalog || claimProjection.activeClaimIdsByRef[expansion.catalogClaimRef] !== event.catalogClaimId || catalog.claim !== expansion.catalogClaimRef || catalog.producerCheckId !== event.expansionOwnerCheck || catalog.scope.length !== 0) {
+        checkpointAuthorityFailure('Root expansion catalog claim is not the exact projected authority');
+      }
+    }
+    return;
+  }
+  if (event.type === 'ControllerItemClaimPublished') {
+    const instance = instanceProjection.instancesById[event.subgraphInstanceId];
+    if (!instance) checkpointAuthorityFailure('Controller item claim references an unknown instance');
+    const nested = !!instance.parentSubgraphInstanceId;
+    const expansion = expansionForCheckpoint(plan, event.expansionOwnerCheck, nested);
+    if (instance.expansionOwnerCheck !== event.expansionOwnerCheck ||
+        event.expansionSpecDigest !== expansion.expansionSpecDigest || event.claim !== expansion.itemClaimRef) {
+      checkpointAuthorityFailure('Controller item claim does not match the compiled expansion authority');
+    }
+    if (!nested) {
+      const catalog = claimProjection.claims[event.catalogClaimId];
+      if (!catalog || claimProjection.activeClaimIdsByRef[expansion.catalogClaimRef] !== event.catalogClaimId || catalog.claim !== expansion.catalogClaimRef) {
+        checkpointAuthorityFailure('Controller item catalog claim is not the exact active plan authority');
+      }
+    }
+    try { expansion.itemValidator(event.payload); } catch (error) {
+      throw new GraphJournalCheckpointError('CHECKPOINT_PLAN_AUTHORITY_MISMATCH', 'Controller item payload violates the compiled item validator', { cause: error });
+    }
+    return;
+  }
+  if (event.type === 'NodeGenerationActivated') {
+    const instance = instanceProjection.instancesById[event.subgraphInstanceId];
+    if (!instance) checkpointAuthorityFailure('Generation activation references an unknown instance');
+    const expansion = expansionForCheckpoint(plan, instance.expansionOwnerCheck, !!instance.parentSubgraphInstanceId);
+    const node = expansion.template.nodesByKey[event.templateNodeKey];
+    const nestedOwner = qualifiedNestedExpansionOwner(expansion.template.name, event.templateNodeKey);
+    const nestedExpansion = expansionPlan.byNestedOwner[nestedOwner];
+    if (!node || event.executionConfigDigest !== node.executionConfigDigest ||
+        (nestedExpansion ? event.nestedExpansionCatalogClaimRef !== nestedExpansion.catalogClaimRef : hasOwn(asRecord, 'nestedExpansionCatalogClaimRef'))) {
+      checkpointAuthorityFailure('Generation activation does not match the compiled template node authority');
+    }
+    return;
+  }
+  if ('nodeGenerationId' in event && event.type === 'ClaimPublished') {
+    const generation = instanceProjection.generationsById[event.nodeGenerationId];
+    if (!generation) checkpointAuthorityFailure('Generated claim references an unknown generation');
+    const expansion = expansionForCheckpoint(plan, instanceProjection.instancesById[generation.subgraphInstanceId].expansionOwnerCheck, !!instanceProjection.instancesById[generation.subgraphInstanceId].parentSubgraphInstanceId);
+    const node = expansion.template.nodesByKey[generation.templateNodeKey];
+    if (!node || !node.emissions.some(emission => emission.claim === event.claim)) checkpointAuthorityFailure('Generated claim is not declared by its compiled template node');
+    try { plan.validatorsByClaim[event.claim](event.payload); } catch (error) {
+      throw new GraphJournalCheckpointError('CHECKPOINT_PLAN_AUTHORITY_MISMATCH', 'Generated claim payload violates the compiled claim validator', { cause: error });
+    }
+  }
+}
+
+function checkpointBody(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    kind: value.kind,
+    version: value.version,
+    sessionId: value.sessionId,
+    graphSemanticDigest: value.graphSemanticDigest,
+    frontier: value.frontier,
+    events: value.events,
+  };
+}
+
+function parseGraphCheckpoint(input: unknown): GraphJournalCheckpointV1 {
+  try {
+    canonicalJson(input);
+  } catch (error) {
+    throw checkpointWrap('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint is not canonical JSON', error);
+  }
+  const value = checkpointObject(input);
+  if (!value || !checkpointHasExactKeys(value, ['kind', 'version', 'sessionId', 'graphSemanticDigest', 'frontier', 'events', 'integrity'])) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint envelope has unknown or missing fields');
+  }
+  if (value.kind !== 'visor.graph-journal-checkpoint' || value.version !== 1) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Unsupported checkpoint kind or version');
+  }
+  checkpointString(value.sessionId, 'Checkpoint sessionId');
+  checkpointString(value.graphSemanticDigest, 'Checkpoint graphSemanticDigest');
+  const frontier = checkpointObject(value.frontier);
+  const integrity = checkpointObject(value.integrity);
+  if (!frontier || !checkpointHasExactKeys(frontier, ['eventCount', 'lastEventId']) || !integrity || !checkpointHasExactKeys(integrity, ['algorithm', 'digest'])) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint frontier or integrity shape is invalid');
+  }
+  checkpointSafeInteger(frontier.eventCount, 'frontier.eventCount');
+  checkpointSafeInteger(frontier.lastEventId, 'frontier.lastEventId');
+  if (integrity.algorithm !== 'sha256' || typeof integrity.digest !== 'string' || !CHECKPOINT_SHA256.test(integrity.digest)) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint integrity algorithm or digest is invalid');
+  }
+  if (!Array.isArray(value.events)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint events must be an array');
+  const expectedDigest = sha256Canonical(checkpointBody(value));
+  if (integrity.digest !== expectedDigest) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_INTEGRITY_MISMATCH', 'Checkpoint integrity digest does not match its canonical body');
+  }
+  return value as unknown as GraphJournalCheckpointV1;
+}
+
+function validateCheckpointPrefix(checkpoint: GraphJournalCheckpointV1): readonly CheckpointRuntimeEvent[] {
+  const frontier = checkpoint.frontier;
+  const rawEvents = checkpoint.events;
+  if (frontier.eventCount !== rawEvents.length || frontier.lastEventId !== (rawEvents.length === 0 ? 0 : rawEvents.length)) {
+    throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Checkpoint frontier does not describe the event prefix');
+  }
+  const events = rawEvents.map(validateCheckpointEventShape);
+  for (const [index, event] of events.entries()) {
+    if (event.eventId !== index + 1) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Checkpoint event IDs must be contiguous from 1');
+    if (event.sessionId !== checkpoint.sessionId) throw new GraphJournalCheckpointError('CHECKPOINT_SESSION_MISMATCH', 'Checkpoint event session differs from its envelope session');
+  }
+  return events;
+}
+
+function reconstructCheckpointAllocators(
+  events: readonly CheckpointRuntimeEvent[]
+): { nextFence: number; attemptOrdinals: Map<string, number>; requestOrdinals: Map<string, number> } {
+  let nextFence = 0;
+  const attemptOrdinals = new Map<string, number>();
+  const requestOrdinals = new Map<string, number>();
+  const generatedStarts = new Set<string>();
+  for (const event of events) {
+    if (event.type === 'CatalogReconciliationRequested') {
+      const prior = requestOrdinals.get(event.expansionOwnerCheck) || 0;
+      if (event.requestOrdinal !== prior + 1 || event.requestId !== deriveCatalogRequestId({
+        sessionId: event.sessionId,
+        expansionOwnerCheck: event.expansionOwnerCheck,
+        ordinal: event.requestOrdinal,
+      })) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Catalog request ordinal is not the next derived ordinal');
+      }
+      requestOrdinals.set(event.expansionOwnerCheck, event.requestOrdinal);
+    }
+    if (event.type !== 'AttemptStarted') continue;
+    nextFence++;
+    if (event.fence !== nextFence) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Attempt fences must be one contiguous global sequence');
+    if ('nodeGenerationId' in event) {
+      const generatedKey = canonicalJson({ nodeGenerationId: event.nodeGenerationId, scope: event.scope });
+      if (generatedStarts.has(generatedKey) || event.attemptId !== sha256Canonical({ nodeGenerationId: event.nodeGenerationId, ordinal: 1 })) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generated attempt identity or ordinal is invalid');
+      }
+      generatedStarts.add(generatedKey);
+      continue;
+    }
+    const authority = { sessionId: event.sessionId, checkId: event.checkId, scope: event.scope };
+    const key = canonicalJson(authority);
+    const ordinal = (attemptOrdinals.get(key) || 0) + 1;
+    if (event.attemptId !== sha256Canonical({ ...authority, ordinal })) {
+      throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Attempt identity is not derived from its reconstructed ordinal');
+    }
+    attemptOrdinals.set(key, ordinal);
+  }
+  return { nextFence, attemptOrdinals, requestOrdinals };
+}
+
+function ensureCheckpointQuiescent(claimProjection: ClaimProjection, instanceProjection: InstanceProjection): void {
+  if (Object.values(claimProjection.attempts).some(attempt => attempt.status === 'started')) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a started root or catalog attempt');
+  }
+  if (Object.values(instanceProjection.requestsById).some(request => request.status === 'pending' || request.status === 'running')) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a pending or running catalog request');
+  }
+  if (Object.values(instanceProjection.generationsById).some(generation => generation.status === 'ready' || generation.status === 'running')) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a ready or running generation');
+  }
+  if (Object.values(instanceProjection.managedRunsByAttemptId).some(run => run.status === 'acquired' || run.status === 'started' || run.status === 'cancel_requested')) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a nonterminal managed run');
+  }
+}
+
 export interface JournalEntry {
   commitId: number;
   sessionId: string;
@@ -99,6 +548,96 @@ export class ExecutionJournal {
   private requestOrdinals = new Map<string, number>();
 
   constructor(private readonly claimPlan?: ClaimPlan) {}
+
+  /** Export the immutable Graph-v2 runtime prefix and its canonical integrity digest. */
+  exportGraphCheckpoint(sessionId: string): GraphJournalCheckpointV1 {
+    checkpointString(sessionId, 'sessionId');
+    const plan = this.requireClaimPlan();
+    if (!plan.expansionPlan?.active) {
+      throw new GraphJournalCheckpointError('CHECKPOINT_GRAPH_MISMATCH', 'Graph journal checkpoints require an active expansion plan');
+    }
+    const events = immutableCanonicalValue(this.runtimeEvents) as readonly CheckpointRuntimeEvent[];
+    if (events.some(event => event.sessionId !== sessionId)) {
+      throw new GraphJournalCheckpointError('CHECKPOINT_SESSION_MISMATCH', 'Runtime event session differs from export session');
+    }
+    const body = {
+      kind: 'visor.graph-journal-checkpoint' as const,
+      version: 1 as const,
+      sessionId,
+      graphSemanticDigest: plan.expansionPlan.graphSemanticDigest,
+      frontier: { eventCount: events.length, lastEventId: events.length === 0 ? 0 : events.length },
+      events,
+    };
+    return immutableCanonicalValue({
+      ...body,
+      integrity: { algorithm: 'sha256' as const, digest: sha256Canonical(body) },
+    });
+  }
+
+  /** Restore a fresh journal only after complete envelope, authority, replay, and frontier validation. */
+  static restoreGraphCheckpoint(claimPlan: ClaimPlan, input: unknown): ExecutionJournal {
+    const checkpoint = parseGraphCheckpoint(input);
+    if (!claimPlan || !claimPlan.active || !claimPlan.expansionPlan?.active) {
+      throw new GraphJournalCheckpointError('CHECKPOINT_GRAPH_MISMATCH', 'Checkpoint restore requires an active claim and expansion plan');
+    }
+    if (checkpoint.graphSemanticDigest !== claimPlan.expansionPlan.graphSemanticDigest) {
+      throw new GraphJournalCheckpointError('CHECKPOINT_GRAPH_MISMATCH', 'Checkpoint graph digest does not match the current compiled plan');
+    }
+
+    const validatedEvents = validateCheckpointPrefix(checkpoint);
+    const events = immutableCanonicalValue(validatedEvents) as readonly CheckpointRuntimeEvent[];
+    const claimEvents: ClaimRuntimeEvent[] = [];
+    const instanceEvents: InstanceRuntimeEvent[] = [];
+    let claimPrefix = createInitialClaimProjection();
+    let instancePrefix = createInitialInstanceProjection();
+    for (const event of events) {
+      const route = routeCheckpointEvent(event);
+      if (route.claim) {
+        claimEvents.push(event as ClaimRuntimeEvent);
+        try {
+          claimPrefix = reduceClaimEvent(claimPrefix, event as ClaimRuntimeEvent, claimPlan);
+        } catch (error) {
+          throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint root claim replay failed', error);
+        }
+      }
+      if (route.instance) {
+        instanceEvents.push(event as InstanceRuntimeEvent);
+        validateCheckpointPlanAuthority(event as InstanceRuntimeEvent, claimPlan, claimPrefix, instancePrefix);
+        try {
+          // Preview each event to make plan authority checks resolve against the exact
+          // projection prefix; replayInstanceEvents below remains the final reducer.
+          instancePrefix = reduceInstanceEvent(instancePrefix, event as InstanceRuntimeEvent);
+        } catch (error) {
+          throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint instance replay failed', error);
+        }
+      }
+    }
+
+    let claimProjection: ClaimProjection;
+    let instanceProjection: InstanceProjection;
+    try {
+      claimProjection = replayClaimEvents(claimEvents, claimPlan);
+    } catch (error) {
+      throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint root claim replay failed', error);
+    }
+    try {
+      instanceProjection = replayInstanceEvents(instanceEvents);
+    } catch (error) {
+      throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint instance replay failed', error);
+    }
+    ensureCheckpointQuiescent(claimProjection, instanceProjection);
+    const allocators = reconstructCheckpointAllocators(events);
+
+    const restored = new ExecutionJournal(claimPlan);
+    // Keep the journal's internal lane appendable while retaining immutable event values.
+    restored.runtimeEvents = events.map(event => immutableCanonicalValue(event)) as Array<CheckpointRuntimeEvent>;
+    restored.claimProjection = immutableCanonicalValue(claimProjection);
+    restored.instanceProjection = immutableCanonicalValue(instanceProjection);
+    restored.nextFence = allocators.nextFence;
+    restored.attemptOrdinals = allocators.attemptOrdinals;
+    restored.requestOrdinals = allocators.requestOrdinals;
+    return restored;
+  }
 
   beginSnapshot(): number {
     return this.commit;

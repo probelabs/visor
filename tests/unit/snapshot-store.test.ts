@@ -12,6 +12,7 @@ import type {
   ManagedRunCancelReceiptV1,
   ManagedRunCleanupReceiptV1,
 } from '../../src/providers/check-provider.interface';
+import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 import {
   deriveControllerItemClaimId,
   deriveNodeGenerationId,
@@ -1230,6 +1231,359 @@ describe('snapshot-store (journal + context view)', () => {
       controllerDecision: 'completed',
     });
     expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+  });
+});
+
+describe('Graph-v2 journal checkpoints', () => {
+  type JsonCheckpoint = any;
+
+  function rehash(checkpoint: JsonCheckpoint): JsonCheckpoint {
+    checkpoint.integrity.digest = sha256Canonical({
+      kind: checkpoint.kind,
+      version: checkpoint.version,
+      sessionId: checkpoint.sessionId,
+      graphSemanticDigest: checkpoint.graphSemanticDigest,
+      frontier: checkpoint.frontier,
+      events: checkpoint.events,
+    });
+    return checkpoint;
+  }
+
+  function checkpointWithEvents(source: ExecutionJournal, events: readonly any[]): JsonCheckpoint {
+    const checkpoint = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+    checkpoint.events = JSON.parse(JSON.stringify(events));
+    checkpoint.frontier = { eventCount: events.length, lastEventId: events.length };
+    return rehash(checkpoint);
+  }
+
+  function completedC2Journal(): ExecutionJournal {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    completeC2Work(source);
+    return source;
+  }
+
+  function completeC2Work(journal: ExecutionJournal): void {
+    while (journal.queryReadyWork().length > 0) {
+      const generation = journal.queryReadyWork()[0];
+      const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(attempt);
+      journal.completeGeneratedAttempt({
+        attempt,
+        payload: generation.checkId === 'inspect' ? { id: 'A', findings: [] } : { done: true },
+      });
+    }
+  }
+
+  it('round-trips an immutable completed Graph-v2 prefix through JSON', () => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    completeC2Work(source);
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(
+      compileClaimPlan(c2Config()),
+      JSON.parse(JSON.stringify(checkpoint))
+    );
+
+    expect(restored.readRuntimeEvents()).toEqual(source.readRuntimeEvents());
+    expect(restored.getClaimProjection()).toEqual(source.getClaimProjection());
+    expect(restored.getInstanceProjection()).toEqual(source.getInstanceProjection());
+    expect(restored.replayClaimProjection()).toEqual(restored.getClaimProjection());
+    expect(restored.replayInstanceProjection()).toEqual(restored.getInstanceProjection());
+    expect(restored.exportGraphCheckpoint('c2-session')).toEqual(checkpoint);
+    expectDeeplyFrozen(restored.exportGraphCheckpoint('c2-session'));
+  });
+
+  it('round-trips nested managed reconciliation after all generated work is quiescent', () => {
+    const source = c4Journal();
+    publishCatalog(source, { components: [{ id: 'A', revision: 1 }] });
+    const enumerate = source.queryReadyWork().find(value => value.checkId === 'enumerate')!;
+    const enumerateAttempt = source.startGeneratedAttempt(enumerate.nodeGenerationId);
+    source.scheduleGeneratedAttempt(enumerateAttempt);
+    source.completeGeneratedAttempt({
+      attempt: enumerateAttempt,
+      payload: { specs: [{ id: 'spec-1', revision: 1, source: 'A/one' }] },
+    });
+    completeReadySpecWork(source);
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(
+      compileClaimPlan(c4Config()),
+      JSON.parse(JSON.stringify(checkpoint))
+    );
+    expect(restored.readRuntimeEvents()).toEqual(source.readRuntimeEvents());
+    expect(restored.getClaimProjection()).toEqual(source.getClaimProjection());
+    expect(restored.getInstanceProjection()).toEqual(source.getInstanceProjection());
+    expect(restored.replayInstanceProjection()).toEqual(restored.getInstanceProjection());
+  });
+
+  it('rejects a rehashed graph mismatch and an unhashed payload mutation', () => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    completeC2Work(source);
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const tampered = JSON.parse(JSON.stringify(checkpoint));
+    const catalogEvent = tampered.events.find((event: any) => event.type === 'ClaimPublished');
+    catalogEvent.payload.components[0].path = 'packages/changed';
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), tampered),
+      'CHECKPOINT_INTEGRITY_MISMATCH'
+    );
+    const graphChanged = JSON.parse(JSON.stringify(checkpoint));
+    graphChanged.graphSemanticDigest = 'f'.repeat(64);
+    graphChanged.frontier.eventCount += 1;
+    rehash(graphChanged);
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), graphChanged),
+      'CHECKPOINT_GRAPH_MISMATCH'
+    );
+  });
+
+  it.each([
+    ['unknown envelope key', (checkpoint: any) => { checkpoint.extra = true; }],
+    ['wrong kind', (checkpoint: any) => { checkpoint.kind = 'other'; }],
+    ['wrong version', (checkpoint: any) => { checkpoint.version = 2; }],
+    ['alternate algorithm', (checkpoint: any) => { checkpoint.integrity.algorithm = 'sha512'; }],
+  ])('rejects %s at the envelope gate', (_name, mutate) => {
+    const source = completedC2Journal();
+    const checkpoint = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+    mutate(checkpoint);
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint),
+      'INVALID_CHECKPOINT_ENVELOPE'
+    );
+  });
+
+  it.each([
+    ['unknown event type', (checkpoint: any) => { checkpoint.events[0].type = 'Unknown'; }],
+    ['extra event key', (checkpoint: any) => { checkpoint.events[0].unknown = true; }],
+    ['request and node hybrid', (checkpoint: any) => {
+      const event = checkpoint.events.find((candidate: any) => candidate.nodeGenerationId);
+      event.requestId = 'hybrid';
+    }],
+    ['non-contiguous event ID', (checkpoint: any) => { checkpoint.events[1].eventId = 99; }],
+    ['event count mismatch', (checkpoint: any) => { checkpoint.frontier.eventCount += 1; }],
+    ['last event mismatch', (checkpoint: any) => { checkpoint.frontier.lastEventId += 1; }],
+  ])('rejects rehashed %s at the prefix gate', (_name, mutate) => {
+    const source = completedC2Journal();
+    const checkpoint = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+    mutate(checkpoint);
+    rehash(checkpoint);
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint),
+      'INVALID_CHECKPOINT_PREFIX'
+    );
+  });
+
+  it('checks graph binding before prefix grammar', () => {
+    const source = completedC2Journal();
+    const checkpoint = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+    checkpoint.graphSemanticDigest = 'f'.repeat(64);
+    checkpoint.frontier.eventCount += 1;
+    rehash(checkpoint);
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint),
+      'CHECKPOINT_GRAPH_MISMATCH'
+    );
+  });
+
+  it.each([
+    ['mixed event session', (checkpoint: any) => { checkpoint.events[0].sessionId = 'other'; }],
+    ['root expansion digest', (checkpoint: any) => {
+      const event = checkpoint.events.find((candidate: any) => candidate.type === 'SubgraphExpanded');
+      event.expansionSpecDigest = 'f'.repeat(64);
+    }],
+    ['generated activation config', (checkpoint: any) => {
+      const event = checkpoint.events.find((candidate: any) => candidate.type === 'NodeGenerationActivated');
+      event.executionConfigDigest = 'f'.repeat(64);
+    }],
+  ])('rejects rehashed %s with its dedicated gate', (_name, mutate) => {
+    const source = completedC2Journal();
+    const checkpoint = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+    mutate(checkpoint);
+    rehash(checkpoint);
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint),
+      _name === 'mixed event session' ? 'CHECKPOINT_SESSION_MISMATCH' : 'CHECKPOINT_PLAN_AUTHORITY_MISMATCH'
+    );
+  });
+
+  it('rejects a semantically different compiled graph after its checkpoint integrity passes', () => {
+    const source = completedC2Journal();
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config('two-predecessor')), checkpoint),
+      'CHECKPOINT_GRAPH_MISMATCH'
+    );
+  });
+
+  it('accepts an empty checkpoint and rejects every non-quiescent frontier class', () => {
+    const empty = new ExecutionJournal(compileClaimPlan(c2Config())).exportGraphCheckpoint('empty');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), JSON.parse(JSON.stringify(empty)));
+    expect(restored.readRuntimeEvents()).toEqual([]);
+    const cases: Array<[string, () => ExecutionJournal]> = [
+      ['root attempt', () => {
+        const journal = c2Journal();
+        journal.startAttempt({ sessionId: 'c2-session', checkId: 'discover', scope: [] });
+        return journal;
+      }],
+      ['pending request', () => {
+        const journal = c2Journal();
+        journal.requestCatalogReconciliation({ sessionId: 'c2-session', ownerCheck: 'discover' });
+        return journal;
+      }],
+      ['ready generation', () => {
+        const journal = c2Journal();
+        publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+        return journal;
+      }],
+      ['running generation', () => {
+        const journal = c2Journal();
+        publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+        const generation = journal.queryReadyWork()[0];
+        journal.startGeneratedAttempt(generation.nodeGenerationId);
+        return journal;
+      }],
+      ['acquired managed run', () => {
+        const journal = c2Journal();
+        publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+        const generation = journal.queryReadyWork()[0];
+        const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+        journal.scheduleGeneratedAttempt(attempt);
+        journal.recordManagedRunAcquired(journal.deriveManagedRunBinding(attempt));
+        return journal;
+      }],
+      ['started managed run', () => {
+        const journal = c2Journal();
+        publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+        const generation = journal.queryReadyWork()[0];
+        const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+        journal.scheduleGeneratedAttempt(attempt);
+        const binding = journal.deriveManagedRunBinding(attempt);
+        journal.recordManagedRunAcquired(binding);
+        journal.recordManagedRunStarted(binding);
+        return journal;
+      }],
+      ['cancel-requested managed run', () => {
+        const journal = c2Journal();
+        publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+        const generation = journal.queryReadyWork()[0];
+        const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+        journal.scheduleGeneratedAttempt(attempt);
+        const binding = journal.deriveManagedRunBinding(attempt);
+        journal.recordManagedRunAcquired(binding);
+        journal.recordManagedRunStarted(binding);
+        journal.recordManagedRunCancelRequested(binding);
+        return journal;
+      }],
+    ];
+    for (const [name, build] of cases) {
+      const checkpoint = build().exportGraphCheckpoint('c2-session');
+      expectErrorCode(
+        () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), JSON.parse(JSON.stringify(checkpoint))),
+        'CHECKPOINT_NOT_QUIESCENT'
+      );
+      void name;
+    }
+  });
+
+  it.each([
+    ['acquisition terminal cut', (journal: ExecutionJournal) => {
+      const generation = journal.queryReadyWork()[0];
+      const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(attempt);
+      journal.failManagedRunAcquisition({ attempt, binding: journal.deriveManagedRunBinding(attempt), failureCode: 'MANAGED_HANDLE_INVALID' });
+      return journal.readRuntimeEvents().findIndex(event => event.type === 'ManagedRunAcquisitionFailed') + 1;
+    }],
+    ['completion terminal cut', (journal: ExecutionJournal) => {
+      const generation = journal.queryReadyWork()[0];
+      const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(attempt);
+      const binding = journal.deriveManagedRunBinding(attempt);
+      journal.recordManagedRunAcquired(binding);
+      journal.recordManagedRunStarted(binding);
+      journal.completeManagedGeneratedAttempt({ attempt, binding, payload: { id: 'A', findings: [] } });
+      return journal.readRuntimeEvents().findIndex(event => event.type === 'ManagedRunTerminated') + 1;
+    }],
+  ])('rejects an atomic managed-terminal cut (%s)', (_name, buildCut) => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    const cut = buildCut(source);
+    const checkpoint = checkpointWithEvents(source, source.readRuntimeEvents().slice(0, cut));
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint),
+      'INVALID_CHECKPOINT_PREFIX'
+    );
+  });
+
+  it('keeps a pre-checkpoint fence stale without appending an event', () => {
+    const source = completedC2Journal();
+    const oldAttempt = source.readRuntimeEvents().find(event =>
+      event.type === 'AttemptStarted' && !('nodeGenerationId' in event)
+    ) as any;
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint);
+    const before = restored.readRuntimeEvents().length;
+    expectErrorCode(
+      () => restored.scheduleCheck({
+        sessionId: oldAttempt.sessionId,
+        checkId: oldAttempt.checkId,
+        scope: oldAttempt.scope,
+        attemptId: oldAttempt.attemptId,
+        fence: oldAttempt.fence,
+      }),
+      'STALE_FENCE'
+    );
+    expect(restored.readRuntimeEvents()).toHaveLength(before);
+  });
+
+  it('reconstructs shared root/catalog ordinals and repeats restore without process-local state', () => {
+    const source = c2Journal();
+    const root = source.startAttempt({ sessionId: 'c2-session', checkId: 'discover', scope: [] });
+    source.scheduleCheck(root);
+    source.failAttempt({ ...root, reason: 'root failed' });
+    const request = source.requestCatalogReconciliation({ sessionId: 'c2-session', ownerCheck: 'discover' });
+    const catalog = source.startCatalogRequestAttempt(request.requestId);
+    source.scheduleCatalogRequestAttempt(catalog);
+    source.failAttempt({ ...catalog, reason: 'catalog failed' });
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const first = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), JSON.parse(JSON.stringify(checkpoint)));
+    const second = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), first.exportGraphCheckpoint('c2-session'));
+    const nextRequest = second.requestCatalogReconciliation({ sessionId: 'c2-session', ownerCheck: 'discover' });
+    const nextCatalog = second.startCatalogRequestAttempt(nextRequest.requestId);
+    expect(nextRequest.requestOrdinal).toBe(2);
+    expect(nextCatalog.attemptId).toBe(sha256Canonical({
+      sessionId: 'c2-session', checkId: 'discover', scope: [], ordinal: 3,
+    }));
+    expect(nextCatalog.fence).toBe(3);
+  });
+
+  it('starts a changed generation with generated ordinal one and rejects a duplicate start', () => {
+    const source = completedC2Journal();
+    const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), source.exportGraphCheckpoint('c2-session'));
+    const request = restored.requestCatalogReconciliation({ sessionId: 'c2-session', ownerCheck: 'discover' });
+    const catalog = restored.startCatalogRequestAttempt(request.requestId);
+    restored.scheduleCatalogRequestAttempt(catalog);
+    restored.completeAttempt({ ...catalog, payload: { components: [{ id: 'A', path: 'packages/new' }] } });
+    const generation = restored.queryReadyWork().find(value => value.checkId === 'inspect')!;
+    const attempt = restored.startGeneratedAttempt(generation.nodeGenerationId);
+    expect(attempt.attemptId).toBe(sha256Canonical({ nodeGenerationId: generation.nodeGenerationId, ordinal: 1 }));
+    expectErrorCode(() => restored.startGeneratedAttempt(generation.nodeGenerationId), 'GENERATION_NOT_READY');
+  });
+
+  it('reconstructs the next request, attempt, and global fence authority', () => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    completeC2Work(source);
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint);
+    const request = restored.requestCatalogReconciliation({ sessionId: 'c2-session', ownerCheck: 'discover' });
+    expect(request.requestOrdinal).toBe(2);
+    const attempt = restored.startCatalogRequestAttempt(request.requestId);
+    const starts = source.readRuntimeEvents().filter(event => event.type === 'AttemptStarted').length;
+    expect(attempt.fence).toBe(starts + 1);
+    expect(attempt.attemptId).toBe(sha256Canonical({
+      sessionId: 'c2-session', checkId: 'discover', scope: [], ordinal: 2,
+    }));
   });
 });
 
