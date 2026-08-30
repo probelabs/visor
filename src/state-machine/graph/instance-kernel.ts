@@ -6,6 +6,10 @@ import {
   type ClaimProjection,
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
+import type {
+  ManagedAdmissionDecisionV1,
+  ManagedGeneratedAdmissionRequestV1,
+} from '../dispatch/managed-admission';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -455,6 +459,19 @@ export interface ManagedRunTerminatedEvent extends ManagedRunEventBase {
   readonly failureCode: ManagedRunFailureCode | null;
 }
 
+export interface ManagedAdmissionPendingEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedAdmissionPending';
+  readonly committedThroughEventId: number;
+  readonly claims: readonly GeneratedClaimPublishedEvent[];
+  readonly coverage: ExpansionCoverageProjection | null;
+  readonly providerOutput: unknown;
+}
+
+export interface ManagedAdmissionResolvedEvent extends ManagedRunEventBase {
+  readonly type: 'ManagedAdmissionResolved';
+  readonly decision: ManagedAdmissionDecisionV1;
+}
+
 type ManagedRunLifecycleEvent =
   | ManagedRunAcquisitionFailedEvent
   | ManagedRunAcquiredEvent
@@ -506,6 +523,8 @@ export type InstanceRuntimeEvent =
   | ManagedRunStartedEvent
   | ManagedRunCancelRequestedEvent
   | ManagedRunTerminatedEvent
+  | ManagedAdmissionPendingEvent
+  | ManagedAdmissionResolvedEvent
   | CatalogRequestAttemptStartedEvent
   | CatalogRequestCheckScheduledEvent
   | CatalogRequestAttemptCompletedEvent
@@ -608,6 +627,17 @@ export interface ManagedRunProjection {
   readonly cancellationRequested?: true;
 }
 
+export interface ManagedAdmissionProjection {
+  readonly binding: ManagedRunBindingV1;
+  readonly status: 'pending' | 'accepted' | 'rejected';
+  readonly pendingEventId: number;
+  readonly committedThroughEventId: number;
+  readonly request: ManagedGeneratedAdmissionRequestV1;
+  readonly decision?: ManagedAdmissionDecisionV1;
+  readonly resolvedEventId?: number;
+  readonly activationEventIds?: readonly number[];
+}
+
 export interface InstanceProjection {
   readonly lastEventId: number;
   readonly requestsById: Readonly<Record<string, CatalogRequestProjection>>;
@@ -620,6 +650,7 @@ export interface InstanceProjection {
   readonly claimsById: Readonly<Record<string, InstanceClaimProjection>>;
   readonly attemptBindingsById: Readonly<Record<string, string>>;
   readonly managedRunsByAttemptId: Readonly<Record<string, ManagedRunProjection>>;
+  readonly managedAdmissionsByAttemptId: Readonly<Record<string, ManagedAdmissionProjection>>;
 }
 
 export type ExpansionCoverageClass =
@@ -816,6 +847,7 @@ export function createInitialInstanceProjection(): InstanceProjection {
     claimsById: {},
     attemptBindingsById: {},
     managedRunsByAttemptId: {},
+    managedAdmissionsByAttemptId: {},
   });
 }
 
@@ -869,6 +901,7 @@ function mutableProjection(projection: InstanceProjection): {
   claimsById: Record<string, InstanceClaimProjection>;
   attemptBindingsById: Record<string, string>;
   managedRunsByAttemptId: Record<string, ManagedRunProjection>;
+  managedAdmissionsByAttemptId: Record<string, ManagedAdmissionProjection>;
 } {
   return {
     lastEventId: projection.lastEventId,
@@ -882,6 +915,7 @@ function mutableProjection(projection: InstanceProjection): {
     claimsById: { ...projection.claimsById },
     attemptBindingsById: { ...projection.attemptBindingsById },
     managedRunsByAttemptId: { ...projection.managedRunsByAttemptId },
+    managedAdmissionsByAttemptId: { ...projection.managedAdmissionsByAttemptId },
   };
 }
 
@@ -1305,6 +1339,179 @@ function reduceManagedRunLifecycle(
     controllerDecision: event.controllerDecision,
     ...(event.failureCode === null ? {} : { failureCode: event.failureCode }),
   };
+}
+
+function requireManagedAdmissionDecision(value: unknown): ManagedAdmissionDecisionV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Managed admission decision must be an object');
+  }
+  const decision = value as Record<string, unknown>;
+  const expected = decision.kind === 'accepted'
+    ? ['version', 'kind', 'binding', 'admissionId']
+    : decision.kind === 'rejected'
+      ? ['version', 'kind', 'binding', 'reason']
+      : [];
+  if (!expected.length || !hasExactKeys(decision, expected) || decision.version !== 1) {
+    throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Managed admission decision shape is invalid');
+  }
+  const binding = requireManagedRunBinding(decision.binding);
+  if (decision.kind === 'accepted') {
+    if (typeof decision.admissionId !== 'string' || decision.admissionId.length === 0) {
+      throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Accepted admission requires an admission ID');
+    }
+  } else if (typeof decision.reason !== 'string' || decision.reason.length === 0) {
+    throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Rejected admission requires a reason');
+  }
+  return immutableCanonicalValue({ ...decision, binding }) as ManagedAdmissionDecisionV1;
+}
+
+function requireAdmissionEnvelope(
+  projection: InstanceProjection,
+  event: ManagedAdmissionPendingEvent | ManagedAdmissionResolvedEvent
+): ManagedRunBindingV1 {
+  const binding = requireManagedRunBinding(event.binding);
+  if (event.sessionId !== binding.sessionId || !scopePathEquals(event.scope, binding.scope)) {
+    throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Admission envelope does not match its binding');
+  }
+  const generation = requireGeneration(projection, binding);
+  const instance = requireInstance(projection, generation.subgraphInstanceId, binding.scope);
+  if (
+    instance.sessionId !== binding.sessionId ||
+    generation.checkId !== binding.checkId ||
+    generation.nodeInstanceId !== binding.nodeInstanceId ||
+    generation.nodeGenerationId !== binding.nodeGenerationId ||
+    generation.attemptId !== binding.attemptId ||
+    generation.fence !== binding.fence ||
+    projection.attemptBindingsById[binding.attemptId] !== binding.nodeGenerationId
+  ) {
+    throw new InstanceKernelError('STALE_FENCE', 'Admission binding is not the current generation attempt');
+  }
+  return binding;
+}
+
+function generatedClaimMatchesAdmission(
+  claim: InstanceClaimProjection | undefined,
+  publication: GeneratedClaimPublishedEvent,
+  binding: ManagedRunBindingV1
+): boolean {
+  return !!claim && claim.kind === 'generated-output' &&
+    publication.sessionId === binding.sessionId && publication.checkId === binding.checkId &&
+    scopePathEquals(publication.scope, binding.scope) &&
+    publication.nodeInstanceId === binding.nodeInstanceId &&
+    publication.nodeGenerationId === binding.nodeGenerationId &&
+    publication.attemptId === binding.attemptId && publication.fence === binding.fence &&
+    claim.claimId === publication.claimId && claim.claim === publication.claim &&
+    claim.payloadFingerprint === publication.payloadFingerprint &&
+    claim.producerCheckId === publication.producerCheckId &&
+    claim.producerAttemptId === publication.attemptId &&
+    claim.producerFence === publication.fence &&
+    claim.nodeGenerationId === publication.nodeGenerationId &&
+    scopePathEquals(claim.scope, publication.scope) &&
+    canonicalJson(claim.parentClaimIds) === canonicalJson(publication.parentClaimIds);
+}
+
+function reduceManagedAdmission(
+  projection: InstanceProjection,
+  next: ReturnType<typeof mutableProjection>,
+  event: ManagedAdmissionPendingEvent | ManagedAdmissionResolvedEvent
+): void {
+  const binding = requireAdmissionEnvelope(projection, event);
+  const managed = projection.managedRunsByAttemptId[binding.attemptId];
+  if (!managed || !managedBindingEquals(managed.binding, binding) ||
+      managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' ||
+      managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
+    throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Admission requires a clean managed terminal');
+  }
+
+  if (event.type === 'ManagedAdmissionPending') {
+    if (projection.managedAdmissionsByAttemptId[binding.attemptId]) {
+      throw new InstanceKernelError('MANAGED_ADMISSION_ALREADY_RESOLVED', 'Managed admission is already recorded');
+    }
+    if (!Number.isSafeInteger(event.committedThroughEventId) ||
+        event.committedThroughEventId !== projection.lastEventId ||
+        event.committedThroughEventId >= event.eventId) {
+      throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Admission pending event must follow its committed batch');
+    }
+    const generation = projection.generationsById[binding.nodeGenerationId];
+    if (!generation || generation.status !== 'completed' || !generation.scheduled) {
+      throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Admission pending requires a completed generation');
+    }
+    const publications = event.claims;
+    const expected = Object.values(projection.claimsById).filter(claim =>
+      claim.kind === 'generated-output' && claim.producerAttemptId === binding.attemptId &&
+      claim.producerFence === binding.fence && claim.nodeGenerationId === binding.nodeGenerationId
+    );
+    if (new Set(publications.map(publication => publication.claimId)).size !== publications.length ||
+        expected.length !== publications.length ||
+        expected.some(claim => !publications.some(publication =>
+          generatedClaimMatchesAdmission(claim, publication, binding)))) {
+      throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Admission claims are not the exact committed publications');
+    }
+    try {
+      canonicalJson(event.providerOutput);
+      canonicalJson(event.coverage);
+      for (const publication of publications) {
+        if (canonicalJson(publication.payload) !== canonicalJson(event.providerOutput)) {
+          throw new Error('provider-output-mismatch');
+        }
+      }
+    } catch {
+      throw new InstanceKernelError('INVALID_MANAGED_ADMISSION', 'Admission provider output is not the committed publication payload');
+    }
+    const request = immutableCanonicalValue<ManagedGeneratedAdmissionRequestV1>({
+      version: 1,
+      binding,
+      pendingEventId: event.eventId,
+      committedThroughEventId: event.committedThroughEventId,
+      claims: publications,
+      coverage: event.coverage,
+      providerOutput: event.providerOutput,
+    });
+    next.managedAdmissionsByAttemptId[binding.attemptId] = {
+      binding,
+      status: 'pending',
+      pendingEventId: event.eventId,
+      committedThroughEventId: event.committedThroughEventId,
+      request,
+    };
+    return;
+  }
+
+  const admission = projection.managedAdmissionsByAttemptId[binding.attemptId];
+  if (!admission) {
+    throw new InstanceKernelError('UNKNOWN_MANAGED_ADMISSION', 'Managed admission has no pending record');
+  }
+  if (!managedBindingEquals(admission.binding, binding)) {
+    throw new InstanceKernelError('STALE_FENCE', 'Admission resolution binding is stale');
+  }
+  const decision = requireManagedAdmissionDecision(event.decision);
+  if (!managedBindingEquals(decision.binding, binding)) {
+    throw new InstanceKernelError('STALE_FENCE', 'Admission decision binding is stale');
+  }
+  if (admission.status !== 'pending') {
+    throw new InstanceKernelError('MANAGED_ADMISSION_ALREADY_RESOLVED', 'Managed admission is already resolved');
+  }
+  next.managedAdmissionsByAttemptId[binding.attemptId] = {
+    ...admission,
+    status: decision.kind,
+    decision,
+    resolvedEventId: event.eventId,
+  };
+}
+
+/** A pending/rejected managed claim is evidence only, never a generated input. */
+export function isManagedClaimUsable(
+  projection: InstanceProjection,
+  claim: InstanceClaimProjection | undefined
+): boolean {
+  if (!claim?.active) return false;
+  if (claim.kind !== 'generated-output' || !claim.producerAttemptId) return true;
+  const admission = projection.managedAdmissionsByAttemptId[claim.producerAttemptId];
+  if (!admission) return true; // no-sink PR-593 compatibility path
+  return admission.status === 'accepted' &&
+    claim.nodeGenerationId === admission.binding.nodeGenerationId &&
+    claim.producerFence === admission.binding.fence &&
+    scopePathEquals(claim.scope, admission.binding.scope);
 }
 
 function hasReadyOrRunningGeneration(projection: InstanceProjection): boolean {
@@ -1860,6 +2067,12 @@ export function reduceInstanceEvent(
         if (!claim?.active || claim.subgraphInstanceId !== instance.subgraphInstanceId) {
           throw new InstanceKernelError('INACTIVE_INPUT_CLAIM', `Input claim ${claimId} is not active`);
         }
+        if (!isManagedClaimUsable(projection, claim)) {
+          throw new InstanceKernelError(
+            'MANAGED_ADMISSION_PENDING',
+            `Input claim ${claimId} has not been accepted for generated execution`
+          );
+        }
       }
       const itemClaim = instance.activeItemClaimId
         ? projection.claimsById[instance.activeItemClaimId]
@@ -1896,6 +2109,18 @@ export function reduceInstanceEvent(
         completedOutputClaimIds: [],
       };
       next.activeGenerationIdByNode[node.nodeInstanceId] = generationId;
+      for (const [attemptId, admission] of Object.entries(projection.managedAdmissionsByAttemptId)) {
+        if (admission.status !== 'accepted' || admission.activationEventIds?.includes(event.eventId)) continue;
+        const releasedClaim = admission.request.claims.some(claim =>
+          event.activeInputClaimIds.includes(claim.claimId)
+        );
+        if (releasedClaim) {
+          next.managedAdmissionsByAttemptId[attemptId] = {
+            ...admission,
+            activationEventIds: [...(admission.activationEventIds || []), event.eventId],
+          };
+        }
+      }
       break;
     }
     case 'NodeGenerationInactivated': {
@@ -2013,6 +2238,10 @@ export function reduceInstanceEvent(
     case 'ManagedRunCancelRequested':
     case 'ManagedRunTerminated':
       reduceManagedRunLifecycle(projection, next, event);
+      break;
+    case 'ManagedAdmissionPending':
+    case 'ManagedAdmissionResolved':
+      reduceManagedAdmission(projection, next, event);
       break;
   }
 
@@ -2214,13 +2443,23 @@ export function reduceInstanceEventBatch(
         );
         const completion = completionIndex < 0 ? undefined : events[completionIndex];
         requireMatchingAttemptTerminal(event.binding, completion, 'AttemptCompleted');
-        if (completionIndex !== events.length - 1) {
+        const trailing = events.slice(completionIndex + 1);
+        const pending = trailing.length === 1 && trailing[0].type === 'ManagedAdmissionPending';
+        if (trailing.length > 0 && !pending) {
           throw new InstanceKernelError(
             'INVALID_MANAGED_BATCH',
-            'Managed AttemptCompleted must end its atomic terminal batch'
+            'Managed AttemptCompleted may only be followed by its admission-pending fact'
           );
         }
-        const interior = events.slice(1, -1);
+        const interior = events.slice(1, completionIndex);
+        if (pending && interior.some(candidate =>
+          isNestedReconciliationEvent(candidate) || candidate.type === 'NodeGenerationActivated'
+        )) {
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Admission-pending terminal batches cannot activate or reconcile descendants'
+          );
+        }
         const nestedEvents = interior.filter(candidate =>
           isNestedReconciliationEvent(candidate) ||
           (candidate.type === 'NodeGenerationActivated' &&
@@ -2282,6 +2521,25 @@ export function reduceInstanceEventBatch(
         }
       }
     }
+    if (event.type === 'ManagedAdmissionResolved') {
+      if (index !== 0) {
+        throw new InstanceKernelError('INVALID_MANAGED_BATCH', 'Admission resolution must begin its atomic batch');
+      }
+      const accepted = event.decision.kind === 'accepted';
+      if (accepted) {
+        const activation = events[1];
+        if (events.length !== 2 || activation.type !== 'NodeGenerationActivated' ||
+            !scopePathEquals(activation.scope, event.binding.scope) ||
+            activation.subgraphInstanceId !== event.binding.scope[event.binding.scope.length - 1].subgraphInstanceId) {
+          throw new InstanceKernelError(
+            'INVALID_MANAGED_BATCH',
+            'Accepted admission must atomically activate one ordinary dependent'
+          );
+        }
+      } else if (events.length !== 1) {
+        throw new InstanceKernelError('INVALID_MANAGED_BATCH', 'Rejected admission cannot activate work');
+      }
+    }
   }
 
   for (const event of events) {
@@ -2333,11 +2591,17 @@ export function replayInstanceEvents(events: readonly InstanceRuntimeEvent[]): I
         }
         terminalIndex++;
       }
-      projection = reduceInstanceEventBatch(
-        projection,
-        events.slice(index, Math.min(terminalIndex + 1, events.length))
-      );
-      index = terminalIndex + 1;
+      const end = terminalIndex + 1 < events.length &&
+        events[terminalIndex + 1].type === 'ManagedAdmissionPending'
+        ? terminalIndex + 2
+        : terminalIndex + 1;
+      projection = reduceInstanceEventBatch(projection, events.slice(index, Math.min(end, events.length)));
+      index = end;
+      continue;
+    }
+    if (event.type === 'ManagedAdmissionResolved' && event.decision.kind === 'accepted') {
+      projection = reduceInstanceEventBatch(projection, events.slice(index, index + 2));
+      index += 2;
       continue;
     }
     projection = reduceInstanceEventBatch(projection, [event]);

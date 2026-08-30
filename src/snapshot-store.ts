@@ -53,11 +53,22 @@ import {
   type GeneratedAttemptStartedEvent,
   type GeneratedCheckScheduledEvent,
   type GeneratedClaimPublishedEvent,
+  type NodeGenerationActivatedEvent,
   type ManagedRunAcquisitionFailureCode,
   type ManagedRunBindingV1,
   type ManagedRunCleanupStatus,
   type ManagedRunFailureCode,
+  type ManagedAdmissionPendingEvent,
+  type ManagedAdmissionResolvedEvent,
+  isManagedClaimUsable,
 } from './state-machine/graph/instance-kernel';
+import {
+  freezeManagedAdmissionRequest,
+  normalizeManagedAdmissionDecision,
+  type ManagedAdmissionResolutionReceiptV1,
+  type ManagedGeneratedAdmissionRequestV1,
+  type ManagedAdmissionDecisionV1,
+} from './state-machine/dispatch/managed-admission';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -267,6 +278,32 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
       base();
       if (!isRecord(event.binding) || (event.cleanupStatus !== 'clean' && event.cleanupStatus !== 'unverified') || (event.controllerDecision !== 'completed' && event.controllerDecision !== 'failed') || (event.failureCode !== null && typeof event.failureCode !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed terminal event has invalid fields');
       return event as unknown as InstanceRuntimeEvent;
+    case 'ManagedAdmissionPending':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'binding', 'committedThroughEventId', 'claims', 'coverage', 'providerOutput']);
+      base();
+      if (!isRecord(event.binding) || typeof event.committedThroughEventId !== 'number' ||
+          !Number.isSafeInteger(event.committedThroughEventId) || event.committedThroughEventId < 1 ||
+          !Array.isArray(event.claims) || (event.coverage !== null && !isRecord(event.coverage))) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed admission pending event has invalid fields');
+      }
+      for (const claim of event.claims) {
+        if (!isRecord(claim) || claim.type !== 'ClaimPublished') {
+          throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed admission claims must be generated publications');
+        }
+      }
+      return event as unknown as ManagedAdmissionPendingEvent;
+    case 'ManagedAdmissionResolved':
+      exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'binding', 'decision']);
+      base();
+      if (!isRecord(event.binding)) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed admission resolution has invalid binding');
+      }
+      try {
+        normalizeManagedAdmissionDecision(event.decision);
+      } catch (error) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed admission resolution has invalid decision', { cause: error });
+      }
+      return event as unknown as ManagedAdmissionResolvedEvent;
     case 'AttemptStarted':
     case 'CheckScheduled':
     case 'AttemptCompleted':
@@ -850,7 +887,8 @@ export class ExecutionJournal {
     for (const consumption of node.consumptions) {
       const claim = generation.activeInputClaimIds
         .map(id => this.instanceProjection.claimsById[id])
-        .find(candidate => candidate?.claim === consumption.claim);
+        .find(candidate => candidate?.claim === consumption.claim &&
+          isManagedClaimUsable(this.instanceProjection, candidate));
       if (!claim) throw new ClaimKernelError('CLAIM_NOT_READY', `Missing generated input ${consumption.claim}`);
       if (
         (claim.kind === 'controller-item' && !claim.controllerCatalogClaimId) ||
@@ -1052,6 +1090,239 @@ export class ExecutionJournal {
     this.instanceProjection = staged.projection;
   }
 
+  /**
+   * Commit a managed generated attempt as durable evidence while withholding
+   * ordinary dependent activation until the internal admission sink resolves it.
+   */
+  commitManagedGeneratedAttemptPending(input: {
+    attempt: GeneratedAttemptStartedEvent;
+    binding: ManagedRunBindingV1;
+    payload: unknown;
+  }): ManagedGeneratedAdmissionRequestV1 {
+    const before = this.instanceProjection;
+    const generation = before.generationsById[input.attempt.nodeGenerationId];
+    const instance = generation ? before.instancesById[generation.subgraphInstanceId] : undefined;
+    if (!generation || !instance) {
+      throw new ClaimKernelError('UNKNOWN_GENERATION', 'Managed pending attempt has an unknown generation');
+    }
+    const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
+    const nestedOwner = qualifiedNestedExpansionOwner(expansion.template.name, generation.templateNodeKey);
+    if (this.requireClaimPlan().expansionPlan!.byNestedOwner[nestedOwner]) {
+      throw new ClaimKernelError(
+        'MANAGED_ADMISSION_NESTED_UNSUPPORTED',
+        'Pending managed admission is limited to an ordinary inspect-to-verify edge'
+      );
+    }
+    const node = expansion.template.nodesByKey[generation.templateNodeKey];
+    if (!node) throw new ClaimKernelError('UNKNOWN_GENERATION', 'Managed pending generation has no template node');
+    const terminal = immutableInstanceEvent({
+      version: 1,
+      type: 'ManagedRunTerminated',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: input.binding.sessionId,
+      scope: input.binding.scope,
+      binding: input.binding,
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+      failureCode: null,
+    });
+    let staged = before;
+    const events: InstanceRuntimeEvent[] = [];
+    const stage = (event: InstanceRuntimeEvent): void => {
+      const stored = immutableInstanceEvent(event);
+      staged = reduceInstanceEvent(staged, stored);
+      events.push(stored);
+    };
+    stage(terminal);
+    const publications: GeneratedClaimPublishedEvent[] = [];
+    for (const emission of node.emissions) {
+      this.requireClaimPlan().validatorsByClaim[emission.claim](input.payload);
+      const immutablePayload = immutableCanonicalValue(input.payload);
+      const payloadFingerprint = sha256Canonical(immutablePayload);
+      const parentClaimIds = [...generation.activeInputClaimIds].sort();
+      const eventId = Math.max(this.claimProjection.lastEventId, staged.lastEventId) + publications.length + 1;
+      publications.push({
+        version: 1,
+        type: 'ClaimPublished',
+        eventId,
+        sessionId: input.attempt.sessionId,
+        checkId: input.attempt.checkId,
+        scope: input.attempt.scope,
+        attemptId: input.attempt.attemptId,
+        fence: input.attempt.fence,
+        nodeInstanceId: input.attempt.nodeInstanceId,
+        nodeGenerationId: input.attempt.nodeGenerationId,
+        claim: emission.claim,
+        payload: immutablePayload,
+        payloadFingerprint,
+        producerCheckId: input.attempt.checkId,
+        parentClaimIds,
+        claimId: sha256Canonical({
+          claim: emission.claim,
+          payloadFingerprint,
+          producerCheckId: input.attempt.checkId,
+          scope: input.attempt.scope,
+          attemptId: input.attempt.attemptId,
+          fence: input.attempt.fence,
+          parentClaimIds,
+        }),
+      });
+    }
+    for (const publication of publications) stage(publication);
+    const completed: GeneratedAttemptStartedEvent & { type: 'AttemptCompleted'; eventId: number } = {
+      ...input.attempt,
+      type: 'AttemptCompleted',
+      eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1,
+    };
+    stage(completed);
+    const pending: ManagedAdmissionPendingEvent = {
+      version: 1,
+      type: 'ManagedAdmissionPending',
+      eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1,
+      sessionId: input.binding.sessionId,
+      scope: input.binding.scope,
+      binding: input.binding,
+      committedThroughEventId: completed.eventId,
+      claims: publications,
+      coverage: null,
+      providerOutput: immutableCanonicalValue(input.payload),
+    };
+    stage(pending);
+    const projection = reduceInstanceEventBatch(before, events);
+    this.runtimeEvents.push(...events);
+    this.instanceProjection = projection;
+    return freezeManagedAdmissionRequest(
+      projection.managedAdmissionsByAttemptId[input.binding.attemptId].request
+    );
+  }
+
+  queryPendingManagedAdmissions(): readonly ManagedGeneratedAdmissionRequestV1[] {
+    return Object.values(this.instanceProjection.managedAdmissionsByAttemptId)
+      .filter(admission => admission.status === 'pending')
+      .sort((left, right) => left.pendingEventId - right.pendingEventId)
+      .map(admission => freezeManagedAdmissionRequest(admission.request));
+  }
+
+  resolveManagedGeneratedAdmission(
+    rawDecision: ManagedAdmissionDecisionV1
+  ): ManagedAdmissionResolutionReceiptV1 {
+    const decision = normalizeManagedAdmissionDecision(rawDecision);
+    const current = this.instanceProjection.managedAdmissionsByAttemptId[decision.binding.attemptId];
+    if (!current || !current.request) {
+      throw new ClaimKernelError('UNKNOWN_MANAGED_ADMISSION', 'Managed admission is not pending');
+    }
+    if (canonicalJson(current.binding) !== canonicalJson(decision.binding)) {
+      throw new ClaimKernelError('STALE_FENCE', 'Managed admission decision binding is stale');
+    }
+    if (current.status !== 'pending') {
+      const prior = current.decision;
+      if (prior && canonicalJson(prior) === canonicalJson(decision)) {
+        return immutableCanonicalValue({
+          version: 1,
+          kind: prior.kind,
+          binding: current.binding,
+          ...(prior.kind === 'accepted' ? { admissionId: prior.admissionId } : { reason: prior.reason }),
+          resolvedEventId: current.resolvedEventId!,
+          activationEventIds: current.activationEventIds || [],
+        });
+      }
+      throw new ClaimKernelError('MANAGED_ADMISSION_ALREADY_RESOLVED', 'Managed admission has already been resolved');
+    }
+    const resolution: ManagedAdmissionResolvedEvent = {
+      version: 1,
+      type: 'ManagedAdmissionResolved',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: decision.binding.sessionId,
+      scope: decision.binding.scope,
+      binding: decision.binding,
+      decision,
+    };
+    const stagedResolution = reduceInstanceEvent(this.instanceProjection, resolution);
+    const events: InstanceRuntimeEvent[] = [immutableInstanceEvent(resolution)];
+    if (decision.kind === 'accepted') {
+      const activation = this.stageOrdinaryAdmissionActivation(stagedResolution, decision.binding);
+      if (!activation) {
+        throw new ClaimKernelError('MANAGED_ADMISSION_NO_DEPENDENT', 'Accepted admission has no ordinary dependent to activate');
+      }
+      events.push(activation);
+    }
+    const projection = reduceInstanceEventBatch(this.instanceProjection, events);
+    this.runtimeEvents.push(...events);
+    this.instanceProjection = projection;
+    const admission = projection.managedAdmissionsByAttemptId[decision.binding.attemptId];
+    return immutableCanonicalValue({
+      version: 1,
+      kind: decision.kind,
+      binding: decision.binding,
+      ...(decision.kind === 'accepted' ? { admissionId: decision.admissionId } : { reason: decision.reason }),
+      resolvedEventId: admission.resolvedEventId!,
+      activationEventIds: admission.activationEventIds || [],
+    });
+  }
+
+  private stageOrdinaryAdmissionActivation(
+    projection: InstanceProjection,
+    binding: ManagedRunBindingV1
+  ): NodeGenerationActivatedEvent | undefined {
+    const generation = projection.generationsById[binding.nodeGenerationId];
+    const instance = generation ? projection.instancesById[generation.subgraphInstanceId] : undefined;
+    if (!generation || !instance) throw new ClaimKernelError('STALE_FENCE', 'Admission generation is stale');
+    const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
+    for (const nodeKey of expansion.template.topology) {
+      const candidate = expansion.template.nodesByKey[nodeKey];
+      const nodeInstanceId = instance.nodeInstanceIdsByTemplateNode[nodeKey];
+      const nestedOwner = qualifiedNestedExpansionOwner(expansion.template.name, nodeKey);
+      const nestedExpansion = this.requireClaimPlan().expansionPlan!.byNestedOwner[nestedOwner];
+      if (!candidate || projection.activeGenerationIdByNode[nodeInstanceId] ||
+          nodeKey === generation.templateNodeKey || nestedExpansion) continue;
+      if (!candidate.dependencyNodeKeys.includes(generation.templateNodeKey)) continue;
+      const dependenciesCompleted = candidate.dependencyNodeKeys.every(dependencyNodeKey => {
+        const dependencyNodeId = instance.nodeInstanceIdsByTemplateNode[dependencyNodeKey];
+        const dependencyGenerationId = projection.activeGenerationIdByNode[dependencyNodeId];
+        return dependencyGenerationId !== undefined &&
+          projection.generationsById[dependencyGenerationId]?.status === 'completed';
+      });
+      if (!dependenciesCompleted) continue;
+      const inputIds: string[] = [];
+      for (const consumption of candidate.consumptions) {
+        const matches = Object.values(projection.claimsById)
+          .filter(claim => claim.subgraphInstanceId === instance.subgraphInstanceId &&
+            claim.incarnation === instance.incarnation && claim.claim === consumption.claim &&
+            isManagedClaimUsable(projection, claim))
+          .sort((left, right) => left.claimId.localeCompare(right.claimId));
+        if (matches.length !== 1) return undefined;
+        inputIds.push(matches[0].claimId);
+      }
+      inputIds.sort();
+      const item = instance.activeItemClaimId ? projection.claimsById[instance.activeItemClaimId] : undefined;
+      if (!item?.active) throw new ClaimKernelError('INACTIVE_ITEM_CLAIM', 'Admission instance item claim is inactive');
+      const nodeGenerationId = deriveNodeGenerationId({
+        nodeInstanceId,
+        incarnation: instance.incarnation,
+        itemFingerprint: item.payloadFingerprint,
+        executionConfigDigest: candidate.executionConfigDigest,
+        activeInputClaimIds: inputIds,
+      });
+      return immutableInstanceEvent({
+        version: 1,
+        type: 'NodeGenerationActivated',
+        eventId: this.nextRuntimeEventId() + 1,
+        sessionId: instance.sessionId,
+        scope: instance.scope,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        nodeInstanceId,
+        nodeGenerationId,
+        templateNodeKey: nodeKey,
+        checkId: nodeKey,
+        incarnation: instance.incarnation,
+        itemFingerprint: item.payloadFingerprint,
+        executionConfigDigest: candidate.executionConfigDigest,
+        activeInputClaimIds: inputIds,
+      });
+    }
+    return undefined;
+  }
+
   private stageGeneratedCompletion(
     input: { attempt: GeneratedAttemptStartedEvent; payload: unknown },
     prefix: readonly InstanceRuntimeEvent[] = []
@@ -1150,6 +1421,7 @@ export class ExecutionJournal {
         const claims = Object.values(staged.claimsById)
           .filter(value =>
             value.active &&
+            isManagedClaimUsable(staged, value) &&
             value.subgraphInstanceId === instance.subgraphInstanceId &&
             value.incarnation === instance.incarnation &&
             value.claim === consumption.claim
@@ -1256,6 +1528,8 @@ export class ExecutionJournal {
           'ManagedRunStarted',
           'ManagedRunCancelRequested',
           'ManagedRunTerminated',
+          'ManagedAdmissionPending',
+          'ManagedAdmissionResolved',
         ].includes(event.type) ||
         'nodeGenerationId' in event || 'requestId' in event
       ) as InstanceRuntimeEvent[]
@@ -1446,6 +1720,7 @@ export class ExecutionJournal {
           const matches = Object.values(projection.claimsById)
             .filter(claim =>
               claim.active &&
+              isManagedClaimUsable(projection, claim) &&
               claim.subgraphInstanceId === instance.subgraphInstanceId &&
               claim.incarnation === instance.incarnation &&
               claim.claim === consumption.claim
