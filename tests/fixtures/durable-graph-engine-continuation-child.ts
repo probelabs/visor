@@ -174,6 +174,8 @@ class DurableFixtureProvider extends CheckProvider {
       checkId,
       sessionId: parent?.sessionId,
       workingDirectory: parent?.workingDirectory,
+      workingDirectoryExists:
+        typeof parent?.workingDirectory === 'string' && fs.existsSync(parent.workingDirectory),
     });
     return { issues: [], output: { items: itemsFor(this.mode) } };
   }

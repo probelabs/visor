@@ -220,6 +220,8 @@ describe('durable Graph checkpoint continuation', () => {
 
     const sourceA = instanceSlice(producer.projection, 'A') as any;
     const sourceB = instanceSlice(producer.projection, 'B') as any;
+    expect(sourceA.generations).toHaveLength(2);
+    expect(sourceB.generations).toHaveLength(2);
     expect(sourceA.generations.every((generation: any) => generation.status === 'completed')).toBe(
       true
     );
@@ -257,6 +259,8 @@ describe('durable Graph checkpoint continuation', () => {
     const workspaceBasePath = path.join(artifactDirectory, 'workspaces');
     expect(producer.calls[0].workingDirectory).toContain(`${workspaceBasePath}${path.sep}`);
     expect(continuation.calls[0].workingDirectory).toContain(`${workspaceBasePath}${path.sep}`);
+    expect(producer.calls[0].workingDirectoryExists).toBe(true);
+    expect(continuation.calls[0].workingDirectoryExists).toBe(true);
     expect(producer.calls[0].workingDirectory).not.toBe(process.cwd());
     expect(continuation.calls[0].workingDirectory).not.toBe(process.cwd());
     expect(fs.existsSync(producer.calls[0].workingDirectory)).toBe(false);
@@ -308,6 +312,12 @@ describe('durable Graph checkpoint continuation', () => {
       (event: any) => event.type === 'AttemptStarted' && 'nodeGenerationId' in event
     );
     expect(suffixGeneratedStarts).toHaveLength(2);
+    const replacementGenerationIds = new Set(
+      replacementAGenerations.map((generation: any) => generation.nodeGenerationId)
+    );
+    const suffixGeneratedGenerationIds = new Set(
+      suffixGeneratedStarts.map((event: any) => event.nodeGenerationId)
+    );
     expect(
       suffixGeneratedStarts.every(
         (event: any) => !sourceCompletedGenerationIds.has(event.nodeGenerationId)
@@ -319,7 +329,20 @@ describe('durable Graph checkpoint continuation', () => {
       );
     }
 
-    for (const call of continuation.calls.filter(call => call.kind === 'generated')) {
+    const generatedCalls = continuation.calls.filter(call => call.kind === 'generated');
+    const terminatedManagedBindingGenerationIds = new Set(
+      generatedCalls
+        .map(call => continuation.projection.managedRunsByAttemptId[call.binding.attemptId])
+        .filter(managed => managed?.status === 'terminated')
+        .map(managed => managed.binding.nodeGenerationId)
+    );
+    expect(replacementGenerationIds.size).toBe(2);
+    expect(suffixGeneratedGenerationIds.size).toBe(2);
+    expect(terminatedManagedBindingGenerationIds.size).toBe(2);
+    expect(suffixGeneratedGenerationIds).toEqual(replacementGenerationIds);
+    expect(terminatedManagedBindingGenerationIds).toEqual(replacementGenerationIds);
+
+    for (const call of generatedCalls) {
       expect(continuation.projection.generationsById[call.binding.nodeGenerationId]).toMatchObject({
         status: 'completed',
         attemptId: call.binding.attemptId,
