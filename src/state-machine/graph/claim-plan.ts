@@ -10,7 +10,13 @@ import {
   immutableCanonicalValue,
   type ClaimSchemaValidator,
 } from './claim-kernel';
-import { compileExpansionPlan, type ExpansionPlan } from './instance-plan';
+import {
+  compileExpansionPlan,
+  PROOF_ADMIT_PROVIDER_TYPE,
+  PROOF_ADMITTED_RECEIPT_CLAIM,
+  PROOF_CANDIDATE_CLAIM,
+  type ExpansionPlan,
+} from './instance-plan';
 
 export const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 
@@ -106,6 +112,44 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
       }
     }
   }
+
+  // The reserved admission profile is template-only. Check this before the
+  // inactive-plan fast path so a root provider type cannot bypass policy by
+  // omitting claim_types (and so reserved root claims cannot become controller
+  // inputs or root emissions).
+  for (const [checkId, check] of Object.entries(checks)) {
+    if (check.type === PROOF_ADMIT_PROVIDER_TYPE) {
+      throw new ClaimPlanError(
+        `Root check "${checkId}" cannot use reserved provider type ${PROOF_ADMIT_PROVIDER_TYPE}`,
+        'RESERVED_PROOF_ADMISSION_ROOT'
+      );
+    }
+    for (const field of ['emits', 'consumes'] as const) {
+      if ((check[field] || []).some(declaration =>
+        declaration.claim === PROOF_CANDIDATE_CLAIM ||
+        declaration.claim === PROOF_ADMITTED_RECEIPT_CLAIM
+      )) {
+        throw new ClaimPlanError(
+          `Root check "${checkId}" cannot declare reserved claim ${PROOF_CANDIDATE_CLAIM} or ${PROOF_ADMITTED_RECEIPT_CLAIM}`,
+          'RESERVED_PROOF_ADMISSION_ROOT'
+        );
+      }
+    }
+    const expansion = check.expand;
+    if (
+      expansion &&
+      (expansion.claim === PROOF_CANDIDATE_CLAIM ||
+        expansion.claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
+        expansion.item_claim === PROOF_CANDIDATE_CLAIM ||
+        expansion.item_claim === PROOF_ADMITTED_RECEIPT_CLAIM)
+    ) {
+      throw new ClaimPlanError(
+        `Root check "${checkId}" cannot route a reserved proof admission claim through expansion`,
+        'RESERVED_PROOF_ADMISSION_ROOT'
+      );
+    }
+  }
+
   const active = Object.keys(claimTypes).length > 0;
 
   if (!active && hasClaimDeclarations) {

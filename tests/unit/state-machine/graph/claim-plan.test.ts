@@ -1,5 +1,10 @@
 import { compileClaimPlan, ClaimPlanError } from '../../../../src/state-machine/graph/claim-plan';
 import { ClaimKernelError } from '../../../../src/state-machine/graph/claim-kernel';
+import {
+  PROOF_ADMIT_PROVIDER_TYPE,
+  PROOF_ADMITTED_RECEIPT_CLAIM,
+  PROOF_CANDIDATE_CLAIM,
+} from '../../../../src/state-machine/graph/instance-plan';
 
 const schema = {
   type: 'object',
@@ -8,6 +13,18 @@ const schema = {
 };
 
 describe('Graph v2 C1 claim plan', () => {
+  const expectRootReserved = (config: any) => {
+    let error: unknown;
+    try { compileClaimPlan(config); } catch (candidate) { error = candidate; }
+    expect((error as ClaimPlanError).code).toBe('RESERVED_PROOF_ADMISSION_ROOT');
+  };
+
+  it.each([
+    ['provider without claim plan', { version: '1.0', checks: { proof: { type: PROOF_ADMIT_PROVIDER_TYPE } } }],
+    ['reserved emission', { version: '1.0', checks: { proof: { type: 'noop', emits: [{ claim: PROOF_CANDIDATE_CLAIM, from: 'output' }] } } }],
+    ['reserved consumption', { version: '1.0', checks: { proof: { type: 'noop', consumes: [{ claim: PROOF_ADMITTED_RECEIPT_CLAIM, cardinality: 'one' }] } } }],
+  ])('rejects root %s before inactive claim-plan return', (_name, config) => expectRootReserved(config));
+
   it('compiles exact consumption into immutable effective dependencies without authored mutation', () => {
     const authoredSchema = JSON.parse(JSON.stringify(schema));
     const config: any = {

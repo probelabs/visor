@@ -65,6 +65,7 @@ export class ConfigManager {
     'git-checkout',
     'a2a',
     'utcp',
+    'proof-admit',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];

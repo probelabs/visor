@@ -1,6 +1,9 @@
 import {
   compileJsonPointer,
   InstancePlanError,
+  PROOF_ADMIT_PROVIDER_TYPE,
+  PROOF_ADMITTED_RECEIPT_CLAIM,
+  PROOF_CANDIDATE_CLAIM,
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
 } from '../../../../src/state-machine/graph/instance-plan';
@@ -64,7 +67,78 @@ function config(): any {
   };
 }
 
+function proofAdmissionConfig(): any {
+  const value = config();
+  Object.assign(value.claim_types, {
+    [PROOF_CANDIDATE_CLAIM]: { schema: { type: 'object' } },
+    [PROOF_ADMITTED_RECEIPT_CLAIM]: { schema: { type: 'object' } },
+  });
+  value.subgraphs['onboard-component'].checks = {
+    inspect: {
+      type: 'noop',
+      consumes: [{ claim: 'component.item@1', as: 'component' }],
+      emits: [{ claim: PROOF_CANDIDATE_CLAIM, from: 'output' }],
+    },
+    proof_admit: {
+      type: PROOF_ADMIT_PROVIDER_TYPE,
+      consumes: [{ claim: PROOF_CANDIDATE_CLAIM, as: 'candidate' }],
+      emits: [{ claim: PROOF_ADMITTED_RECEIPT_CLAIM, from: 'output' }],
+    },
+    verify: {
+      type: 'noop',
+      consumes: [
+        { claim: PROOF_CANDIDATE_CLAIM, as: 'candidate' },
+        { claim: PROOF_ADMITTED_RECEIPT_CLAIM, as: 'receipt' },
+      ],
+    },
+  };
+  return value;
+}
+
 describe('Graph v2 C2 expansion plan', () => {
+  it('compiles the exact reserved inspect -> proof_admit -> verify profile', () => {
+    const plan = compileClaimPlan(proofAdmissionConfig()).expansionPlan;
+    const template = plan.byOwner.discover.template;
+    expect(template.templateNodeKeys).toEqual(['inspect', 'proof_admit', 'verify']);
+    expect(template.topology).toEqual(template.templateNodeKeys);
+    expect(template.emitterByClaim).toMatchObject({
+      [PROOF_CANDIDATE_CLAIM]: 'inspect', [PROOF_ADMITTED_RECEIPT_CLAIM]: 'proof_admit',
+    });
+  });
+
+  it.each([
+    ['type without refs', (value: any) => {
+      const checks = value.subgraphs['onboard-component'].checks;
+      delete checks.inspect.emits;
+      checks.proof_admit.consumes = [{ claim: 'component.item@1', as: 'component' }];
+      checks.proof_admit.emits = [{ claim: 'component.onboarded@1', from: 'output' }];
+      checks.verify.consumes = [{ claim: 'component.item@1', as: 'component' }];
+    }],
+    ['wrong key', (value: any) => {
+      const checks = value.subgraphs['onboard-component'].checks;
+      checks.admit = checks.proof_admit;
+      delete checks.proof_admit;
+    }],
+    ['alternate claims', (value: any) => {
+      const checks = value.subgraphs['onboard-component'].checks;
+      value.claim_types['fixture.alternate@1'] = { schema: { type: 'object' } };
+      checks.inspect.emits.push({ claim: 'fixture.alternate@1', from: 'output' });
+      checks.proof_admit.consumes[0].claim = 'fixture.alternate@1';
+    }],
+    ['extra proof-admit use', (value: any) => {
+      value.subgraphs['onboard-component'].checks.extra = { type: PROOF_ADMIT_PROVIDER_TYPE };
+    }],
+  ])('rejects reserved profile with %s before provider lookup', (_name, mutate) => {
+    const value = proofAdmissionConfig();
+    mutate(value);
+    try {
+      compileClaimPlan(value);
+      throw new Error('expected reserved-profile rejection');
+    } catch (error) {
+      expect((error as InstancePlanError).code).toBe('RESERVED_PROOF_ADMISSION_PROFILE');
+    }
+  });
+
   it('compiles exact immutable bindings, topology, pointers, and semantic digests', () => {
     const authored = config();
     const before = JSON.parse(JSON.stringify(authored));

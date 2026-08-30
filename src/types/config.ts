@@ -219,7 +219,8 @@ export type ConfigCheckType =
   | 'workflow'
   | 'git-checkout'
   | 'a2a'
-  | 'utcp';
+  | 'utcp'
+  | 'proof-admit';
 
 /**
  * Valid event triggers for checks

@@ -2634,3 +2634,114 @@ describe('EXP-0123 managed graph-run ownership', () => {
     expect(result.statistics.failedExecutions).toBe(0);
   });
 });
+
+const EXP_0205_MANAGED_PROVIDER = 'exp-0205-managed';
+const EXP_0205_VERIFY_PROVIDER = 'exp-0205-verify';
+
+describe('EXP-0205 explicit proof admission node', () => {
+  const registry = CheckProviderRegistry.getInstance();
+  let engine: StateMachineExecutionEngine;
+  let managedRequests: ManagedRunStartRequest[];
+  let verifyClaims: Array<Readonly<Record<string, any>>>;
+
+  class ExplicitManagedProvider extends CheckProvider {
+    getName() { return EXP_0205_MANAGED_PROVIDER; }
+    getDescription() { return 'EXP-0205 managed fixture'; }
+    async validateConfig() { return true; }
+    async isAvailable() { return true; }
+    getRequirements() { return []; }
+    getSupportedConfigKeys() { return ['type']; }
+    async execute(_pr: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+      if (config.checkName !== 'discover-components') throw new Error('EXP_0205_UNEXPECTED_EXECUTE');
+      return { issues: [], output: { components: [{ id: 'A', path: 'a' }, { id: 'B', path: 'b' }] } };
+    }
+    startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
+      managedRequests.push(request);
+      const key = String(request.binding.scope[0]?.key);
+      const summary: ReviewSummary = { issues: [], output: { id: key === 'A' ? 'B' : 'A', decision: key === 'A' ? 'reject' : 'accept', admit: key === 'B', item: key === 'B' ? 'A' : 'B' } };
+      return {
+        binding: request.binding,
+        started: Promise.resolve(startedReceipt(request.binding)),
+        outcome: Promise.resolve(successOutcome(request.binding, summary)),
+        cancel: async _reason => cancelReceipt(request.binding),
+        close: async () => cleanupReceipt(request.binding),
+      };
+    }
+  }
+
+  class ExplicitVerifyProvider extends CheckProvider {
+    getName() { return EXP_0205_VERIFY_PROVIDER; }
+    getDescription() { return 'EXP-0205 verify fixture'; }
+    async validateConfig() { return true; }
+    async isAvailable() { return true; }
+    getRequirements() { return []; }
+    getSupportedConfigKeys() { return ['type']; }
+    async execute(_pr: PRInfo, _config: CheckProviderConfig, _deps?: Map<string, ReviewSummary>, context?: ExecutionContext): Promise<ReviewSummary> {
+      verifyClaims.push(context?.claims || {});
+      return { issues: [], output: { verified: true } };
+    }
+  }
+
+  beforeEach(() => {
+    engine = new StateMachineExecutionEngine();
+    managedRequests = [];
+    verifyClaims = [];
+    registry.register(new ExplicitManagedProvider());
+    registry.register(new ExplicitVerifyProvider());
+  });
+
+  afterEach(() => {
+    registry.unregister(EXP_0205_MANAGED_PROVIDER);
+    registry.unregister(EXP_0205_VERIFY_PROVIDER);
+    jest.restoreAllMocks();
+  });
+
+  it('accepts A, rejects B, preserves lineage, and replays the live projection', async () => {
+    const config: any = fixtureConfig(EXP_0205_MANAGED_PROVIDER);
+    config.max_parallelism = 2;
+    Object.assign(config.claim_types, {
+      'proof.candidate@1': { schema: { type: 'object', required: ['id', 'decision'], properties: { id: { type: 'string' }, decision: { type: 'string' } } } },
+      'proof.admitted_receipt@1': { schema: { type: 'object' } },
+    });
+    config.subgraphs['onboard-component'].checks = {
+      inspect: { type: EXP_0205_MANAGED_PROVIDER, consumes: [{ claim: 'component.item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }] },
+      proof_admit: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
+      verify: { type: EXP_0205_VERIFY_PROVIDER, consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }] },
+    };
+    const result = await engine.executeGroupedChecks(
+      prInfo,
+      ['discover-components'],
+      undefined,
+      config,
+      'table',
+      false,
+      2
+    );
+    const journal = (engine as any)._lastContext.journal;
+    const events = journal.readRuntimeEvents() as readonly any[];
+    const generated = (key: string) => events.filter(event => event.scope?.[0]?.key === key);
+    const accepted = generated('A');
+    const rejected = generated('B');
+    const candidateA = accepted.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
+    const receiptA = accepted.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1');
+    const candidateB = rejected.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
+    const ledger = (key: string) => { const scoped = generated(key); const start = scoped.findIndex(event => event.type === 'ManagedRunTerminated'); return scoped.slice(start).map(event => `${event.type}:${event.checkId || ''}:${event.claim || ''}:${event.reason || ''}`); };
+
+    expect(result.statistics.failedExecutions).toBe(1);
+    expect(managedRequests).toHaveLength(2);
+    expect([candidateA, receiptA, candidateB]).toEqual([expect.anything(), expect.anything(), expect.anything()]);
+    expect(receiptA.parentClaimIds).toEqual([candidateA.claimId]);
+    expect(receiptA.payload.candidateClaimId).toBe(candidateA.claimId);
+    expect([...accepted.find(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify').activeInputClaimIds].sort()).toEqual([candidateA.claimId, receiptA.claimId].sort());
+    expect(verifyClaims).toHaveLength(1);
+    expect(Object.values(verifyClaims[0]).map(claim => claim.claimId).sort()).toEqual(
+      [candidateA.claimId, receiptA.claimId].sort()
+    );
+    expect(rejected.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
+    expect(rejected.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false);
+    expect(rejected.some(event => event.type === 'AttemptFailed' && event.reason === 'PROVIDER_EXECUTION_FAILED')).toBe(true);
+    expect(ledger('A')).toEqual(['ManagedRunTerminated:::', 'ClaimPublished:inspect:proof.candidate@1:', 'NodeGenerationActivated:proof_admit::', 'AttemptCompleted:inspect::', 'AttemptStarted:proof_admit::', 'CheckScheduled:proof_admit::', 'ClaimPublished:proof_admit:proof.admitted_receipt@1:', 'NodeGenerationActivated:verify::', 'AttemptCompleted:proof_admit::', 'AttemptStarted:verify::', 'CheckScheduled:verify::', 'AttemptCompleted:verify::']);
+    expect(ledger('B')).toEqual(['ManagedRunTerminated:::', 'ClaimPublished:inspect:proof.candidate@1:', 'NodeGenerationActivated:proof_admit::', 'AttemptCompleted:inspect::', 'AttemptStarted:proof_admit::', 'CheckScheduled:proof_admit::', 'AttemptFailed:proof_admit::PROVIDER_EXECUTION_FAILED']);
+    expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection());
+  });
+});

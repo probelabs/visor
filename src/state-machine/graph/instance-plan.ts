@@ -16,6 +16,12 @@ import {
 const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
+/** Reserved EXP-0205 admission profile identifiers. */
+export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
+export const PROOF_ADMITTED_RECEIPT_CLAIM = 'proof.admitted_receipt@1';
+export const PROOF_ADMIT_PROVIDER_TYPE = 'proof-admit';
+export const PROOF_ADMIT_NODE_KEY = 'proof_admit';
+
 export class InstancePlanError extends Error {
   readonly code: string;
 
@@ -201,6 +207,114 @@ function resolvedTemplateCheck(check: CheckConfig): CheckConfig {
     type: check.type || 'ai',
     ...(check.consumes ? { consumes: consumptions } : {}),
   });
+}
+
+function claimList(check: CheckConfig, field: 'emits' | 'consumes'): string[] {
+  return (check[field] || []).map(declaration => declaration.claim).sort();
+}
+
+function rejectReservedProfile(templateName: string, detail: string): never {
+  throw new InstancePlanError(
+    'RESERVED_PROOF_ADMISSION_PROFILE',
+    `Subgraph template "${templateName}" violates the reserved proof admission profile: ${detail}`
+  );
+}
+
+/**
+ * The proof admission node is deliberately a fixed, tiny profile. It is
+ * validated after all ordinary declaration, emitter, dependency, and topology
+ * checks so no alternate claim path can be smuggled through a template.
+ */
+function validateReservedProofAdmissionTemplate(
+  name: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority
+): void {
+  const triggered = nodeKeys.some(nodeKey => {
+    const check = resolvedChecks[nodeKey];
+    return (
+      check.type === PROOF_ADMIT_PROVIDER_TYPE ||
+      claimList(check, 'emits').some(
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM
+      ) ||
+      claimList(check, 'consumes').some(
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM
+      )
+    );
+  });
+  if (!triggered) return;
+
+  if (!hasOwn(authority.claimTypes, PROOF_CANDIDATE_CLAIM)) {
+    rejectReservedProfile(name, `missing ${PROOF_CANDIDATE_CLAIM} declaration`);
+  }
+  if (!hasOwn(authority.claimTypes, PROOF_ADMITTED_RECEIPT_CLAIM)) {
+    rejectReservedProfile(name, `missing ${PROOF_ADMITTED_RECEIPT_CLAIM} declaration`);
+  }
+  if (
+    inputClaim === PROOF_CANDIDATE_CLAIM ||
+    inputClaim === PROOF_ADMITTED_RECEIPT_CLAIM
+  ) {
+    rejectReservedProfile(name, 'a reserved claim cannot be the template input');
+  }
+
+  const expectedNodes = ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
+  if (nodeKeys.length !== expectedNodes.length || nodeKeys.some((key, index) => key !== expectedNodes[index])) {
+    rejectReservedProfile(name, `expected exactly the nodes ${expectedNodes.join(', ')}`);
+  }
+  if (topology.join('\0') !== expectedNodes.join('\0')) {
+    rejectReservedProfile(name, `expected topology ${expectedNodes.join(' -> ')}`);
+  }
+
+  for (const nodeKey of nodeKeys) {
+    const check = resolvedChecks[nodeKey];
+    if (nodeKey !== PROOF_ADMIT_NODE_KEY && check.type === PROOF_ADMIT_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `provider type ${PROOF_ADMIT_PROVIDER_TYPE} is only valid at ${PROOF_ADMIT_NODE_KEY}`);
+    }
+  }
+
+  const inspect = resolvedChecks.inspect;
+  if (claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, `inspect must emit only ${PROOF_CANDIDATE_CLAIM}`);
+  }
+  if (
+    claimList(inspect, 'consumes').length !== 1 ||
+    claimList(inspect, 'consumes')[0] !== inputClaim
+  ) {
+    rejectReservedProfile(name, 'inspect must consume only the template input claim');
+  }
+
+  const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (proofAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must have type ${PROOF_ADMIT_PROVIDER_TYPE}`);
+  }
+  if (claimList(proofAdmit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must emit only ${PROOF_ADMITTED_RECEIPT_CLAIM}`);
+  }
+  if (claimList(proofAdmit, 'consumes').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must consume only ${PROOF_CANDIDATE_CLAIM}`);
+  }
+
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE) {
+    rejectReservedProfile(name, 'verify cannot use the proof admission provider');
+  }
+  if (
+    claimList(verify, 'emits').length !== 0 ||
+    claimList(verify, 'consumes').join('\0') !==
+      [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')
+  ) {
+    rejectReservedProfile(name, 'verify must consume both reserved claims and emit none');
+  }
+
+  // Keep this assertion close to the profile so future changes cannot make
+  // the candidate-consumer exemption implicit or broaden it accidentally.
+  if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must have exactly one candidate consumer`);
+  }
 }
 
 function topologicalOrder(
@@ -416,6 +530,15 @@ function compileTemplate(
     dependencies[nodeKey] = Object.freeze([...effective].sort());
   }
   const topology = topologicalOrder(name, dependencies);
+  validateReservedProofAdmissionTemplate(
+    name,
+    inputClaim,
+    nodeKeys,
+    resolvedChecks,
+    consumptionsByNode,
+    topology,
+    authority
+  );
   const dependentsByNode: Record<string, readonly string[]> = {};
   for (const nodeKey of nodeKeys) {
     dependentsByNode[nodeKey] = Object.freeze(
