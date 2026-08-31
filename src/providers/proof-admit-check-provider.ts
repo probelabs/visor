@@ -1,85 +1,122 @@
-import { PRInfo } from '../pr-analyzer';
-import { CheckProvider, CheckProviderConfig, ExecutionContext, CandidateClaimInput } from './check-provider.interface';
-import { ReviewSummary } from '../reviewer';
-import { immutableCanonicalValue, sha256Canonical } from '../state-machine/graph/claim-kernel';
+import type { PRInfo } from '../pr-analyzer';
+import { CheckProvider, type CheckProviderConfig, type ExecutionContext, type ManagedAgentRun, type ManagedRunStartRequest } from './check-provider.interface';
+import type { ReviewSummary } from '../reviewer';
+import { immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
+import { PROOF_ADMIT_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
 import {
-  PROOF_ADMIT_PROVIDER_TYPE,
-  PROOF_CANDIDATE_CLAIM,
-} from '../state-machine/graph/instance-plan';
+  createProofAdmissionCliChildForFocusedTest,
+  PROOF_ADMISSION_UNAVAILABLE,
+  startProofAdmissionCliChild,
+} from './proof-admission-cli-child';
 
 export const PROOF_ADMIT_PROVIDER_NAME = PROOF_ADMIT_PROVIDER_TYPE;
-type AdmissionCandidate = Readonly<{ claimId: string; claim: typeof PROOF_CANDIDATE_CLAIM; payload: unknown; payloadFingerprint: string; producerCheckId: string; attemptId: string; fence: number; scope: unknown; parentClaimIds: readonly string[] }>;
-type AdmissionRequest = Readonly<{ version: 1; candidate: AdmissionCandidate }>;
-type AdmissionReceipt = Readonly<{ version: 1; kind: 'admitted'; candidateClaimId: string; candidateClaim: typeof PROOF_CANDIDATE_CLAIM; candidateFingerprint: string; candidateAttemptId: string; candidateFence: number; scope: unknown; parentClaimIds: readonly string[] }>;
-type AdmissionDecision =
-  | Readonly<{ kind: 'accepted'; receipt: AdmissionReceipt }>
-  | Readonly<{ kind: 'rejected'; reason: string }>;
-type AdmissionSink = Readonly<{ decide(request: AdmissionRequest): AdmissionDecision }>;
+const INTERNAL = Symbol('proof-admit-focused-test');
 
-function fail(code: string, detail: string): never { throw new Error(`${code}: ${detail}`); }
-function deeplyFrozen(value: unknown, seen = new Set<object>()): boolean {
-  if (!value || typeof value !== 'object') return true;
-  if (seen.has(value)) return true;
-  seen.add(value);
-  return Object.isFrozen(value) && Object.values(value as Record<string, unknown>).every(child => deeplyFrozen(child, seen));
+function invalid(detail: string): never { throw new Error(`PROOF_ADMISSION_INVALID_CONFIG: ${detail}`); }
+
+type PlainRecord = Record<string, unknown>;
+type ProofAdmissionChildRequest = Readonly<{
+  binding: ManagedRunStartRequest['binding'];
+  workingDirectory: string;
+  proofAdmissionRequest: string;
+}>;
+
+function plain(value: unknown): value is PlainRecord {
+  return !!value && typeof value === 'object' && !Array.isArray(value) &&
+    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
 
-function detachCandidate(value: unknown): AdmissionCandidate {
-  const candidate = value as CandidateClaimInput;
-  if (!value || typeof value !== 'object' || Array.isArray(value) || candidate.provenance !== 'attempt' || candidate.claim !== PROOF_CANDIDATE_CLAIM || typeof candidate.claimId !== 'string' || typeof candidate.payloadFingerprint !== 'string' || typeof candidate.producerCheckId !== 'string' || typeof candidate.attemptId !== 'string' || !Number.isSafeInteger(candidate.fence) || !Array.isArray(candidate.scope) || !Array.isArray(candidate.parentClaimIds)) fail('PROOF_ADMISSION_INVALID_CANDIDATE', 'candidate lacks exact attempt provenance');
-  const detached = immutableCanonicalValue({
-    claimId: candidate.claimId, claim: PROOF_CANDIDATE_CLAIM as typeof PROOF_CANDIDATE_CLAIM, payload: candidate.payload,
-    payloadFingerprint: candidate.payloadFingerprint, producerCheckId: candidate.producerCheckId,
-    attemptId: candidate.attemptId, fence: candidate.fence, scope: candidate.scope,
-    parentClaimIds: candidate.parentClaimIds,
+function exactOwnKeys(value: object, expected: readonly string[]): boolean {
+  const keys = Reflect.ownKeys(value);
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index] && typeof key === 'string' && (() => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return !!descriptor && 'value' in descriptor && descriptor.enumerable;
+  })());
+}
+
+function proofAdmissionChildRequest(request: ManagedRunStartRequest): ProofAdmissionChildRequest {
+  if (!plain(request.checkConfig) || request.checkConfig.type !== PROOF_ADMIT_PROVIDER_NAME) {
+    invalid('provider type is not proof-admit');
+  }
+  const forbiddenConfigKeys = ['command', 'exec', 'workingDirectory', 'env', 'args', 'command_args', 'interpreter', 'url', 'method', 'headers', 'stdin', 'content', 'ai_model', 'ai_provider'];
+  for (const key of forbiddenConfigKeys) {
+    if (Object.prototype.hasOwnProperty.call(request.checkConfig, key) && request.checkConfig[key] !== undefined) {
+      invalid(`provider config contains ${key}`);
+    }
+  }
+  const controllerAi = request.checkConfig.ai;
+  if (controllerAi !== undefined && (!plain(controllerAi) || !exactOwnKeys(controllerAi, ['timeout', 'debug']) || typeof controllerAi.timeout !== 'number' || typeof controllerAi.debug !== 'boolean')) {
+    invalid('provider config contains unauthorised ai options');
+  }
+
+  const dependencies = request.dependencyResults as unknown;
+  if (!dependencies || typeof dependencies !== 'object' || typeof Reflect.get(dependencies, 'size') !== 'number' || typeof Reflect.get(dependencies, 'keys') !== 'function') {
+    invalid('dependency results are not a map');
+  }
+  let dependencyKeys: string[];
+  try {
+    dependencyKeys = Array.from((Reflect.get(dependencies, 'keys') as () => Iterable<string>).call(dependencies));
+  } catch {
+    invalid('dependency results cannot be inspected');
+  }
+  if (dependencyKeys.length !== 1 || dependencyKeys[0] !== 'inspect' || Reflect.get(dependencies, 'size') !== 1) {
+    invalid('proof admission requires exactly the inspect dependency');
+  }
+
+  const claims = request.executionContext && request.executionContext.claims;
+  if (!plain(claims) || !exactOwnKeys(claims, ['candidate'])) invalid('candidate claim alias is invalid');
+  const candidate = claims.candidate;
+  if (!plain(candidate) || candidate.claim !== 'proof.candidate@1' || candidate.producerCheckId !== 'inspect' || candidate.provenance !== 'attempt' || typeof candidate.attemptId !== 'string' || !Number.isSafeInteger(candidate.fence)) {
+    invalid('candidate claim authority is invalid');
+  }
+  if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0 || !request.workingDirectory.startsWith('/') || typeof request.proofAdmissionRequest !== 'string' || request.proofAdmissionRequest.length === 0) {
+    throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  }
+  return Object.freeze({
+    binding: immutableCanonicalValue(request.binding),
+    workingDirectory: request.workingDirectory,
+    proofAdmissionRequest: request.proofAdmissionRequest,
   });
-  if (sha256Canonical(detached.payload) !== detached.payloadFingerprint) fail('PROOF_ADMISSION_INVALID_CANDIDATE', 'candidate fingerprint does not match payload');
-  return detached;
 }
 
-function detachReceipt(value: unknown, candidate: AdmissionCandidate): AdmissionReceipt {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('PROOF_ADMISSION_INVALID_RECEIPT', 'sink returned a non-object receipt');
-  const receipt = value as Record<string, unknown>;
-  if (!deeplyFrozen(value) || receipt.version !== 1 || receipt.kind !== 'admitted' || receipt.candidateClaimId !== candidate.claimId || receipt.candidateClaim !== PROOF_CANDIDATE_CLAIM || receipt.candidateFingerprint !== candidate.payloadFingerprint || receipt.candidateAttemptId !== candidate.attemptId || receipt.candidateFence !== candidate.fence || sha256Canonical(receipt.scope) !== sha256Canonical(candidate.scope) || !Array.isArray(receipt.parentClaimIds) || sha256Canonical(receipt.parentClaimIds) !== sha256Canonical(candidate.parentClaimIds)) fail('PROOF_ADMISSION_INVALID_RECEIPT', 'sink receipt is mutable, has wrong parents, or is not bound to candidate');
-  return immutableCanonicalValue({ version: 1, kind: 'admitted' as const, candidateClaimId: candidate.claimId, candidateClaim: PROOF_CANDIDATE_CLAIM as typeof PROOF_CANDIDATE_CLAIM, candidateFingerprint: candidate.payloadFingerprint, candidateAttemptId: candidate.attemptId, candidateFence: candidate.fence, scope: receipt.scope, parentClaimIds: receipt.parentClaimIds });
+export function createProofAdmitProviderForFocusedTest(path: string): ProofAdmitCheckProvider {
+  const token = createProofAdmissionCliChildForFocusedTest(path);
+  return new ProofAdmitCheckProvider(token as object, INTERNAL);
 }
-
-const proofAdmissionSink = Object.freeze({
-  decide(request: AdmissionRequest): AdmissionDecision {
-    const scope = request.candidate.scope as readonly unknown[];
-    const first = scope[0] as Record<string, unknown> | undefined;
-    if (first?.key !== 'A') return { kind: 'rejected', reason: 'deterministic fixture rejection' };
-    return { kind: 'accepted', receipt: immutableCanonicalValue({ version: 1, kind: 'admitted' as const, candidateClaimId: request.candidate.claimId, candidateClaim: PROOF_CANDIDATE_CLAIM as typeof PROOF_CANDIDATE_CLAIM, candidateFingerprint: request.candidate.payloadFingerprint, candidateAttemptId: request.candidate.attemptId, candidateFence: request.candidate.fence, scope: request.candidate.scope, parentClaimIds: request.candidate.parentClaimIds }) };
-  },
-});
-
-const INTERNAL_PROOF_ADMISSION_BOOTSTRAP = Symbol('proof-admission-internal-bootstrap');
-export function createProofAdmitProviderForFocusedTest(sink: AdmissionSink): ProofAdmitCheckProvider { return new ProofAdmitCheckProvider(sink, INTERNAL_PROOF_ADMISSION_BOOTSTRAP); }
 
 export class ProofAdmitCheckProvider extends CheckProvider {
-  private readonly sink: AdmissionSink;
-  constructor(sink: AdmissionSink = proofAdmissionSink, token?: typeof INTERNAL_PROOF_ADMISSION_BOOTSTRAP) {
+  private readonly executableCapability: object | undefined;
+
+  constructor(executablePath?: string | object, token?: typeof INTERNAL) {
     super();
-    if (sink !== proofAdmissionSink && token !== INTERNAL_PROOF_ADMISSION_BOOTSTRAP) fail('PROOF_ADMISSION_INVALID_BOOTSTRAP', 'custom sink requires internal bootstrap');
-    this.sink = sink;
+    if (executablePath !== undefined && token !== INTERNAL) invalid('custom executable requires internal bootstrap');
+    this.executableCapability = token === INTERNAL
+      ? (typeof executablePath === 'object'
+        ? executablePath
+        : executablePath === undefined ? undefined : createProofAdmissionCliChildForFocusedTest(executablePath))
+      : undefined;
   }
+
   getName(): string { return PROOF_ADMIT_PROVIDER_NAME; }
-  getDescription(): string { return 'Sealed built-in proof candidate admission provider'; }
+  getDescription(): string { return 'Sealed built-in Proof candidate admission provider'; }
+
   async validateConfig(config: unknown): Promise<boolean> {
-    return !!config && typeof config === 'object' && (config as CheckProviderConfig).type === PROOF_ADMIT_PROVIDER_NAME;
+    return !!config && typeof config === 'object' && !Array.isArray(config) &&
+      (config as CheckProviderConfig).type === PROOF_ADMIT_PROVIDER_NAME &&
+      Object.keys(config as Record<string, unknown>).every(key => ['type', 'consumes', 'emits', 'expand'].includes(key));
   }
-  async execute(_pr: PRInfo, config: CheckProviderConfig, _deps?: Map<string, ReviewSummary>, context?: ExecutionContext): Promise<ReviewSummary> {
-    if (config.type !== PROOF_ADMIT_PROVIDER_NAME) fail('PROOF_ADMISSION_INVALID_CONFIG', `expected type ${PROOF_ADMIT_PROVIDER_NAME}`);
-    const claims = Object.values(context?.claims || {});
-    if (claims.length !== 1 || claims[0].claim !== PROOF_CANDIDATE_CLAIM) {
-      fail('PROOF_ADMISSION_INVALID_CANDIDATE', 'exactly one proof candidate claim is required');
-    }
-    const candidate = detachCandidate(claims[0]);
-    const decision = this.sink.decide(immutableCanonicalValue({ version: 1, candidate }));
-    if (decision.kind === 'rejected') throw new Error('PROOF_ADMISSION_REJECTED');
-    return { issues: [], output: detachReceipt(decision.receipt, candidate) };
+
+  async execute(_pr: PRInfo, config: CheckProviderConfig, _deps?: Map<string, ReviewSummary>, _context?: ExecutionContext): Promise<ReviewSummary> {
+    if (config.type !== PROOF_ADMIT_PROVIDER_NAME) invalid(`expected type ${PROOF_ADMIT_PROVIDER_NAME}`);
+    throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   }
+
   getSupportedConfigKeys(): string[] { return ['type']; }
-  async isAvailable(): Promise<boolean> { return true; }
-  getRequirements(): string[] { return ['No external dependencies required']; }
+  async isAvailable(): Promise<boolean> { return this.executableCapability !== undefined; }
+  getRequirements(): string[] { return [PROOF_ADMISSION_UNAVAILABLE]; }
+
+  startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
+    const childRequest = proofAdmissionChildRequest(request);
+    return startProofAdmissionCliChild(childRequest, this.executableCapability);
+  }
 }

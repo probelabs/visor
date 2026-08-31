@@ -43,6 +43,7 @@ import * as ndjsonTelemetry from '../../src/telemetry/fallback-ndjson';
 import * as managedRunHelpers from '../../src/state-machine/dispatch/managed-run';
 import {
   createGovernedProofInspectProviderForFocusedTest,
+  governedResultDigest,
   type GovernedProbeRunnerRequest,
 } from '../../src/providers/governed-proof-inspect-check-provider';
 import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
@@ -836,6 +837,19 @@ describe('EXP-0123 managed graph-run ownership', () => {
     expect(cleanup.binding).toEqual(control.binding);
     expect(originalCloseCalls).toBe(1);
     expect(activeHandles).toBe(0);
+  });
+
+  it('does not smuggle proof admission authority into an ordinary managed provider', async () => {
+    const run = engine.executeGroupedChecks(prInfo, ['discover-components'], undefined, fixtureConfig(), 'table', false, 1);
+    await until(() => controls.length === 1, 'ordinary managed acquisition');
+    const control = controls[0];
+    expect(control.request.checkConfig.type).toBe(MANAGED_PROVIDER);
+    expect(control.request.proofAdmissionRequest).toBeUndefined();
+    control.started.resolve(startedReceipt(control.request.binding));
+    control.outcome.resolve(successOutcome(control.request.binding, { issues: [], output: { id: 'A', findings: ['ordinary'] } }));
+    await until(() => control.closeCalls === 1, 'ordinary managed close');
+    control.close.resolve(cleanupReceipt(control.request.binding));
+    await run;
   });
 
   it('replays only journal facts without crossing live collaborator boundaries', async () => {
@@ -2718,7 +2732,7 @@ describe('EXP-0205 explicit proof admission node', () => {
         managedRequests.push(request as unknown as ManagedRunStartRequest);
         const key = String(request.binding.scope[0]?.key);
         const data = { decision: key === 'A' ? 'accept' : 'reject', id: key };
-        const digest = `sha256:${sha256Canonical(data)}`;
+        const digest = governedResultDigest(data);
         return {
           data,
           runtimeAttestation: {
@@ -2784,33 +2798,27 @@ describe('EXP-0205 explicit proof admission node', () => {
     const candidateA = accepted.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
     const receiptA = accepted.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1');
     const candidateB = rejected.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
-    const ledger = (key: string) => { const scoped = generated(key); const start = scoped.findIndex(event => event.type === 'ManagedRunTerminated'); return scoped.slice(start).map(event => `${event.type}:${event.checkId || ''}:${event.claim || ''}:${event.reason || ''}`); };
     for (const key of ['A', 'B']) { const terminated = generated(key).filter(event => event.type === 'ManagedRunTerminated'); expect(terminated).toHaveLength(1); expect(terminated[0]).toMatchObject({ controllerDecision: 'completed', cleanupStatus: 'clean' }); }
 
-    expect(result.statistics.failedExecutions).toBe(1);
+    expect(result.statistics.failedExecutions).toBe(2);
     expect(managedRequests).toHaveLength(2);
-    expect([candidateA, receiptA, candidateB]).toEqual([expect.anything(), expect.anything(), expect.anything()]);
-    expect(receiptA.parentClaimIds).toEqual([candidateA.claimId]);
-    expect(receiptA.payload.candidateClaimId).toBe(candidateA.claimId);
-    expect(receiptA.payload.parentClaimIds).toEqual(candidateA.parentClaimIds);
+    expect([candidateA, candidateB]).toEqual([expect.anything(), expect.anything()]);
+    expect(receiptA).toBeUndefined();
     expect(candidateA.proofCandidateEvidenceFingerprint).toBe(sha256Canonical(candidateA.proofCandidateEvidence));
     expect(candidateA.claimId).toBe(sha256Canonical({ claim: candidateA.claim, payloadFingerprint: candidateA.payloadFingerprint, producerCheckId: candidateA.producerCheckId, scope: candidateA.scope, attemptId: candidateA.attemptId, fence: candidateA.fence, parentClaimIds: [...candidateA.parentClaimIds].sort(), proofCandidateEvidenceFingerprint: candidateA.proofCandidateEvidenceFingerprint }));
-    expect([...accepted.find(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify').activeInputClaimIds].sort()).toEqual([candidateA.claimId, receiptA.claimId].sort());
-    expect(verifyClaims).toHaveLength(1);
+    expect(accepted.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false);
+    expect(verifyClaims).toHaveLength(0);
     expect(fakeAnswerCalls).toBe(2);
     expect(fakeCancelCalls).toBe(0);
     expect(fakeCloseCalls).toBe(2);
     expect(fakePostCloseCalls).toBe(0);
-    expect(Object.values(verifyClaims[0]).map(claim => claim.claimId).sort()).toEqual(
-      [candidateA.claimId, receiptA.claimId].sort()
-    );
-    expect(verifyClaims[0].candidate.proofAdmission).toEqual(candidateA.proofCandidateEvidence);
-    expect('proofCandidateEvidence' in receiptA).toBe(false);
+    expect('proofCandidateEvidence' in (candidateA || {})).toBe(true);
     expect(rejected.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
     expect(rejected.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false);
-    expect(rejected.some(event => event.type === 'AttemptFailed' && event.reason === 'PROVIDER_EXECUTION_FAILED')).toBe(true);
-    expect(ledger('A')).toEqual(['ManagedRunTerminated:::', 'ClaimPublished:inspect:proof.candidate@1:', 'NodeGenerationActivated:proof_admit::', 'AttemptCompleted:inspect::', 'AttemptStarted:proof_admit::', 'CheckScheduled:proof_admit::', 'ClaimPublished:proof_admit:proof.admitted_receipt@1:', 'NodeGenerationActivated:verify::', 'AttemptCompleted:proof_admit::', 'AttemptStarted:verify::', 'CheckScheduled:verify::', 'AttemptCompleted:verify::']);
-    expect(ledger('B')).toEqual(['ManagedRunTerminated:::', 'ClaimPublished:inspect:proof.candidate@1:', 'NodeGenerationActivated:proof_admit::', 'AttemptCompleted:inspect::', 'AttemptStarted:proof_admit::', 'CheckScheduled:proof_admit::', 'AttemptFailed:proof_admit::PROVIDER_EXECUTION_FAILED']);
+    expect(rejected.some(event => event.type === 'AttemptFailed' && event.reason === 'MANAGED_START_FAILED')).toBe(true);
+    expect(accepted.some(event => event.type === 'AttemptFailed' && event.reason === 'MANAGED_START_FAILED')).toBe(true);
+    expect(accepted.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
+    expect(rejected.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
     expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection());
   });
 });

@@ -276,7 +276,7 @@ function managedFixture() {
 }
 
 function candidateEvidence(payload: unknown): any {
-  const digest = `sha256:${sha256Canonical(payload)}`;
+  const digest = 'sha256:9e4573c9aafd70eaf846fe2abbcc88a78a2f2ea2515f0a73a1ce3d98c6d6a6b2';
   const invocation = { role_id: 'role', stance: 'owner', subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'a'.repeat(64)}` }, output_schema_id: 'result', output_schema: Buffer.from('{"type":"object"}').toString('base64') };
   const invocationDigest = `sha256:${'b'.repeat(64)}`;
   const attestation = { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } };
@@ -461,9 +461,17 @@ describe('Graph v2 C2 instance kernel', () => {
     const payload = { id: 'A', inspected: true };
     const evidence = candidateEvidence(payload);
     const candidate = { ...published, claim: PROOF_CANDIDATE_CLAIM, payload, payloadFingerprint: sha256Canonical(payload), proofCandidateEvidence: evidence, proofCandidateEvidenceFingerprint: sha256Canonical(evidence), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(payload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
-    const managed = replayInstanceEvents([...fixture.events, managedAcquired(fixture.binding, 6), managedStarted(fixture.binding, 7)]);
+    const managedEvents = [...fixture.events, managedAcquired(fixture.binding, 6), managedStarted(fixture.binding, 7)];
+    const managed = replayInstanceEvents(managedEvents);
     const terminated = managedTerminated(fixture.binding, 8, { cleanupStatus: 'clean', controllerDecision: 'completed', failureCode: null });
-    expect(reduceInstanceEventBatch(managed, [terminated, candidate, completed]).claimsById[candidate.claimId].proofCandidateEvidence).toEqual(evidence);
+    const admittedEvents = [terminated, candidate, completed];
+    const live = reduceInstanceEventBatch(managed, admittedEvents);
+    expect(live.claimsById[candidate.claimId].proofCandidateEvidence).toEqual(evidence);
+    expect(replayInstanceEvents([...managedEvents, ...admittedEvents])).toEqual(live);
+    const oldPlainEvidence = { ...evidence, probe: { ...evidence.probe, resultIdentity: { ...evidence.probe.resultIdentity, resultDigest: 'sha256:321159a84d09d6a8030c0403bc98f6cf22f897bb5d6e448b8274e672ed203072' } } };
+    const oldPlainFingerprint = sha256Canonical(oldPlainEvidence);
+    const oldPlainCandidate = { ...candidate, proofCandidateEvidence: oldPlainEvidence, proofCandidateEvidenceFingerprint: oldPlainFingerprint, claimId: sha256Canonical({ claim: candidate.claim, payloadFingerprint: candidate.payloadFingerprint, producerCheckId: candidate.producerCheckId, scope: candidate.scope, attemptId: candidate.attemptId, fence: candidate.fence, parentClaimIds: [...candidate.parentClaimIds].sort(), proofCandidateEvidenceFingerprint: oldPlainFingerprint }) } as GeneratedClaimPublishedEvent;
+    expectKernelError(() => reduceInstanceEventBatch(managed, [terminated, oldPlainCandidate, completed]), 'INVALID_PROOF_EVIDENCE');
     const tamperedPayload = { '10': 'ten', '2': 'two' };
     const tampered = { ...candidate, payload: tamperedPayload, payloadFingerprint: sha256Canonical(tamperedPayload), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(tamperedPayload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
     expectKernelError(() => reduceInstanceEventBatch(managed, [terminated, tampered, completed]), 'INVALID_PROOF_EVIDENCE');

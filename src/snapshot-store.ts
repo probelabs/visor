@@ -57,9 +57,11 @@ import {
   type ManagedRunBindingV1,
   type ManagedRunCleanupStatus,
   type ManagedRunFailureCode,
+  type ManagedRunTerminatedEvent,
 } from './state-machine/graph/instance-kernel';
-import { PROOF_CANDIDATE_CLAIM } from './state-machine/graph/instance-plan';
-import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './providers/governed-proof-inspect-check-provider';
+import { PROOF_ADMIT_NODE_KEY, PROOF_CANDIDATE_CLAIM } from './state-machine/graph/instance-plan';
+import { goCompatibleProofJson } from './providers/proof-admission-cli-child';
+import { governedResultDigest, validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -420,7 +422,7 @@ function validateCheckpointPlanAuthority(
       }
       try {
         const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
-        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== `sha256:${sha256Canonical(event.payload)}` || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(canonicalJson(event.payload), 'utf8') || JSON.stringify(event.payload) !== canonicalJson(event.payload)) {
+        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== governedResultDigest(event.payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(canonicalJson(event.payload), 'utf8') || JSON.stringify(event.payload) !== canonicalJson(event.payload)) {
           checkpointAuthorityFailure('Generated proof candidate evidence is detached from compiled inspect or payload authority');
         }
       } catch (error) {
@@ -912,6 +914,141 @@ export class ExecutionJournal {
     return Object.freeze({ generation, node, claims: Object.freeze(claims) });
   }
 
+  /** Project the exact controller-owned candidate envelope consumed by Proof. */
+  getProofAdmissionRequest(nodeGenerationId: string): string {
+    const execution = this.getGeneratedExecution(nodeGenerationId);
+    if (execution.generation.templateNodeKey !== PROOF_ADMIT_NODE_KEY || execution.generation.checkId !== PROOF_ADMIT_NODE_KEY) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof admission is reserved for proof_admit');
+    }
+    const candidateClaim = Object.values(execution.claims).find(claim => claim.claim === PROOF_CANDIDATE_CLAIM);
+    const evidence = candidateClaim?.proofAdmission;
+    if (!candidateClaim || !evidence) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof candidate evidence is missing');
+    if (candidateClaim.provenance !== 'attempt' || typeof candidateClaim.attemptId !== 'string' || !Number.isSafeInteger(candidateClaim.fence)) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof candidate provenance is invalid');
+    }
+    const proofAttempts = this.runtimeEvents.filter(event =>
+      event.type === 'AttemptStarted' && 'nodeGenerationId' in event &&
+      event.nodeGenerationId === execution.generation.nodeGenerationId &&
+      event.checkId === PROOF_ADMIT_NODE_KEY && event.attemptId === execution.generation.attemptId &&
+      event.fence === execution.generation.fence
+    );
+    if (proofAttempts.length !== 1) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof admission attempt is ambiguous');
+    const proofAttemptIndex = this.runtimeEvents.indexOf(proofAttempts[0]);
+    const publications = this.runtimeEvents.filter(event =>
+      event.type === 'ClaimPublished' &&
+      event.claim === PROOF_CANDIDATE_CLAIM && event.claimId === candidateClaim.claimId &&
+      event.attemptId === candidateClaim.attemptId && event.fence === candidateClaim.fence
+    ) as GeneratedClaimPublishedEvent[];
+    if (publications.length !== 1) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is ambiguous');
+    const publication = publications[0];
+    const publicationIndex = this.runtimeEvents.indexOf(publication);
+    if (publicationIndex < 0 || publicationIndex >= proofAttemptIndex || publication.producerCheckId !== candidateClaim.producerCheckId || publication.payloadFingerprint !== candidateClaim.payloadFingerprint || canonicalJson(publication.scope) !== canonicalJson(candidateClaim.scope) || canonicalJson(publication.parentClaimIds) !== canonicalJson(candidateClaim.parentClaimIds) || publication.attemptId !== candidateClaim.attemptId || publication.fence !== candidateClaim.fence || canonicalJson(publication.payload) !== canonicalJson(candidateClaim.payload) || JSON.stringify(publication.payload) !== canonicalJson(publication.payload)) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is detached');
+    }
+    const terminations = this.runtimeEvents.filter(event =>
+      event.type === 'ManagedRunTerminated' &&
+      event.binding.checkId === publication.checkId &&
+      event.binding.nodeGenerationId === publication.nodeGenerationId &&
+      event.binding.attemptId === publication.attemptId &&
+      event.binding.fence === publication.fence &&
+      event.controllerDecision === 'completed'
+    ) as ManagedRunTerminatedEvent[];
+    if (terminations.length !== 1) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate managed termination is ambiguous');
+    }
+    const termination = terminations[0];
+    const terminationIndex = this.runtimeEvents.indexOf(termination);
+    if (terminationIndex < 0 || terminationIndex >= proofAttemptIndex || termination.cleanupStatus !== 'clean' || termination.failureCode !== null || termination.sessionId !== publication.sessionId || canonicalJson(termination.scope) !== canonicalJson(publication.scope)) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate managed termination is not clean');
+    }
+    const scope = (value: readonly KeyedScopePath[number][]) => value.map(part => ({
+      Kind: part.kind,
+      ExpansionOwnerCheck: part.expansionOwnerCheck,
+      Key: part.key,
+      SubgraphInstanceID: part.subgraphInstanceId,
+    }));
+    const binding = {
+      ManagedRunID: deriveManagedRunId({
+        sessionId: publication.sessionId,
+        checkId: publication.checkId,
+        scope: publication.scope,
+        nodeInstanceId: publication.nodeInstanceId,
+        nodeGenerationId: publication.nodeGenerationId,
+        attemptId: publication.attemptId,
+        fence: publication.fence,
+      }),
+      SessionID: publication.sessionId,
+      CheckID: publication.checkId,
+      Scope: scope(publication.scope),
+      NodeInstanceID: publication.nodeInstanceId,
+      NodeGenerationID: publication.nodeGenerationId,
+      AttemptID: publication.attemptId,
+      Fence: publication.fence,
+    };
+    if (termination.binding.managedRunId !== binding.ManagedRunID || termination.binding.sessionId !== publication.sessionId || termination.binding.checkId !== publication.checkId || termination.binding.nodeInstanceId !== publication.nodeInstanceId || termination.binding.nodeGenerationId !== publication.nodeGenerationId || termination.binding.attemptId !== publication.attemptId || termination.binding.fence !== publication.fence || canonicalJson(termination.binding.scope) !== canonicalJson(publication.scope)) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate termination binding is detached');
+    }
+    const invocation = evidence.role.invocation as Record<string, any>;
+    const subject = invocation.subject as Record<string, any>;
+    const invocationWire = {
+      role_id: invocation.role_id,
+      stance: invocation.stance,
+      subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
+      output_schema_id: invocation.output_schema_id,
+      output_schema: invocation.output_schema,
+    };
+    const payloadBytes = Buffer.from(canonicalJson(publication.payload), 'utf8');
+    if (JSON.stringify(publication.payload) !== canonicalJson(publication.payload)) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate payload is not canonical');
+    }
+    const candidate = {
+      Version: 'proof.role-result-candidate-envelope/v1',
+      Invocation: invocationWire,
+      InvocationDigest: evidence.role.invocationDigest,
+      RoleID: invocation.role_id,
+      Stance: invocation.stance,
+      Subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
+      AttestationVersion: evidence.probe.attestation.version,
+      ExecutionSource: 'caller',
+      ProbeInvocationDigest: (evidence.probe.attestation.executionContext as Record<string, any>).invocationDigest,
+      IdentityVersion: evidence.probe.resultIdentity.version,
+      IdentitySource: evidence.probe.resultIdentity.source,
+      ResultDigest: evidence.probe.resultIdentity.resultDigest,
+      CanonicalBytes: evidence.probe.resultIdentity.canonicalBytes,
+      ProbeResultBytes: payloadBytes.toString('base64'),
+      VisorPayloadBytes: payloadBytes.toString('base64'),
+      Publication: {
+        Version: 1,
+        Type: 'ClaimPublished',
+        SessionID: publication.sessionId,
+        CheckID: publication.checkId,
+        Scope: scope(publication.scope),
+        NodeInstanceID: publication.nodeInstanceId,
+        NodeGenerationID: publication.nodeGenerationId,
+        AttemptID: publication.attemptId,
+        Fence: publication.fence,
+        ClaimID: publication.claimId,
+        Claim: publication.claim,
+        PayloadFingerprint: publication.payloadFingerprint,
+        ProducerCheckID: publication.producerCheckId,
+        Payload: payloadBytes.toString('base64'),
+        ParentClaimIDs: [...publication.parentClaimIds],
+      },
+      Binding: binding,
+      Termination: {
+        Version: 1,
+        Type: 'ManagedRunTerminated',
+        SessionID: termination.sessionId,
+        Scope: scope(termination.scope),
+        Binding: binding,
+        CleanupStatus: termination.cleanupStatus,
+        ControllerDecision: termination.controllerDecision,
+        FailureCode: null,
+      },
+    };
+    return goCompatibleProofJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate });
+  }
+
   deriveManagedRunBinding(attempt: GeneratedAttemptStartedEvent): ManagedRunBindingV1 {
     const generation = this.instanceProjection.generationsById[attempt.nodeGenerationId];
     const instance = generation
@@ -1113,7 +1250,7 @@ export class ExecutionJournal {
           throw new Error('evidence invocation is detached from compiled inspect config');
         }
         const payloadJson = canonicalJson(payload);
-        if (evidence.probe.resultIdentity.resultDigest !== `sha256:${sha256Canonical(payload)}` || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(payload) !== payloadJson) {
+        if (evidence.probe.resultIdentity.resultDigest !== governedResultDigest(payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(payload) !== payloadJson) {
           throw new Error('evidence result identity is detached from candidate payload');
         }
       } catch (error) {

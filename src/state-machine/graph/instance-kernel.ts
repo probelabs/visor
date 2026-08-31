@@ -7,7 +7,7 @@ import {
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 import { PROOF_CANDIDATE_CLAIM } from './instance-plan';
-import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from '../../providers/governed-proof-inspect-check-provider';
+import { governedResultDigest, validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from '../../providers/governed-proof-inspect-check-provider';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -1517,7 +1517,7 @@ function reduceGeneratedLifecycle(
         validateProofCandidateEvidence(event.proofCandidateEvidence);
         const payloadJson = canonicalJson(event.payload);
         const identity = event.proofCandidateEvidence.probe.resultIdentity;
-        if (identity.resultDigest !== `sha256:${sha256Canonical(event.payload)}` || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(event.payload) !== payloadJson) throw new Error('result identity is detached from canonical claim payload');
+        if (identity.resultDigest !== governedResultDigest(event.payload) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(event.payload) !== payloadJson) throw new Error('result identity is detached from canonical claim payload');
       } catch { throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate evidence is invalid or detached'); }
       if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
         throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');

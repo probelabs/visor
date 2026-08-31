@@ -262,6 +262,10 @@ function snapshotReadonlyMap(
 export function snapshotManagedRunStartRequest(
   request: ManagedRunStartRequest
 ): ManagedRunStartRequest {
+  const proofAdmission = request.checkConfig.type === 'proof-admit';
+  if (proofAdmission !== (request.proofAdmissionRequest !== undefined)) {
+    throw new Error('PROOF_ADMISSION_REQUEST_AUTHORITY_MISMATCH');
+  }
   const copies = new WeakMap<object, unknown>();
   const snapshot = {
     prInfo: copyAndFreezePlainData(request.prInfo, copies),
@@ -270,6 +274,8 @@ export function snapshotManagedRunStartRequest(
     executionContext: copyAndFreezePlainData(request.executionContext, copies),
     binding: copyAndFreezePlainData(request.binding, copies),
     executionConfigDigest: request.executionConfigDigest,
+    workingDirectory: request.workingDirectory,
+    ...(request.proofAdmissionRequest !== undefined ? { proofAdmissionRequest: request.proofAdmissionRequest } : {}),
   };
   return Object.freeze(snapshot);
 }

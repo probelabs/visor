@@ -159,6 +159,10 @@ export interface ManagedRunStartRequest {
   readonly binding: ManagedRunBindingV1;
   /** Immutable compiled execution authority, never authored provider data. */
   readonly executionConfigDigest: string;
+  /** Controller-owned, realpathed root for managed child execution. */
+  readonly workingDirectory?: string;
+  /** Controller-projected, canonical Proof candidate request for proof-admit. */
+  readonly proofAdmissionRequest?: string;
 }
 
 export interface ManagedRunStartedReceiptV1 {

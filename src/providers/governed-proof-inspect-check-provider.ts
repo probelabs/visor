@@ -1,12 +1,14 @@
 import { TextDecoder } from 'util';
+import { createHash } from 'crypto';
 import type { PRInfo } from '../pr-analyzer';
 import type { ReviewSummary } from '../reviewer';
-import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
 import { CheckProvider, type CheckProviderConfig, type ExecutionContext, type ManagedAgentRun, type ManagedRunStartRequest } from './check-provider.interface';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
 
 export const GOVERNED_PROOF_INSPECT_PROVIDER_NAME = 'governed-proof-inspect';
 export const GOVERNED_PROBE_UNAVAILABLE = 'GOVERNED_PROBE_UNAVAILABLE';
+const GOVERNED_RESULT_IDENTITY_DOMAIN = 'probe.governed-result-identity/data/v1';
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = 'luna-xhigh-readonly-v1';
 const AUTHORED = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile'] as const;
@@ -69,6 +71,13 @@ function text(v: unknown, max: number, nonempty = true): v is string { return ty
 function visible(v: unknown, max: number, nonempty = true): v is string { return typeof v === 'string' && (!nonempty || v.length > 0) && Buffer.byteLength(v) <= max && /^[\x21-\x7e]*$/.test(v); }
 function wire(v: unknown): v is string { return typeof v === 'string' && DIGEST.test(v); }
 function fail(detail: string): never { throw new Error(`GOVERNED_PROOF_INVALID: ${detail}`); }
+/** Proof's domain-separated identity digest: domain || NUL || uint64BE(len) || canonical UTF-8 bytes. */
+export function governedResultDigest(value: unknown): string {
+  const bytes = Buffer.from(canonicalJson(value), 'utf8');
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update(GOVERNED_RESULT_IDENTITY_DOMAIN, 'utf8').update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
 function jsonObject(value: string, label: string): Record<string, unknown> { let parsed: unknown; try { parsed = JSON.parse(value); } catch { fail(`${label} is not JSON`); } if (!plain(parsed) || !exact(parsed, Object.keys(parsed))) fail(`${label} must be a JSON object`); return parsed; }
 function decodeSchema(value: unknown): string {
   if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) fail('output_schema is not padded base64');
@@ -121,7 +130,7 @@ function evidenceFromResult(config: CheckProviderConfig, result: { data: unknown
   validateRunnerResult(result);
   if (!validMaterialized(result.data)) fail('runner data is not materialized JSON');
   const dataBytes = canonicalJson(result.data); if (JSON.stringify(result.data) !== dataBytes) fail('runner data is not canonical JSON');
-  const identity = result.resultIdentity; if (!plain(identity) || !exact(identity, ['version', 'source', 'resultDigest', 'canonicalBytes']) || identity.version !== 'probe.governed-result-identity/v1' || identity.source !== 'probe-host-schema-valid-json' || identity.resultDigest !== `sha256:${sha256Canonical(result.data)}` || identity.canonicalBytes !== Buffer.byteLength(dataBytes) || typeof identity.canonicalBytes !== 'number' || !Number.isSafeInteger(identity.canonicalBytes) || identity.canonicalBytes < 0) fail('result identity invalid');
+  const identity = result.resultIdentity; if (!plain(identity) || !exact(identity, ['version', 'source', 'resultDigest', 'canonicalBytes']) || identity.version !== 'probe.governed-result-identity/v1' || identity.source !== 'probe-host-schema-valid-json' || identity.resultDigest !== governedResultDigest(result.data) || identity.canonicalBytes !== Buffer.byteLength(dataBytes) || typeof identity.canonicalBytes !== 'number' || !Number.isSafeInteger(identity.canonicalBytes) || identity.canonicalBytes < 0) fail('result identity invalid');
   const digest = config.invocation_digest as string; const att = validateAttestation(result.runtimeAttestation, digest); const invocation = config.invocation as Record<string, unknown>;
   return immutableCanonicalValue({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity } });
 }

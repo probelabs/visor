@@ -5,8 +5,9 @@ import {
   GovernedProofInspectCheckProvider,
   projectGovernedProofInspectConfig,
   validateProofCandidateEvidence,
+  governedResultDigest,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
-import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
 
 const binding: any = Object.freeze({
   managedRunId: 'managed', sessionId: 'session', checkId: 'inspect',
@@ -47,7 +48,7 @@ function runnerResult(): any {
     runtimeAttestation: attestation(config().invocation_digest),
     resultIdentity: {
       version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json',
-      resultDigest: `sha256:${sha256Canonical(data)}`, canonicalBytes: Buffer.byteLength(canonicalJson(data)),
+      resultDigest: governedResultDigest(data), canonicalBytes: Buffer.byteLength(canonicalJson(data)),
     },
   };
 }

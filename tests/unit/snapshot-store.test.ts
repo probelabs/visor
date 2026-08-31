@@ -13,6 +13,7 @@ import type {
   ManagedRunCleanupReceiptV1,
 } from '../../src/providers/check-provider.interface';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
+import { governedResultDigest } from '../../src/providers/governed-proof-inspect-check-provider';
 import {
   deriveControllerItemClaimId,
   deriveNodeGenerationId,
@@ -138,7 +139,7 @@ function governedC2Config(): any {
 
 function governedEvidence(data: Record<string, string>): any {
   const invocation = { role_id: 'owner', stance: 'owner', subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'1'.repeat(64)}` }, output_schema_id: 'candidate', output_schema: Buffer.from(JSON.stringify({ type: 'object' })).toString('base64') };
-  const digest = `sha256:${sha256Canonical(data)}`;
+  const digest = governedResultDigest(data);
   const attestation = { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: `sha256:${'2'.repeat(64)}` }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } };
   return immutableCanonicalValue({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: `sha256:${'2'.repeat(64)}` }, probe: { attestation, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(data)) } } });
 }
@@ -1738,6 +1739,17 @@ describe('managed-run authority snapshots', () => {
       }
 
       const callOrder: string[] = [];
+      const handleRef: { value?: any } = {};
+      const cancel = jest.fn(function (this: unknown, _reason: 'deadline', _fence: number) {
+        expect(this).toBe(handleRef.value);
+        callOrder.push('cancel');
+        return cancelReturn.promise;
+      });
+      const close = jest.fn(function (this: unknown) {
+        expect(this).toBe(handleRef.value);
+        callOrder.push('close');
+        return closeReturn.promise;
+      });
       const handle: any = {
         binding,
         started: Promise.resolve({ version: 1 as const, kind: 'started' as const, binding }),
@@ -1745,16 +1757,7 @@ describe('managed-run authority snapshots', () => {
         cancel,
         close,
       };
-      const cancel = jest.fn(function (this: unknown, _reason: 'deadline', _fence: number) {
-        expect(this).toBe(handle);
-        callOrder.push('cancel');
-        return cancelReturn.promise;
-      });
-      const close = jest.fn(function (this: unknown) {
-        expect(this).toBe(handle);
-        callOrder.push('close');
-        return closeReturn.promise;
-      });
+      handleRef.value = handle;
       const snapshot = snapshotManagedRun(() => handle, binding);
       const onCancelRequested = jest.fn();
       const deadline = armManagedRunDeadline({
@@ -2077,5 +2080,12 @@ describe('managed-run authority snapshots', () => {
     dependencyResults.set('late', { output: 'late' });
     expect(providerShared.nested.value).toBe('before');
     expect(snapshot.dependencyResults.has('late')).toBe(false);
+  });
+
+  it('requires the Proof request only for proof-admit snapshots', () => {
+    const base: any = { prInfo: {}, dependencyResults: new Map(), executionContext: {}, binding: helperManagedBinding() };
+    expect(() => snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-admit' } })).toThrow('PROOF_ADMISSION_REQUEST_AUTHORITY_MISMATCH');
+    expect(() => snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'managed' }, proofAdmissionRequest: '{}' })).toThrow('PROOF_ADMISSION_REQUEST_AUTHORITY_MISMATCH');
+    expect(snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-admit' }, proofAdmissionRequest: '{}' }).proofAdmissionRequest).toBe('{}');
   });
 });

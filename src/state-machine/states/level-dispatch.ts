@@ -21,6 +21,8 @@ import type {
   DispatchRecord,
 } from '../../types/engine';
 import { logger } from '../../logger';
+import { realpathSync, statSync } from 'fs';
+import { isAbsolute } from 'path';
 import type { ReviewSummary, ReviewIssue } from '../../reviewer';
 import type { CheckExecutionStats } from '../../types/execution';
 import type {
@@ -107,6 +109,14 @@ type DynamicExecution =
 
 function isEngineerCheck(checkId: string): boolean {
   return checkId === 'engineer-task';
+}
+
+function controllerWorkingDirectory(context: EngineContext): string {
+  const root = context.workingDirectory;
+  if (typeof root !== 'string' || !isAbsolute(root)) throw new Error('MANAGED_START_FAILED');
+  const resolved = realpathSync(root);
+  if (!statSync(resolved).isDirectory()) throw new Error('MANAGED_START_FAILED');
+  return resolved;
 }
 
 function startCheckProgressTelemetry(
@@ -3260,6 +3270,8 @@ async function executeSingleCheck(
                 executionContext,
                 binding,
                 executionConfigDigest: context.journal.getGeneratedExecution(dynamic!.attempt.nodeGenerationId).node.executionConfigDigest,
+                workingDirectory: controllerWorkingDirectory(context),
+                ...(checkId === 'proof_admit' ? { proofAdmissionRequest: context.journal.getProofAdmissionRequest(dynamic!.attempt.nodeGenerationId) } : {}),
               })),
             binding
           );

@@ -5,19 +5,8 @@ import {
 } from '../../../src/providers/check-provider.interface';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
-import { createProofAdmitProviderForFocusedTest, ProofAdmitCheckProvider } from '../../../src/providers/proof-admit-check-provider';
-import { PROOF_CANDIDATE_CLAIM } from '../../../src/state-machine/graph/instance-plan';
-import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import { ProofAdmitCheckProvider } from '../../../src/providers/proof-admit-check-provider';
 import { GovernedProofInspectCheckProvider } from '../../../src/providers/governed-proof-inspect-check-provider';
-
-const admissionCandidate = (payload: any = { evidence: 'fixture' }): any => ({
-  provenance: 'attempt', claimId: 'candidate-1', claim: PROOF_CANDIDATE_CLAIM, payload,
-  payloadFingerprint: sha256Canonical(payload), producerCheckId: 'inspect', attemptId: 'attempt-1', fence: 1,
-  scope: [{ key: 'A' }], parentClaimIds: [],
-});
-const admissionReceipt = (candidate: any): any => ({ version: 1, kind: 'admitted', candidateClaimId: candidate.claimId,
-  candidateClaim: PROOF_CANDIDATE_CLAIM, candidateFingerprint: candidate.payloadFingerprint,
-  candidateAttemptId: candidate.attemptId, candidateFence: candidate.fence, scope: candidate.scope, parentClaimIds: candidate.parentClaimIds });
 
 // Mock provider for testing
 class MockCheckProvider extends CheckProvider {
@@ -265,27 +254,10 @@ describe('CheckProviderRegistry', () => {
     });
   });
 
-  const executeAdmission = (decision: any, candidate: any) => createProofAdmitProviderForFocusedTest({
-    decide: () => decision(candidate),
-  }).execute({} as PRInfo, { type: 'proof-admit' } as any, undefined, { claims: { candidate } } as any);
-
-  it.each([
-    ['malformed', () => ({ kind: 'accepted', receipt: {} }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
-    ['mismatched', (candidate: any) => ({ kind: 'accepted', receipt: immutableCanonicalValue({ ...admissionReceipt(candidate), candidateClaimId: 'forged' }) }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
-    ['parent mismatch', (candidate: any) => ({ kind: 'accepted', receipt: immutableCanonicalValue({ ...admissionReceipt(candidate), parentClaimIds: ['forged'] }) }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
-    ['mutable', (candidate: any) => ({ kind: 'accepted', receipt: admissionReceipt(candidate) }), 'PROOF_ADMISSION_INVALID_RECEIPT'],
-    ['rejected', () => ({ kind: 'rejected', reason: 'fixture' }), 'PROOF_ADMISSION_REJECTED'],
-  ])('publishes no authority for %s sink result', async (_name, decision, error) => {
-    await expect(executeAdmission(decision, admissionCandidate())).rejects.toThrow(error);
-  });
-
-  it('detaches a valid deeply frozen sink receipt', async () => {
-    const candidate = admissionCandidate();
-    let outerDecision: any;
-    const result = await executeAdmission((value: any) => (outerDecision = { kind: 'accepted', receipt: immutableCanonicalValue(admissionReceipt(value)) }), candidate);
-    expect(Object.isFrozen(outerDecision)).toBe(false);
-    expect(Object.isFrozen(result.output)).toBe(true);
-    expect(Object.isFrozen((result.output as any).parentClaimIds)).toBe(true);
-    expect((result.output as any).parentClaimIds).toEqual(candidate.parentClaimIds);
+  it('keeps the reserved admission provider unavailable without package bootstrap', async () => {
+    const provider = registry.getProvider('proof-admit');
+    expect(provider).toBeInstanceOf(ProofAdmitCheckProvider);
+    await expect(provider?.isAvailable()).resolves.toBe(false);
+    await expect(provider?.execute({} as PRInfo, { type: 'proof-admit' } as any)).rejects.toThrow('PROOF_ADMISSION_UNAVAILABLE');
   });
 });
