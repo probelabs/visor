@@ -1,4 +1,15 @@
+jest.unmock('child_process');
+jest.mock('@probelabs/probe', () => {
+  const root = (process.env.NODE_PATH || '').split(require('node:path').delimiter)[0];
+  return root ? require(require('node:path').join(root, '@probelabs/probe/cjs/index.cjs')) : jest.requireActual('../../__mocks__/@probelabs/probe.ts');
+});
+
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { spawnSync } from 'child_process';
+import { createHash } from 'crypto';
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { delimiter, join } from 'path';
 
 jest.mock('../../src/state-machine/dispatch/managed-run', () => {
   const actual = jest.requireActual<typeof import('../../src/state-machine/dispatch/managed-run')>(
@@ -43,10 +54,15 @@ import * as ndjsonTelemetry from '../../src/telemetry/fallback-ndjson';
 import * as managedRunHelpers from '../../src/state-machine/dispatch/managed-run';
 import {
   createGovernedProofInspectProviderForFocusedTest,
+  GOVERNED_PROOF_INSPECT_MESSAGE,
   governedResultDigest,
   type GovernedProbeRunnerRequest,
 } from '../../src/providers/governed-proof-inspect-check-provider';
+import { createProofAdmitProviderForFocusedTest } from '../../src/providers/proof-admit-check-provider';
+import { goCompatibleProofJson } from '../../src/providers/proof-admission-cli-child';
 import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
+import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
+import { ExecutionJournal } from '../../src/snapshot-store';
 
 const realManagedRunHelpers = jest.requireActual<
   typeof import('../../src/state-machine/dispatch/managed-run')
@@ -2657,6 +2673,76 @@ describe('EXP-0123 managed graph-run ownership', () => {
 
 const EXP_0205_MANAGED_PROVIDER = 'exp-0205-managed';
 const EXP_0205_VERIFY_PROVIDER = 'exp-0205-verify';
+const ACCEPTED_PROOF_SHA = '43a0cbc36b0bdf640bc4c712fa00b180208b395bac34a6ee2957528cd43f8272';
+const C0_RESPONSE_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'];
+
+function acceptedProofBinary(): string {
+  const path = process.env.VISOR_PROOF_ADMISSION_BIN;
+  if (!path || !path.startsWith('/')) throw new Error('VISOR_PROOF_ADMISSION_BIN is required');
+  const realpath = realpathSync(path); const stat = statSync(realpath);
+  if (!stat.isFile() || (stat.mode & 0o111) === 0 || stat.size !== 86738098) throw new Error('Proof executable identity mismatch');
+  const digest = createHash('sha256').update(readFileSync(realpath)).digest('hex');
+  if (digest !== ACCEPTED_PROOF_SHA) throw new Error('Proof executable SHA mismatch');
+  return realpath;
+}
+
+function proofFixture(): { root: string; requirement: string; fingerprint: string; schema: string } {
+  const root = mkdtempSync(join(tmpdir(), 'visor-exp-0207b0b-proof-'));
+  const reqDir = join(root, 'specs/system/requirements'); mkdirSync(reqDir, { recursive: true }); mkdirSync(join(root, '.proof'), { recursive: true });
+  writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: visor-native-zero-model\n  version: 1.0.0\n  specs:\n    - path: specs/system\n      prefix: SYS-REQ\n      type: system\n');
+  const fretish = 'the component shall eventually satisfy component_ready';
+  const requirement = join(reqDir, 'SYS-REQ-001.req.yaml');
+  writeFileSync(requirement, `id: SYS-REQ-001\nversion: 1\nstatus: draft\npriority: shall\ncategory: functional\nreq_type: guarantee\nfretish: "${fretish}"\ndescription: ""\nformalization_strategy: fretish\ninformal_verification:\n  method: ""\n  evidence: ""\n  verified: false\ncomponent: component_a\nrationale: ""\ntags: []\nvariables: []\ntraces: {}\nverification:\n  assurance_level: E\n  formalization_status: none\n  realizability: unchecked\n  vacuity_status: unchecked\n  vacuity_checked: false\n  review:\n    status: pending\n    ai_generated: false\nhistory:\n  created_by: human:test\n  created_at: "2026-08-31T00:00:00Z"\n`);
+  const semantic = { id: 'SYS-REQ-001', component: 'component_a', req_type: 'guarantee', formalization_strategy: 'fretish', fretish, interface: {}, assumption: {} };
+  const fingerprint = `sha256:${createHash('sha256').update(JSON.stringify(semantic)).digest('hex')}`;
+  const schema = JSON.stringify({ type: 'object', additionalProperties: false, required: ['decision'], properties: { decision: { type: 'string', enum: ['accept'] } } });
+  return { root, requirement, fingerprint, schema };
+}
+
+function c0Process(binary: string, fixture: ReturnType<typeof proofFixture>): ReturnType<typeof spawnSync> {
+  const request = { role_id: 'spec-review', stance: 'owner', subject: { kind: 'requirement', id: 'SYS-REQ-001', fingerprint: fixture.fingerprint }, output_schema_id: 'proof.findings/v1', output_schema: Buffer.from(fixture.schema).toString('base64') };
+  return spawnSync(binary, ['resolve-role-invocation'], { cwd: fixture.root, input: JSON.stringify(request), env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' }, encoding: 'utf8', timeout: 120000, maxBuffer: 8388608 });
+}
+
+function freshC0(binary: string, fixture: ReturnType<typeof proofFixture>): Record<string, any> {
+  const processResult = c0Process(binary, fixture);
+  if (processResult.status !== 0 || processResult.signal || processResult.error || processResult.stderr !== '' || !processResult.stdout.endsWith('\n') || processResult.stdout.slice(0, -1).includes('\n') || processResult.stdout.includes('\r')) throw new Error(`Proof C0 failed: ${processResult.stderr}`);
+  const output = processResult.stdout.slice(0, -1);
+  const response = JSON.parse(output) as Record<string, any>;
+  if (Object.keys(response).length !== 12 || goCompatibleProofJson(response) !== output || JSON.stringify(Object.keys(response)) !== JSON.stringify(C0_RESPONSE_KEYS) || !response.invocation_digest || !response.instructions || !response.output_schema) throw new Error('Proof C0 response is not canonical 12-field authority');
+  return response;
+}
+
+function installNativeSentinels(): { counts: Record<string, number>; restore: () => void } {
+  const counts: Record<string, number> = {};
+  const patches: Array<{ target: object; key: string; descriptor: PropertyDescriptor }> = [];
+  let restored = false;
+  const restore = () => { if (restored) return; restored = true; for (const { target, key, descriptor } of patches.reverse()) Object.defineProperty(target, key, descriptor); };
+  const patch = (target: object, key: string, label: string) => {
+    const descriptor = Object.getOwnPropertyDescriptor(target, key);
+    if (!descriptor || typeof descriptor.value !== 'function') throw new Error(`missing native boundary ${label}`);
+    counts[label] = 0;
+    Object.defineProperty(target, key, { ...descriptor, value: function () { counts[label]++; throw new Error('ZERO_MODEL_NATIVE_BOUNDARY'); } });
+    patches.push({ target, key, descriptor });
+  };
+  const nodeModulesRoot = (process.env.NODE_PATH || '').split(delimiter)[0];
+  if (!nodeModulesRoot) throw new Error('NODE_PATH is required for the bare Probe rc332 dependency');
+  const probePath = join(nodeModulesRoot, '@probelabs/probe/cjs/index.cjs');
+  if (!probePath.endsWith('/cjs/index.cjs')) throw new Error(`Probe is not CJS rc332: ${probePath}`);
+  const acceptedProbe = require(probePath).ProbeAgent as { prototype: object };
+  const productProbe = require('@probelabs/probe').ProbeAgent as { prototype: object };
+  if (productProbe !== acceptedProbe) throw new Error('ProbeAgent product/CJS identity mismatch');
+  try {
+    patch(productProbe.prototype, 'initialize', 'probe.initialize'); patch(productProbe.prototype, 'answerGoverned', 'probe.answerGoverned');
+    patch(globalThis as unknown as object, 'fetch', 'global.fetch');
+    for (const moduleName of ['node:http', 'node:https']) { const module = require(moduleName); patch(module, 'request', `${moduleName}.request`); patch(module, 'get', `${moduleName}.get`); }
+    const net = require('node:net'); patch(net, 'connect', 'node:net.connect'); patch(net, 'createConnection', 'node:net.createConnection'); patch(net.Socket.prototype, 'connect', 'net.Socket.connect');
+    patch(require('node:tls'), 'connect', 'node:tls.connect');
+    const dns = require('node:dns'); patch(dns, 'lookup', 'node:dns.lookup'); patch(dns, 'resolve', 'node:dns.resolve');
+    const dnsPromises = require('node:dns/promises'); patch(dnsPromises, 'lookup', 'node:dns.promises.lookup'); patch(dnsPromises, 'resolve', 'node:dns.promises.resolve');
+  } catch (error) { restore(); throw error; }
+  return { counts, restore };
+}
 
 describe('EXP-0205 explicit proof admission node', () => {
   const registry = CheckProviderRegistry.getInstance();
@@ -2670,6 +2756,13 @@ describe('EXP-0205 explicit proof admission node', () => {
   let fakeCancelCalls = 0;
   let fakeCloseCalls = 0;
   let fakePostCloseCalls = 0;
+  let focusedInspectData: ((request: GovernedProbeRunnerRequest) => unknown) | undefined;
+  let focusedInspect: CheckProvider | undefined;
+  let focusedAdmission: CheckProvider | undefined;
+  let singleCatalog = false;
+  let providersDescriptor: PropertyDescriptor;
+  let providerEntries: Array<[string, CheckProvider]>;
+  let providerMap: Map<string, CheckProvider>;
 
   class ExplicitManagedProvider extends CheckProvider {
     getName() { return EXP_0205_MANAGED_PROVIDER; }
@@ -2680,7 +2773,7 @@ describe('EXP-0205 explicit proof admission node', () => {
     getSupportedConfigKeys() { return ['type']; }
     async execute(_pr: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
       if (config.checkName !== 'discover-components') throw new Error('EXP_0205_UNEXPECTED_EXECUTE');
-      return { issues: [], output: { components: [{ id: 'A', path: 'a' }, { id: 'B', path: 'b' }] } };
+      return { issues: [], output: { components: singleCatalog ? [{ id: 'A', path: 'a' }] : [{ id: 'A', path: 'a' }, { id: 'B', path: 'b' }] } };
     }
     startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
       managedRequests.push(request);
@@ -2710,19 +2803,24 @@ describe('EXP-0205 explicit proof admission node', () => {
   }
 
   beforeEach(() => {
-    engine = new StateMachineExecutionEngine();
     managedRequests = [];
     verifyClaims = [];
     fakeAnswerCalls = 0;
     fakeCancelCalls = 0;
     fakeCloseCalls = 0;
     fakePostCloseCalls = 0;
+    focusedInspectData = undefined;
+    focusedInspect = undefined;
+    focusedAdmission = undefined;
+    singleCatalog = false;
+    providersDescriptor = Object.getOwnPropertyDescriptor(registry as any, 'providers')!;
+    providerMap = providersDescriptor.value as Map<string, CheckProvider>;
+    providerEntries = Array.from(providerMap.entries());
     capturedProviders = registry.getAllProviders();
     capturedAvailable = registry.getAvailableProviders();
     capturedGoverned = registry.getProvider('governed-proof-inspect');
     registry.register(new ExplicitManagedProvider());
     registry.register(new ExplicitVerifyProvider());
-    const realRegistry = registry;
     const fake = createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => {
       let closed = false;
       return {
@@ -2731,7 +2829,7 @@ describe('EXP-0205 explicit proof admission node', () => {
         fakeAnswerCalls++;
         managedRequests.push(request as unknown as ManagedRunStartRequest);
         const key = String(request.binding.scope[0]?.key);
-        const data = { decision: key === 'A' ? 'accept' : 'reject', id: key };
+        const data = focusedInspectData ? focusedInspectData(request) : { decision: 'accept', id: key };
         const digest = governedResultDigest(data);
         return {
           data,
@@ -2746,17 +2844,18 @@ describe('EXP-0205 explicit proof admission node', () => {
         };
       }, cancel: () => { if (closed) fakePostCloseCalls++; fakeCancelCalls++; }, close: () => { if (closed) fakePostCloseCalls++; fakeCloseCalls++; closed = true; },
     }; });
-    jest.spyOn(CheckProviderRegistry, 'getInstance').mockReturnValue({
-      getProvider: (name: string) => name === 'governed-proof-inspect' ? fake : realRegistry.getProvider(name),
-      getProviderOrThrow: (name: string) => name === 'governed-proof-inspect' ? fake : realRegistry.getProviderOrThrow(name),
-      setCustomTools: realRegistry.setCustomTools.bind(realRegistry),
-    } as unknown as CheckProviderRegistry);
+    providerMap.set('governed-proof-inspect', fake);
+    focusedInspect = fake;
+    engine = new StateMachineExecutionEngine();
   });
 
   afterEach(async () => {
     registry.unregister(EXP_0205_MANAGED_PROVIDER);
     registry.unregister(EXP_0205_VERIFY_PROVIDER);
     jest.restoreAllMocks();
+    providerMap.clear();
+    for (const [name, provider] of providerEntries) providerMap.set(name, provider);
+    Object.defineProperty(registry, 'providers', providersDescriptor);
     expect(CheckProviderRegistry.getInstance()).toBe(registry);
     expect(registry.getAllProviders()).toEqual(capturedProviders);
     expect(registry.getAvailableProviders()).toEqual(capturedAvailable);
@@ -2821,4 +2920,142 @@ describe('EXP-0205 explicit proof admission node', () => {
     expect(rejected.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
     expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection());
   });
+
+  it('projects fresh C0, preserves a stale schema-valid candidate, and rejects it in Proof', async () => {
+    singleCatalog = true;
+    const binary = acceptedProofBinary();
+    const fixture = proofFixture();
+    const original = readFileSync(fixture.requirement, 'utf8');
+    const requirementStat = lstatSync(fixture.requirement);
+    const sentinels = installNativeSentinels();
+    const originalKeys = Array.from(providerMap.keys());
+    const originalIdentities = new Map(providerMap);
+    let restoreDiagnostics = () => {};
+    try {
+      const c0 = freshC0(binary, fixture);
+      const configFor = (): VisorConfig => {
+        const config: any = fixtureConfig(EXP_0205_MANAGED_PROVIDER);
+        Object.assign(config.claim_types, { 'proof.candidate@1': { schema: { type: 'object', additionalProperties: false, required: ['decision'], properties: { decision: { type: 'string' } } } }, 'proof.admitted_receipt@1': { schema: { type: 'object' } } });
+        config.subgraphs['onboard-component'].checks = {
+          inspect: { type: 'governed-proof-inspect', message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: c0.instructions, invocation: { role_id: c0.role_id, stance: c0.stance, subject: c0.subject, output_schema_id: c0.output_schema_id, output_schema: c0.output_schema }, invocation_digest: c0.invocation_digest, result_schema: Buffer.from(c0.output_schema, 'base64').toString('utf8'), profile: 'luna-xhigh-readonly-v1', consumes: [{ claim: 'component.item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }] },
+          proof_admit: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
+          verify: { type: EXP_0205_VERIFY_PROVIDER, consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }] },
+        };
+        return config;
+      };
+      writeFileSync(fixture.requirement, original.replace('component_ready', 'component_changed'));
+      const stale = c0Process(binary, fixture);
+      expect(stale.status).not.toBe(0); expect(stale.stdout).toBe(''); expect(stale.stderr).toMatch(/SUBJECT_FINGERPRINT_MISMATCH/);
+      acceptedProofBinary();
+      focusedInspectData = () => ({ decision: 'accept' });
+      const admissionBinary = acceptedProofBinary();
+      focusedAdmission = createProofAdmitProviderForFocusedTest(admissionBinary);
+      const admissionStarts = jest.spyOn(focusedAdmission, 'startManaged');
+      expect(focusedInspect).toBeDefined();
+      providerMap.set('governed-proof-inspect', focusedInspect!);
+      providerMap.set('proof-admit', focusedAdmission);
+      expect(Array.from(providerMap.keys())).toEqual(originalKeys);
+      expect(providerMap.size).toBe(originalIdentities.size);
+      for (const [name, provider] of originalIdentities) {
+        if (name === 'governed-proof-inspect') expect(providerMap.get(name)).toBe(focusedInspect);
+        else if (name === 'proof-admit') expect(providerMap.get(name)).toBe(focusedAdmission);
+        else expect(providerMap.get(name)).toBe(provider);
+      }
+      const runtimeRegistry = require('../../src/providers/check-provider-registry').CheckProviderRegistry.getInstance() as CheckProviderRegistry;
+      expect(runtimeRegistry).toBe(registry);
+      expect(Object.getOwnPropertyDescriptor(runtimeRegistry as any, 'providers')!.value).toBe(providerMap);
+      expect(runtimeRegistry.getProvider('governed-proof-inspect')).toBe(focusedInspect);
+      expect(runtimeRegistry.getProvider('proof-admit')).toBe(focusedAdmission);
+      const providerLookups: string[] = [];
+      const providerMapGetDescriptor = Object.getOwnPropertyDescriptor(providerMap, 'get');
+      const originalProviderMapGet = providerMap.get;
+      Object.defineProperty(providerMap, 'get', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: function (this: Map<string, CheckProvider>, name: string): CheckProvider | undefined {
+          providerLookups.push(name);
+          return originalProviderMapGet.call(this, name);
+        },
+      });
+      let inspectStartCalls = 0;
+      let inspectStartLatched = false;
+      const inspectStartDescriptor = Object.getOwnPropertyDescriptor(focusedInspect!, 'startManaged');
+      const originalInspectStart = focusedInspect!.startManaged;
+      Object.defineProperty(focusedInspect!, 'startManaged', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: function (this: CheckProvider, request: ManagedRunStartRequest): ManagedAgentRun {
+          inspectStartCalls++;
+          if (inspectStartLatched) throw new Error('FOCUSED_INSPECT_START_REPEATED');
+          inspectStartLatched = true;
+          return originalInspectStart.call(this, request);
+        },
+      });
+      restoreDiagnostics = () => {
+        try {
+          if (providerMapGetDescriptor) Object.defineProperty(providerMap, 'get', providerMapGetDescriptor);
+          else delete (providerMap as any).get;
+        } finally {
+          if (inspectStartDescriptor) Object.defineProperty(focusedInspect!, 'startManaged', inspectStartDescriptor);
+          else delete (focusedInspect! as any).startManaged;
+        }
+      };
+      const graphEngine = new StateMachineExecutionEngine(fixture.root);
+      const graphConfig = configFor();
+      const graphPlan = compileClaimPlan(graphConfig);
+      expect(graphPlan.expansionPlan.byOwner['discover-components'].template.templateNodeKeys).toEqual(['inspect', 'proof_admit', 'verify']);
+      const result = await graphEngine.executeGroupedChecks(prInfo, ['discover-components'], undefined, graphConfig, 'table', false, 1);
+      const journal = (graphEngine as any)._lastContext.journal as ExecutionJournal;
+      const events = journal.readRuntimeEvents() as readonly any[];
+      const scoped = events.filter(event => event.scope?.[0]?.key === 'A');
+      expect(result.statistics.failedExecutions).toBeGreaterThan(0);
+      expect(events.filter(event => event.type === 'ControllerItemClaimPublished' && event.claim === 'component.item@1')).toHaveLength(1);
+      expect(scoped.filter(event => event.type === 'NodeGenerationActivated').map(event => event.checkId)).toEqual(['inspect', 'proof_admit']);
+      const candidate = scoped.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
+      expect(scoped.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1')).toHaveLength(1);
+      expect(candidate).toBeDefined();
+      expect(candidate.proofCandidateEvidenceFingerprint).toBe(sha256Canonical(candidate.proofCandidateEvidence));
+      expect(candidate.claimId).toBe(sha256Canonical({ claim: candidate.claim, payloadFingerprint: candidate.payloadFingerprint, producerCheckId: candidate.producerCheckId, scope: candidate.scope, attemptId: candidate.attemptId, fence: candidate.fence, parentClaimIds: [...candidate.parentClaimIds].sort(), proofCandidateEvidenceFingerprint: candidate.proofCandidateEvidenceFingerprint }));
+      expect(scoped.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
+      expect(scoped.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false);
+      expect(verifyClaims).toHaveLength(0); expect(fakeAnswerCalls).toBe(1); expect(fakeCancelCalls).toBe(0); expect(fakeCloseCalls).toBe(1); expect(fakePostCloseCalls).toBe(0); expect(admissionStarts).toHaveBeenCalledTimes(1);
+      expect(scoped.filter(event => event.type === 'ManagedRunTerminated')).toHaveLength(2);
+      expect(scoped.filter(event => event.type === 'ManagedRunTerminated')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ binding: expect.objectContaining({ checkId: 'inspect' }), controllerDecision: 'completed', cleanupStatus: 'clean', failureCode: null }),
+        expect.objectContaining({ binding: expect.objectContaining({ checkId: 'proof_admit' }), controllerDecision: 'failed', cleanupStatus: 'clean', failureCode: 'MANAGED_OUTCOME_FAILED' }),
+      ]));
+      expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection());
+      const checkpoint = journal.exportGraphCheckpoint((graphEngine as any)._lastContext.sessionId);
+      const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(configFor()), JSON.parse(JSON.stringify(checkpoint)));
+      expect(JSON.stringify(restored.exportGraphCheckpoint(checkpoint.sessionId))).toBe(JSON.stringify(checkpoint));
+      expect(JSON.stringify(restored.getInstanceProjection())).toBe(JSON.stringify(journal.getInstanceProjection()));
+      expect(fakeAnswerCalls).toBe(1); expect(admissionStarts).toHaveBeenCalledTimes(1);
+      expect(inspectStartCalls).toBe(1);
+      expect(inspectStartLatched).toBe(true);
+      expect(providerLookups).toContain('governed-proof-inspect');
+      expect(providerLookups).toContain('proof-admit');
+      for (const [label, count] of Object.entries(sentinels.counts)) expect(count).toBe(0);
+    } finally {
+      let cleanupError: unknown;
+      const cleanup = (action: () => void) => { try { action(); } catch (error) { cleanupError ??= error; } };
+      cleanup(() => writeFileSync(fixture.requirement, original));
+      cleanup(() => restoreDiagnostics());
+      cleanup(() => sentinels.restore());
+      cleanup(() => { providerMap.clear(); for (const [name, provider] of originalIdentities) providerMap.set(name, provider); });
+      cleanup(() => { focusedAdmission = undefined; focusedInspectData = undefined; });
+      cleanup(() => {
+        const restoredRequirement = lstatSync(fixture.requirement);
+        expect(readFileSync(fixture.requirement, 'utf8')).toBe(original);
+        expect(restoredRequirement.mode).toBe(requirementStat.mode);
+        expect(restoredRequirement.isSymbolicLink()).toBe(requirementStat.isSymbolicLink());
+        expect(Array.from(providerMap.keys())).toEqual(originalKeys);
+        for (const [name, provider] of originalIdentities) expect(providerMap.get(name)).toBe(provider);
+      });
+      cleanup(() => rmSync(fixture.root, { recursive: true, force: true }));
+      cleanup(() => expect(existsSync(fixture.root)).toBe(false));
+      if (cleanupError !== undefined) throw cleanupError;
+    }
+  }, 60000);
 });

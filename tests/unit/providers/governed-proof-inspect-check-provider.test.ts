@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import {
   createGovernedProofInspectProviderForFocusedTest,
+  GOVERNED_PROOF_INSPECT_MESSAGE,
   GOVERNED_PROBE_UNAVAILABLE,
   GovernedProofInspectCheckProvider,
   projectGovernedProofInspectConfig,
@@ -54,7 +55,7 @@ function runnerResult(): any {
 }
 
 function request(): any {
-  return { prInfo: {}, checkConfig: config(), dependencyResults: new Map(), executionContext: {}, binding, executionConfigDigest: 'd'.repeat(64) };
+  return { prInfo: {}, checkConfig: config(), dependencyResults: new Map(), executionContext: {}, binding, executionConfigDigest: 'd'.repeat(64), workingDirectory: process.cwd() };
 }
 
 describe('governed Proof inspect provider', () => {
@@ -89,7 +90,9 @@ describe('governed Proof inspect provider', () => {
     const answer = jest.fn(() => runnerResult());
     const cancel = jest.fn();
     const close = jest.fn();
+    let captured: any;
     const provider = createGovernedProofInspectProviderForFocusedTest(requestValue => {
+      captured = requestValue;
       expect(Object.isFrozen(requestValue)).toBe(true);
       expect(Object.isFrozen(requestValue.binding)).toBe(true);
       return { answer, cancel, close };
@@ -98,6 +101,12 @@ describe('governed Proof inspect provider', () => {
     await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
     const outcome: any = await run.outcome;
     expect(outcome.kind).toBe('succeeded-proof-candidate');
+    expect(captured.message).toBe(GOVERNED_PROOF_INSPECT_MESSAGE);
+    expect(captured.instructions).toBe(config().instructions);
+    expect(captured.invocation).toEqual(config().invocation);
+    expect(captured.invocationDigest).toBe(config().invocation_digest);
+    expect(captured.resultSchema).toBe(config().result_schema);
+    expect(captured.workingDirectory).toBe(process.cwd());
     expect(Object.keys(outcome)).toEqual(['version', 'kind', 'binding', 'summary', 'proofCandidateEvidence']);
     expect(Object.isFrozen(outcome.proofCandidateEvidence)).toBe(true);
     expect(Object.isFrozen(outcome.proofCandidateEvidence.probe.attestation)).toBe(true);
@@ -106,6 +115,15 @@ describe('governed Proof inspect provider', () => {
     await expect(run.cancel('deadline', binding.fence)).resolves.toMatchObject({ kind: 'cancelled' });
     await run.close(); await run.close();
     expect(cancel).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a projection tamper before constructing or dispatching the runner', () => {
+    const factory = jest.fn(() => ({
+      answer: jest.fn(), cancel: jest.fn(), close: jest.fn(),
+    }));
+    const provider = createGovernedProofInspectProviderForFocusedTest(factory);
+    expect(() => provider.startManaged({ ...request(), checkConfig: { ...config(), unexpected: true } })).toThrow('unknown config key');
+    expect(factory).not.toHaveBeenCalled();
   });
 
   it('rejects noncanonical runner data and stale cancellation fences', async () => {

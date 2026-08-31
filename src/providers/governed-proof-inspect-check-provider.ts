@@ -5,9 +5,12 @@ import type { ReviewSummary } from '../reviewer';
 import { canonicalJson, immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
 import { CheckProvider, type CheckProviderConfig, type ExecutionContext, type ManagedAgentRun, type ManagedRunStartRequest } from './check-provider.interface';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
+import type { GovernedIdentifiedAnswerResult } from '@probelabs/probe';
+import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE } from './governed-probe-runner';
 
 export const GOVERNED_PROOF_INSPECT_PROVIDER_NAME = 'governed-proof-inspect';
 export const GOVERNED_PROBE_UNAVAILABLE = 'GOVERNED_PROBE_UNAVAILABLE';
+export const GOVERNED_PROOF_INSPECT_MESSAGE = GOVERNED_PROOF_ROLE_MESSAGE;
 const GOVERNED_RESULT_IDENTITY_DOMAIN = 'probe.governed-result-identity/data/v1';
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = 'luna-xhigh-readonly-v1';
@@ -106,12 +109,12 @@ export function projectGovernedProofInspectConfig(value: unknown): CheckProvider
   if (!text(value.result_schema, 131072)) fail('result_schema is invalid');
   const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
   if (value.result_schema !== decoded) fail('result_schema does not equal invocation output_schema');
-  return immutableCanonicalValue(Object.fromEntries(AUTHORED.map(k => [k, value[k]]))) as CheckProviderConfig;
+  return immutableCanonicalValue(Object.fromEntries(AUTHORED.map(k => [k, k === 'message' ? GOVERNED_PROOF_INSPECT_MESSAGE : value[k]]))) as CheckProviderConfig;
 }
 
 export interface ProofCandidateEvidenceV1 { readonly version: 'visor.proof-candidate-evidence/v1'; readonly role: { readonly invocation: Record<string, unknown>; readonly invocationDigest: string }; readonly probe: { readonly attestation: Record<string, unknown>; readonly resultIdentity: Record<string, unknown> }; }
-export interface GovernedProbeRunnerRequest { readonly message: string; readonly instructions: string; readonly invocation: Record<string, unknown>; readonly invocationDigest: string; readonly resultSchema: string; readonly executionConfigDigest: string; readonly binding: ManagedRunBindingV1; }
-export interface GovernedProbeRunner { answer(request: GovernedProbeRunnerRequest): Promise<{ data: unknown; runtimeAttestation: Record<string, unknown>; resultIdentity: Record<string, unknown> }> | { data: unknown; runtimeAttestation: Record<string, unknown>; resultIdentity: Record<string, unknown> }; cancel(reason: 'deadline'): Promise<void> | void; close(): Promise<void> | void; }
+export interface GovernedProbeRunnerRequest { readonly message: string; readonly instructions: string; readonly invocation: Record<string, unknown>; readonly invocationDigest: string; readonly resultSchema: string; readonly executionConfigDigest: string; readonly binding: ManagedRunBindingV1; readonly workingDirectory: string; }
+export interface GovernedProbeRunner { answer(request: GovernedProbeRunnerRequest): Promise<GovernedIdentifiedAnswerResult> | GovernedIdentifiedAnswerResult; cancel(reason: 'deadline'): Promise<void> | void; close(): Promise<void> | void; }
 type GovernedProbeRunnerFactory = (request: GovernedProbeRunnerRequest) => GovernedProbeRunner;
 function validateAttestation(att: unknown, digest: string): Record<string, unknown> {
   if (!validMaterialized(att)) fail('attestation contains non-materialized data');
@@ -167,8 +170,8 @@ export function validateProofCandidateEvidence(value: unknown): ProofCandidateEv
 const INTERNAL = Symbol('governed-proof-inspect-test-factory');
 export function createGovernedProofInspectProviderForFocusedTest(factory: GovernedProbeRunnerFactory): GovernedProofInspectCheckProvider { return new GovernedProofInspectCheckProvider(factory, INTERNAL); }
 export class GovernedProofInspectCheckProvider extends CheckProvider {
-  private readonly factory?: GovernedProbeRunnerFactory;
-  constructor(factory?: GovernedProbeRunnerFactory, token?: typeof INTERNAL) { super(); if (factory && token !== INTERNAL) fail('runner factory is test-only'); this.factory = factory; }
+  private readonly factory: GovernedProbeRunnerFactory;
+  constructor(factory?: GovernedProbeRunnerFactory, token?: typeof INTERNAL) { super(); if (factory && token !== INTERNAL) fail('runner factory is test-only'); this.factory = factory || createGovernedProbeRunner; }
   getName(): string { return GOVERNED_PROOF_INSPECT_PROVIDER_NAME; }
   getDescription(): string { return 'Sealed built-in governed Proof inspection provider'; }
   async validateConfig(config: unknown): Promise<boolean> { try { projectGovernedProofInspectConfig(config); return true; } catch { return false; } }
@@ -177,9 +180,10 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
   async isAvailable(): Promise<boolean> { return false; }
   getRequirements(): string[] { return [GOVERNED_PROBE_UNAVAILABLE]; }
   startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
-    const config = projectGovernedProofInspectConfig(request.checkConfig); if (!/^[0-9a-f]{64}$/.test(request.executionConfigDigest)) fail('executionConfigDigest is invalid'); if (!this.factory) throw new Error(GOVERNED_PROBE_UNAVAILABLE);
+    const config = projectGovernedProofInspectConfig(request.checkConfig); if (!/^[0-9a-f]{64}$/.test(request.executionConfigDigest)) fail('executionConfigDigest is invalid');
+    if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0) fail('workingDirectory is invalid');
     const binding = immutableCanonicalValue(request.binding);
-    const invocation = config.invocation as Record<string, unknown>; const frozen = immutableCanonicalValue({ message: config.message, instructions: config.instructions, invocation, invocationDigest: config.invocation_digest, resultSchema: config.result_schema, executionConfigDigest: request.executionConfigDigest, binding }) as GovernedProbeRunnerRequest;
+    const invocation = config.invocation as Record<string, unknown>; const frozen = immutableCanonicalValue({ message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: config.instructions, invocation, invocationDigest: config.invocation_digest, resultSchema: config.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory }) as GovernedProbeRunnerRequest;
     const runner = this.factory(frozen); if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
     let cancelled = false, closed = false; const answer = Promise.resolve().then(() => runner.answer(frozen)).then(value => { const evidence = evidenceFromResult(config, validateRunnerResult(value)); return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: immutableCanonicalValue({ issues: [], output: value.data }), proofCandidateEvidence: evidence }); });
     return { binding, started: Promise.resolve({ version: 1, kind: 'started', binding }), outcome: answer, cancel: async (reason, fence) => { if (fence !== binding.fence) throw new Error('GOVERNED_PROOF_INVALID: cancellation fence is stale'); if (!cancelled) { cancelled = true; await runner.cancel(reason); } return { version: 1, kind: 'cancelled', binding, reason }; }, close: async () => { if (!closed) { closed = true; await runner.close(); } return { version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }; } };

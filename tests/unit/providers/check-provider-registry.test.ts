@@ -6,7 +6,10 @@ import {
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
 import { ProofAdmitCheckProvider } from '../../../src/providers/proof-admit-check-provider';
-import { GovernedProofInspectCheckProvider } from '../../../src/providers/governed-proof-inspect-check-provider';
+import {
+  GOVERNED_PROBE_UNAVAILABLE,
+  GovernedProofInspectCheckProvider,
+} from '../../../src/providers/governed-proof-inspect-check-provider';
 
 // Mock provider for testing
 class MockCheckProvider extends CheckProvider {
@@ -259,5 +262,12 @@ describe('CheckProviderRegistry', () => {
     expect(provider).toBeInstanceOf(ProofAdmitCheckProvider);
     await expect(provider?.isAvailable()).resolves.toBe(false);
     await expect(provider?.execute({} as PRInfo, { type: 'proof-admit' } as any)).rejects.toThrow('PROOF_ADMISSION_UNAVAILABLE');
+  });
+
+  it('keeps the governed inspect provider sealed and unavailable until managed bootstrap', async () => {
+    const provider = registry.getProvider('governed-proof-inspect');
+    expect(provider).toBeInstanceOf(GovernedProofInspectCheckProvider);
+    await expect(provider?.isAvailable()).resolves.toBe(false);
+    expect(provider?.getRequirements()).toEqual([GOVERNED_PROBE_UNAVAILABLE]);
   });
 });
