@@ -32,10 +32,11 @@ function config(): any {
 
 function attestation(invocationDigest: string): any {
   const digest = `sha256:${'c'.repeat(64)}`;
+  const attestationDigest = 'c'.repeat(64);
   return {
     version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
-    requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
-    observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' },
+    requested: { profileDigest: attestationDigest, cwdDigest: attestationDigest, probeToolsDigest: attestationDigest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+    observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: attestationDigest, permissionProfileDigest: attestationDigest, filesystem: 'restricted-read-root', network: 'restricted' },
     executionContext: { source: 'caller', invocationDigest },
     dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 7 },
     evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
@@ -151,5 +152,22 @@ describe('governed Proof inspect provider', () => {
     await expect(detached.startManaged(request()).outcome).rejects.toThrow('GOVERNED_PROOF_INVALID');
     const malformed = runnerResult(); malformed.data = { '10': 'ten', '2': 'two' };
     expect(() => validateProofCandidateEvidence({ ...malformed, proof: malformed })).toThrow('GOVERNED_PROOF_INVALID');
+  });
+
+  it('accepts rc332 bare attestation digests and rejects every alternate shape', async () => {
+    const provider = createGovernedProofInspectProviderForFocusedTest(() => ({ answer: runnerResult, cancel: () => undefined, close: () => undefined }));
+    const evidence: any = (await provider.startManaged(request()).outcome as any).proofCandidateEvidence;
+    const fields = [['requested', 'profileDigest'], ['requested', 'cwdDigest'], ['requested', 'probeToolsDigest'], ['observed', 'cwdDigest'], ['observed', 'permissionProfileDigest']];
+    const edit = (field: string[], change: (value: any, key: string) => void) => { const copy = JSON.parse(JSON.stringify(evidence)); change(copy.probe.attestation[field[0]], field[1]); return copy; };
+    for (const [parent, key] of fields) {
+      for (const value of ['0'.repeat(64), 'f'.repeat(64)]) expect(() => validateProofCandidateEvidence(edit([parent, key], (object, name) => { object[name] = value; }))).not.toThrow();
+      for (const value of [`sha256:${'c'.repeat(64)}`, 'C'.repeat(64), 'c'.repeat(63), 'c'.repeat(65), 'g'.repeat(64), ' '.repeat(64), null, [], 42, true]) expect(() => validateProofCandidateEvidence(edit([parent, key], (object, name) => { object[name] = value; }))).toThrow('GOVERNED_PROOF_INVALID');
+      expect(() => validateProofCandidateEvidence(edit([parent, key], (object, name) => { delete object[name]; }))).toThrow('GOVERNED_PROOF_INVALID');
+      let accessed = false;
+      expect(() => validateProofCandidateEvidence(edit([parent, key], (object, name) => { Object.defineProperty(object, name, { enumerable: true, get: () => { accessed = true; return 'c'.repeat(64); } }); }))).toThrow('GOVERNED_PROOF_INVALID');
+      expect(accessed).toBe(false);
+      expect(() => validateProofCandidateEvidence(edit([parent, key], (object, name) => { Object.setPrototypeOf(object, { [name]: 'c'.repeat(64) }); delete object[name]; }))).toThrow('GOVERNED_PROOF_INVALID');
+      expect(() => validateProofCandidateEvidence(edit([parent, key], (object) => { object.extra = true; }))).toThrow('GOVERNED_PROOF_INVALID');
+    }
   });
 });

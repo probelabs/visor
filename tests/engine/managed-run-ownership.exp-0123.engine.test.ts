@@ -2831,12 +2831,13 @@ describe('EXP-0205 explicit proof admission node', () => {
         const key = String(request.binding.scope[0]?.key);
         const data = focusedInspectData ? focusedInspectData(request) : { decision: 'accept', id: key };
         const digest = governedResultDigest(data);
+        const attestationDigest = 'c'.repeat(64);
         return {
           data,
           runtimeAttestation: {
             version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
-            requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
-            observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' },
+            requested: { profileDigest: attestationDigest, cwdDigest: attestationDigest, probeToolsDigest: attestationDigest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+            observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: attestationDigest, permissionProfileDigest: attestationDigest, filesystem: 'restricted-read-root', network: 'restricted' },
             executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
             dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
           },
