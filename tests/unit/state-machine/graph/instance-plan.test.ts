@@ -118,6 +118,47 @@ describe('Graph v2 C2 expansion plan', () => {
     });
   });
 
+  it('accepts closed controller ai.timeout, retains graph/digest semantics, and preserves absent compatibility', () => {
+    const withoutAi = compileClaimPlan(proofAdmissionConfig()).expansionPlan;
+    const withAiConfig = proofAdmissionConfig();
+    withAiConfig.subgraphs['onboard-component'].checks.inspect.ai = { timeout: 600000 };
+    const withAi = compileClaimPlan(withAiConfig).expansionPlan;
+    const node = withAi.byOwner.discover.template.nodesByKey.inspect;
+    expect(node.check.ai).toEqual({ timeout: 600000 });
+    expect(Object.isFrozen(node.check.ai)).toBe(true);
+    expect(node.executionConfigDigest).not.toBe(withoutAi.byOwner.discover.template.nodesByKey.inspect.executionConfigDigest);
+    expect(withAi.graphSemanticDigest).not.toBe(withoutAi.graphSemanticDigest);
+    expect(compileClaimPlan(proofAdmissionConfig()).expansionPlan.graphSemanticDigest).toBe(withoutAi.graphSemanticDigest);
+    for (const timeout of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2147483648]) {
+      const invalid = proofAdmissionConfig();
+      invalid.subgraphs['onboard-component'].checks.inspect.ai = { timeout };
+      expect(() => compileClaimPlan(invalid)).toThrow('inspect ai.timeout');
+    }
+    for (const timeout of [1, 2147483647]) {
+      const boundary = proofAdmissionConfig();
+      boundary.subgraphs['onboard-component'].checks.inspect.ai = { timeout };
+      expect(() => compileClaimPlan(boundary)).not.toThrow();
+    }
+    const extra = proofAdmissionConfig();
+    extra.subgraphs['onboard-component'].checks.inspect.ai = { timeout: 600000, debug: false };
+    expect(() => compileClaimPlan(extra)).toThrow('inspect ai.timeout');
+  });
+
+  it.each([
+    ['string', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.ai = '600000'; }],
+    ['null', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.ai = null; }],
+    ['array', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.ai = [{ timeout: 600000 }]; }],
+    ['missing timeout', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.ai = {}; }],
+    ['symbol key', (value: any) => { const ai: any = { timeout: 600000 }; ai[Symbol('extra')] = true; value.subgraphs['onboard-component'].checks.inspect.ai = ai; }],
+    ['accessor', (value: any) => { const ai: any = {}; Object.defineProperty(ai, 'timeout', { enumerable: true, get: () => 600000 }); value.subgraphs['onboard-component'].checks.inspect.ai = ai; }],
+    ['non-enumerable', (value: any) => { const ai: any = {}; Object.defineProperty(ai, 'timeout', { value: 600000 }); value.subgraphs['onboard-component'].checks.inspect.ai = ai; }],
+    ['custom prototype', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.ai = Object.assign(Object.create({}), { timeout: 600000 }); }],
+    ['polluted prototype', (value: any) => { const ai = { timeout: 600000 }; Object.setPrototypeOf(ai, { polluted: true }); value.subgraphs['onboard-component'].checks.inspect.ai = ai; }],
+  ])('rejects controller ai.timeout %s', (_name, mutate) => {
+    const value = proofAdmissionConfig(); mutate(value);
+    expect(() => compileClaimPlan(value)).toThrow(/inspect ai(?:\.timeout)?/);
+  });
+
   it.each([
     ['unknown authored key', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.runtime_unknown_enriched_key = true; }],
     ['malformed Unicode', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.message = '\ud800'; }],

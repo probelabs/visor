@@ -86,6 +86,12 @@ describe('governed Proof inspect provider', () => {
     expect(() => projectGovernedProofInspectConfig({ ...config(), consumes: [], emits: [] })).not.toThrow();
   });
 
+  it('accepts controller timeout metadata but strips it from Proof authority', () => {
+    const projected = projectGovernedProofInspectConfig({ ...config(), ai: { timeout: 600000 } });
+    expect((projected as any).ai).toBeUndefined();
+    expect(Object.keys(projected)).toEqual(['instructions', 'invocation', 'invocation_digest', 'message', 'profile', 'result_schema', 'type']);
+  });
+
   it('uses a focused-only runner seam and emits a frozen typed candidate outcome', async () => {
     const answer = jest.fn(() => runnerResult());
     const cancel = jest.fn();

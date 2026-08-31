@@ -16,6 +16,8 @@ import {
 
 const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+const CONTROLLER_TIMEOUT_MIN = 1;
+const CONTROLLER_TIMEOUT_MAX = 2147483647;
 
 /** Reserved EXP-0205 admission profile identifiers. */
 export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
@@ -114,10 +116,18 @@ function validDigest(value: unknown): value is string { return typeof value === 
 
 function decodeGovernedSchema(value: unknown): string { if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return ''; const bytes = Buffer.from(value, 'base64'); if (bytes.length < 1 || bytes.length > 131072 || bytes.toString('base64') !== value) return ''; try { const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes); return validUnicode(decoded) ? decoded : ''; } catch { return ''; } }
 
+function validateControllerAi(name: string, value: unknown): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) rejectReservedProfile(name, 'inspect ai must be a plain object');
+  const keys = Reflect.ownKeys(value); const descriptor = Object.getOwnPropertyDescriptor(value, 'timeout');
+  if (keys.length !== 1 || keys[0] !== 'timeout' || !descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'number' || !Number.isSafeInteger(descriptor.value) || descriptor.value < CONTROLLER_TIMEOUT_MIN || descriptor.value > CONTROLLER_TIMEOUT_MAX) rejectReservedProfile(name, 'inspect ai.timeout must be one finite integer from 1 through 2147483647');
+}
+
 function validateGovernedInspectConfig(name: string, check: CheckConfig): void {
-  const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
+  const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
   if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
   if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
+  validateControllerAi(name, record.ai);
   if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || record.profile !== 'luna-xhigh-readonly-v1' || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
   const invocation = record.invocation;
   if (!invocation || typeof invocation !== 'object' || Array.isArray(invocation) || !hasExactKeys(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !validMaterialized(invocation)) rejectReservedProfile(name, 'inspect invocation is not closed');
@@ -607,7 +617,7 @@ function compileTemplate(
       templateDigest,
       templateNodeKey: nodeKey,
       ...(check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE
-        ? { authoredProviderConfig: Object.fromEntries(['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile'].map(key => [key, (check as Record<string, unknown>)[key]])) }
+        ? { authoredProviderConfig: Object.fromEntries(['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', ...(check.ai ? ['ai'] : [])].map(key => [key, (check as Record<string, unknown>)[key]])) }
         : { resolvedCheck: check }),
     });
     nodesByKey[nodeKey] = Object.freeze({
