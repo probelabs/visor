@@ -6,6 +6,7 @@ import type {
   KeyedScopePath,
   ManagedRunBindingV1,
 } from '../state-machine/graph/instance-kernel';
+import type { ProofCandidateEvidenceV1 } from './governed-proof-inspect-check-provider';
 
 interface CandidateClaimInputBase {
   readonly claimId: string;
@@ -15,6 +16,8 @@ interface CandidateClaimInputBase {
   readonly producerCheckId: string;
   readonly scope: Readonly<ScopePath> | KeyedScopePath;
   readonly parentClaimIds: readonly string[];
+  /** Graph-owned governed evidence, present only for an admitted candidate claim. */
+  readonly proofAdmission?: ProofCandidateEvidenceV1;
 }
 
 /** Exact, immutable candidate claim view granted to a consuming provider. */
@@ -154,6 +157,8 @@ export interface ManagedRunStartRequest {
   readonly dependencyResults: ReadonlyMap<string, ReviewSummary>;
   readonly executionContext: ExecutionContext;
   readonly binding: ManagedRunBindingV1;
+  /** Immutable compiled execution authority, never authored provider data. */
+  readonly executionConfigDigest: string;
 }
 
 export interface ManagedRunStartedReceiptV1 {
@@ -169,6 +174,14 @@ export interface ManagedRunSucceededOutcomeV1 {
   readonly summary: ReviewSummary;
 }
 
+export interface ManagedProofCandidateSucceededOutcomeV1 {
+  readonly version: 1;
+  readonly kind: 'succeeded-proof-candidate';
+  readonly binding: ManagedRunBindingV1;
+  readonly summary: ReviewSummary;
+  readonly proofCandidateEvidence: ProofCandidateEvidenceV1;
+}
+
 export interface ManagedRunFailedOutcomeV1 {
   readonly version: 1;
   readonly kind: 'failed';
@@ -177,6 +190,7 @@ export interface ManagedRunFailedOutcomeV1 {
 
 export type ManagedRunOutcomeV1 =
   | ManagedRunSucceededOutcomeV1
+  | ManagedProofCandidateSucceededOutcomeV1
   | ManagedRunFailedOutcomeV1;
 
 export interface ManagedRunCancelReceiptV1 {

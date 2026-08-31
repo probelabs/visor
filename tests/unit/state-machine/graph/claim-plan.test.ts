@@ -4,6 +4,7 @@ import {
   PROOF_ADMIT_PROVIDER_TYPE,
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
+  GOVERNED_PROOF_INSPECT_PROVIDER_TYPE,
 } from '../../../../src/state-machine/graph/instance-plan';
 
 const schema = {
@@ -21,6 +22,7 @@ describe('Graph v2 C1 claim plan', () => {
 
   it.each([
     ['provider without claim plan', { version: '1.0', checks: { proof: { type: PROOF_ADMIT_PROVIDER_TYPE } } }],
+    ['governed provider without claim plan', { version: '1.0', checks: { inspect: { type: GOVERNED_PROOF_INSPECT_PROVIDER_TYPE } } }],
     ['reserved emission', { version: '1.0', checks: { proof: { type: 'noop', emits: [{ claim: PROOF_CANDIDATE_CLAIM, from: 'output' }] } } }],
     ['reserved consumption', { version: '1.0', checks: { proof: { type: 'noop', consumes: [{ claim: PROOF_ADMITTED_RECEIPT_CLAIM, cardinality: 'one' }] } } }],
   ])('rejects root %s before inactive claim-plan return', (_name, config) => expectRootReserved(config));

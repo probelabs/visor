@@ -39,6 +39,7 @@ import {
   type SubgraphExpandedEvent,
   type SubgraphTombstonedEvent,
 } from '../../../../src/state-machine/graph/instance-kernel';
+import { PROOF_CANDIDATE_CLAIM } from '../../../../src/state-machine/graph/instance-plan';
 
 const sessionId = 'session-1';
 const expansionOwnerCheck = 'discover-components';
@@ -274,6 +275,14 @@ function managedFixture() {
   return { projection, events, attempt, binding };
 }
 
+function candidateEvidence(payload: unknown): any {
+  const digest = `sha256:${sha256Canonical(payload)}`;
+  const invocation = { role_id: 'role', stance: 'owner', subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'a'.repeat(64)}` }, output_schema_id: 'result', output_schema: Buffer.from('{"type":"object"}').toString('base64') };
+  const invocationDigest = `sha256:${'b'.repeat(64)}`;
+  const attestation = { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } };
+  return { version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest }, probe: { attestation, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(payload), 'utf8') } } };
+}
+
 function managedEnvelope(binding: ManagedRunBindingV1, eventId: number) {
   return {
     version: 1 as const,
@@ -442,6 +451,22 @@ describe('Graph v2 C2 instance kernel', () => {
     expect(Object.isFrozen(live)).toBe(true);
     expect(Object.isFrozen(live.generationsById[activation.nodeGenerationId])).toBe(true);
     expect(Object.isFrozen(live.claimsById[item.claimId].payload)).toBe(true);
+  });
+
+  it('binds candidate result identity to the exact canonical payload bytes', () => {
+    const fixture = managedFixture();
+    const item = itemPublished(2, { id: 'A', revision: 1 }, 1);
+    const activation = activated(3, item);
+    const [started, , published, completed] = successfulGeneration(7, activation);
+    const payload = { id: 'A', inspected: true };
+    const evidence = candidateEvidence(payload);
+    const candidate = { ...published, claim: PROOF_CANDIDATE_CLAIM, payload, payloadFingerprint: sha256Canonical(payload), proofCandidateEvidence: evidence, proofCandidateEvidenceFingerprint: sha256Canonical(evidence), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(payload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
+    const managed = replayInstanceEvents([...fixture.events, managedAcquired(fixture.binding, 6), managedStarted(fixture.binding, 7)]);
+    const terminated = managedTerminated(fixture.binding, 8, { cleanupStatus: 'clean', controllerDecision: 'completed', failureCode: null });
+    expect(reduceInstanceEventBatch(managed, [terminated, candidate, completed]).claimsById[candidate.claimId].proofCandidateEvidence).toEqual(evidence);
+    const tamperedPayload = { '10': 'ten', '2': 'two' };
+    const tampered = { ...candidate, payload: tamperedPayload, payloadFingerprint: sha256Canonical(tamperedPayload), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(tamperedPayload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
+    expectKernelError(() => reduceInstanceEventBatch(managed, [terminated, tampered, completed]), 'INVALID_PROOF_EVIDENCE');
   });
 
   it('inactivates one incarnation exactly and activates only its replacement', () => {
@@ -733,6 +758,7 @@ describe('Graph v2 C3 managed run lifecycle kernel', () => {
     expect(final.managedRunsByAttemptId[fixture.binding.attemptId]).toEqual({
       binding: fixture.binding,
       status: 'terminated',
+      cancellationRequested: true,
       cleanupStatus: 'clean',
       controllerDecision: 'failed',
       failureCode: 'MANAGED_DEADLINE_EXCEEDED',
@@ -855,7 +881,7 @@ describe('Graph v2 C3 managed run lifecycle kernel', () => {
         name: 'cancel-requested',
         events: [...fixture.events, acquired, cancelRequested],
         live: cancelledProjection,
-        expectedManaged: { binding: fixture.binding, status: 'cancel_requested' },
+        expectedManaged: { binding: fixture.binding, status: 'cancel_requested', cancellationRequested: true },
         managedTerminalCount: 0,
         attemptTerminalCount: 0,
       },
@@ -902,6 +928,7 @@ describe('Graph v2 C3 managed run lifecycle kernel', () => {
         expectedManaged: {
           binding: fixture.binding,
           status: 'terminated',
+          cancellationRequested: true,
           cleanupStatus: 'unverified',
           controllerDecision: 'failed',
           failureCode: 'MANAGED_CLOSE_FAILED',

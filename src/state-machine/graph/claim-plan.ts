@@ -12,6 +12,7 @@ import {
 } from './claim-kernel';
 import {
   compileExpansionPlan,
+  GOVERNED_PROOF_INSPECT_PROVIDER_TYPE,
   PROOF_ADMIT_PROVIDER_TYPE,
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
@@ -118,7 +119,7 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
   // omitting claim_types (and so reserved root claims cannot become controller
   // inputs or root emissions).
   for (const [checkId, check] of Object.entries(checks)) {
-    if (check.type === PROOF_ADMIT_PROVIDER_TYPE) {
+    if (check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
       throw new ClaimPlanError(
         `Root check "${checkId}" cannot use reserved provider type ${PROOF_ADMIT_PROVIDER_TYPE}`,
         'RESERVED_PROOF_ADMISSION_ROOT'

@@ -21,6 +21,10 @@ import {
   ProofAdmitCheckProvider,
   PROOF_ADMIT_PROVIDER_NAME,
 } from './proof-admit-check-provider';
+import {
+  GovernedProofInspectCheckProvider,
+  GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
+} from './governed-proof-inspect-check-provider';
 
 /**
  * Registry for managing check providers
@@ -67,6 +71,7 @@ export class CheckProviderRegistry {
     // Reserved EXP-0205 provider. It is installed by the registry itself and
     // cannot be replaced through the public register/unregister API.
     this.registerBuiltIn(new ProofAdmitCheckProvider());
+    this.registerBuiltIn(new GovernedProofInspectCheckProvider());
 
     // Try to register UtcpCheckProvider - it may fail if dependencies are missing
     try {
@@ -120,7 +125,7 @@ export class CheckProviderRegistry {
    */
   register(provider: CheckProvider): void {
     const name = provider.getName();
-    if (name === PROOF_ADMIT_PROVIDER_NAME) {
+    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME) {
       throw new Error(`Provider '${name}' is reserved and cannot be registered publicly`);
     }
     if (this.providers.has(name)) {
@@ -137,7 +142,7 @@ export class CheckProviderRegistry {
    * Unregister a check provider
    */
   unregister(name: string): void {
-    if (name === PROOF_ADMIT_PROVIDER_NAME) {
+    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME) {
       throw new Error(`Provider '${name}' is reserved and cannot be unregistered`);
     }
     if (!this.providers.has(name)) {

@@ -7,6 +7,7 @@ import type {
   ManagedRunStartedReceiptV1,
 } from '../../providers/check-provider.interface';
 import type { ReviewSummary } from '../../reviewer';
+import { validateProofCandidateEvidence } from '../../providers/governed-proof-inspect-check-provider';
 import { canonicalJson, immutableCanonicalValue } from '../graph/claim-kernel';
 import {
   requireKeyedScopePath,
@@ -236,7 +237,6 @@ function snapshotReadonlyMap(
     Object.freeze([key, copyAndFreezePlainData(value, copies)] as const)
   );
   const snapshot = new Map<string, ReviewSummary>(entries);
-  let view!: ReadonlyMap<string, ReviewSummary>;
   const shell = Object.create(null) as Record<PropertyKey, unknown>;
   Object.defineProperties(shell, {
     size: { enumerable: true, get: () => snapshot.size },
@@ -254,7 +254,7 @@ function snapshotReadonlyMap(
     },
     [Symbol.iterator]: { enumerable: false, value: () => snapshot.entries() },
   });
-  view = Object.freeze(shell) as unknown as ReadonlyMap<string, ReviewSummary>;
+  const view = Object.freeze(shell) as unknown as ReadonlyMap<string, ReviewSummary>;
   return view;
 }
 
@@ -269,6 +269,7 @@ export function snapshotManagedRunStartRequest(
     dependencyResults: snapshotReadonlyMap(request.dependencyResults, copies),
     executionContext: copyAndFreezePlainData(request.executionContext, copies),
     binding: copyAndFreezePlainData(request.binding, copies),
+    executionConfigDigest: request.executionConfigDigest,
   };
   return Object.freeze(snapshot);
 }
@@ -439,12 +440,14 @@ export function normalizeManagedRunOutcome(
     const kind = Reflect.get(value, 'kind', value) as unknown;
     const expectedKeys = kind === 'succeeded'
       ? ['version', 'kind', 'binding', 'summary']
+      : kind === 'succeeded-proof-candidate'
+        ? ['version', 'kind', 'binding', 'summary', 'proofCandidateEvidence']
       : ['version', 'kind', 'binding'];
     if (!hasExactOwnKeys(value, expectedKeys)) throw protocolError(code);
 
     const version = Reflect.get(value, 'version', value) as unknown;
     const receiptBinding = Reflect.get(value, 'binding', value) as unknown;
-    if (version !== 1 || (kind !== 'succeeded' && kind !== 'failed')) {
+    if (version !== 1 || (kind !== 'succeeded' && kind !== 'succeeded-proof-candidate' && kind !== 'failed')) {
       throw protocolError(code);
     }
     const binding = normalizeReceiptBinding(receiptBinding, expectedBinding, code);
@@ -452,6 +455,16 @@ export function normalizeManagedRunOutcome(
 
     const summary = Reflect.get(value, 'summary', value) as unknown;
     if (!isPlainRecord(summary)) throw protocolError(code);
+    if (kind === 'succeeded-proof-candidate') {
+      const proofCandidateEvidence = validateProofCandidateEvidence(Reflect.get(value, 'proofCandidateEvidence', value));
+      return Object.freeze({
+        version: 1,
+        kind,
+        binding,
+        summary: immutableCanonicalValue<ReviewSummary>(summary as ReviewSummary),
+        proofCandidateEvidence,
+      });
+    }
     return Object.freeze({
       version: 1,
       kind,

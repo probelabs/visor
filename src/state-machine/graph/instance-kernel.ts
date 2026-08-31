@@ -6,6 +6,8 @@ import {
   type ClaimProjection,
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
+import { PROOF_CANDIDATE_CLAIM } from './instance-plan';
+import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from '../../providers/governed-proof-inspect-check-provider';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -408,6 +410,8 @@ export interface GeneratedClaimPublishedEvent extends BoundAttemptEventBase {
   readonly payloadFingerprint: string;
   readonly producerCheckId: string;
   readonly parentClaimIds: readonly string[];
+  readonly proofCandidateEvidence?: ProofCandidateEvidenceV1;
+  readonly proofCandidateEvidenceFingerprint?: string;
 }
 
 export interface GeneratedAttemptCompletedEvent extends BoundAttemptEventBase {
@@ -592,6 +596,8 @@ export interface InstanceClaimProjection {
   readonly subgraphInstanceId: string;
   readonly incarnation: number;
   readonly nodeGenerationId?: string;
+  readonly proofCandidateEvidence?: ProofCandidateEvidenceV1;
+  readonly proofCandidateEvidenceFingerprint?: string;
 }
 
 export interface ManagedRunProjection {
@@ -1502,7 +1508,24 @@ function reduceGeneratedLifecycle(
     if (payloadFingerprint !== event.payloadFingerprint) {
       throw new InstanceKernelError('INVALID_PAYLOAD_FINGERPRINT', 'Generated claim fingerprint is invalid');
     }
-    const claimId = sha256Canonical({
+    const hasEvidence = event.proofCandidateEvidence !== undefined || event.proofCandidateEvidenceFingerprint !== undefined;
+    if (event.claim === PROOF_CANDIDATE_CLAIM) {
+      if (generation.templateNodeKey !== 'inspect' || event.checkId !== 'inspect' || event.proofCandidateEvidence === undefined || typeof event.proofCandidateEvidenceFingerprint !== 'string' || event.proofCandidateEvidenceFingerprint !== sha256Canonical(event.proofCandidateEvidence)) {
+        throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate publication requires its exact evidence sidecar');
+      }
+      try {
+        validateProofCandidateEvidence(event.proofCandidateEvidence);
+        const payloadJson = canonicalJson(event.payload);
+        const identity = event.proofCandidateEvidence.probe.resultIdentity;
+        if (identity.resultDigest !== `sha256:${sha256Canonical(event.payload)}` || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(event.payload) !== payloadJson) throw new Error('result identity is detached from canonical claim payload');
+      } catch { throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate evidence is invalid or detached'); }
+      if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
+        throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
+      }
+    } else if (hasEvidence) {
+      throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
+    }
+    const claimIdentity = {
       claim: event.claim,
       payloadFingerprint,
       producerCheckId: event.checkId,
@@ -1510,7 +1533,9 @@ function reduceGeneratedLifecycle(
       attemptId: event.attemptId,
       fence: event.fence,
       parentClaimIds: [...event.parentClaimIds].sort(),
-    });
+      ...(event.claim === PROOF_CANDIDATE_CLAIM ? { proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint as string } : {}),
+    };
+    const claimId = sha256Canonical(claimIdentity);
     if (claimId !== event.claimId || projection.claimsById[event.claimId]) {
       throw new InstanceKernelError('INVALID_CLAIM_ID', 'Generated claim ID is invalid or duplicate');
     }
@@ -1529,6 +1554,10 @@ function reduceGeneratedLifecycle(
       subgraphInstanceId: instance.subgraphInstanceId,
       incarnation: generation.incarnation,
       nodeGenerationId: generation.nodeGenerationId,
+      ...(event.claim === PROOF_CANDIDATE_CLAIM ? {
+        proofCandidateEvidence: immutableCanonicalValue(event.proofCandidateEvidence),
+        proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint,
+      } : {}),
     };
     next.generationsById[event.nodeGenerationId] = {
       ...generation,

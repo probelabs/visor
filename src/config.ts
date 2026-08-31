@@ -66,6 +66,7 @@ export class ConfigManager {
     'a2a',
     'utcp',
     'proof-admit',
+    'governed-proof-inspect',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];

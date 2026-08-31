@@ -29,6 +29,7 @@ import type {
   ManagedRunOutcomeV1,
   ManagedRunStartedReceiptV1,
 } from '../../providers/check-provider.interface';
+import { GOVERNED_PROOF_INSPECT_PROVIDER_NAME } from '../../providers/governed-proof-inspect-check-provider';
 import type { CheckConfig } from '../../types/config';
 import type {
   CatalogRequestAttemptStartedEvent,
@@ -140,6 +141,7 @@ function stopCheckProgressTelemetry(timer: ReturnType<typeof setInterval> | null
 
 interface ManagedProviderSettlement {
   readonly result?: ReviewSummary;
+  readonly proofCandidateEvidence?: import('../../providers/governed-proof-inspect-check-provider').ProofCandidateEvidenceV1;
   readonly cleanupStatus: ManagedRunCleanupStatus;
   readonly failureCode?: ManagedRunFailureCode;
 }
@@ -229,6 +231,7 @@ function validateManagedCancel(
 async function runManagedProvider(input: {
   readonly snapshot: ManagedRunSnapshot;
   readonly timeoutMs: number;
+  readonly providerType: string;
   readonly onStarted: () => void;
   readonly onStartedObserved: () => void;
   readonly onCancelRequested: () => void;
@@ -280,7 +283,8 @@ async function runManagedProvider(input: {
 
     const finishOrdinary = async (
       baseFailure: ManagedRunFailureCode | undefined,
-      result?: ReviewSummary
+      result?: ReviewSummary,
+      proofCandidateEvidence?: import('../../providers/governed-proof-inspect-check-provider').ProofCandidateEvidenceV1
     ): Promise<ManagedProviderSettlement> => {
       const close = settled(input.snapshot.closeOnce());
       const winner = await raceManagedPromises<
@@ -297,7 +301,7 @@ async function runManagedProvider(input: {
       const cleanup = validateManagedCleanup(input.snapshot, winner.value);
       if (cleanup.failureCode) return cleanup;
       return {
-        ...(baseFailure ? { failureCode: baseFailure } : { result }),
+        ...(baseFailure ? { failureCode: baseFailure } : { result, ...(proofCandidateEvidence ? { proofCandidateEvidence } : {}) }),
         cleanupStatus: cleanup.cleanupStatus,
       };
     };
@@ -351,7 +355,11 @@ async function runManagedProvider(input: {
     try {
       const normalized = normalizeManagedRunOutcome(outcome.value.value, input.snapshot.binding);
       if (normalized.kind === 'failed') return finishOrdinary('MANAGED_OUTCOME_FAILED');
-      return finishOrdinary(undefined, normalized.summary);
+      if (normalized.kind === 'succeeded-proof-candidate' &&
+          (input.providerType !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || input.snapshot.binding.checkId !== 'inspect')) {
+        return finishOrdinary('MANAGED_OUTCOME_RECEIPT_INVALID');
+      }
+      return finishOrdinary(undefined, normalized.summary, normalized.kind === 'succeeded-proof-candidate' ? normalized.proofCandidateEvidence : undefined);
     } catch (error) {
       return finishOrdinary(protocolFailure(error, 'MANAGED_OUTCOME_RECEIPT_INVALID'));
     }
@@ -2997,7 +3005,6 @@ async function executeSingleCheck(
         debug: !!context.debug,
       },
     };
-
     // Propagate authenticated Octokit (v2 frontends / Action mode)
     try {
       const maybeOctokit = (context.executionContext as any)?.octokit;
@@ -3252,6 +3259,7 @@ async function executeSingleCheck(
                 dependencyResults,
                 executionContext,
                 binding,
+                executionConfigDigest: context.journal.getGeneratedExecution(dynamic!.attempt.nodeGenerationId).node.executionConfigDigest,
               })),
             binding
           );
@@ -3279,6 +3287,7 @@ async function executeSingleCheck(
       const settlementPromise = runManagedProvider({
         snapshot,
         timeoutMs: managedTimeoutMs,
+        providerType,
         onStarted: () => {
           context.journal.recordManagedRunStarted(binding);
         },
@@ -3792,6 +3801,8 @@ async function executeSingleCheck(
               attempt: dynamic.attempt,
               binding: managedBinding,
               payload: (result as { output?: unknown }).output,
+              executionConfigDigest: context.journal.getGeneratedExecution(dynamic.attempt.nodeGenerationId).node.executionConfigDigest,
+              ...(managedSettlement?.proofCandidateEvidence ? { proofCandidateEvidence: managedSettlement.proofCandidateEvidence } : {}),
             });
             claimAttemptFinished = true;
             dynamic.terminalLatch.phase = 'terminal';

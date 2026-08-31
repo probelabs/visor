@@ -220,7 +220,8 @@ export type ConfigCheckType =
   | 'git-checkout'
   | 'a2a'
   | 'utcp'
-  | 'proof-admit';
+  | 'proof-admit'
+  | 'governed-proof-inspect';
 
 /**
  * Valid event triggers for checks
@@ -791,6 +792,12 @@ export interface CheckConfig {
    */
   /** Message template for log checks */
   message?: string;
+  /** Closed governed Proof inspection invocation fields. */
+  instructions?: string;
+  invocation?: Record<string, unknown>;
+  invocation_digest?: string;
+  result_schema?: string;
+  profile?: string;
   /** Log level for log checks */
   level?: 'debug' | 'info' | 'warn' | 'error';
   /** Include PR context in log output */

@@ -378,6 +378,14 @@ describe('durable Graph checkpoint continuation', () => {
     });
     expect(continuation.restoredLive).toEqual(continuation.projection);
     expect(continuation.replay).toEqual(continuation.restoredLive);
+    expect(continuation.replay).toEqual(continuation.projection);
+    expect(
+      returnedEvents.filter((event: any) => event.claim !== 'proof.candidate@1')
+        .every((event: any) => !('proofCandidateEvidence' in event) && !('proofCandidateEvidenceFingerprint' in event))
+    ).toBe(true);
+    expect(Object.values(continuation.projection.claimsById).every((claim: any) =>
+      claim.claim === 'proof.candidate@1' || !('proofCandidateEvidence' in claim)
+    )).toBe(true);
     expect(continuation.canonicalReexport).toEqual(continuation.checkpoint);
     expect(continuation.checkpoint.frontier.eventCount).toBe(returnedEvents.length);
     expect(continuation.result).toBeDefined();

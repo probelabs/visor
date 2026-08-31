@@ -1,3 +1,4 @@
+import { TextDecoder } from 'util';
 import type {
   CheckConfig,
   ClaimConsumptionConfig,
@@ -20,6 +21,7 @@ const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
 export const PROOF_ADMITTED_RECEIPT_CLAIM = 'proof.admitted_receipt@1';
 export const PROOF_ADMIT_PROVIDER_TYPE = 'proof-admit';
+export const GOVERNED_PROOF_INSPECT_PROVIDER_TYPE = 'governed-proof-inspect';
 export const PROOF_ADMIT_NODE_KEY = 'proof_admit';
 
 export class InstancePlanError extends Error {
@@ -98,6 +100,42 @@ export interface ExpansionCompileAuthority {
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function hasExactKeys(value: object, keys: readonly string[]): boolean { const actual = Reflect.ownKeys(value); return actual.length === keys.length && actual.every(key => typeof key === 'string' && keys.includes(key) && (() => { const descriptor = Object.getOwnPropertyDescriptor(value, key); return !!descriptor && 'value' in descriptor && descriptor.enumerable; })()); }
+
+function validUnicode(value: string): boolean { for (let index = 0; index < value.length; index++) { const code = value.charCodeAt(index); if (code >= 0xd800 && code <= 0xdbff) { const next = value.charCodeAt(index + 1); if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return false; index++; } else if (code >= 0xdc00 && code <= 0xdfff) return false; } return true; }
+
+function validText(value: unknown, max: number, nonempty = true): value is string { return typeof value === 'string' && validUnicode(value) && (!nonempty || value.length > 0) && Buffer.byteLength(value, 'utf8') <= max; }
+
+function validVisible(value: unknown, max: number): value is string { return typeof value === 'string' && validUnicode(value) && value.length > 0 && Buffer.byteLength(value, 'utf8') <= max && /^[\x21-\x7e]+$/.test(value); }
+
+function validDigest(value: unknown): value is string { return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value); }
+
+function decodeGovernedSchema(value: unknown): string { if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return ''; const bytes = Buffer.from(value, 'base64'); if (bytes.length < 1 || bytes.length > 131072 || bytes.toString('base64') !== value) return ''; try { const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes); return validUnicode(decoded) ? decoded : ''; } catch { return ''; } }
+
+function validateGovernedInspectConfig(name: string, check: CheckConfig): void {
+  const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
+  if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
+  if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
+  if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || record.profile !== 'luna-xhigh-readonly-v1' || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
+  const invocation = record.invocation;
+  if (!invocation || typeof invocation !== 'object' || Array.isArray(invocation) || !hasExactKeys(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !validMaterialized(invocation)) rejectReservedProfile(name, 'inspect invocation is not closed');
+  const invocationRecord = invocation as Record<string, unknown>, subject = invocationRecord.subject;
+  if (!validVisible(invocationRecord.role_id, 128) || (invocationRecord.stance !== 'owner' && invocationRecord.stance !== 'external-review') || !validVisible(invocationRecord.output_schema_id, 128) || !subject || typeof subject !== 'object' || Array.isArray(subject) || !hasExactKeys(subject, ['kind', 'id', 'fingerprint']) || !validMaterialized(subject)) rejectReservedProfile(name, 'inspect invocation fields are invalid');
+  const subjectRecord = subject as Record<string, unknown>;
+  if ((subjectRecord.kind !== 'project' && subjectRecord.kind !== 'requirement') || !validVisible(subjectRecord.id, 128) || !validDigest(subjectRecord.fingerprint)) rejectReservedProfile(name, 'inspect invocation subject is invalid');
+  const decoded = decodeGovernedSchema(invocationRecord.output_schema); if (!decoded || record.result_schema !== decoded) rejectReservedProfile(name, 'inspect result schema is not bound to invocation');
+  let parsed: unknown; try { parsed = JSON.parse(decoded); } catch { rejectReservedProfile(name, 'inspect output schema is not JSON'); }
+  if (!validMaterialized(parsed) || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) rejectReservedProfile(name, 'inspect output schema must be a JSON object');
+}
+
+function validMaterialized(value: unknown, seen = new Set<object>()): boolean {
+  if (value === null || typeof value === 'boolean') return true; if (typeof value === 'number') return Number.isFinite(value); if (typeof value === 'string') return validUnicode(value); if (!value || typeof value !== 'object' || seen.has(value)) return false; seen.add(value);
+  try {
+    if (Array.isArray(value)) { const keys = Reflect.ownKeys(value), length = Object.getOwnPropertyDescriptor(value, 'length'); if (keys.some(key => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(key))) || !length || !('value' in length) || length.enumerable) return false; for (const key of keys) { if (key === 'length') continue; const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !('value' in d) || !d.enumerable) return false; } for (let i = 0; i < value.length; i++) if (!hasOwn(value, String(i))) return false; return value.every(item => validMaterialized(item, seen)); }
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false; for (const key of Reflect.ownKeys(value)) { if (typeof key !== 'string') return false; const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !('value' in d) || !d.enumerable || !validMaterialized(d.value, seen)) return false; } return true;
+  } finally { seen.delete(value); }
 }
 
 /** Unambiguous static address for one generated expansion owner. */
@@ -237,7 +275,7 @@ function validateReservedProofAdmissionTemplate(
   const triggered = nodeKeys.some(nodeKey => {
     const check = resolvedChecks[nodeKey];
     return (
-      check.type === PROOF_ADMIT_PROVIDER_TYPE ||
+      check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
       claimList(check, 'emits').some(
         claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM
       ) ||
@@ -278,6 +316,10 @@ function validateReservedProofAdmissionTemplate(
   }
 
   const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
+    rejectReservedProfile(name, `inspect must have type ${GOVERNED_PROOF_INSPECT_PROVIDER_TYPE}`);
+  }
+  validateGovernedInspectConfig(name, inspect);
   if (claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
     rejectReservedProfile(name, `inspect must emit only ${PROOF_CANDIDATE_CLAIM}`);
   }
@@ -405,6 +447,9 @@ function compileTemplate(
         'UNSUPPORTED_TEMPLATE_EXECUTION',
         `Template check "${name}.${nodeKey}" cannot use forEach, workflow, or lifecycle routing`
       );
+    }
+    if (check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
+      validateGovernedInspectConfig(name, check);
     }
     for (const field of ['emits', 'consumes'] as const) {
       if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {
@@ -561,7 +606,9 @@ function compileTemplate(
       v: 1,
       templateDigest,
       templateNodeKey: nodeKey,
-      resolvedCheck: check,
+      ...(check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE
+        ? { authoredProviderConfig: Object.fromEntries(['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile'].map(key => [key, (check as Record<string, unknown>)[key]])) }
+        : { resolvedCheck: check }),
     });
     nodesByKey[nodeKey] = Object.freeze({
       templateNodeKey: nodeKey,

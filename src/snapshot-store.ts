@@ -58,6 +58,8 @@ import {
   type ManagedRunCleanupStatus,
   type ManagedRunFailureCode,
 } from './state-machine/graph/instance-kernel';
+import { PROOF_CANDIDATE_CLAIM } from './state-machine/graph/instance-plan';
+import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -293,14 +295,17 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
     case 'ClaimPublished': {
       const node = eventHasNodeDiscriminator(event);
       if (eventHasRequestDiscriminator(event)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'ClaimPublished cannot carry requestId');
+      const sidecar = event.claim === PROOF_CANDIDATE_CLAIM && hasOwn(event, 'proofCandidateEvidence');
+      if (event.claim === PROOF_CANDIDATE_CLAIM && (!sidecar || !hasOwn(event, 'proofCandidateEvidenceFingerprint')) || event.claim !== PROOF_CANDIDATE_CLAIM && (hasOwn(event, 'proofCandidateEvidence') || hasOwn(event, 'proofCandidateEvidenceFingerprint'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof evidence sidecar fields are not paired or reserved');
+      const evidenceKeys = sidecar ? ['proofCandidateEvidence', 'proofCandidateEvidenceFingerprint'] : [];
       const keys = node
-        ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds']
-        : [...ATTEMPT_BASE_KEYS, 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds'];
+        ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', ...evidenceKeys]
+        : [...ATTEMPT_BASE_KEYS, 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', ...evidenceKeys];
       exact(keys);
       base();
       if (typeof event.checkId !== 'string' || typeof event.attemptId !== 'string' || typeof event.fence !== 'number' || !Number.isSafeInteger(event.fence) || event.fence < 1 ||
           typeof event.claimId !== 'string' || typeof event.claim !== 'string' || typeof event.payloadFingerprint !== 'string' || typeof event.producerCheckId !== 'string' || !Array.isArray(event.parentClaimIds) ||
-          (node && (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Claim publication has invalid fields');
+          (node && (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string')) || (sidecar && typeof event.proofCandidateEvidenceFingerprint !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Claim publication has invalid fields');
       return event as unknown as CheckpointRuntimeEvent;
     }
     default:
@@ -408,6 +413,23 @@ function validateCheckpointPlanAuthority(
     const expansion = expansionForCheckpoint(plan, instanceProjection.instancesById[generation.subgraphInstanceId].expansionOwnerCheck, !!instanceProjection.instancesById[generation.subgraphInstanceId].parentSubgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
     if (!node || !node.emissions.some(emission => emission.claim === event.claim)) checkpointAuthorityFailure('Generated claim is not declared by its compiled template node');
+    const sidecar = event.claim === PROOF_CANDIDATE_CLAIM;
+    if (sidecar) {
+      if (generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== sha256Canonical(event.proofCandidateEvidence)) {
+        checkpointAuthorityFailure('Generated proof candidate evidence is not bound to the compiled inspect authority');
+      }
+      try {
+        const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
+        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== `sha256:${sha256Canonical(event.payload)}` || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(canonicalJson(event.payload), 'utf8') || JSON.stringify(event.payload) !== canonicalJson(event.payload)) {
+          checkpointAuthorityFailure('Generated proof candidate evidence is detached from compiled inspect or payload authority');
+        }
+      } catch (error) {
+        if (error instanceof GraphJournalCheckpointError) throw error;
+        throw new GraphJournalCheckpointError('CHECKPOINT_PLAN_AUTHORITY_MISMATCH', 'Generated proof candidate evidence is invalid', { cause: error });
+      }
+    } else if (hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint')) {
+      checkpointAuthorityFailure('Generated evidence sidecars are reserved for proof candidates');
+    }
     try { plan.validatorsByClaim[event.claim](event.payload); } catch (error) {
       throw new GraphJournalCheckpointError('CHECKPOINT_PLAN_AUTHORITY_MISMATCH', 'Generated claim payload violates the compiled claim validator', { cause: error });
     }
@@ -882,6 +904,9 @@ export class ExecutionJournal {
         scope: claim.scope,
         parentClaimIds: claim.parentClaimIds,
         ...provenance,
+        ...(claim.claim === PROOF_CANDIDATE_CLAIM && claim.proofCandidateEvidence && claim.proofCandidateEvidenceFingerprint
+          ? { proofAdmission: claim.proofCandidateEvidence }
+          : {}),
       });
     }
     return Object.freeze({ generation, node, claims: Object.freeze(claims) });
@@ -1025,6 +1050,7 @@ export class ExecutionJournal {
   completeGeneratedAttempt(input: {
     attempt: GeneratedAttemptStartedEvent;
     payload: unknown;
+    proofCandidateEvidence?: ProofCandidateEvidenceV1;
   }): void {
     const staged = this.stageGeneratedCompletion(input);
     this.runtimeEvents.push(...staged.events);
@@ -1035,6 +1061,8 @@ export class ExecutionJournal {
     attempt: GeneratedAttemptStartedEvent;
     binding: ManagedRunBindingV1;
     payload: unknown;
+    executionConfigDigest: string;
+    proofCandidateEvidence?: ProofCandidateEvidenceV1;
   }): void {
     const terminal = immutableInstanceEvent({
       version: 1,
@@ -1053,7 +1081,7 @@ export class ExecutionJournal {
   }
 
   private stageGeneratedCompletion(
-    input: { attempt: GeneratedAttemptStartedEvent; payload: unknown },
+    input: { attempt: GeneratedAttemptStartedEvent; payload: unknown; executionConfigDigest?: string; proofCandidateEvidence?: ProofCandidateEvidenceV1 },
     prefix: readonly InstanceRuntimeEvent[] = []
   ): { events: readonly InstanceRuntimeEvent[]; projection: InstanceProjection } {
     const { attempt, payload } = input;
@@ -1062,11 +1090,39 @@ export class ExecutionJournal {
     const instance = before.instancesById[generation.subgraphInstanceId];
     const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
+    const candidateEmissions = node.emissions.filter(emission => emission.claim === PROOF_CANDIDATE_CLAIM);
+    if (candidateEmissions.length > 0) {
+      const terminal = prefix.filter(event => event.type === 'ManagedRunTerminated') as readonly any[];
+      if (terminal.length !== 1 || terminal[0].cleanupStatus !== 'clean' || terminal[0].controllerDecision !== 'completed' || terminal[0].failureCode !== null) {
+        throw new ClaimKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
+      }
+    }
+    if (input.executionConfigDigest !== undefined && input.executionConfigDigest !== generation.executionConfigDigest) throw new ClaimKernelError('STALE_EXECUTION_CONFIG', 'Managed completion does not match live generation authority');
     const nestedOwner = qualifiedNestedExpansionOwner(
       expansion.template.name,
       generation.templateNodeKey
     );
     const nestedExpansion = this.requireClaimPlan().expansionPlan!.byNestedOwner[nestedOwner];
+    if (candidateEmissions.length > 0) {
+      if (input.executionConfigDigest !== generation.executionConfigDigest || generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || input.proofCandidateEvidence === undefined) {
+        throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate completion requires governed inspect authority and an evidence sidecar');
+      }
+      try {
+        const evidence = validateProofCandidateEvidence(input.proofCandidateEvidence);
+        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation)) {
+          throw new Error('evidence invocation is detached from compiled inspect config');
+        }
+        const payloadJson = canonicalJson(payload);
+        if (evidence.probe.resultIdentity.resultDigest !== `sha256:${sha256Canonical(payload)}` || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(payload) !== payloadJson) {
+          throw new Error('evidence result identity is detached from candidate payload');
+        }
+      } catch (error) {
+        if (error instanceof ClaimKernelError) throw error;
+        throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate evidence is invalid or detached');
+      }
+    } else if (input.proofCandidateEvidence !== undefined) {
+      throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
+    }
     let staged = before;
     const events: InstanceRuntimeEvent[] = [];
     const stage = (event: InstanceRuntimeEvent): void => {
@@ -1092,7 +1148,13 @@ export class ExecutionJournal {
         producerCheckId: attempt.checkId, parentClaimIds,
         claimId: sha256Canonical({ claim: emission.claim, payloadFingerprint,
           producerCheckId: attempt.checkId, scope: attempt.scope, attemptId: attempt.attemptId,
-          fence: attempt.fence, parentClaimIds }),
+          fence: attempt.fence, parentClaimIds,
+          ...(emission.claim === PROOF_CANDIDATE_CLAIM
+            ? { proofCandidateEvidenceFingerprint: sha256Canonical(input.proofCandidateEvidence) }
+            : {}) }),
+        ...(emission.claim === PROOF_CANDIDATE_CLAIM
+          ? { proofCandidateEvidence: input.proofCandidateEvidence, proofCandidateEvidenceFingerprint: sha256Canonical(input.proofCandidateEvidence) }
+          : {}),
       };
       publications.push(published);
     }

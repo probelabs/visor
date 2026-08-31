@@ -139,6 +139,13 @@ checks:
       expect(() => configManager.validateConfig(config)).toThrow('RESERVED_PROOF_ADMISSION_ROOT');
     });
 
+    it('recognizes governed proof inspection but rejects it at the root policy boundary', () => {
+      const config: any = { version: '1.0', checks: { inspect: { type: 'governed-proof-inspect' } } };
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(configSchema);
+      expect(validate(config)).toBe(true);
+      expect(() => configManager.validateConfig(config)).toThrow('RESERVED_PROOF_ADMISSION_ROOT');
+    });
+
     it('accepts the human-readable Graph v2 C1 fixture through generated schema and semantics', () => {
       const realFs = jest.requireActual<typeof fs>('fs');
       const fixturePath = path.resolve(

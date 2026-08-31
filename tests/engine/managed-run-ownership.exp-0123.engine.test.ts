@@ -41,6 +41,11 @@ import { EventBus } from '../../src/event-bus/event-bus';
 import * as traceHelpers from '../../src/telemetry/trace-helpers';
 import * as ndjsonTelemetry from '../../src/telemetry/fallback-ndjson';
 import * as managedRunHelpers from '../../src/state-machine/dispatch/managed-run';
+import {
+  createGovernedProofInspectProviderForFocusedTest,
+  type GovernedProbeRunnerRequest,
+} from '../../src/providers/governed-proof-inspect-check-provider';
+import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
 const realManagedRunHelpers = jest.requireActual<
   typeof import('../../src/state-machine/dispatch/managed-run')
@@ -463,7 +468,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
           fence: request.binding.fence,
         };
       }
-      let control!: ManagedControl;
+      const control = {} as ManagedControl;
       const handle: ManagedAgentRun = {
         binding,
         started: started.promise,
@@ -495,7 +500,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
         },
       };
       const journal = (engine as any)._lastContext.journal;
-      control = {
+      Object.assign(control, {
         request,
         binding,
         started,
@@ -513,7 +518,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
         cancelCalls: [],
         closeCalls: 0,
         closeReceivers: [],
-      };
+      });
       controls.push(control);
       launchOrder.push(`managed:${keyOf(request)}`);
       if (acquisitionMode === 'valid' && identityPosition !== 'handle') activeHandles++;
@@ -2028,6 +2033,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
       const { activeChildren: _omitted, ...missingActiveChildren } = cleanupReceipt(
         control.binding
       );
+      void _omitted;
       control.close.resolve(missingActiveChildren as unknown as ManagedRunCleanupReceiptV1);
     } else {
       control.close.resolve(cleanupReceipt(control.binding));
@@ -2643,6 +2649,13 @@ describe('EXP-0205 explicit proof admission node', () => {
   let engine: StateMachineExecutionEngine;
   let managedRequests: ManagedRunStartRequest[];
   let verifyClaims: Array<Readonly<Record<string, any>>>;
+  let capturedProviders: CheckProvider[];
+  let capturedAvailable: string[];
+  let capturedGoverned: CheckProvider | undefined;
+  let fakeAnswerCalls = 0;
+  let fakeCancelCalls = 0;
+  let fakeCloseCalls = 0;
+  let fakePostCloseCalls = 0;
 
   class ExplicitManagedProvider extends CheckProvider {
     getName() { return EXP_0205_MANAGED_PROVIDER; }
@@ -2686,14 +2699,55 @@ describe('EXP-0205 explicit proof admission node', () => {
     engine = new StateMachineExecutionEngine();
     managedRequests = [];
     verifyClaims = [];
+    fakeAnswerCalls = 0;
+    fakeCancelCalls = 0;
+    fakeCloseCalls = 0;
+    fakePostCloseCalls = 0;
+    capturedProviders = registry.getAllProviders();
+    capturedAvailable = registry.getAvailableProviders();
+    capturedGoverned = registry.getProvider('governed-proof-inspect');
     registry.register(new ExplicitManagedProvider());
     registry.register(new ExplicitVerifyProvider());
+    const realRegistry = registry;
+    const fake = createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => {
+      let closed = false;
+      return {
+      answer: () => {
+        if (closed) fakePostCloseCalls++;
+        fakeAnswerCalls++;
+        managedRequests.push(request as unknown as ManagedRunStartRequest);
+        const key = String(request.binding.scope[0]?.key);
+        const data = { decision: key === 'A' ? 'accept' : 'reject', id: key };
+        const digest = `sha256:${sha256Canonical(data)}`;
+        return {
+          data,
+          runtimeAttestation: {
+            version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+            requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+            observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' },
+            executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+            dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+          },
+          resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(data)) },
+        };
+      }, cancel: () => { if (closed) fakePostCloseCalls++; fakeCancelCalls++; }, close: () => { if (closed) fakePostCloseCalls++; fakeCloseCalls++; closed = true; },
+    }; });
+    jest.spyOn(CheckProviderRegistry, 'getInstance').mockReturnValue({
+      getProvider: (name: string) => name === 'governed-proof-inspect' ? fake : realRegistry.getProvider(name),
+      getProviderOrThrow: (name: string) => name === 'governed-proof-inspect' ? fake : realRegistry.getProviderOrThrow(name),
+      setCustomTools: realRegistry.setCustomTools.bind(realRegistry),
+    } as unknown as CheckProviderRegistry);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     registry.unregister(EXP_0205_MANAGED_PROVIDER);
     registry.unregister(EXP_0205_VERIFY_PROVIDER);
     jest.restoreAllMocks();
+    expect(CheckProviderRegistry.getInstance()).toBe(registry);
+    expect(registry.getAllProviders()).toEqual(capturedProviders);
+    expect(registry.getAvailableProviders()).toEqual(capturedAvailable);
+    expect(registry.getProvider('governed-proof-inspect')).toBe(capturedGoverned);
+    expect(await capturedGoverned!.isAvailable()).toBe(false);
   });
 
   it('accepts A, rejects B, preserves lineage, and replays the live projection', async () => {
@@ -2704,7 +2758,12 @@ describe('EXP-0205 explicit proof admission node', () => {
       'proof.admitted_receipt@1': { schema: { type: 'object' } },
     });
     config.subgraphs['onboard-component'].checks = {
-      inspect: { type: EXP_0205_MANAGED_PROVIDER, consumes: [{ claim: 'component.item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }] },
+      inspect: {
+        type: 'governed-proof-inspect', message: 'inspect', instructions: 'inspect component',
+        invocation: { role_id: 'proof-inspect', stance: 'owner', subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'1'.repeat(64)}` }, output_schema_id: 'proof-candidate', output_schema: Buffer.from(JSON.stringify({ type: 'object' })).toString('base64') },
+        invocation_digest: `sha256:${'2'.repeat(64)}`, result_schema: JSON.stringify({ type: 'object' }), profile: 'luna-xhigh-readonly-v1',
+        consumes: [{ claim: 'component.item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }],
+      },
       proof_admit: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
       verify: { type: EXP_0205_VERIFY_PROVIDER, consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }] },
     };
@@ -2734,11 +2793,19 @@ describe('EXP-0205 explicit proof admission node', () => {
     expect(receiptA.parentClaimIds).toEqual([candidateA.claimId]);
     expect(receiptA.payload.candidateClaimId).toBe(candidateA.claimId);
     expect(receiptA.payload.parentClaimIds).toEqual(candidateA.parentClaimIds);
+    expect(candidateA.proofCandidateEvidenceFingerprint).toBe(sha256Canonical(candidateA.proofCandidateEvidence));
+    expect(candidateA.claimId).toBe(sha256Canonical({ claim: candidateA.claim, payloadFingerprint: candidateA.payloadFingerprint, producerCheckId: candidateA.producerCheckId, scope: candidateA.scope, attemptId: candidateA.attemptId, fence: candidateA.fence, parentClaimIds: [...candidateA.parentClaimIds].sort(), proofCandidateEvidenceFingerprint: candidateA.proofCandidateEvidenceFingerprint }));
     expect([...accepted.find(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify').activeInputClaimIds].sort()).toEqual([candidateA.claimId, receiptA.claimId].sort());
     expect(verifyClaims).toHaveLength(1);
+    expect(fakeAnswerCalls).toBe(2);
+    expect(fakeCancelCalls).toBe(0);
+    expect(fakeCloseCalls).toBe(2);
+    expect(fakePostCloseCalls).toBe(0);
     expect(Object.values(verifyClaims[0]).map(claim => claim.claimId).sort()).toEqual(
       [candidateA.claimId, receiptA.claimId].sort()
     );
+    expect(verifyClaims[0].candidate.proofAdmission).toEqual(candidateA.proofCandidateEvidence);
+    expect('proofCandidateEvidence' in receiptA).toBe(false);
     expect(rejected.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false);
     expect(rejected.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false);
     expect(rejected.some(event => event.type === 'AttemptFailed' && event.reason === 'PROVIDER_EXECUTION_FAILED')).toBe(true);

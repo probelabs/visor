@@ -75,7 +75,19 @@ function proofAdmissionConfig(): any {
   });
   value.subgraphs['onboard-component'].checks = {
     inspect: {
-      type: 'noop',
+      type: 'governed-proof-inspect',
+      message: 'inspect component',
+      instructions: 'return the inspected component',
+      invocation: {
+        role_id: 'proof-inspect',
+        stance: 'owner',
+        subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'a'.repeat(64)}` },
+        output_schema_id: 'proof-result',
+        output_schema: Buffer.from('{"type":"object"}', 'utf8').toString('base64'),
+      },
+      invocation_digest: `sha256:${'b'.repeat(64)}`,
+      result_schema: '{"type":"object"}',
+      profile: 'luna-xhigh-readonly-v1',
       consumes: [{ claim: 'component.item@1', as: 'component' }],
       emits: [{ claim: PROOF_CANDIDATE_CLAIM, from: 'output' }],
     },
@@ -104,6 +116,16 @@ describe('Graph v2 C2 expansion plan', () => {
     expect(template.emitterByClaim).toMatchObject({
       [PROOF_CANDIDATE_CLAIM]: 'inspect', [PROOF_ADMITTED_RECEIPT_CLAIM]: 'proof_admit',
     });
+  });
+
+  it.each([
+    ['unknown authored key', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.runtime_unknown_enriched_key = true; }],
+    ['malformed Unicode', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.message = '\ud800'; }],
+    ['noncanonical base64', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.invocation.output_schema = 'eyJ0eXBlIjoib2JqZWN0In0'; }],
+    ['accessor', (value: any) => { Object.defineProperty(value.subgraphs['onboard-component'].checks.inspect, 'message', { enumerable: true, get: () => 'detached' }); }],
+  ])('rejects governed inspect %s before execution', (_name, mutate) => {
+    const value = proofAdmissionConfig(); mutate(value);
+    expect(() => compileClaimPlan(value)).toThrow(InstancePlanError);
   });
 
   it.each([

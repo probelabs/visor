@@ -12,7 +12,7 @@ import type {
   ManagedRunCancelReceiptV1,
   ManagedRunCleanupReceiptV1,
 } from '../../src/providers/check-provider.interface';
-import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 import {
   deriveControllerItemClaimId,
   deriveNodeGenerationId,
@@ -120,6 +120,38 @@ function c2Config(templateShape: C2TemplateShape = 'linear'): any {
 
 function c2Journal(templateShape: C2TemplateShape = 'linear'): ExecutionJournal {
   return new ExecutionJournal(compileClaimPlan(c2Config(templateShape)));
+}
+
+function governedC2Config(): any {
+  const config = c2Config();
+  const schema = JSON.stringify({ type: 'object' });
+  const invocation = { role_id: 'owner', stance: 'owner', subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'1'.repeat(64)}` }, output_schema_id: 'candidate', output_schema: Buffer.from(schema).toString('base64') };
+  config.claim_types['proof.candidate@1'] = { schema: { type: 'object', required: ['id', 'decision'], properties: { id: { type: 'string' }, decision: { type: 'string' } } } };
+  config.claim_types['proof.admitted_receipt@1'] = { schema: { type: 'object' } };
+  config.subgraphs.component.checks = {
+    inspect: { type: 'governed-proof-inspect', message: 'inspect', instructions: 'review', invocation, invocation_digest: `sha256:${'2'.repeat(64)}`, result_schema: schema, profile: 'luna-xhigh-readonly-v1', consumes: [{ claim: 'component.item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }] },
+    proof_admit: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
+    verify: { type: 'noop', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }] },
+  };
+  return config;
+}
+
+function governedEvidence(data: Record<string, string>): any {
+  const invocation = { role_id: 'owner', stance: 'owner', subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'1'.repeat(64)}` }, output_schema_id: 'candidate', output_schema: Buffer.from(JSON.stringify({ type: 'object' })).toString('base64') };
+  const digest = `sha256:${sha256Canonical(data)}`;
+  const attestation = { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: `sha256:${'2'.repeat(64)}` }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } };
+  return immutableCanonicalValue({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: `sha256:${'2'.repeat(64)}` }, probe: { attestation, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(data)) } } });
+}
+
+function completedGovernedCheckpoint(): { plan: any; checkpoint: any } {
+  const plan = compileClaimPlan(governedC2Config()); const journal = new ExecutionJournal(plan);
+  publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+  const generation = journal.queryReadyWork().find(value => value.checkId === 'inspect')!;
+  const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId); journal.scheduleGeneratedAttempt(attempt);
+  const binding = journal.deriveManagedRunBinding(attempt); journal.recordManagedRunAcquired(binding); journal.recordManagedRunStarted(binding);
+  const payload = { decision: 'accept', id: 'A' };
+  journal.completeManagedGeneratedAttempt({ attempt, binding, payload, executionConfigDigest: journal.getGeneratedExecution(generation.nodeGenerationId).node.executionConfigDigest, proofCandidateEvidence: governedEvidence(payload) });
+  return { plan, checkpoint: JSON.parse(JSON.stringify(journal.exportGraphCheckpoint('c2-session'))) };
 }
 
 function c4Config(): any {
@@ -245,6 +277,7 @@ function managedNestedBatchFixture(componentKey = 'A'): {
   journal.completeManagedGeneratedAttempt({
     attempt,
     binding,
+    executionConfigDigest: journal.getGeneratedExecution(attempt.nodeGenerationId).node.executionConfigDigest,
     payload: {
       specs: [{ id: 'spec-1', revision: 1, source: `${componentKey}/one` }],
     },
@@ -631,6 +664,7 @@ describe('snapshot-store (journal + context view)', () => {
     journal.completeManagedGeneratedAttempt({
       attempt,
       binding,
+      executionConfigDigest: journal.getGeneratedExecution(attempt.nodeGenerationId).node.executionConfigDigest,
       payload: {
         specs: [
           { id: 'spec-2', revision: 1, source: 'A/two' },
@@ -1209,6 +1243,7 @@ describe('snapshot-store (journal + context view)', () => {
         journal.completeManagedGeneratedAttempt({
           attempt,
           binding,
+          executionConfigDigest: journal.getGeneratedExecution(attempt.nodeGenerationId).node.executionConfigDigest,
           payload: { id: 'A', findings: 'not-an-array' },
         }),
       'CLAIM_SCHEMA_INVALID'
@@ -1218,6 +1253,7 @@ describe('snapshot-store (journal + context view)', () => {
     journal.completeManagedGeneratedAttempt({
       attempt,
       binding,
+      executionConfigDigest: journal.getGeneratedExecution(attempt.nodeGenerationId).node.executionConfigDigest,
       payload: { id: 'A', findings: ['bounded'] },
     });
     const committed = journal.readRuntimeEvents().slice(before.length);
@@ -1231,6 +1267,48 @@ describe('snapshot-store (journal + context view)', () => {
       controllerDecision: 'completed',
     });
     expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+    expect(Object.values(journal.getInstanceProjection().claimsById).every(claim => !('proofAdmission' in claim))).toBe(true);
+  });
+
+  it('round-trips a governed candidate sidecar through admission and quiescent restore', () => {
+    const plan = compileClaimPlan(governedC2Config());
+    const journal = new ExecutionJournal(plan);
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const inspect = journal.queryReadyWork().find(generation => generation.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(inspect.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    journal.recordManagedRunAcquired(binding);
+    journal.recordManagedRunStarted(binding);
+    const payload = { decision: 'accept', id: 'A' };
+    journal.completeManagedGeneratedAttempt({ attempt, binding, payload, executionConfigDigest: journal.getGeneratedExecution(inspect.nodeGenerationId).node.executionConfigDigest, proofCandidateEvidence: governedEvidence(payload) });
+    const candidate = Object.values(journal.getInstanceProjection().claimsById).find(claim => claim.claim === 'proof.candidate@1')!;
+    const admission = journal.queryReadyWork().find(generation => generation.checkId === 'proof_admit')!;
+    const admissionAttempt = journal.startGeneratedAttempt(admission.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(admissionAttempt);
+    journal.completeGeneratedAttempt({ attempt: admissionAttempt, payload: { candidateClaimId: candidate.claimId } });
+    const verify = journal.queryReadyWork().find(generation => generation.checkId === 'verify')!;
+    const verifyAttempt = journal.startGeneratedAttempt(verify.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(verifyAttempt);
+    journal.completeGeneratedAttempt({ attempt: verifyAttempt, payload: {} });
+    const checkpoint = journal.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+    expect(restored.getInstanceProjection()).toEqual(journal.getInstanceProjection());
+    expect(restored.replayInstanceProjection()).toEqual(restored.getInstanceProjection());
+    expect(restored.getGeneratedExecution(verify.nodeGenerationId).claims.candidate.proofAdmission).toEqual(governedEvidence(payload));
+  });
+
+  it('rejects governed completion without digest, managed terminal, or bound invocation', () => {
+    const plan = compileClaimPlan(governedC2Config()); const journal = new ExecutionJournal(plan);
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(value => value.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId); journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt); const payload = { decision: 'accept', id: 'A' };
+    expectErrorCode(() => journal.completeManagedGeneratedAttempt({ attempt, binding, executionConfigDigest: 'f'.repeat(64), payload, proofCandidateEvidence: governedEvidence(payload) }), 'STALE_EXECUTION_CONFIG');
+    expectErrorCode(() => journal.completeGeneratedAttempt({ attempt, payload, proofCandidateEvidence: governedEvidence(payload) }), 'MANAGED_TERMINAL_REQUIRED');
+    const detached = JSON.parse(JSON.stringify(governedEvidence(payload))); detached.role.invocationDigest = `sha256:${'f'.repeat(64)}`;
+    journal.recordManagedRunAcquired(binding); journal.recordManagedRunStarted(binding);
+    expectErrorCode(() => journal.completeManagedGeneratedAttempt({ attempt, binding, executionConfigDigest: journal.getGeneratedExecution(generation.nodeGenerationId).node.executionConfigDigest, payload, proofCandidateEvidence: detached }), 'INVALID_PROOF_EVIDENCE');
   });
 });
 
@@ -1387,6 +1465,21 @@ describe('Graph-v2 journal checkpoints', () => {
   });
 
   it.each([
+    ['one-sided sidecar', (event: any) => { delete event.proofCandidateEvidenceFingerprint; }, 'INVALID_CHECKPOINT_PREFIX'],
+    ['evidence tamper', (event: any) => { event.proofCandidateEvidence.probe.resultIdentity.resultDigest = `sha256:${'f'.repeat(64)}`; }, 'CHECKPOINT_PLAN_AUTHORITY_MISMATCH'],
+    ['wrong claim sidecar', (event: any) => { event.claim = 'component.inspected@1'; }, 'INVALID_CHECKPOINT_PREFIX'],
+    ['wrong node', (event: any) => { event.nodeGenerationId = 'f'.repeat(64); }, 'CHECKPOINT_PLAN_AUTHORITY_MISMATCH'],
+    ['wrong producer/checkId', (event: any) => { event.checkId = 'proof_admit'; }, 'INVALID_CHECKPOINT_PREFIX'],
+    ['claim ID mismatch', (event: any) => { event.claimId = 'f'.repeat(64); }, 'INVALID_CHECKPOINT_PREFIX'],
+  ])('rejects governed publication authority drift: %s', (_name, mutate, code) => {
+    const { plan, checkpoint } = completedGovernedCheckpoint();
+    const event = checkpoint.events.find((value: any) => value.claim === 'proof.candidate@1');
+    mutate(event);
+    rehash(checkpoint);
+    expectErrorCode(() => ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint), code);
+  });
+
+  it.each([
     ['mixed event session', (checkpoint: any) => { checkpoint.events[0].sessionId = 'other'; }],
     ['root expansion digest', (checkpoint: any) => {
       const event = checkpoint.events.find((candidate: any) => candidate.type === 'SubgraphExpanded');
@@ -1501,7 +1594,7 @@ describe('Graph-v2 journal checkpoints', () => {
       const binding = journal.deriveManagedRunBinding(attempt);
       journal.recordManagedRunAcquired(binding);
       journal.recordManagedRunStarted(binding);
-      journal.completeManagedGeneratedAttempt({ attempt, binding, payload: { id: 'A', findings: [] } });
+      journal.completeManagedGeneratedAttempt({ attempt, binding, executionConfigDigest: journal.getGeneratedExecution(attempt.nodeGenerationId).node.executionConfigDigest, payload: { id: 'A', findings: [] } });
       return journal.readRuntimeEvents().findIndex(event => event.type === 'ManagedRunTerminated') + 1;
     }],
   ])('rejects an atomic managed-terminal cut (%s)', (_name, buildCut) => {
@@ -1645,8 +1738,14 @@ describe('managed-run authority snapshots', () => {
       }
 
       const callOrder: string[] = [];
-      let handle: any;
-      const cancel = jest.fn(function (this: unknown, reason: 'deadline', fence: number) {
+      const handle: any = {
+        binding,
+        started: Promise.resolve({ version: 1 as const, kind: 'started' as const, binding }),
+        outcome: Promise.resolve({ version: 1 as const, kind: 'failed' as const, binding }),
+        cancel,
+        close,
+      };
+      const cancel = jest.fn(function (this: unknown, _reason: 'deadline', _fence: number) {
         expect(this).toBe(handle);
         callOrder.push('cancel');
         return cancelReturn.promise;
@@ -1656,13 +1755,6 @@ describe('managed-run authority snapshots', () => {
         callOrder.push('close');
         return closeReturn.promise;
       });
-      handle = {
-        binding,
-        started: Promise.resolve({ version: 1 as const, kind: 'started' as const, binding }),
-        outcome: Promise.resolve({ version: 1 as const, kind: 'failed' as const, binding }),
-        cancel,
-        close,
-      };
       const snapshot = snapshotManagedRun(() => handle, binding);
       const onCancelRequested = jest.fn();
       const deadline = armManagedRunDeadline({

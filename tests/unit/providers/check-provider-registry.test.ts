@@ -8,6 +8,7 @@ import { ReviewSummary } from '../../../src/reviewer';
 import { createProofAdmitProviderForFocusedTest, ProofAdmitCheckProvider } from '../../../src/providers/proof-admit-check-provider';
 import { PROOF_CANDIDATE_CLAIM } from '../../../src/state-machine/graph/instance-plan';
 import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import { GovernedProofInspectCheckProvider } from '../../../src/providers/governed-proof-inspect-check-provider';
 
 const admissionCandidate = (payload: any = { evidence: 'fixture' }): any => ({
   provenance: 'attempt', claimId: 'candidate-1', claim: PROOF_CANDIDATE_CLAIM, payload,
@@ -84,6 +85,8 @@ describe('CheckProviderRegistry', () => {
       expect(providers).toContain('http_client');
       expect(providers).toContain('noop');
       expect(providers).toContain('proof-admit');
+      expect(providers).toContain('governed-proof-inspect');
+      expect(registry.getProvider('governed-proof-inspect')).toBeInstanceOf(GovernedProofInspectCheckProvider);
     });
   });
 
@@ -106,6 +109,9 @@ describe('CheckProviderRegistry', () => {
       expect(() => registry.register(new MockCheckProvider('proof-admit'))).toThrow(
         "Provider 'proof-admit' is reserved"
       );
+      expect(() => registry.register(new MockCheckProvider('governed-proof-inspect'))).toThrow(
+        "Provider 'governed-proof-inspect' is reserved"
+      );
       expect(registry.getProvider('proof-admit')).toBeInstanceOf(ProofAdmitCheckProvider);
     });
   });
@@ -125,6 +131,9 @@ describe('CheckProviderRegistry', () => {
     it('seals the reserved proof-admit name from removal', () => {
       expect(() => registry.unregister('proof-admit')).toThrow(
         "Provider 'proof-admit' is reserved"
+      );
+      expect(() => registry.unregister('governed-proof-inspect')).toThrow(
+        "Provider 'governed-proof-inspect' is reserved"
       );
       expect(registry.hasProvider('proof-admit')).toBe(true);
     });
@@ -200,8 +209,8 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAllProviders();
       expect(providers).toContain(provider1);
       expect(providers).toContain(provider2);
-      // Reset adds 18 default providers, including the sealed proof-admit provider, + 2 custom = 20 total
-      expect(providers.length).toBe(20);
+      // Reset adds 19 default providers, including both sealed proof providers, + 2 custom.
+      expect(providers.length).toBe(21);
     });
   });
 
