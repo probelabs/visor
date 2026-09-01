@@ -35,6 +35,7 @@ export class CheckProviderRegistry {
   private static instance: CheckProviderRegistry;
   private customTools?: Record<string, CustomToolDefinition>;
   private proofAdmissionBootstrapped = false;
+  private proofAdmissionAccessed = false;
 
   private constructor() {
     // Register default providers
@@ -125,6 +126,7 @@ export class CheckProviderRegistry {
   /** Install the reserved Proof provider once from a controller-owned opaque capability. */
   bootstrapProofAdmission(capability: object): void {
     if (this.proofAdmissionBootstrapped) throw new Error('Proof admission bootstrap already completed');
+    if (this.proofAdmissionAccessed) throw new Error('Proof admission bootstrap must precede provider access');
     const current = this.providers.get(PROOF_ADMIT_PROVIDER_NAME);
     if (!(current instanceof ProofAdmitCheckProvider)) throw new Error('Proof admission provider registry state is invalid');
     this.providers.set(PROOF_ADMIT_PROVIDER_NAME, createProofAdmitProviderFromCapability(capability));
@@ -168,6 +170,7 @@ export class CheckProviderRegistry {
    * Get a provider by name
    */
   getProvider(name: string): CheckProvider | undefined {
+    if (name === PROOF_ADMIT_PROVIDER_NAME) this.proofAdmissionAccessed = true;
     return this.providers.get(name);
   }
 
@@ -175,6 +178,7 @@ export class CheckProviderRegistry {
    * Get provider or throw if not found
    */
   getProviderOrThrow(name: string): CheckProvider {
+    if (name === PROOF_ADMIT_PROVIDER_NAME) this.proofAdmissionAccessed = true;
     const provider = this.providers.get(name);
     if (!provider) {
       throw new Error(
@@ -188,6 +192,7 @@ export class CheckProviderRegistry {
    * Check if a provider exists
    */
   hasProvider(name: string): boolean {
+    if (name === PROOF_ADMIT_PROVIDER_NAME) this.proofAdmissionAccessed = true;
     return this.providers.has(name);
   }
 
@@ -266,6 +271,7 @@ export class CheckProviderRegistry {
   reset(): void {
     this.providers.clear();
     this.proofAdmissionBootstrapped = false;
+    this.proofAdmissionAccessed = false;
     this.registerDefaultProviders();
   }
 

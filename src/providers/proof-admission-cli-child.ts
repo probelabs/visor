@@ -10,9 +10,11 @@ import { canonicalJson } from '../state-machine/graph/claim-kernel';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
 
 export const PROOF_ADMISSION_UNAVAILABLE = 'PROOF_ADMISSION_UNAVAILABLE';
+export const PROOF_ADMISSION_CLEANUP_FAILED = 'PROOF_ADMISSION_CLEANUP_FAILED';
 const REQUEST_LIMIT = 2162688;
 const STDOUT_LIMIT = 2097153;
 const STDERR_LIMIT = 65536;
+const COMMAND_TIMEOUT_MS = process.env.NODE_ENV === 'test' && Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) > 0 ? Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) : 120000;
 const DECISION_VERSION = 'proof.role-result-candidate-cli-decision/v1';
 const RECEIPT_VERSION = 'proof.role-result-candidate-admission/v1';
 const CANDIDATE_ID_DOMAIN = 'proof.role-result-candidate-envelope/id/v1';
@@ -162,6 +164,10 @@ function executableCapability(path: string): ExecutableCapability | undefined {
 function capabilityIdentity(value: unknown): ExecutableStat | undefined {
   return value && typeof value === 'object' ? executableCapabilities.get(value) : undefined;
 }
+export function proofAdmissionCapabilityValid(value: unknown): value is object {
+  const identity = capabilityIdentity(value);
+  return !!identity && sameExecutable(identity, executableStat(identity.realpath));
+}
 function groupAbsent(pid: number): boolean {
   try { process.kill(-pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
 }
@@ -223,26 +229,22 @@ function runBoundedProofCommand(
       stdoutEnded = true;
       stderrEnded = true;
     };
-    const rejectUnavailable = () => {
+    const rejectUnavailable = (cleanupFailed = false) => {
       if (settled) return;
       settled = true;
       clearTimers();
       closeStreams();
-      reject(new Error(PROOF_ADMISSION_UNAVAILABLE));
+      reject(new Error(cleanupFailed ? PROOF_ADMISSION_CLEANUP_FAILED : PROOF_ADMISSION_UNAVAILABLE));
     };
     const proveGroupGone = (): boolean => !pid || groupAbsent(pid);
     const reapOrReject = () => {
-      if (settled || !pid || proveGroupGone()) {
-        settle();
-        return;
-      }
-      if (!reapTimer) {
-        reapTimer = setTimeout(() => {
-          reapTimer = undefined;
-          if (proveGroupGone() && closeSeen) settle();
-          else rejectUnavailable();
-        }, 2000);
-      }
+      if (settled || !pid) return;
+      if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) { settle(); return; }
+      if (!reapTimer) reapTimer = setTimeout(() => {
+        reapTimer = undefined;
+        if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) settle();
+        else rejectUnavailable(true);
+      }, 2000);
     };
     const settle = () => {
       if (settled || !closeSeen || !stdoutEnded || !stderrEnded || !pid) return;
@@ -261,19 +263,21 @@ function runBoundedProofCommand(
       timedOut = true;
       closeStreams();
       if (!pid) {
-        try { child?.kill('SIGTERM'); } catch { /* child may already be gone */ }
+        // Spawn errors can arrive before Node assigns a pid.  Settle the
+        // request immediately; there is no process group to reap.
+        rejectUnavailable();
         return;
       }
       if (!proveGroupGone() && !termSent) {
         termSent = true;
-        try { signalGroup(pid, 'SIGTERM'); } catch { rejectUnavailable(); return; }
+        try { signalGroup(pid, 'SIGTERM'); } catch { rejectUnavailable(true); return; }
       }
       if (!killTimer) {
         killTimer = setTimeout(() => {
           killTimer = undefined;
           if (pid && !proveGroupGone() && !killSent) {
             killSent = true;
-            try { signalGroup(pid, 'SIGKILL'); } catch { rejectUnavailable(); }
+            try { signalGroup(pid, 'SIGKILL'); } catch { rejectUnavailable(true); }
           }
           reapOrReject();
         }, 250);
@@ -327,9 +331,9 @@ function runBoundedProofCommand(
       });
       child.once('close', () => {
         closeSeen = true;
-        settle();
+        if (!pid) rejectUnavailable(); else settle();
       });
-      deadlineTimer = setTimeout(forceStop, 120000);
+      deadlineTimer = setTimeout(forceStop, COMMAND_TIMEOUT_MS);
     } catch {
       rejectUnavailable();
     }

@@ -20,6 +20,7 @@ import { logger, configureLoggerFromCli } from './logger';
 import { ChatTUI } from './tui/index';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
 import { withVisorRun, getVisorRunAttributes } from './telemetry/trace-helpers';
@@ -64,16 +65,36 @@ async function projectProofAuthority(config: VisorConfig, capability: object, cw
   if (projected === 0) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: no governed-proof-inspect node');
 }
 
+function containsGovernedProofNode(value: unknown, seen = new Set<object>()): boolean {
+  if (!value || typeof value !== 'object' || seen.has(value as object)) return false;
+  seen.add(value as object);
+  if (!Array.isArray(value) && (value as any).type === 'governed-proof-inspect') return true;
+  return (Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)).some(child => containsGovernedProofNode(child, seen));
+}
+
+function isGovernedConfigFile(configPath: string): boolean {
+  try { return containsGovernedProofNode(yaml.load(fs.readFileSync(path.resolve(configPath), 'utf8'))); } catch { return false; }
+}
+
 async function loadProofAwareConfig(configManager: ConfigManager, configPath: string, proofBin: string): Promise<{ config: VisorConfig; capability: object; memoryNamespace: string }> {
   const capability = createProofAdmissionCapability(proofBin);
   const resolvedPath = path.resolve(configPath);
-  const config = await configManager.loadConfig(resolvedPath, { validate: false, mergeDefaults: false });
+  const oldRemotePolicy = process.env.VISOR_NO_REMOTE_EXTENDS;
+  process.env.VISOR_NO_REMOTE_EXTENDS = 'true';
+  let config: VisorConfig;
+  try {
+    // Normalize and merge defaults before projecting Proof authority. This is
+    // the exact object that is subsequently validated and compiled.
+    config = await configManager.loadConfig(resolvedPath, { validate: false, mergeDefaults: true });
+  } finally {
+    if (oldRemotePolicy === undefined) delete process.env.VISOR_NO_REMOTE_EXTENDS;
+    else process.env.VISOR_NO_REMOTE_EXTENDS = oldRemotePolicy;
+  }
   await projectProofAuthority(config, capability, path.dirname(resolvedPath));
   const memoryNamespace = `visor-cli-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   config.memory = { ...(config.memory || {}), storage: 'memory', namespace: memoryNamespace };
   configManager.validateConfig(config);
-  const merged = await configManager.loadConfigFromObject(config, { validate: false, mergeDefaults: true, baseDir: path.dirname(resolvedPath) });
-  return { config: merged, capability, memoryNamespace };
+  return { config, capability, memoryNamespace };
 }
 
 /**
@@ -1255,15 +1276,24 @@ export async function main(): Promise<void> {
   let runTuiWorkflow: ((message: string) => Promise<void>) | null = null;
   let proofCapability: object | undefined;
   let ownedMemoryNamespace: string | undefined;
+  let memoryCleanupFailed = false;
   const cleanupOwnedMemoryNamespace = async (): Promise<void> => {
     if (!ownedMemoryNamespace) return;
     const namespace = ownedMemoryNamespace;
-    ownedMemoryNamespace = undefined;
     try {
       const { MemoryStore } = await import('./memory-store');
-      await MemoryStore.getInstance().clear(namespace);
+      const store = MemoryStore.getInstance();
+      const data = (store as any).data as Map<string, Map<string, unknown>>;
+      const unrelated = goCompatibleProofJson([...data].filter(([key]) => key !== namespace).map(([key, values]) => [key, [...values]]));
+      await store.clear(namespace);
+      if (store.list(namespace).length !== 0) throw new Error('namespace still contains data');
+      const remaining = goCompatibleProofJson([...data].filter(([key]) => key !== namespace).map(([key, values]) => [key, [...values]]));
+      if (remaining !== unrelated) throw new Error('unrelated memory namespaces changed');
+      // Keep ownership until the clear and postcondition both succeed.
+      ownedMemoryNamespace = undefined;
     } catch (error) {
-      logger.warn(`Failed to clean Proof memory namespace: ${error instanceof Error ? error.message : String(error)}`);
+      memoryCleanupFailed = true;
+      logger.error(`Proof memory cleanup failed closed for ${namespace}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -1758,6 +1788,9 @@ export async function main(): Promise<void> {
     } else if (options.proofBin) {
       throw new Error('--proof-bin requires --config so the governed project cwd is explicit');
     } else if (options.configPath) {
+      if (isGovernedConfigFile(options.configPath)) {
+        throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed configuration requires --proof-bin <absolute-path>');
+      }
       try {
         logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
@@ -2758,7 +2791,7 @@ export async function main(): Promise<void> {
     // Force exit to prevent hanging from unclosed resources (MCP connections, etc.)
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
-    const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
+    const exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed ? 1 : 0;
     // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {

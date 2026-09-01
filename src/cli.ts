@@ -52,7 +52,7 @@ export class CLI {
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
       .option('--config <path>', 'Path to configuration file')
-      .option('--proof-bin [path]', 'Absolute trusted Proof executable for governed graph runs')
+      .option('--proof-bin <path>', 'Absolute trusted Proof executable for governed graph runs')
       .option(
         '--timeout <ms>',
         'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',

@@ -1,6 +1,9 @@
 # Small product-native Proof graph. Keep this file readable and commented.
 version: "1.0"
 max_parallelism: 1
+workspace:
+  # The demo graph runs against the checked-out component; no workspace copy.
+  enabled: false
 memory:
   storage: memory
   # CLI assigns a fresh namespace; authored values are never reused.

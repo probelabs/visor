@@ -5,6 +5,7 @@ import { immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
 import { PROOF_ADMIT_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
 import {
   createProofAdmissionCliChildForFocusedTest,
+  proofAdmissionCapabilityValid,
   PROOF_ADMISSION_UNAVAILABLE,
   startProofAdmissionCliChild,
 } from './proof-admission-cli-child';
@@ -84,6 +85,7 @@ export function createProofAdmitProviderForFocusedTest(path: string): ProofAdmit
   return new ProofAdmitCheckProvider(token as object, INTERNAL);
 }
 export function createProofAdmitProviderFromCapability(capability: object): ProofAdmitCheckProvider {
+  if (!proofAdmissionCapabilityValid(capability)) invalid('capability is not the current trusted Proof executable');
   return new ProofAdmitCheckProvider(capability, INTERNAL);
 }
 
