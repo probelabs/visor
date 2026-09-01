@@ -200,6 +200,9 @@ export class CheckProviderRegistry {
    * Get all registered provider names
    */
   getAvailableProviders(): string[] {
+    // Enumerating provider names exposes whether the reserved Proof provider is
+    // available, so it is an acquisition boundary for one-shot bootstrap too.
+    if (this.providers.has(PROOF_ADMIT_PROVIDER_NAME)) this.proofAdmissionAccessed = true;
     return Array.from(this.providers.keys());
   }
 
@@ -207,6 +210,9 @@ export class CheckProviderRegistry {
    * Get all providers
    */
   getAllProviders(): CheckProvider[] {
+    // Returning the provider objects is an acquisition boundary, including
+    // callers such as getActiveProviders() and listProviders().
+    if (this.providers.has(PROOF_ADMIT_PROVIDER_NAME)) this.proofAdmissionAccessed = true;
     return Array.from(this.providers.values());
   }
 

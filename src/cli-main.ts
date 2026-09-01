@@ -72,11 +72,35 @@ function containsGovernedProofNode(value: unknown, seen = new Set<object>()): bo
   return (Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)).some(child => containsGovernedProofNode(child, seen));
 }
 
-function isGovernedConfigFile(configPath: string): boolean {
-  try { return containsGovernedProofNode(yaml.load(fs.readFileSync(path.resolve(configPath), 'utf8'))); } catch { return false; }
+function readConfigDocument(configPath: string): unknown {
+  return yaml.load(fs.readFileSync(path.resolve(configPath), 'utf8'));
 }
 
-async function loadProofAwareConfig(configManager: ConfigManager, configPath: string, proofBin: string): Promise<{ config: VisorConfig; capability: object; memoryNamespace: string }> {
+function isGovernedConfigFile(configPath: string): boolean {
+  try { return containsGovernedProofNode(readConfigDocument(configPath)); } catch { return false; }
+}
+
+function hasRemoteExtends(configPath: string): boolean {
+  try {
+    const root = readConfigDocument(configPath) as any;
+    const value = root && typeof root === 'object' ? root.extends || root.include : undefined;
+    const sources = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    return sources.some(source => typeof source === 'string' && /^https?:\/\//i.test(source));
+  } catch { return false; }
+}
+
+async function loadNormalizedForGovernanceCheck(configManager: ConfigManager, configPath: string): Promise<VisorConfig> {
+  const oldRemotePolicy = process.env.VISOR_NO_REMOTE_EXTENDS;
+  process.env.VISOR_NO_REMOTE_EXTENDS = 'true';
+  try {
+    return await configManager.loadConfig(path.resolve(configPath), { validate: false, mergeDefaults: true });
+  } finally {
+    if (oldRemotePolicy === undefined) delete process.env.VISOR_NO_REMOTE_EXTENDS;
+    else process.env.VISOR_NO_REMOTE_EXTENDS = oldRemotePolicy;
+  }
+}
+
+async function loadProofAwareConfig(configManager: ConfigManager, configPath: string, proofBin: string, ownNamespace?: (namespace: string) => void): Promise<{ config: VisorConfig; capability: object; memoryNamespace: string }> {
   const capability = createProofAdmissionCapability(proofBin);
   const resolvedPath = path.resolve(configPath);
   const oldRemotePolicy = process.env.VISOR_NO_REMOTE_EXTENDS;
@@ -92,6 +116,7 @@ async function loadProofAwareConfig(configManager: ConfigManager, configPath: st
   }
   await projectProofAuthority(config, capability, path.dirname(resolvedPath));
   const memoryNamespace = `visor-cli-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  ownNamespace?.(memoryNamespace);
   config.memory = { ...(config.memory || {}), storage: 'memory', namespace: memoryNamespace };
   configManager.validateConfig(config);
   return { config, capability, memoryNamespace };
@@ -1776,7 +1801,12 @@ export async function main(): Promise<void> {
     if (options.configPath && options.proofBin) {
       try {
         logger.step('Loading configuration with trusted Proof authority');
-        const loaded = await loadProofAwareConfig(configManager, options.configPath, options.proofBin);
+        const loaded = await loadProofAwareConfig(
+          configManager,
+          options.configPath,
+          options.proofBin,
+          namespace => { ownedMemoryNamespace = namespace; }
+        );
         config = loaded.config;
         proofCapability = loaded.capability;
         ownedMemoryNamespace = loaded.memoryNamespace;
@@ -1788,8 +1818,27 @@ export async function main(): Promise<void> {
     } else if (options.proofBin) {
       throw new Error('--proof-bin requires --config so the governed project cwd is explicit');
     } else if (options.configPath) {
-      if (isGovernedConfigFile(options.configPath)) {
+      const directGoverned = isGovernedConfigFile(options.configPath);
+      const remoteShaped = hasRemoteExtends(options.configPath);
+      // A direct governed root with remote inheritance is rejected before the
+      // loader can fetch it. This keeps the remote fetch sentinel at zero while
+      // leaving ordinary non-governed remote extends on their existing path.
+      if (directGoverned && remoteShaped) {
         throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed configuration requires --proof-bin <absolute-path>');
+      }
+      if (!remoteShaped) {
+        try {
+          const normalized = await loadNormalizedForGovernanceCheck(configManager, options.configPath);
+          if (containsGovernedProofNode(normalized)) {
+            throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed configuration requires --proof-bin <absolute-path>');
+          }
+        } catch (error) {
+          // A non-governed local chain may itself extend a remote config. Keep
+          // that ordinary behavior unchanged; a direct governed root is still
+          // denied without allowing the remote fetch to occur.
+          const message = error instanceof Error ? error.message : String(error);
+          if (directGoverned || !/remote extends are disabled/i.test(message)) throw error;
+        }
       }
       try {
         logger.step('Loading configuration');

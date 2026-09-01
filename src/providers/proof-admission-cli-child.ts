@@ -213,6 +213,7 @@ function runBoundedProofCommand(
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let reapTimer: ReturnType<typeof setTimeout> | undefined;
+    let reapDeadline = 0;
 
     const clearTimers = () => {
       if (deadlineTimer) clearTimeout(deadlineTimer);
@@ -240,11 +241,13 @@ function runBoundedProofCommand(
     const reapOrReject = () => {
       if (settled || !pid) return;
       if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) { settle(); return; }
+      if (!reapDeadline) reapDeadline = Date.now() + 2000;
       if (!reapTimer) reapTimer = setTimeout(() => {
         reapTimer = undefined;
         if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) settle();
-        else rejectUnavailable(true);
-      }, 2000);
+        else if (Date.now() >= reapDeadline) rejectUnavailable(true);
+        else reapOrReject();
+      }, 10);
     };
     const settle = () => {
       if (settled || !closeSeen || !stdoutEnded || !stderrEnded || !pid) return;
@@ -327,11 +330,17 @@ function runBoundedProofCommand(
       child.once('exit', (code, exitedSignal) => {
         status = code;
         signal = exitedSignal;
+        // A normal parent exit is not sufficient when a detached descendant
+        // still owns the process group. Treat this as a failed protocol run
+        // and drive the same TERM/grace/KILL/reap state machine as timeout.
+        if (pid && !proveGroupGone()) { forceStop(); return; }
         settle();
       });
       child.once('close', () => {
         closeSeen = true;
-        if (!pid) rejectUnavailable(); else settle();
+        if (!pid) rejectUnavailable();
+        else if (!proveGroupGone()) forceStop();
+        else settle();
       });
       deadlineTimer = setTimeout(forceStop, COMMAND_TIMEOUT_MS);
     } catch {
@@ -394,6 +403,8 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
   let admitted = false;
   let terminationRequested = false;
   let termSent = false, killSent = false, timer: ReturnType<typeof setTimeout> | undefined, reapTimer: ReturnType<typeof setTimeout> | undefined;
+  let cleanupFailed = false;
+  let reapDeadline = 0;
   let resolveStarted!: (value: { version: 1; kind: 'started'; binding: ManagedRunBindingV1 }) => void;
   let rejectStarted!: (reason: unknown) => void;
   const started = new Promise<any>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject; });
@@ -403,11 +414,59 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
   const outcome = new Promise<ManagedRunOutcomeV1>(resolve => { resolveOutcome = resolve; });
   const cleanup = new Promise<any>((resolve, reject) => { resolveCleanup = resolve; rejectCleanup = reject; });
   const failOnce = (reason: string) => { if (!failed) failed = reason; };
+  const closeStreams = () => {
+    for (const stream of [child?.stdin, child?.stdout, child?.stderr]) {
+      if (stream && typeof (stream as any).destroy === 'function') (stream as any).destroy();
+    }
+    stdoutEnd = true; stderrEnd = true;
+  };
+  const settleBeforePid = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (timer) { clearTimeout(timer); timer = undefined; }
+    if (reapTimer) { clearTimeout(reapTimer); reapTimer = undefined; }
+    closeStreams();
+    child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
+    resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+    // No PID means no process group exists to reap; this is a bounded spawn
+    // rejection, not a cleanup ambiguity.
+    resolveCleanup(Object.freeze({ version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }));
+  };
+  const reapOrSettle = () => {
+    if (cleaned || !pid) return;
+    if (groupAbsent(pid)) { settle(); return; }
+    if (!reapDeadline) reapDeadline = Date.now() + 2000;
+    if (!reapTimer) reapTimer = setTimeout(() => {
+      reapTimer = undefined;
+      if (pid && groupAbsent(pid)) settle();
+      else if (Date.now() >= reapDeadline) {
+        cleanupFailed = true;
+        failOnce('process group reap timed out');
+        cleaned = true;
+        if (timer) { clearTimeout(timer); timer = undefined; }
+        closeStreams();
+        child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
+        resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+        rejectCleanup(new Error(PROOF_ADMISSION_CLEANUP_FAILED));
+      } else reapOrSettle();
+    }, 10);
+  };
   const killIfNeeded = () => {
     if (!pid || groupAbsent(pid)) return;
-    if (!termSent) { termSent = true; try { signalGroup(pid, 'SIGTERM'); } catch { failOnce('termination failed'); } }
-    if (!timer) timer = setTimeout(() => { if (pid && !groupAbsent(pid) && !killSent) { killSent = true; try { signalGroup(pid, 'SIGKILL'); } catch { failOnce('termination failed'); } } }, 250);
-    if (!reapTimer) reapTimer = setTimeout(() => { reapTimer = undefined; if (pid && !groupAbsent(pid)) { failOnce('process group reap timed out'); if (timer) { clearTimeout(timer); timer = undefined; } child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners(); resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding })); rejectCleanup(new Error('process group reap timed out')); } }, 2000);
+    closeStreams();
+    if (!termSent) {
+      termSent = true;
+      try { signalGroup(pid, 'SIGTERM'); } catch { cleanupFailed = true; failOnce('termination failed'); }
+    }
+    if (!timer) timer = setTimeout(() => {
+      timer = undefined;
+      if (pid && !groupAbsent(pid) && !killSent) {
+        killSent = true;
+        try { signalGroup(pid, 'SIGKILL'); } catch { cleanupFailed = true; failOnce('termination failed'); }
+      }
+      reapOrSettle();
+    }, 250);
+    reapOrSettle();
   };
   const settle = () => {
     if (!closeSeen || !stdoutEnd || !stderrEnd || !pid || !groupAbsent(pid)) return;
@@ -416,6 +475,11 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     if (timer) { clearTimeout(timer); timer = undefined; }
     if (reapTimer) { clearTimeout(reapTimer); reapTimer = undefined; }
     child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
+    if (cleanupFailed) {
+      resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+      rejectCleanup(new Error(PROOF_ADMISSION_CLEANUP_FAILED));
+      return;
+    }
     if (!failed && admitted && writeDone && exitCode === 0 && signal === null && stderr.length === 0 && decision !== undefined) {
       resolveOutcome(Object.freeze({ version: 1, kind: 'succeeded', binding, summary: Object.freeze({ issues: [], output: decision }) }));
     } else {
@@ -444,9 +508,24 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     proc.stderr?.on('data', (chunk: Buffer) => { const remaining = STDERR_LIMIT - stderr.length; const append = Math.min(chunk.length, remaining); if (append > 0) stderr = Buffer.concat([stderr, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stderr limit exceeded'); killIfNeeded(); } });
     proc.stdout?.on('end', () => { stdoutEnd = true; inspectStdout(); settle(); });
     proc.stderr?.on('end', () => { stderrEnd = true; settle(); });
-    proc.on('error', error => { failOnce('child process failed'); rejectStarted(error); closeSeen = true; stdoutEnd = true; stderrEnd = true; if (!pid) rejectCleanup(error); else settle(); });
-    proc.on('exit', (code, exitedSignal) => { exitCode = code; signal = exitedSignal; if (pid && !groupAbsent(pid)) killIfNeeded(); settle(); });
-    proc.on('close', () => { closeSeen = true; settle(); });
+    proc.on('error', () => {
+      failOnce('child process failed');
+      rejectStarted(new Error(PROOF_ADMISSION_UNAVAILABLE));
+      closeSeen = true; stdoutEnd = true; stderrEnd = true;
+      if (!pid) settleBeforePid(); else { killIfNeeded(); settle(); }
+    });
+    proc.on('exit', (code, exitedSignal) => {
+      exitCode = code; signal = exitedSignal;
+      // Parent exit is not clean if a detached descendant still owns the
+      // group. The same idempotent cleanup state machine handles it once.
+      if (pid && !groupAbsent(pid)) { failOnce('detached process group survived parent'); killIfNeeded(); }
+      settle();
+    });
+    proc.on('close', () => {
+      closeSeen = true;
+      if (pid && !groupAbsent(pid)) { failOnce('detached process group survived parent'); killIfNeeded(); }
+      settle();
+    });
   };
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   try {
@@ -454,15 +533,16 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     attach(child);
     child.once('spawn', () => {
       pid = child?.pid;
-      if (!pid) { failOnce('child process did not expose a pid'); rejectStarted(new Error('child process did not expose a pid')); return; }
+      if (!pid) { failOnce('child process did not expose a pid'); rejectStarted(new Error(PROOF_ADMISSION_UNAVAILABLE)); settleBeforePid(); return; }
       resolveStarted(Object.freeze({ version: 1 as const, kind: 'started' as const, binding }));
       if (terminationRequested) { killIfNeeded(); return; }
       if (!sameExecutable(executable, executableStat(executable.realpath))) { failOnce('executable changed before write'); killIfNeeded(); return; }
       child?.stdin?.once('error', () => { failOnce('request write failed'); killIfNeeded(); });
       child?.stdin?.end(request.proofAdmissionRequest, 'utf8', () => { writeDone = true; settle(); });
     });
-  } catch (error) {
-    failOnce('child acquisition failed'); rejectStarted(error); if (pid) killIfNeeded(); else { closeSeen = true; stdoutEnd = true; stderrEnd = true; rejectCleanup(error); }
+  } catch {
+    failOnce('child acquisition failed'); rejectStarted(new Error(PROOF_ADMISSION_UNAVAILABLE));
+    if (pid) { killIfNeeded(); } else { closeSeen = true; stdoutEnd = true; stderrEnd = true; settleBeforePid(); }
   }
   const terminate = async () => { terminationRequested = true; if (pid) killIfNeeded(); await cleanup; return { version: 1 as const, kind: 'cancelled' as const, binding, reason: 'deadline' as const }; };
   return Object.freeze({
@@ -470,6 +550,6 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     started,
     outcome,
     cancel: async (reason: 'deadline', fence: number) => { if (fence !== binding.fence) throw new Error('stale cancellation fence'); return terminate(); },
-    close: async () => { terminationRequested = true; if (pid && !closeSeen) killIfNeeded(); return cleanup; },
+    close: async () => { terminationRequested = true; if (pid) killIfNeeded(); return cleanup; },
   });
 }

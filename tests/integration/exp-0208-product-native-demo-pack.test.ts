@@ -35,6 +35,8 @@ function digest(domain, bytes) { const n = Buffer.alloc(8); n.writeBigUInt64BE(B
 const mode = ${JSON.stringify(mode)}; const pidFile = ${JSON.stringify(pidFile)}; let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { try {
   const request = JSON.parse(input); let output;
   if (mode === 'hung') { require('fs').writeFileSync(pidFile, String(process.pid)); require('child_process').spawn(process.execPath, ['-e', \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"], {stdio:'ignore'}); process.on('SIGTERM',()=>{}); setInterval(() => {}, 1000); return; }
+  if (mode === 'parent-exits-c0') { require('fs').writeFileSync(pidFile, String(process.pid)); require('child_process').spawn(process.execPath, ['-e', \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"], {stdio:'ignore'}); process.exit(0); }
+  if (mode === 'parent-exits-descendant' && process.argv[2] === 'admit-candidate') { require('fs').writeFileSync(pidFile, String(process.pid)); require('child_process').spawn(process.execPath, ['-e', \"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"], {stdio:'ignore'}); process.exit(0); }
   if (process.argv[2] === 'resolve-role-invocation') { if (mode === 'malformed') { process.stdout.write('not-json\\n'); return; } if (mode === 'nonzero') { process.exitCode = 7; return; } if (mode === 'cap') { process.stdout.write('x'.repeat(2097154)); return; } const schema = Buffer.from(request.output_schema, 'base64'); output = { version: 'proof.role-invocation/v1', role_id: request.role_id, role_source: 'proof-fixture', stance: request.stance, subject: mode === 'changed-subject' ? { ...request.subject, id: 'other' } : request.subject, authority: { source: 'proof-fixture' }, output_schema_id: request.output_schema_id, output_schema: request.output_schema, output_schema_digest: digest('proof.role-output-schema/id/v1', schema), instructions: 'Review the bound subject and return the schema-shaped result.', role_text_digest: digest('proof.role-text/id/v1', Buffer.from(request.role_id)), invocation_digest: digest('proof.role-invocation/id/v1', Buffer.from(canon(request))) }; }
   else if (process.argv[2] === 'admit-candidate') { const c = request.candidate; if (mode === 'reject') { output = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'REJECTED', receipt: null, reject_code: 'CANDIDATE_INVALID' }; } else { const p = c.Publication; const unsigned = { Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED', CandidateID: digest('proof.role-result-candidate-envelope/id/v1', Buffer.from(JSON.stringify(c))), ProbeResultDigest: c.ResultDigest, ProbeCanonicalBytes: c.CanonicalBytes, ClaimID: p.ClaimID, Claim: p.Claim, PayloadFingerprint: p.PayloadFingerprint, InvocationDigest: c.InvocationDigest, RoleID: c.RoleID, Stance: c.Stance, Subject: c.Subject, ProducerCheckID: p.ProducerCheckID, ParentClaimIDs: p.ParentClaimIDs, Binding: c.Binding, Termination: c.Termination }; const receipt = { ...unsigned, receipt_id: digest('proof.role-result-candidate-receipt/id/v1', Buffer.from(JSON.stringify(unsigned))) }; output = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt, reject_code: null }; } }
   else throw new Error('unsupported command'); process.stdout.write(JSON.stringify(output) + '\\n');
@@ -63,6 +65,17 @@ describe('EXP-0208 product-native demo pack', () => {
     });
   });
 
+  it('uses the frozen real Proof for C0 and admission through normal cli-main', async () => {
+    const proof = process.env.VISOR_EXP0208_REAL_PROOF_BIN;
+    if (!proof) return;
+    const [{ CheckProviderRegistry }] = await Promise.all([import('../../src/providers/check-provider-registry')]);
+    const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; let runnerCalls = 0;
+    map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: (request: GovernedProbeRunnerRequest) => { runnerCalls++; return fakeAnswer(request); }, cancel: () => {}, close: () => {} })));
+    const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const oldLog = console.log; const oldError = console.error; const exit = jest.fn();
+    process.exit = exit as any; console.log = jest.fn(); console.error = jest.fn();
+    try { process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', CONFIG, '--check', 'discover', '--event', 'manual', '--disable-code-context', '--proof-bin', resolve(proof)]; const { main } = await import('../../src/cli-main'); await main(); expect(exit).toHaveBeenCalledWith(0); expect(runnerCalls).toBe(1); expect([...((await import('../../src/memory-store')).MemoryStore.getInstance() as any).data.keys()].filter((key: string) => key.startsWith('visor-cli-'))).toEqual([]); } finally { process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+  });
+
   it('proves candidate admission, exact verify inputs, replay, and C0 canonical projection', async () => {
     await withProtocolFixture(async proof => {
       const [{ ConfigManager }, child, { StateMachineExecutionEngine }] = await Promise.all([import('../../src/config'), import('../../src/providers/proof-admission-cli-child'), import('../../src/state-machine-execution-engine')]);
@@ -86,6 +99,10 @@ describe('EXP-0208 product-native demo pack', () => {
       await expect(child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), invocation(), PROJECT)).rejects.toThrow(child.PROOF_ADMISSION_UNAVAILABLE);
       const pid = Number(readFileSync(pidFile!, 'utf8')); try { process.kill(-pid, 0); throw new Error('surviving Proof process group'); } catch (error) { expect((error as NodeJS.ErrnoException).code).toBe('ESRCH'); }
     }, 'hung');
+    await withProtocolFixture(async (proof, pidFile) => {
+      await expect(child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), invocation(), PROJECT)).rejects.toThrow(child.PROOF_ADMISSION_UNAVAILABLE);
+      const pid = Number(readFileSync(pidFile!, 'utf8')); try { process.kill(-pid, 0); throw new Error('surviving parent-exit Proof group'); } catch (error) { expect((error as NodeJS.ErrnoException).code).toBe('ESRCH'); }
+    }, 'parent-exits-c0');
     await withProtocolFixture(async proof => {
       const missing = { ...invocation() } as any; delete missing.output_schema;
       await expect(child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), missing, PROJECT)).rejects.toThrow(child.PROOF_ADMISSION_UNAVAILABLE);
@@ -93,6 +110,12 @@ describe('EXP-0208 product-native demo pack', () => {
     await withProtocolFixture(async proof => {
       const capability = child.createProofAdmissionCapability(proof); writeFileSync(proof, '#!/bin/sh\nexit 0\n', 'utf8'); chmodSync(proof, 0o755);
       await expect(child.resolveProofRoleInvocation(capability, invocation(), PROJECT)).rejects.toThrow(child.PROOF_ADMISSION_UNAVAILABLE);
+    }, 'success');
+    await withProtocolFixture(async proof => {
+      const capability = child.createProofAdmissionCapability(proof); writeFileSync(proof, '#!/visor-exp-0208-missing-interpreter\n', 'utf8'); chmodSync(proof, 0o755);
+      const started = Date.now();
+      await expect(child.resolveProofRoleInvocation(capability, invocation(), PROJECT)).rejects.toThrow(child.PROOF_ADMISSION_UNAVAILABLE);
+      expect(Date.now() - started).toBeLessThan(250);
     }, 'success');
   });
 
@@ -127,5 +150,29 @@ describe('EXP-0208 product-native demo pack', () => {
       expect(() => registry.bootstrapProofAdmission({})).toThrow('capability'); registry.bootstrapProofAdmission(capability); expect([...map.keys()]).toEqual(keys); expect(map.get('noop')).toBe(unrelated); expect(() => registry.bootstrapProofAdmission(capability)).toThrow('already');
       CheckProviderRegistry.clearInstance(); const late = CheckProviderRegistry.getInstance(); late.getProvider('proof-admit'); expect(() => late.bootstrapProofAdmission(capability)).toThrow('precede'); CheckProviderRegistry.clearInstance();
     });
+  });
+
+  it('rejects governed local inheritance after normalization and remote roots before fetch', async () => {
+    const directory = mkdtempSync(join(PROJECT, '.exp-0208-no-proof-')); const parent = join(directory, 'parent.yaml'); const child = join(directory, 'child.yaml');
+    writeFileSync(parent, 'version: "1.0"\nchecks:\n  inherited:\n    type: governed-proof-inspect\n', 'utf8'); writeFileSync(child, 'version: "1.0"\nextends: parent.yaml\n', 'utf8');
+    const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const oldLog = console.log; const oldError = console.error; const exit = jest.fn(); process.exit = exit as any; console.log = jest.fn(); console.error = jest.fn();
+    try { process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', child]; const { main } = await import('../../src/cli-main'); await main(); expect(exit).toHaveBeenCalledWith(1); } finally { process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; rmSync(directory, { recursive: true, force: true }); }
+    const remoteConfig = join(PROJECT, '.exp-0208-remote.yaml'); writeFileSync(remoteConfig, 'version: "1.0"\nextends: https://127.0.0.1:9/never-fetch.yaml\nchecks:\n  local:\n    type: governed-proof-inspect\n', 'utf8'); const oldFetch = global.fetch; const fetch = jest.fn(); global.fetch = fetch as any;
+    try { process.exit = exit as any; console.log = jest.fn(); console.error = jest.fn(); process.argv = ['node', 'visor', '--config', remoteConfig]; const { main } = await import('../../src/cli-main'); await main(); expect(exit).toHaveBeenCalledWith(1); expect(fetch).not.toHaveBeenCalled(); } finally { global.fetch = oldFetch; rmSync(remoteConfig, { force: true }); process.argv = oldArgv; process.exit = oldExit; console.log = oldLog; console.error = oldError; }
+  });
+
+  it('marks provider enumeration as a Proof bootstrap access boundary', async () => {
+    const child = await import('../../src/providers/proof-admission-cli-child'); const { CheckProviderRegistry } = await import('../../src/providers/check-provider-registry');
+    await withProtocolFixture(async proof => { const registry = CheckProviderRegistry.getInstance(); registry.getAllProviders(); expect(() => registry.bootstrapProofAdmission(child.createProofAdmissionCapability(proof))).toThrow('precede'); CheckProviderRegistry.clearInstance(); });
+  });
+
+  it('cleans a parent-exit descendant with TERM, grace, KILL, and ESRCH', async () => {
+    await withProtocolFixture(async (proof, pidFile) => {
+      const [{ ConfigManager }, child, { StateMachineExecutionEngine }, { CheckProviderRegistry }] = await Promise.all([import('../../src/config'), import('../../src/providers/proof-admission-cli-child'), import('../../src/state-machine-execution-engine'), import('../../src/providers/check-provider-registry')]);
+      const manager = new ConfigManager(); const config: any = await manager.loadConfig(CONFIG, { validate: false, mergeDefaults: true }); const c0 = await child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), invocation(), PROJECT) as any; const inspect = config.subgraphs['one-component'].checks.inspect;
+      inspect.message = GOVERNED_PROOF_INSPECT_MESSAGE; inspect.instructions = c0.instructions; inspect.invocation_digest = c0.invocation_digest; inspect.result_schema = Buffer.from(c0.output_schema, 'base64').toString(); manager.validateConfig(config);
+      const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }))); registry.bootstrapProofAdmission(child.createProofAdmissionCapability(proof));
+      try { const engine = new StateMachineExecutionEngine(PROJECT); const result = await engine.executeGroupedChecks(prInfo, ['discover'], undefined, config, 'json', false, 1); expect(result.statistics.failedExecutions).toBeGreaterThan(0); const pid = Number(readFileSync(pidFile!, 'utf8')); try { process.kill(-pid, 0); throw new Error('surviving Proof process group'); } catch (error) { expect((error as NodeJS.ErrnoException).code).toBe('ESRCH'); } } finally { map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+    }, 'parent-exits-descendant');
   });
 });

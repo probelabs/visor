@@ -44,6 +44,7 @@ describe('CLI options consistency', () => {
       output: 'json',
       'output-file': '/tmp/test',
       config: '/tmp/test.yaml',
+      'proof-bin': '/tmp/proof',
       timeout: '1000',
       'max-parallelism': '2',
       tags: 'foo',
