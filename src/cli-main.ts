@@ -31,6 +31,50 @@ import {
   injectGitHubCredentials,
   type GitHubAuthOptions,
 } from './github-auth';
+import {
+  createProofAdmissionCapability,
+  goCompatibleProofJson,
+  resolveProofRoleInvocation,
+} from './providers/proof-admission-cli-child';
+import type { VisorConfig } from './types/config';
+
+const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
+
+async function projectProofAuthority(config: VisorConfig, capability: object, cwd: string): Promise<void> {
+  const seen = new Set<object>();
+  let projected = 0;
+  const visit = async (value: unknown): Promise<void> => {
+    if (!value || typeof value !== 'object' || seen.has(value as object)) return;
+    seen.add(value as object);
+    if (!Array.isArray(value) && (value as any).type === 'governed-proof-inspect') {
+      const node = value as any;
+      const invocation = node.invocation;
+      if (!invocation || typeof invocation !== 'object' || Reflect.ownKeys(invocation).length !== PROOF_INVOCATION_KEYS.length || !PROOF_INVOCATION_KEYS.every(key => Object.prototype.hasOwnProperty.call(invocation, key))) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed invocation is not closed');
+      const request = Object.fromEntries(PROOF_INVOCATION_KEYS.map(key => [key, invocation[key]]));
+      const authority = await resolveProofRoleInvocation(capability, request, cwd) as any;
+      if (authority.role_id !== request.role_id || authority.stance !== request.stance || goCompatibleProofJson(authority.subject) !== goCompatibleProofJson(request.subject) || authority.output_schema_id !== request.output_schema_id || authority.output_schema !== request.output_schema) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: C0 response does not equal authored invocation');
+      node.instructions = authority.instructions;
+      node.invocation_digest = authority.invocation_digest;
+      node.result_schema = Buffer.from(authority.output_schema, 'base64').toString('utf8');
+      projected++;
+    }
+    for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) await visit(child);
+  };
+  await visit(config);
+  if (projected === 0) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: no governed-proof-inspect node');
+}
+
+async function loadProofAwareConfig(configManager: ConfigManager, configPath: string, proofBin: string): Promise<{ config: VisorConfig; capability: object; memoryNamespace: string }> {
+  const capability = createProofAdmissionCapability(proofBin);
+  const resolvedPath = path.resolve(configPath);
+  const config = await configManager.loadConfig(resolvedPath, { validate: false, mergeDefaults: false });
+  await projectProofAuthority(config, capability, path.dirname(resolvedPath));
+  const memoryNamespace = `visor-cli-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  config.memory = { ...(config.memory || {}), storage: 'memory', namespace: memoryNamespace };
+  configManager.validateConfig(config);
+  const merged = await configManager.loadConfigFromObject(config, { validate: false, mergeDefaults: true, baseDir: path.dirname(resolvedPath) });
+  return { config: merged, capability, memoryNamespace };
+}
 
 /**
  * Execute a single check in sandbox mode (--run-check).
@@ -1209,6 +1253,19 @@ export async function main(): Promise<void> {
   let tuiConsoleRestore: (() => void) | null = null;
   // Function to re-run workflow from TUI - set after setup is complete
   let runTuiWorkflow: ((message: string) => Promise<void>) | null = null;
+  let proofCapability: object | undefined;
+  let ownedMemoryNamespace: string | undefined;
+  const cleanupOwnedMemoryNamespace = async (): Promise<void> => {
+    if (!ownedMemoryNamespace) return;
+    const namespace = ownedMemoryNamespace;
+    ownedMemoryNamespace = undefined;
+    try {
+      const { MemoryStore } = await import('./memory-store');
+      await MemoryStore.getInstance().clear(namespace);
+    } catch (error) {
+      logger.warn(`Failed to clean Proof memory namespace: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   try {
     // Preflight: detect obviously stale dist relative to src and warn early.
@@ -1686,7 +1743,21 @@ export async function main(): Promise<void> {
 
     // Load configuration FIRST (before starting debug server)
     let config: import('./types/config').VisorConfig;
-    if (options.configPath) {
+    if (options.configPath && options.proofBin) {
+      try {
+        logger.step('Loading configuration with trusted Proof authority');
+        const loaded = await loadProofAwareConfig(configManager, options.configPath, options.proofBin);
+        config = loaded.config;
+        proofCapability = loaded.capability;
+        ownedMemoryNamespace = loaded.memoryNamespace;
+      } catch (error) {
+        logger.error(`❌ Error loading governed configuration: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+        return;
+      }
+    } else if (options.proofBin) {
+      throw new Error('--proof-bin requires --config so the governed project cwd is explicit');
+    } else if (options.configPath) {
       try {
         logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
@@ -1725,6 +1796,11 @@ export async function main(): Promise<void> {
       config = await configManager
         .findAndLoadConfig()
         .catch(() => configManager.getDefaultConfig());
+    }
+
+    if (proofCapability) {
+      const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
+      CheckProviderRegistry.getInstance().bootstrapProofAdmission(proofCapability);
     }
 
     // Save a startup config snapshot (best-effort, never blocks execution)
@@ -2476,21 +2552,25 @@ export async function main(): Promise<void> {
               pauseGate
             )
         );
-      if (sharedTaskStore) {
-        const { trackExecution } = await import('./agent-protocol/track-execution');
-        const tracked = await trackExecution(
-          {
-            taskStore: sharedTaskStore,
-            source: 'cli',
-            workflowId: checksToRun.join(','),
-            configPath: options.configPath,
-            messageText: options.message || `CLI run: ${checksToRun.join(', ')}`,
-          },
-          cliExecFn
-        );
-        executionResult = tracked.result;
-      } else {
-        executionResult = await cliExecFn();
+      try {
+        if (sharedTaskStore) {
+          const { trackExecution } = await import('./agent-protocol/track-execution');
+          const tracked = await trackExecution(
+            {
+              taskStore: sharedTaskStore,
+              source: 'cli',
+              workflowId: checksToRun.join(','),
+              configPath: options.configPath,
+              messageText: options.message || `CLI run: ${checksToRun.join(', ')}`,
+            },
+            cliExecFn
+          );
+          executionResult = tracked.result;
+        } else {
+          executionResult = await cliExecFn();
+        }
+      } finally {
+        await cleanupOwnedMemoryNamespace();
       }
     }
 
@@ -2731,6 +2811,7 @@ export async function main(): Promise<void> {
     } catch {}
     process.exit(exitCode);
   } catch (error) {
+    await cleanupOwnedMemoryNamespace();
     // Import error classes dynamically to avoid circular dependencies
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
       './providers/claude-code-check-provider'
@@ -2819,6 +2900,8 @@ export async function main(): Promise<void> {
       } catch {}
     }
     process.exit(1);
+  } finally {
+    await cleanupOwnedMemoryNamespace();
   }
 }
 

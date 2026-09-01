@@ -52,6 +52,7 @@ export class CLI {
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
       .option('--config <path>', 'Path to configuration file')
+      .option('--proof-bin [path]', 'Absolute trusted Proof executable for governed graph runs')
       .option(
         '--timeout <ms>',
         'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
@@ -154,6 +155,9 @@ export class CLI {
       // Ensure argv has at least the program name for commander.js
       const normalizedArgv =
         argv.length > 0 && !argv[0].startsWith('-') ? argv : ['node', 'visor', ...argv];
+      if (normalizedArgv.filter(arg => arg === '--proof-bin' || arg.startsWith('--proof-bin=')).length > 1) {
+        throw new Error('--proof-bin may be supplied only once');
+      }
 
       // Create a fresh program instance for each parse to avoid state issues
       const tempProgram = new Command();
@@ -214,6 +218,7 @@ export class CLI {
         output: options.output as OutputFormat,
         outputFile: options.outputFile,
         configPath: options.config,
+        proofBin: typeof options.proofBin === 'string' ? options.proofBin : undefined,
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
@@ -296,6 +301,10 @@ export class CLI {
       throw new Error(
         `Invalid output format: ${options.output}. Available options: ${this.validOutputs.join(', ')}`
       );
+    }
+
+    if (options.proofBin !== undefined && options.proofBin !== true && (typeof options.proofBin !== 'string' || !path.isAbsolute(options.proofBin))) {
+      throw new Error('--proof-bin must be an absolute executable path');
     }
 
     // Validate timeout

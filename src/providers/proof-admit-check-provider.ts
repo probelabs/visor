@@ -83,6 +83,9 @@ export function createProofAdmitProviderForFocusedTest(path: string): ProofAdmit
   const token = createProofAdmissionCliChildForFocusedTest(path);
   return new ProofAdmitCheckProvider(token as object, INTERNAL);
 }
+export function createProofAdmitProviderFromCapability(capability: object): ProofAdmitCheckProvider {
+  return new ProofAdmitCheckProvider(capability, INTERNAL);
+}
 
 export class ProofAdmitCheckProvider extends CheckProvider {
   private readonly executableCapability: object | undefined;

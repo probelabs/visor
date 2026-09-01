@@ -17,6 +17,8 @@ const DECISION_VERSION = 'proof.role-result-candidate-cli-decision/v1';
 const RECEIPT_VERSION = 'proof.role-result-candidate-admission/v1';
 const CANDIDATE_ID_DOMAIN = 'proof.role-result-candidate-envelope/id/v1';
 const RECEIPT_ID_DOMAIN = 'proof.role-result-candidate-receipt/id/v1';
+const C0_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] as const;
+const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 type ExecutableStat = Readonly<{
   realpath: string; dev: number; ino: number; mode: number; uid: number; gid: number; size: number;
   mtimeMs: number; ctimeMs: number; digest: string;
@@ -167,14 +169,207 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try { process.kill(-pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
 }
 
+type ProofCommandResult = Readonly<{
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: Buffer;
+  stderr: Buffer;
+}>;
+
+/**
+ * Run a Proof command as a bounded, detached process group.
+ *
+ * The caller must not consume a result until this function resolves: resolution
+ * is deliberately after the parent close event and a zero-survivor group check.
+ */
+function runBoundedProofCommand(
+  executable: ExecutableStat,
+  args: readonly string[],
+  input: string,
+  workingDirectory: string,
+): Promise<ProofCommandResult> {
+  return new Promise((resolve, reject) => {
+    let child: ChildProcess | undefined;
+    let pid: number | undefined;
+    let status: number | null = null;
+    let signal: NodeJS.Signals | null = null;
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let stdoutEnded = false;
+    let stderrEnded = false;
+    let closeSeen = false;
+    let settled = false;
+    let terminationRequested = false;
+    let termSent = false;
+    let killSent = false;
+    let inputWritten = false;
+    let timedOut = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let reapTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearTimers = () => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (killTimer) clearTimeout(killTimer);
+      if (reapTimer) clearTimeout(reapTimer);
+      deadlineTimer = undefined;
+      killTimer = undefined;
+      reapTimer = undefined;
+    };
+    const closeStreams = () => {
+      child?.stdin?.destroy();
+      child?.stdout?.destroy();
+      child?.stderr?.destroy();
+      stdoutEnded = true;
+      stderrEnded = true;
+    };
+    const rejectUnavailable = () => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      closeStreams();
+      reject(new Error(PROOF_ADMISSION_UNAVAILABLE));
+    };
+    const proveGroupGone = (): boolean => !pid || groupAbsent(pid);
+    const reapOrReject = () => {
+      if (settled || !pid || proveGroupGone()) {
+        settle();
+        return;
+      }
+      if (!reapTimer) {
+        reapTimer = setTimeout(() => {
+          reapTimer = undefined;
+          if (proveGroupGone() && closeSeen) settle();
+          else rejectUnavailable();
+        }, 2000);
+      }
+    };
+    const settle = () => {
+      if (settled || !closeSeen || !stdoutEnded || !stderrEnded || !pid) return;
+      if (!proveGroupGone()) return reapOrReject();
+      settled = true;
+      clearTimers();
+      closeStreams();
+      if (timedOut || !inputWritten) {
+        reject(new Error(PROOF_ADMISSION_UNAVAILABLE));
+        return;
+      }
+      resolve(Object.freeze({ status, signal, stdout, stderr }));
+    };
+    const forceStop = () => {
+      terminationRequested = true;
+      timedOut = true;
+      closeStreams();
+      if (!pid) {
+        try { child?.kill('SIGTERM'); } catch { /* child may already be gone */ }
+        return;
+      }
+      if (!proveGroupGone() && !termSent) {
+        termSent = true;
+        try { signalGroup(pid, 'SIGTERM'); } catch { rejectUnavailable(); return; }
+      }
+      if (!killTimer) {
+        killTimer = setTimeout(() => {
+          killTimer = undefined;
+          if (pid && !proveGroupGone() && !killSent) {
+            killSent = true;
+            try { signalGroup(pid, 'SIGKILL'); } catch { rejectUnavailable(); }
+          }
+          reapOrReject();
+        }, 250);
+      }
+      reapOrReject();
+    };
+    const append = (current: Buffer, chunk: Buffer, limit: number): { value: Buffer; overflow: boolean } => {
+      const remaining = limit - current.length;
+      if (remaining <= 0) return { value: current, overflow: chunk.length > 0 };
+      return { value: Buffer.concat([current, chunk.subarray(0, remaining)]), overflow: chunk.length > remaining };
+    };
+
+    try {
+      child = spawn(executable.realpath, [...args], {
+        cwd: workingDirectory,
+        env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+        shell: false,
+        detached: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      pid = child.pid;
+      child.stdout?.on('data', (chunk: Buffer) => {
+        const appended = append(stdout, chunk, STDOUT_LIMIT);
+        stdout = appended.value;
+        if (appended.overflow) forceStop();
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const appended = append(stderr, chunk, STDERR_LIMIT);
+        stderr = appended.value;
+        if (appended.overflow) forceStop();
+      });
+      child.stdout?.on('end', () => { stdoutEnded = true; settle(); });
+      child.stderr?.on('end', () => { stderrEnded = true; settle(); });
+      child.once('spawn', () => {
+        pid = child?.pid;
+        if (!pid || terminationRequested || !sameExecutable(executable, executableStat(executable.realpath))) {
+          forceStop();
+          return;
+        }
+        child?.stdin?.once('error', forceStop);
+        child?.stdin?.end(input, 'utf8', () => {
+          inputWritten = true;
+          settle();
+        });
+      });
+      child.once('error', forceStop);
+      child.once('exit', (code, exitedSignal) => {
+        status = code;
+        signal = exitedSignal;
+        settle();
+      });
+      child.once('close', () => {
+        closeSeen = true;
+        settle();
+      });
+      deadlineTimer = setTimeout(forceStop, 120000);
+    } catch {
+      rejectUnavailable();
+    }
+  });
+}
+
 export function goCompatibleProofJson(value: unknown): string { return json(value); }
 export function proofExecutableAvailable(path: string | undefined): boolean {
   return process.platform !== 'win32' && typeof path === 'string' && executableStat(path) !== undefined;
 }
-export function createProofAdmissionCliChildForFocusedTest(path: string): object {
+export function createProofAdmissionCapability(path: string): object {
   const capability = executableCapability(path);
   if (!capability) fail(PROOF_ADMISSION_UNAVAILABLE);
   return capability;
+}
+export function createProofAdmissionCliChildForFocusedTest(path: string): object {
+  return createProofAdmissionCapability(path);
+}
+
+/** Resolve authored role authority with the same opaque executable capability used by admission. */
+export async function resolveProofRoleInvocation(
+  capability: unknown,
+  request: Readonly<Record<string, unknown>>,
+  workingDirectory: string
+): Promise<Readonly<Record<string, unknown>>> {
+  const executable = capabilityIdentity(capability);
+  if (process.platform === 'win32' || !executable || !workingDirectory.startsWith('/') || !exact(request, C0_REQUEST_KEYS)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const input = json(request);
+  if (Buffer.byteLength(input, 'utf8') > REQUEST_LIMIT || !validUnicode(request)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const result = await runBoundedProofCommand(executable, ['resolve-role-invocation'], input, workingDirectory);
+  if (!sameExecutable(executable, executableStat(executable.realpath)) || result.status !== 0 || result.signal || result.stderr.length !== 0 || result.stdout.length === 0 || result.stdout[result.stdout.length - 1] !== 10) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  let stdout: string;
+  try { stdout = new TextDecoder('utf-8', { fatal: true }).decode(result.stdout); } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
+  const output = stdout.slice(0, -1);
+  if (output.includes('\n') || output.includes('\r')) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  let value: Record<string, unknown>;
+  try { value = JSON.parse(output) as Record<string, unknown>; } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
+  if (!exact(value, C0_KEYS) || json(value) !== output || value.version !== 'proof.role-invocation/v1' || value.role_id !== request.role_id || value.stance !== request.stance || !equalJson(value.subject, request.subject) || value.output_schema_id !== request.output_schema_id || value.output_schema !== request.output_schema || typeof value.instructions !== 'string' || value.instructions.length === 0) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  return Object.freeze(value);
 }
 
 export function startProofAdmissionCliChild(request: ProofAdmissionCliChildRequest, executablePath: unknown): ManagedAgentRun {

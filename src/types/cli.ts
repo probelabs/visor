@@ -21,6 +21,8 @@ export interface CliOptions {
   output: OutputFormat;
   /** Path to configuration file */
   configPath?: string;
+  /** Absolute trusted Proof executable used for role projection and admission */
+  proofBin?: string;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */

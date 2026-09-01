@@ -20,6 +20,7 @@ import { CustomToolDefinition } from '../types/config';
 import {
   ProofAdmitCheckProvider,
   PROOF_ADMIT_PROVIDER_NAME,
+  createProofAdmitProviderFromCapability,
 } from './proof-admit-check-provider';
 import {
   GovernedProofInspectCheckProvider,
@@ -33,6 +34,7 @@ export class CheckProviderRegistry {
   private providers: Map<string, CheckProvider> = new Map();
   private static instance: CheckProviderRegistry;
   private customTools?: Record<string, CustomToolDefinition>;
+  private proofAdmissionBootstrapped = false;
 
   private constructor() {
     // Register default providers
@@ -118,6 +120,15 @@ export class CheckProviderRegistry {
       throw new Error(`Provider '${name}' is already registered`);
     }
     this.providers.set(name, provider);
+  }
+
+  /** Install the reserved Proof provider once from a controller-owned opaque capability. */
+  bootstrapProofAdmission(capability: object): void {
+    if (this.proofAdmissionBootstrapped) throw new Error('Proof admission bootstrap already completed');
+    const current = this.providers.get(PROOF_ADMIT_PROVIDER_NAME);
+    if (!(current instanceof ProofAdmitCheckProvider)) throw new Error('Proof admission provider registry state is invalid');
+    this.providers.set(PROOF_ADMIT_PROVIDER_NAME, createProofAdmitProviderFromCapability(capability));
+    this.proofAdmissionBootstrapped = true;
   }
 
   /**
@@ -254,6 +265,7 @@ export class CheckProviderRegistry {
    */
   reset(): void {
     this.providers.clear();
+    this.proofAdmissionBootstrapped = false;
     this.registerDefaultProviders();
   }
 
