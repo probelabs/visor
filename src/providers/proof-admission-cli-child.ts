@@ -175,19 +175,8 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
   try { process.kill(-pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
 }
 
-type ProofCommandResult = Readonly<{
-  status: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: Buffer;
-  stderr: Buffer;
-}>;
+type ProofCommandResult = Readonly<{ status: number | null; signal: NodeJS.Signals | null; stdout: Buffer; stderr: Buffer }>;
 
-/**
- * Run a Proof command as a bounded, detached process group.
- *
- * The caller must not consume a result until this function resolves: resolution
- * is deliberately after the parent close event and a zero-survivor group check.
- */
 function runBoundedProofCommand(
   executable: ExecutableStat,
   args: readonly string[],
@@ -195,46 +184,18 @@ function runBoundedProofCommand(
   workingDirectory: string,
 ): Promise<ProofCommandResult> {
   return new Promise((resolve, reject) => {
-    let child: ChildProcess | undefined;
-    let pid: number | undefined;
-    let status: number | null = null;
-    let signal: NodeJS.Signals | null = null;
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
-    let stdoutEnded = false;
-    let stderrEnded = false;
-    let closeSeen = false;
-    let settled = false;
-    let terminationRequested = false;
-    let termSent = false;
-    let killSent = false;
-    let inputWritten = false;
-    let timedOut = false;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let reapTimer: ReturnType<typeof setTimeout> | undefined;
-    let reapDeadline = 0;
+    let child: ChildProcess | undefined, pid: number | undefined, status: number | null = null, signal: NodeJS.Signals | null = null, stdout: Buffer = Buffer.alloc(0), stderr: Buffer = Buffer.alloc(0), stdoutEnded = false, stderrEnded = false, closeSeen = false, settled = false, terminationRequested = false, termSent = false, killSent = false, inputWritten = false, timedOut = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined, killTimer: ReturnType<typeof setTimeout> | undefined, reapTimer: ReturnType<typeof setTimeout> | undefined, reapDeadline = 0;
 
-    const clearTimers = () => {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      if (killTimer) clearTimeout(killTimer);
-      if (reapTimer) clearTimeout(reapTimer);
-      deadlineTimer = undefined;
-      killTimer = undefined;
-      reapTimer = undefined;
-    };
-    const closeStreams = () => {
-      child?.stdin?.destroy();
-      child?.stdout?.destroy();
-      child?.stderr?.destroy();
-      stdoutEnded = true;
-      stderrEnded = true;
-    };
+    const clearTimers = () => { if (deadlineTimer) clearTimeout(deadlineTimer); if (killTimer) clearTimeout(killTimer); if (reapTimer) clearTimeout(reapTimer); deadlineTimer = undefined; killTimer = undefined; reapTimer = undefined; };
+    const closeStreams = () => { child?.stdin?.destroy(); child?.stdout?.destroy(); child?.stderr?.destroy(); stdoutEnded = true; stderrEnded = true; };
+    const clearListeners = () => { child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners(); };
     const rejectUnavailable = (cleanupFailed = false) => {
       if (settled) return;
       settled = true;
       clearTimers();
       closeStreams();
+      clearListeners();
       reject(new Error(cleanupFailed ? PROOF_ADMISSION_CLEANUP_FAILED : PROOF_ADMISSION_UNAVAILABLE));
     };
     const proveGroupGone = (): boolean => !pid || groupAbsent(pid);
@@ -242,12 +203,7 @@ function runBoundedProofCommand(
       if (settled || !pid) return;
       if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) { settle(); return; }
       if (!reapDeadline) reapDeadline = Date.now() + 2000;
-      if (!reapTimer) reapTimer = setTimeout(() => {
-        reapTimer = undefined;
-        if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) settle();
-        else if (Date.now() >= reapDeadline) rejectUnavailable(true);
-        else reapOrReject();
-      }, 10);
+      if (!reapTimer) reapTimer = setTimeout(() => { reapTimer = undefined; if (proveGroupGone() && closeSeen && stdoutEnded && stderrEnded) settle(); else if (Date.now() >= reapDeadline) rejectUnavailable(true); else reapOrReject(); }, 10);
     };
     const settle = () => {
       if (settled || !closeSeen || !stdoutEnded || !stderrEnded || !pid) return;
@@ -266,8 +222,6 @@ function runBoundedProofCommand(
       timedOut = true;
       closeStreams();
       if (!pid) {
-        // Spawn errors can arrive before Node assigns a pid.  Settle the
-        // request immediately; there is no process group to reap.
         rejectUnavailable();
         return;
       }
@@ -330,9 +284,6 @@ function runBoundedProofCommand(
       child.once('exit', (code, exitedSignal) => {
         status = code;
         signal = exitedSignal;
-        // A normal parent exit is not sufficient when a detached descendant
-        // still owns the process group. Treat this as a failed protocol run
-        // and drive the same TERM/grace/KILL/reap state machine as timeout.
         if (pid && !proveGroupGone()) { forceStop(); return; }
         settle();
       });
@@ -428,8 +379,6 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     closeStreams();
     child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
     resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
-    // No PID means no process group exists to reap; this is a bounded spawn
-    // rejection, not a cleanup ambiguity.
     resolveCleanup(Object.freeze({ version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }));
   };
   const reapOrSettle = () => {
@@ -516,8 +465,6 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     });
     proc.on('exit', (code, exitedSignal) => {
       exitCode = code; signal = exitedSignal;
-      // Parent exit is not clean if a detached descendant still owns the
-      // group. The same idempotent cleanup state machine handles it once.
       if (pid && !groupAbsent(pid)) { failOnce('detached process group survived parent'); killIfNeeded(); }
       settle();
     });
