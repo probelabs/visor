@@ -507,7 +507,16 @@ export class SlackFrontend implements Frontend {
     result: { output?: any; content?: string }
   ): Promise<void> {
     try {
-      if (this.isLiveTaskUpdatesMode(ctx)) return;
+      // In live-updates mode, the text message is handled by TaskLiveUpdateManager.
+      // But if the result carries _rawOutput (from DSL execute_plan output()),
+      // we still need to upload file attachments — live updates can't do that.
+      if (this.isLiveTaskUpdatesMode(ctx)) {
+        const out: any = (result as any)?.output;
+        if (out && typeof out._rawOutput === 'string' && out._rawOutput.trim().length > 0) {
+          await this.uploadRawOutputFiles(ctx, checkId, out._rawOutput);
+        }
+        return;
+      }
       const cfg: any = ctx.config || {};
       const checkCfg: any = cfg.checks?.[checkId];
       if (!checkCfg) return;
@@ -758,6 +767,58 @@ export class SlackFrontend implements Frontend {
           }`
         );
       } catch {}
+    }
+  }
+
+  /**
+   * Upload file sections from _rawOutput as Slack file attachments.
+   * Called in live-updates mode where the text message is handled by
+   * TaskLiveUpdateManager but file uploads still need the Slack API.
+   */
+  private async uploadRawOutputFiles(
+    ctx: FrontendContext,
+    checkId: string,
+    rawOutput: string
+  ): Promise<void> {
+    const slack = this.getSlack(ctx);
+    if (!slack) return;
+
+    const payload = this.getInboundSlackPayload(ctx);
+    const ev: any = payload?.event;
+    const channel = String(ev?.channel || '');
+    const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
+    if (!channel || !threadTs) return;
+
+    // Normalize literal \n escape sequences from DSL output
+    const normalized = rawOutput.replace(/\\n/g, '\n');
+    const fileSections = extractFileSections(normalized);
+    if (fileSections.length === 0) return;
+
+    ctx.logger.info(
+      `[slack-frontend] uploading ${fileSections.length} file(s) from _rawOutput for ${checkId} (live-updates mode)`
+    );
+    for (const section of fileSections) {
+      try {
+        const buffer = Buffer.from(section.content, 'utf-8');
+        const uploadResult = await slack.files.uploadV2({
+          content: buffer,
+          filename: section.filename,
+          channel,
+          thread_ts: threadTs,
+          title: section.filename,
+        });
+        if (uploadResult.ok) {
+          ctx.logger.info(`[slack-frontend] uploaded file ${section.filename} to ${channel}`);
+        } else {
+          ctx.logger.warn(`[slack-frontend] upload failed for file ${section.filename}`);
+        }
+      } catch (e) {
+        ctx.logger.warn(
+          `[slack-frontend] failed to upload file ${section.filename}: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+      }
     }
   }
 

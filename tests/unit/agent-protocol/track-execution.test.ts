@@ -461,6 +461,48 @@ describe('trackExecution', () => {
       expect((updated!.status.message!.parts[0] as any).text).toBe('Text response after non-text');
     });
 
+    it('should not include _rawOutput in live update text (file uploads handled separately)', async () => {
+      const sink = {
+        kind: 'test',
+        start: jest.fn(async () => null),
+        update: jest.fn(async () => null),
+        complete: jest.fn(async () => ({ ref: { message_id: 'msg-raw' } })),
+        fail: jest.fn(async () => null),
+      };
+
+      const csvData = '--- report.csv ---\nid,customer,status\n123,Acme,active\n456,Beta,pending';
+
+      await trackExecution(
+        {
+          taskStore: store,
+          source: 'slack',
+          messageText: 'generate SLA report',
+          liveUpdates: {
+            config: true,
+            sink,
+          },
+        },
+        async () => ({
+          reviewSummary: {
+            history: {
+              'generate-response': [{ text: 'Here is your SLA report.' }],
+            },
+            output: {
+              text: 'Here is your SLA report.',
+              _rawOutput: csvData,
+            },
+          },
+        })
+      );
+
+      // Live update text should only contain the response text, NOT the raw CSV data.
+      // File uploads from _rawOutput are handled by the Slack frontend, not the live update sink.
+      expect(sink.complete).toHaveBeenCalledTimes(1);
+      const sinkText = sink.complete.mock.calls[0][0];
+      expect(sinkText).toContain('Here is your SLA report.');
+      expect(sinkText).not.toContain('Acme,active');
+    });
+
     it('should fall back to issue summary when history has no usable text', async () => {
       const { task } = await trackExecution(
         { taskStore: store, source: 'test' as any, messageText: 'issue fallback test' },
