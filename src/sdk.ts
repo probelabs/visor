@@ -14,6 +14,16 @@ import type {
   GraphCheckpointContinuationResult,
 } from './state-machine-execution-engine';
 import type { GraphJournalCheckpointV1 } from './snapshot-store';
+import type {
+  GovernedGraphAnyTerminalReceipt,
+  GovernedGraphAnyTerminalReceiptDraft,
+  GovernedGraphComponentTerminalReceiptEntry,
+  GovernedGraphDiscoveryTerminalReceiptEntry,
+  GovernedGraphMultiTerminalReceipt,
+  GovernedGraphMultiTerminalReceiptDraft,
+  GovernedGraphTerminalReceipt,
+  GovernedGraphTerminalReceiptDraft,
+} from './governed-graph-terminal-receipt';
 
 export { StateMachineExecutionEngine };
 export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
@@ -21,6 +31,14 @@ export type {
   GraphCheckpointContinuationInput,
   GraphCheckpointContinuationResult,
   GraphJournalCheckpointV1,
+  GovernedGraphAnyTerminalReceipt,
+  GovernedGraphAnyTerminalReceiptDraft,
+  GovernedGraphComponentTerminalReceiptEntry,
+  GovernedGraphDiscoveryTerminalReceiptEntry,
+  GovernedGraphMultiTerminalReceipt,
+  GovernedGraphMultiTerminalReceiptDraft,
+  GovernedGraphTerminalReceipt,
+  GovernedGraphTerminalReceiptDraft,
 };
 export type {
   ExpansionCoverageProjection,

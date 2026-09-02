@@ -25,6 +25,12 @@ export interface CliOptions {
   proofBin?: string;
   /** Absolute, controller-owned path for the terminal governed receipt */
   governedReceipt?: string;
+  /** Absolute existing Graph-v2 checkpoint to import and continue */
+  graphCheckpointIn?: string;
+  /** Absolute absent path for the quiescent Graph-v2 checkpoint export */
+  graphCheckpointOut?: string;
+  /** Expansion owner used when continuing an imported Graph-v2 checkpoint */
+  graphCheckpointOwner?: string;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */

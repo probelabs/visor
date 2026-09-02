@@ -1,0 +1,38 @@
+import { describe, expect, it } from '@jest/globals';
+import { validateGovernedGraphTerminalReceipt } from '../../src/governed-graph-terminal-receipt';
+
+const idA = 'a'.repeat(64); const idB = 'b'.repeat(64); const idC = 'c'.repeat(64); const idD = 'd'.repeat(64); const idE = 'e'.repeat(64); const idF = 'f'.repeat(64); const idG = '1'.repeat(64); const idH = '2'.repeat(64); const idI = '3'.repeat(64); const idJ = '4'.repeat(64); const idK = '5'.repeat(64); const idL = '6'.repeat(64);
+const attestation = { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', dispatch: { source: 'probe-host-tools-call', tool: 'codex' }, eventCount: 1, usage: { status: 'unavailable' } };
+
+function component(key: string, scopeId: string, offset: string): any {
+  const candidate = offset.repeat(64); const admitted = (offset === 'a' ? 'b' : offset === 'c' ? 'd' : 'f').repeat(64);
+  return {
+    componentKey: key,
+    scope: [{ kind: 'keyed', expansionOwnerCheck: 'discover', key, subgraphInstanceId: scopeId }],
+    workItemClaimId: ('1' + offset).repeat(32), candidateClaimId: candidate, admittedReceiptClaimId: admitted,
+    generation: { inspect: { generationId: ('2' + offset).repeat(32), status: 'completed' }, proof_admit: { generationId: ('3' + offset).repeat(32), status: 'completed' }, verify: { generationId: ('4' + offset).repeat(32), status: 'completed' } },
+    verifyInputClaimIds: [candidate, admitted], attestation, status: 'passed', cleanupStatus: 'clean',
+  };
+}
+
+function receipt(): any {
+  return {
+    version: 'visor.governed-graph-terminal-receipt/v2', status: 'passed', sourceConfigSha256: idA, sessionId: 'session', graphSemanticDigest: idB, componentCount: 3,
+    nodes: { inspect: { terminalCount: 3, status: 'completed' }, proof_admit: { terminalCount: 3, status: 'completed' }, verify: { terminalCount: 3, status: 'completed' } },
+    discovery: { candidateClaimId: idC, admittedReceiptClaimId: idD, verifyInputClaimIds: [idC], attestation: null, status: 'completed' },
+    components: [component('http-adapter', idE, 'a'), component('service-policy', idF, 'c'), component('storage-domain', idG, 'e')],
+    providerCleanupStatus: 'clean', managedUncleanTerminalCount: 0, activeChildren: 0, activeResources: 0, memoryStatus: 'clean', projectionReplayEqual: true, failureCode: null, exitStatus: 0,
+  };
+}
+
+describe('EXP-0209 multi-component governed terminal receipt', () => {
+  it('accepts a canonical complete discovery plus sorted component projection', () => {
+    expect(() => validateGovernedGraphTerminalReceipt(receipt())).not.toThrow();
+  });
+
+  it('rejects duplicate or unsorted component entries and incomplete verify inputs', () => {
+    const duplicate = receipt(); duplicate.components[1] = { ...duplicate.components[0] }; expect(() => validateGovernedGraphTerminalReceipt(duplicate)).toThrow(/sorted|duplicate/);
+    const incomplete = receipt(); incomplete.components[0] = { ...incomplete.components[0], verifyInputClaimIds: [incomplete.components[0].candidateClaimId] }; expect(() => validateGovernedGraphTerminalReceipt(incomplete)).toThrow();
+    const missing = receipt(); missing.components = missing.components.slice(0, 2); expect(() => validateGovernedGraphTerminalReceipt(missing)).toThrow();
+  });
+});

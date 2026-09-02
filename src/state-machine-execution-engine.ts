@@ -7,6 +7,7 @@ import type { EngineContext, RunState } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
 import type { GraphJournalCheckpointV1 } from './snapshot-store';
 import type { InstanceProjection } from './state-machine/graph/instance-kernel';
+import { compileClaimPlan } from './state-machine/graph/claim-plan';
 import { logger } from './logger';
 import type { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import { SandboxManager } from './sandbox/sandbox-manager';
@@ -16,7 +17,7 @@ import type {
   BuiltGraphCheckpointContext,
   GraphCheckpointBootstrap,
 } from './state-machine/context/build-engine-context';
-import { projectGovernedGraphTerminalReceipt, type GovernedGraphTerminalReceiptDraft } from './governed-graph-terminal-receipt';
+import { projectGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 
 export interface GraphCheckpointContinuationInput {
   checkpoint: unknown;
@@ -768,6 +769,44 @@ export class StateMachineExecutionEngine {
     };
   }
 
+  /**
+   * Export the last Graph-v2 run through the public engine boundary.
+   *
+   * ExecutionJournal deliberately keeps its low-level export primitive
+   * available to the state machine and tests.  The public engine contract is
+   * stricter: it re-validates the exported prefix through the same restore
+   * path, which enforces graph authority, replay, allocator, and quiescence
+   * checks before callers are allowed to persist it.
+   */
+  public exportGraphCheckpoint(): GraphJournalCheckpointV1 {
+    const context = this._lastContext;
+    if (!context) {
+      const error = new Error('Graph checkpoint export requires a prior or active run') as Error & { code: string };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    if (!context.claimPlan?.active) {
+      throw new Error('Graph checkpoint export requires an active claim plan');
+    }
+    const checkpoint = context.journal.exportGraphCheckpoint(context.sessionId);
+    // Restore is the canonical public quiescence gate. It performs complete
+    // envelope/integrity/plan/replay validation without starting providers.
+    ExecutionJournal.restoreGraphCheckpoint(context.claimPlan, checkpoint);
+    return checkpoint;
+  }
+
+  /**
+   * Validate and canonicalize an imported checkpoint before any provider or
+   * run service is initialized. This is intentionally separate from
+   * continueGraphCheckpoint so CLI/SDK callers can fail closed early.
+   */
+  public validateGraphCheckpoint(input: unknown, config: VisorConfig): GraphJournalCheckpointV1 {
+    const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as VisorConfig);
+    const restored = ExecutionJournal.restoreGraphCheckpoint(plan, input);
+    const checkpoint = restored.exportGraphCheckpoint((input as any)?.sessionId);
+    return checkpoint;
+  }
+
   /** Queue a compiled catalog owner on the currently active runner/journal. */
   public requestCatalogReconciliation(ownerCheck: string) {
     const runner = this._lastRunner;
@@ -806,7 +845,7 @@ export class StateMachineExecutionEngine {
   }
 
   /** Narrow, read-only terminal receipt projection; never exposes the journal. */
-  public getGovernedGraphTerminalReceiptDraft(sourceConfigSha256: string): GovernedGraphTerminalReceiptDraft {
+  public getGovernedGraphTerminalReceiptDraft(sourceConfigSha256: string): GovernedGraphAnyTerminalReceiptDraft {
     const context = this._lastContext;
     if (!context) {
       const error = new Error('Governed terminal receipt requires a prior or active run') as Error & { code: string };

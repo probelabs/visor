@@ -54,6 +54,9 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option('--proof-bin <path>', 'Absolute trusted Proof executable for governed graph runs')
       .option('--governed-receipt <path>', 'Write the terminal governed receipt to an absolute new file')
+      .option('--graph-checkpoint-in <path>', 'Import an existing Graph-v2 checkpoint and continue it')
+      .option('--graph-checkpoint-out <path>', 'Write a quiescent Graph-v2 checkpoint to an absolute new file')
+      .option('--graph-checkpoint-owner <check>', 'Expansion owner to reconcile when importing a Graph-v2 checkpoint')
       .option(
         '--timeout <ms>',
         'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
@@ -224,6 +227,9 @@ export class CLI {
         configPath: options.config,
         proofBin: typeof options.proofBin === 'string' ? options.proofBin : undefined,
         governedReceipt: typeof options.governedReceipt === 'string' ? options.governedReceipt : undefined,
+        graphCheckpointIn: typeof options.graphCheckpointIn === 'string' ? options.graphCheckpointIn : undefined,
+        graphCheckpointOut: typeof options.graphCheckpointOut === 'string' ? options.graphCheckpointOut : undefined,
+        graphCheckpointOwner: typeof options.graphCheckpointOwner === 'string' ? options.graphCheckpointOwner : undefined,
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
@@ -313,6 +319,15 @@ export class CLI {
     }
     if (options.governedReceipt !== undefined && options.governedReceipt !== true && (typeof options.governedReceipt !== 'string' || !path.isAbsolute(options.governedReceipt))) {
       throw new Error('--governed-receipt must be an absolute new file path');
+    }
+    for (const [key, label] of [['graphCheckpointIn', '--graph-checkpoint-in'], ['graphCheckpointOut', '--graph-checkpoint-out']] as const) {
+      const value = options[key];
+      if (value !== undefined && value !== true && (typeof value !== 'string' || !path.isAbsolute(value))) {
+        throw new Error(`${label} must be an absolute file path`);
+      }
+    }
+    if (options.graphCheckpointOwner !== undefined && (typeof options.graphCheckpointOwner !== 'string' || options.graphCheckpointOwner.length === 0)) {
+      throw new Error('--graph-checkpoint-owner must be a non-empty check name');
     }
 
     // Validate timeout

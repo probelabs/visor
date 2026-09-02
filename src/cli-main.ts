@@ -39,7 +39,9 @@ import {
   resolveProofRoleInvocation,
 } from './providers/proof-admission-cli-child';
 import type { VisorConfig } from './types/config';
-import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphTerminalReceiptDraft } from './governed-graph-terminal-receipt';
+import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
+import { readGraphCheckpointFile, publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
+import { compileClaimPlan } from './state-machine/graph/claim-plan';
 
 const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 
@@ -102,6 +104,32 @@ function validateGovernedReceiptMode(options: import('./types/cli').CliOptions):
   const parent = fs.realpathSync(requestedParent); const parentStat = fs.lstatSync(parent); const stat = fs.statSync(parent);
   if (parentStat.isSymbolicLink() || !parentStat.isDirectory() || !stat.isDirectory() || (stat.mode & 0o777) !== 0o700) throw new Error('--governed-receipt parent must be an existing private 0700 directory');
   try { fs.lstatSync(path.join(parent, path.basename(target))); throw new Error('--governed-receipt target must be absent'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
+function validateGraphCheckpointMode(options: import('./types/cli').CliOptions): void {
+  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner) return;
+  if (options.graphCheckpointOwner && !options.graphCheckpointIn) throw new Error('--graph-checkpoint-owner requires --graph-checkpoint-in');
+  if ((options.graphCheckpointIn || options.graphCheckpointOut) && (!options.configPath || options.checks.length !== 1 || options.output !== 'json')) {
+    throw new Error('--graph-checkpoint-in/out requires --config, one --check, and --output json');
+  }
+  if (options.graphCheckpointIn) validateGraphCheckpointInputFile(path.resolve(options.graphCheckpointIn));
+  if (options.graphCheckpointOut) validateGraphCheckpointOutputTarget(path.resolve(options.graphCheckpointOut));
+  if (options.graphCheckpointIn && options.graphCheckpointOut && path.resolve(options.graphCheckpointIn) === path.resolve(options.graphCheckpointOut)) {
+    throw new Error('--graph-checkpoint-in and --graph-checkpoint-out cannot refer to the same file');
+  }
+  if (options.graphCheckpointOut && options.governedReceipt && path.resolve(options.graphCheckpointOut) === path.resolve(options.governedReceipt)) {
+    throw new Error('--graph-checkpoint-out cannot alias --governed-receipt');
+  }
+}
+
+function resolveGraphCheckpointOwner(config: VisorConfig, checks: readonly string[], explicit?: string): string {
+  if (explicit) return explicit;
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as VisorConfig);
+  const owners = Object.keys(plan.expansionPlan?.byOwner || {}).sort();
+  if (owners.length === 1) return owners[0];
+  const selected = checks.filter(check => owners.includes(check));
+  if (selected.length === 1) return selected[0];
+  throw new Error('--graph-checkpoint-owner is required when the graph has multiple expansion owners');
 }
 
 async function loadNormalizedForGovernanceCheck(configManager: ConfigManager, configPath: string): Promise<VisorConfig> {
@@ -1542,6 +1570,7 @@ export async function main(): Promise<void> {
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
     validateGovernedReceiptMode(options);
+    validateGraphCheckpointMode(options);
     const receiptSourceConfigSha256 = options.governedReceipt && options.configPath
       ? createHash('sha256').update(fs.readFileSync(path.resolve(options.configPath))).digest('hex')
       : undefined;
@@ -2612,8 +2641,9 @@ export async function main(): Promise<void> {
     // Skip initial automatic run for TUI mode - wait for user to type a message
     // TUI workflows are typically chat-style and expect user input first
     let executionResult: import('./types/execution').ExecutionResult;
-    let receiptDraft: GovernedGraphTerminalReceiptDraft | undefined;
+    let receiptDraft: GovernedGraphAnyTerminalReceiptDraft | undefined;
     let receiptProjectionFailed = false;
+    let checkpointExportFailed = false;
     if (chatTui) {
       logger.info('[TUI] Waiting for user input - type a message to start the workflow');
       chatTui.setRunning(false);
@@ -2641,8 +2671,22 @@ export async function main(): Promise<void> {
         withVisorRun(
           { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
           { source: 'cli', workflowId: checksToRun.join(',') },
-          async () =>
-            engine.executeGroupedChecks(
+          async () => {
+            if (options.graphCheckpointIn) {
+              const checkpoint = readGraphCheckpointFile(options.graphCheckpointIn);
+              const ownerCheck = resolveGraphCheckpointOwner(config, checksToRun, options.graphCheckpointOwner);
+              const continued = await engine.continueGraphCheckpoint({
+                checkpoint,
+                expansionOwnerCheck: ownerCheck,
+                config,
+                prInfo: prInfoWithContext,
+                debug: options.debug || false,
+                maxParallelism: options.maxParallelism,
+                failFast: options.failFast,
+              });
+              return continued.result;
+            }
+            return engine.executeGroupedChecks(
               prInfo,
               checksToRun,
               options.timeout,
@@ -2653,7 +2697,8 @@ export async function main(): Promise<void> {
               options.failFast,
               tagFilter,
               pauseGate
-            )
+            );
+          }
         );
       try {
         if (sharedTaskStore) {
@@ -2682,6 +2727,14 @@ export async function main(): Promise<void> {
           }
         }
         await cleanupOwnedMemoryNamespace();
+      }
+      if (options.graphCheckpointOut) {
+        try {
+          publishGraphCheckpointFile(engine.exportGraphCheckpoint(), options.graphCheckpointOut);
+        } catch (error) {
+          checkpointExportFailed = true;
+          logger.error(`Graph checkpoint publication failed closed: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
 
@@ -2870,7 +2923,7 @@ export async function main(): Promise<void> {
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
     const receiptTerminalFailed = receiptDraft !== undefined && receiptDraft.failureCode !== null;
-    let exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed || receiptProjectionFailed || receiptTerminalFailed ? 1 : 0;
+    let exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed || receiptProjectionFailed || receiptTerminalFailed || checkpointExportFailed ? 1 : 0;
     // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {
