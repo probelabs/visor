@@ -1,0 +1,145 @@
+# EXP-0209 focused authored profile.  The component WorkItem is the single
+# external Graph-v2 input; its authority envelope carries the Proof component
+# role claim without adding a second un-emitted template input.
+version: "1.0"
+max_parallelism: 3
+workspace:
+  enabled: false
+
+claim_types:
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - project_id
+              - component_id
+              - sorted_owned_paths
+              - sorted_dependency_closure
+              - proof_path_mapping
+              - proof_input_state
+              - proof_component_subject
+              - authority
+            properties:
+              project_id: { type: string }
+              component_id: { type: string }
+              sorted_owned_paths: { type: array, items: { type: string } }
+              sorted_dependency_closure: { type: array, items: { type: string } }
+              proof_path_mapping: { type: array }
+              proof_input_state: { type: array }
+              proof_component_subject: { type: object }
+              authority:
+                type: object
+                additionalProperties: false
+                required: [claimId, claim, payloadFingerprint, payload]
+                properties:
+                  claimId: { type: string, pattern: "^[0-9a-f]{64}$" }
+                  claim: { const: "proof.component_role_authority@1" }
+                  payloadFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+                  payload: { type: object }
+  component.work_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - project_id
+        - component_id
+        - sorted_owned_paths
+        - sorted_dependency_closure
+        - proof_path_mapping
+        - proof_input_state
+        - proof_component_subject
+        - authority
+      properties:
+        project_id: { type: string }
+        component_id: { type: string }
+        sorted_owned_paths: { type: array, items: { type: string } }
+        sorted_dependency_closure: { type: array, items: { type: string } }
+        proof_path_mapping: { type: array }
+        proof_input_state: { type: array }
+        proof_component_subject: { type: object }
+        authority:
+          type: object
+          additionalProperties: false
+          required: [claimId, claim, payloadFingerprint, payload]
+          properties:
+            claimId: { type: string, pattern: "^[0-9a-f]{64}$" }
+            claim: { const: "proof.component_role_authority@1" }
+            payloadFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+            payload: { type: object }
+  proof.candidate@1:
+    schema: { type: object }
+  proof.admitted_receipt@1:
+    schema: { type: object }
+
+checks:
+  discover:
+    type: memory
+    operation: set
+    key: catalog
+    value:
+      components:
+        - project_id: journalservice
+          component_id: http-adapter
+          sorted_owned_paths: [http.go, http_test.go]
+          sorted_dependency_closure: [http.go, http_test.go]
+          proof_path_mapping: []
+          proof_input_state: []
+          proof_component_subject: { kind: component, id: http-adapter }
+          authority:
+            claimId: "1111111111111111111111111111111111111111111111111111111111111111"
+            claim: proof.component_role_authority@1
+            payloadFingerprint: "2222222222222222222222222222222222222222222222222222222222222222"
+            payload:
+              componentId: http-adapter
+              roleId: onboard
+              subjectFingerprint: "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    emits:
+      - claim: component.catalog@1
+        from: output
+    expand:
+      claim: component.catalog@1
+      template: onboard-component
+      items_pointer: /components
+      key_pointer: /component_id
+      item_claim: component.work_item@1
+
+subgraphs:
+  onboard-component:
+    input: { name: component, claim: component.work_item@1 }
+    checks:
+      inspect:
+        type: governed-proof-inspect
+        message: Execute the bound Proof role and return only the required JSON.
+        instructions: Inspect exactly the bound component WorkItem.
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject:
+            kind: component
+            id: http-adapter
+            fingerprint: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+          output_schema_id: proof.onboarding@1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfQ==
+        invocation_digest: "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        result_schema: '{"type":"object","additionalProperties":false}'
+        consumes: [{ claim: component.work_item@1, as: component }]
+        emits: [{ claim: proof.candidate@1, from: output }]
+      proof_admit:
+        type: proof-admit
+        consumes: [{ claim: proof.candidate@1, as: candidate }]
+        emits: [{ claim: proof.admitted_receipt@1, from: output }]
+      verify:
+        type: noop
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }

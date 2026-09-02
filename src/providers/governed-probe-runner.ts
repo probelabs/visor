@@ -9,6 +9,7 @@ import {
 } from '@probelabs/probe';
 import { canonicalJson } from '../state-machine/graph/claim-kernel';
 import type {
+  GovernedProbeDispatchPreview,
   GovernedProbeRunner,
   GovernedProbeRunnerRequest,
 } from './governed-proof-inspect-check-provider';
@@ -95,6 +96,12 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
       governedCodexProfile,
     };
     this.agent = new ProbeAgent(options);
+  }
+
+  async preview(_request: GovernedProbeRunnerRequest): Promise<GovernedProbeDispatchPreview> {
+    if (this.cancelled) throw new Error('GOVERNED_PROOF_INVALID: runner is cancelled');
+    if (this.closed) throw new Error('GOVERNED_PROOF_INVALID: runner is closed');
+    return this.agent.previewGovernedAnswerDispatch(this.userMessage, { schema: this.resultSchema });
   }
 
   async answer(_request: GovernedProbeRunnerRequest): Promise<GovernedIdentifiedAnswerResult> {

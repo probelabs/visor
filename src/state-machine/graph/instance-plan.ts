@@ -135,7 +135,7 @@ function validateGovernedInspectConfig(name: string, check: CheckConfig): void {
   const invocationRecord = invocation as Record<string, unknown>, subject = invocationRecord.subject;
   if (!validVisible(invocationRecord.role_id, 128) || (invocationRecord.stance !== 'owner' && invocationRecord.stance !== 'external-review') || !validVisible(invocationRecord.output_schema_id, 128) || !subject || typeof subject !== 'object' || Array.isArray(subject) || !hasExactKeys(subject, ['kind', 'id', 'fingerprint']) || !validMaterialized(subject)) rejectReservedProfile(name, 'inspect invocation fields are invalid');
   const subjectRecord = subject as Record<string, unknown>;
-  if ((subjectRecord.kind !== 'project' && subjectRecord.kind !== 'requirement') || !validVisible(subjectRecord.id, 128) || !validDigest(subjectRecord.fingerprint)) rejectReservedProfile(name, 'inspect invocation subject is invalid');
+  if ((subjectRecord.kind !== 'project' && subjectRecord.kind !== 'requirement' && subjectRecord.kind !== 'component') || !validVisible(subjectRecord.id, 128) || !validDigest(subjectRecord.fingerprint)) rejectReservedProfile(name, 'inspect invocation subject is invalid');
   const decoded = decodeGovernedSchema(invocationRecord.output_schema); if (!decoded || record.result_schema !== decoded) rejectReservedProfile(name, 'inspect result schema is not bound to invocation');
   let parsed: unknown; try { parsed = JSON.parse(decoded); } catch { rejectReservedProfile(name, 'inspect output schema is not JSON'); }
   if (!validMaterialized(parsed) || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) rejectReservedProfile(name, 'inspect output schema must be a JSON object');

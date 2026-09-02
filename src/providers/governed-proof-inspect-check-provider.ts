@@ -16,7 +16,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = 'luna-xhigh-readonly-v1';
 /** Runtime claims used by the onboarding component context contract. */
 export const COMPONENT_WORK_ITEM_CLAIM = 'component.work_item@1';
-export const PROOF_ROLE_AUTHORITY_CLAIM = 'proof.role_authority@1';
+export const PROOF_ROLE_AUTHORITY_CLAIM = 'proof.component_role_authority@1';
 export const GOVERNED_PROOF_CONTEXT_VERSION = 'visor.proof-runtime-context/v1';
 export const GOVERNED_PROOF_CONTEXT_MAX_BYTES = 131072;
 const AUTHORED = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile'] as const;
@@ -102,7 +102,7 @@ function validateInvocation(value: unknown): asserts value is Record<string, unk
   if (!validMaterialized(value)) fail('invocation contains non-materialized data');
   if (!visible(value.role_id, 128) || (value.stance !== 'owner' && value.stance !== 'external-review') || !visible(value.output_schema_id, 128)) fail('invocation strings are invalid');
   const subject = value.subject;
-  if (!plain(subject) || !exact(subject, ['kind', 'id', 'fingerprint']) || (subject.kind !== 'project' && subject.kind !== 'requirement') || !visible(subject.id, 128) || !wire(subject.fingerprint)) fail('invocation subject is invalid');
+  if (!plain(subject) || !exact(subject, ['kind', 'id', 'fingerprint']) || (subject.kind !== 'project' && subject.kind !== 'requirement' && subject.kind !== 'component') || !visible(subject.id, 128) || !wire(subject.fingerprint)) fail('invocation subject is invalid');
   const schema = decodeSchema(value.output_schema); const parsed = jsonObject(schema, 'output_schema'); if (!validMaterialized(parsed)) fail('output_schema contains non-materialized data');
 }
 export function projectGovernedProofInspectConfig(value: unknown): CheckProviderConfig {
@@ -166,15 +166,43 @@ export interface GovernedProbeRunnerRequest {
   readonly context?: GovernedProofRuntimeContextV1;
   readonly contextDigest?: string;
 }
-export interface GovernedProbeRunner { answer(request: GovernedProbeRunnerRequest): Promise<GovernedIdentifiedAnswerResult> | GovernedIdentifiedAnswerResult; cancel(reason: 'deadline'): Promise<void> | void; close(): Promise<void> | void; }
+export interface GovernedProbeDispatchPreview {
+  readonly source: 'probe-host-tools-call';
+  readonly tool: 'codex';
+  readonly promptDigest: string;
+  readonly promptBytes: number;
+}
+export interface GovernedProbeRunner {
+  answer(request: GovernedProbeRunnerRequest): Promise<GovernedIdentifiedAnswerResult> | GovernedIdentifiedAnswerResult;
+  /** Preview must be the same Probe dispatch that answer() will attest. */
+  preview?(request: GovernedProbeRunnerRequest): Promise<GovernedProbeDispatchPreview> | GovernedProbeDispatchPreview;
+  cancel(reason: 'deadline'): Promise<void> | void;
+  close(): Promise<void> | void;
+}
 type GovernedProbeRunnerFactory = (request: GovernedProbeRunnerRequest) => GovernedProbeRunner;
-function validateAttestation(att: unknown, digest: string): Record<string, unknown> {
+function validateAttestation(
+  att: unknown,
+  digest: string,
+  expectedDispatch?: GovernedProbeDispatchPreview
+): Record<string, unknown> {
   if (!validMaterialized(att)) fail('attestation contains non-materialized data');
   if (!plain(att) || !exact(att, ['version', 'profileId', 'requested', 'observed', 'executionContext', 'dispatch', 'evidence', 'usage']) || att.version !== 'probe.governed-codex-attestation/v2' || att.profileId !== PROFILE) fail('attestation header invalid');
   const requested = att.requested, observed = att.observed, ctx = att.executionContext, dispatch = att.dispatch, evidence = att.evidence, usage = att.usage;
   if (!plain(requested) || !exact(requested, ['profileDigest', 'cwdDigest', 'probeToolsDigest', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy']) || !bare(requested.profileDigest) || !bare(requested.cwdDigest) || !bare(requested.probeToolsDigest) || requested.model !== 'gpt-5.6-luna' || requested.reasoningEffort !== 'xhigh' || requested.sandbox !== 'read-only' || requested.approvalPolicy !== 'never') fail('requested attestation invalid');
   if (!plain(observed) || !exact(observed, ['source', 'model', 'modelProviderId', 'reasoningEffort', 'approvalPolicy', 'cwdDigest', 'permissionProfileDigest', 'filesystem', 'network']) || observed.source !== 'session_configured' || observed.model !== 'gpt-5.6-luna' || observed.modelProviderId !== 'openai' || observed.reasoningEffort !== 'xhigh' || observed.approvalPolicy !== 'never' || !bare(observed.cwdDigest) || !bare(observed.permissionProfileDigest) || observed.filesystem !== 'restricted-read-root' || observed.network !== 'restricted') fail('observed attestation invalid');
   if (!plain(ctx) || !exact(ctx, ['source', 'invocationDigest']) || ctx.source !== 'caller' || ctx.invocationDigest !== digest || !plain(dispatch) || !exact(dispatch, ['source', 'tool', 'promptDigest', 'promptBytes']) || dispatch.source !== 'probe-host-tools-call' || dispatch.tool !== 'codex' || !wire(dispatch.promptDigest) || typeof dispatch.promptBytes !== 'number' || !Number.isSafeInteger(dispatch.promptBytes) || dispatch.promptBytes < 0 || !plain(evidence) || !exact(evidence, ['eventCount']) || evidence.eventCount !== 1 || !plain(usage) || !exact(usage, ['status']) || usage.status !== 'unavailable') fail('attestation evidence invalid');
+  if (expectedDispatch && (
+    !plain(expectedDispatch) ||
+    !exact(expectedDispatch, ['source', 'tool', 'promptDigest', 'promptBytes']) ||
+    expectedDispatch.source !== 'probe-host-tools-call' ||
+    expectedDispatch.tool !== 'codex' ||
+    !wire(expectedDispatch.promptDigest) ||
+    typeof expectedDispatch.promptBytes !== 'number' ||
+    !Number.isSafeInteger(expectedDispatch.promptBytes) ||
+    expectedDispatch.promptBytes < 0 ||
+    dispatch.promptDigest !== expectedDispatch.promptDigest ||
+    dispatch.promptBytes !== expectedDispatch.promptBytes
+  )) fail('attestation dispatch is detached from the Probe preview');
   return immutableCanonicalValue(att);
 }
 function validateRunnerResult(value: unknown): { data: unknown; runtimeAttestation: Record<string, unknown>; resultIdentity: Record<string, unknown> } {
@@ -231,6 +259,29 @@ function validateProjectedRuntimeContextClaim(
   });
 }
 
+/**
+ * The generated instance has one external input slot.  The component WorkItem
+ * therefore carries the exact Proof component-role authority as a canonical
+ * nested claim envelope.  This keeps the graph's one-input invariant while
+ * preserving two independently checkable authorities at the Probe boundary.
+ */
+function projectEmbeddedAuthority(
+  payload: unknown,
+  expectedScope: ManagedRunBindingV1['scope']
+): GovernedProofRuntimeContextClaimV1 {
+  if (!plain(payload) || !own(payload, 'authority')) fail('runtime WorkItem authority is missing');
+  const embedded = payload.authority;
+  if (!plain(embedded) || !exact(embedded, ['claimId', 'claim', 'payloadFingerprint', 'payload']) || !validMaterialized(embedded)) fail('runtime WorkItem authority envelope is not closed');
+  if (!bare(embedded.claimId) || embedded.claim !== PROOF_ROLE_AUTHORITY_CLAIM || !bare(embedded.payloadFingerprint) || !validMaterialized(embedded.payload) || JSON.stringify(embedded.payload) !== canonicalJson(embedded.payload) || sha256Canonical(embedded.payload) !== embedded.payloadFingerprint) fail('runtime WorkItem authority is detached');
+  return immutableCanonicalValue({
+    claimId: embedded.claimId,
+    claim: embedded.claim,
+    payloadFingerprint: embedded.payloadFingerprint,
+    scope: expectedScope,
+    payload: embedded.payload,
+  });
+}
+
 function validateRuntimeContextShape(value: unknown): GovernedProofRuntimeContextV1 {
   if (!plain(value) || !exact(value, ['version', 'component', 'authority']) || value.version !== GOVERNED_PROOF_CONTEXT_VERSION) fail('runtime context header is invalid');
   if (JSON.stringify(value) !== canonicalJson(value)) fail('runtime context is noncanonical');
@@ -243,17 +294,18 @@ function validateRuntimeContextShape(value: unknown): GovernedProofRuntimeContex
 
 /**
  * Project the exact generated input claims into the only runtime context that
- * the governed Probe runner may receive. The graph must provide exactly one
- * component WorkItem and one same-scope Proof authority claim.
+ * the governed Probe runner may receive. Graph-v2 supplies one external
+ * component WorkItem claim; its canonical payload envelope carries the
+ * same-scope Proof component-role authority claim.
  */
 export function projectGovernedProofRuntimeContext(
   claims: unknown,
   binding: ManagedRunBindingV1
 ): GovernedProofRuntimeContextV1 {
-  if (!plain(claims) || !exact(claims, ['component', 'authority'])) fail('runtime context requires exactly component and authority claims');
+  if (!plain(claims) || !exact(claims, ['component'])) fail('runtime context requires exactly the component WorkItem claim');
   const record = claims as Record<string, unknown>;
   const component = validateRuntimeContextClaim(record.component, COMPONENT_WORK_ITEM_CLAIM, binding.scope);
-  const authority = validateRuntimeContextClaim(record.authority, PROOF_ROLE_AUTHORITY_CLAIM, binding.scope);
+  const authority = projectEmbeddedAuthority(component.payload, binding.scope);
   if (component.claimId === authority.claimId) fail('runtime context claims must be distinct');
   const context = immutableCanonicalValue({ version: GOVERNED_PROOF_CONTEXT_VERSION as typeof GOVERNED_PROOF_CONTEXT_VERSION, component, authority });
   if (Buffer.byteLength(canonicalJson(context), 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('runtime context exceeds bounded byte limit');
@@ -278,22 +330,17 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   parentClaims: readonly GovernedProofRuntimeParentClaimV1[],
   binding: ManagedRunBindingV1
 ): void {
-  const contextClaims = parentClaims.filter(claim =>
-    claim.claim === COMPONENT_WORK_ITEM_CLAIM || claim.claim === PROOF_ROLE_AUTHORITY_CLAIM
-  );
+  const contextClaims = parentClaims.filter(claim => claim.claim === COMPONENT_WORK_ITEM_CLAIM);
   if (contextClaims.length === 0) {
     if (evidence.context !== undefined || evidence.contextDigest !== undefined) fail('unexpected runtime context for legacy inspect');
     return;
   }
-  if (contextClaims.length !== 2 || !evidence.context || evidence.contextDigest === undefined) fail('runtime context is missing');
+  if (contextClaims.length !== 1 || !evidence.context || evidence.contextDigest === undefined) fail('runtime context is missing');
   const context = evidence.context;
-  const expected = contextClaims.map(claim => claim.claimId).sort();
-  const actual = [context.component.claimId, context.authority.claimId].sort();
-  if (actual.length !== expected.length || actual.some((claimId, index) => claimId !== expected[index])) fail('runtime context claims are not exact parents');
-  for (const contextClaim of [context.component, context.authority]) {
-    const parent = contextClaims.find(claim => claim.claimId === contextClaim.claimId);
-    if (!parent || parent.claim !== contextClaim.claim || parent.payloadFingerprint !== contextClaim.payloadFingerprint || canonicalJson(parent.scope) !== canonicalJson(contextClaim.scope) || canonicalJson(parent.payload) !== canonicalJson(contextClaim.payload)) fail('runtime context claim is stale or foreign');
-  }
+  const parent = contextClaims[0];
+  if (context.component.claimId !== parent.claimId || context.component.claim !== parent.claim || context.component.payloadFingerprint !== parent.payloadFingerprint || canonicalJson(parent.scope) !== canonicalJson(context.component.scope) || canonicalJson(parent.payload) !== canonicalJson(context.component.payload)) fail('runtime context component is stale or foreign');
+  const authority = projectEmbeddedAuthority(parent.payload, binding.scope);
+  if (canonicalJson(authority) !== canonicalJson(context.authority)) fail('runtime context authority is stale or foreign');
   if (canonicalJson(context.component.scope) !== canonicalJson(binding.scope) || canonicalJson(context.authority.scope) !== canonicalJson(binding.scope)) fail('runtime context scope is foreign');
 }
 
@@ -301,25 +348,28 @@ function requiresRuntimeContext(config: CheckProviderConfig): boolean {
   const consumes = config.consumes;
   if (consumes === undefined) return false;
   if (!Array.isArray(consumes)) fail('config consumes is not an array');
-  const authority = consumes.filter(value => plain(value) && value.claim === PROOF_ROLE_AUTHORITY_CLAIM);
-  if (authority.length === 0) return false;
-  if (authority.length !== 1 || consumes.length !== 2 || consumes.some(value => !plain(value))) fail('runtime context declarations are not exact');
-  const component = consumes.find(value => value.claim === COMPONENT_WORK_ITEM_CLAIM && value.as === 'component');
-  const authorityBinding = consumes.find(value => value.claim === PROOF_ROLE_AUTHORITY_CLAIM && value.as === 'authority');
-  if (!component || !authorityBinding) fail('runtime context declarations are not component plus authority');
+  const component = consumes.filter(value => plain(value) && value.claim === COMPONENT_WORK_ITEM_CLAIM && value.as === 'component');
+  if (component.length === 0) {
+    if (consumes.some(value => plain(value) && value.claim === PROOF_ROLE_AUTHORITY_CLAIM)) fail('runtime authority must be carried by the component WorkItem envelope');
+    return false;
+  }
+  if (component.length !== 1 || consumes.length !== 1 || consumes.some(value => !plain(value))) fail('runtime context declarations are not the canonical WorkItem envelope');
   return true;
 }
 
 function evidenceFromResult(
   config: CheckProviderConfig,
   result: { data: unknown; runtimeAttestation: Record<string, unknown>; resultIdentity: Record<string, unknown> },
-  context?: GovernedProofRuntimeContextV1
+  context?: GovernedProofRuntimeContextV1,
+  dispatchPreview?: GovernedProbeDispatchPreview
 ): ProofCandidateEvidenceV1 {
   validateRunnerResult(result);
   if (!validMaterialized(result.data)) fail('runner data is not materialized JSON');
   const dataBytes = canonicalJson(result.data); if (JSON.stringify(result.data) !== dataBytes) fail('runner data is not canonical JSON');
   const identity = result.resultIdentity; if (!plain(identity) || !exact(identity, ['version', 'source', 'resultDigest', 'canonicalBytes']) || identity.version !== 'probe.governed-result-identity/v1' || identity.source !== 'probe-host-schema-valid-json' || identity.resultDigest !== governedResultDigest(result.data) || identity.canonicalBytes !== Buffer.byteLength(dataBytes) || typeof identity.canonicalBytes !== 'number' || !Number.isSafeInteger(identity.canonicalBytes) || identity.canonicalBytes < 0) fail('result identity invalid');
-  const digest = config.invocation_digest as string; const att = validateAttestation(result.runtimeAttestation, digest); const invocation = config.invocation as Record<string, unknown>;
+  const digest = config.invocation_digest as string;
+  const att = validateAttestation(result.runtimeAttestation, digest, context ? dispatchPreview : undefined);
+  const invocation = config.invocation as Record<string, unknown>;
   if (context) {
     const projected = validateRuntimeContextShape(context);
     return immutableCanonicalValue({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity }, context: projected, contextDigest: governedProofRuntimeContextDigest(projected) });
@@ -387,7 +437,16 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
     const contextDigest = context ? governedProofRuntimeContextDigest(context) : undefined;
     const invocation = config.invocation as Record<string, unknown>; const frozen = immutableCanonicalValue({ message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: config.instructions, invocation, invocationDigest: config.invocation_digest, resultSchema: config.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) }) as GovernedProbeRunnerRequest;
     const runner = this.factory(frozen); if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
-    let cancelled = false, closed = false; const answer = Promise.resolve().then(() => runner.answer(frozen)).then(value => { const evidence = evidenceFromResult(config, validateRunnerResult(value), context); return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: immutableCanonicalValue({ issues: [], output: value.data }), proofCandidateEvidence: evidence }); });
+    if (runtimeContextRequired && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');
+    let cancelled = false, closed = false;
+    const answer = Promise.resolve()
+      .then(() => runtimeContextRequired ? runner.preview!(frozen) : undefined)
+      .then(preview => Promise.resolve(runner.answer(frozen)).then(value => ({ value, preview })))
+      .then(({ value, preview }) => {
+        const validated = validateRunnerResult(value);
+        const evidence = evidenceFromResult(config, validated, context, preview);
+        return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: immutableCanonicalValue({ issues: [], output: validated.data }), proofCandidateEvidence: evidence });
+      });
     return { binding, started: Promise.resolve({ version: 1, kind: 'started', binding }), outcome: answer, cancel: async (reason, fence) => { if (fence !== binding.fence) throw new Error('GOVERNED_PROOF_INVALID: cancellation fence is stale'); if (!cancelled) { cancelled = true; await runner.cancel(reason); } return { version: 1, kind: 'cancelled', binding, reason }; }, close: async () => { if (!closed) { closed = true; await runner.close(); } return { version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }; } };
   }
 }

@@ -107,7 +107,7 @@ describe('private governed Probe runner', () => {
     const context: any = immutableCanonicalValue({
       version: 'visor.proof-runtime-context/v1',
       component: { claimId: '1'.repeat(64), claim: 'component.work_item@1', payloadFingerprint: sha256Canonical({ componentId: 'http-adapter' }), scope: [], payload: { componentId: 'http-adapter' } },
-      authority: { claimId: '3'.repeat(64), claim: 'proof.role_authority@1', payloadFingerprint: sha256Canonical({ roleId: 'onboard' }), scope: [], payload: { roleId: 'onboard' } },
+      authority: { claimId: '3'.repeat(64), claim: 'proof.component_role_authority@1', payloadFingerprint: sha256Canonical({ roleId: 'onboard' }), scope: [], payload: { roleId: 'onboard' } },
     });
     const runner = new GovernedProbeAgentRunner(request({ context, contextDigest: `sha256:${'5'.repeat(64)}` }));
     await runner.answer(request({ context }));

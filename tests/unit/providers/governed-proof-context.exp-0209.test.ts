@@ -33,13 +33,24 @@ function claim(claimName: string, id: string, scope: any, payload: unknown): Can
 }
 
 function claims(scope: any, key: string): Record<string, CandidateClaimInput> {
+  const authorityPayload = {
+    componentId: key,
+    roleId: 'onboard',
+    subjectFingerprint: `sha256:${key === 'http-adapter' ? '5'.repeat(64) : '6'.repeat(64)}`,
+  };
+  const authority = {
+    claimId: key === 'http-adapter' ? '3'.repeat(64) : '4'.repeat(64),
+    claim: PROOF_ROLE_AUTHORITY_CLAIM,
+    payloadFingerprint: sha256Canonical(authorityPayload),
+    payload: authorityPayload,
+  };
+  const workItem = immutableCanonicalValue({
+    authority,
+    componentId: key,
+    sortedOwnedPaths: key === 'http-adapter' ? ['http.go', 'http_test.go'] : ['service.go', 'service_test.go'],
+  });
   return {
-    component: claim(COMPONENT_WORK_ITEM_CLAIM, key === 'http-adapter' ? '1'.repeat(64) : '2'.repeat(64), scope, {
-      componentId: key, sortedOwnedPaths: key === 'http-adapter' ? ['http.go', 'http_test.go'] : ['service.go', 'service_test.go'],
-    }),
-    authority: claim(PROOF_ROLE_AUTHORITY_CLAIM, key === 'http-adapter' ? '3'.repeat(64) : '4'.repeat(64), scope, {
-      componentId: key, roleId: 'onboard', subjectFingerprint: `sha256:${key === 'http-adapter' ? '5'.repeat(64) : '6'.repeat(64)}`,
-    }),
+    component: claim(COMPONENT_WORK_ITEM_CLAIM, key === 'http-adapter' ? '1'.repeat(64) : '2'.repeat(64), scope, workItem),
   };
 }
 
@@ -56,7 +67,6 @@ function inspectConfig(): CheckProviderConfig {
     profile: 'luna-xhigh-readonly-v1',
     consumes: [
       { claim: COMPONENT_WORK_ITEM_CLAIM, as: 'component' },
-      { claim: PROOF_ROLE_AUTHORITY_CLAIM, as: 'authority' },
     ],
   } as CheckProviderConfig;
 }
@@ -92,7 +102,7 @@ describe('EXP-0209 governed component context', () => {
     const captured: any[] = [];
     const factory = jest.fn((request: any) => {
       captured.push(request);
-      return { answer: (value: any) => result(value), cancel: () => undefined, close: () => undefined };
+      return { preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'e'.repeat(64)}`, promptBytes: Buffer.byteLength(governedProofRuntimePrompt(request.context)) }), answer: (value: any) => result(value), cancel: () => undefined, close: () => undefined };
     });
     const provider = createGovernedProofInspectProviderForFocusedTest(factory as any);
     const runA = provider.startManaged(startRequest(scopeA, claims(scopeA, 'http-adapter'), factory));
@@ -111,19 +121,19 @@ describe('EXP-0209 governed component context', () => {
   });
 
   it.each([
-    ['missing authority', (input: any) => { delete input.authority; }],
+    ['missing authority', (input: any) => { const payload = { componentId: input.component.payload.componentId, sortedOwnedPaths: input.component.payload.sortedOwnedPaths }; input.component = { ...input.component, payload, payloadFingerprint: sha256Canonical(payload) }; }],
     ['extra claim alias', (input: any) => { input.foreign = input.component; }],
     ['foreign component scope', (input: any) => { input.component = claims(scopeB, 'service-policy').component; }],
-    ['noncanonical component payload', (input: any) => { input.component = { ...input.component, payload: { '10': 'ten', '2': 'two' }, payloadFingerprint: sha256Canonical({ '10': 'ten', '2': 'two' }) }; }],
-    ['oversized component context', (input: any) => { const payload = { componentId: 'http-adapter', text: 'x'.repeat(140000) }; input.component = { ...input.component, payload, payloadFingerprint: sha256Canonical(payload) }; }],
+    ['noncanonical component payload', (input: any) => { const payload = { '10': 'ten', '2': 'two', ...input.component.payload }; input.component = { ...input.component, payload, payloadFingerprint: sha256Canonical(payload) }; }],
+    ['oversized component context', (input: any) => { const payload = { ...input.component.payload, text: 'x'.repeat(140000) }; input.component = { ...input.component, payload, payloadFingerprint: sha256Canonical(payload) }; }],
   ])('fails closed for %s', (label, mutate) => {
     const input: any = claims(scopeA, 'http-adapter');
     mutate(input);
-    expect(() => projectGovernedProofRuntimeContext(input, binding(scopeA))).toThrow(/runtime context|noncanonical|foreign|bounded/i);
+    expect(() => projectGovernedProofRuntimeContext(input, binding(scopeA))).toThrow(/runtime context|missing|noncanonical|foreign|bounded/i);
   });
 
   it('rejects stale and cross-scope candidate context against current Proof parents', async () => {
-    const factory = jest.fn(() => ({ answer: (value: any) => result(value), cancel: () => undefined, close: () => undefined }));
+    const factory = jest.fn((request: any) => ({ preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'e'.repeat(64)}`, promptBytes: Buffer.byteLength(governedProofRuntimePrompt(request.context)) }), answer: (value: any) => result(value), cancel: () => undefined, close: () => undefined }));
     const provider = createGovernedProofInspectProviderForFocusedTest(factory as any);
     const run = provider.startManaged(startRequest(scopeA, claims(scopeA, 'http-adapter'), factory));
     const outcome: any = await run.outcome;
@@ -133,5 +143,15 @@ describe('EXP-0209 governed component context', () => {
     stale.component = { ...stale.component, payloadFingerprint: '9'.repeat(64) } as any;
     expect(() => validateGovernedProofRuntimeContextAgainstClaims(evidence, Object.values(stale), binding(scopeA))).toThrow(/stale|foreign/i);
     await run.close();
+  });
+
+  it('rejects a valid-shaped but detached Probe dispatch digest', async () => {
+    const factory = jest.fn((request: any) => ({
+      preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'f'.repeat(64)}`, promptBytes: Buffer.byteLength(governedProofRuntimePrompt(request.context)) }),
+      answer: (value: any) => result(value), cancel: () => undefined, close: () => undefined,
+    }));
+    const provider = createGovernedProofInspectProviderForFocusedTest(factory as any);
+    await expect(provider.startManaged(startRequest(scopeA, claims(scopeA, 'http-adapter'), factory)).outcome)
+      .rejects.toThrow(/dispatch|GOVERNED_PROOF_INVALID/i);
   });
 });
