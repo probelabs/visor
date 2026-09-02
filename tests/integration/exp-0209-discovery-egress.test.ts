@@ -317,6 +317,20 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
       },
     };
     candidate = { ...candidate, proofAdmission: candidateEvidence };
+    candidate = {
+      ...candidate,
+      claimId: sha256Canonical({
+        claim: candidate.claim,
+        payloadFingerprint: candidate.payloadFingerprint,
+        producerCheckId: candidate.producerCheckId,
+        scope: candidate.scope,
+        attemptId: candidate.attemptId,
+        fence: candidate.fence,
+        parentClaimIds: [...candidate.parentClaimIds].sort(),
+        proofCandidateEvidenceFingerprint: sha256Canonical(candidateEvidence),
+      }),
+    };
+    candidateEnvelope.Publication.ClaimID = candidate.claimId;
     const admissionProvider = admitModule.createProofAdmitProviderFromCapability(capability);
     const admissionRun = admissionProvider.startManaged({
       prInfo, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [] },
@@ -412,7 +426,7 @@ describe('EXP-0209 admitted discovery egress', () => {
         Publication: { Version: 1, Type: 'ClaimPublished', SessionID: 'session', CheckID: 'inspect', Scope: candidateBinding.Scope, NodeInstanceID: candidateBinding.NodeInstanceID, NodeGenerationID: candidateBinding.NodeGenerationID, AttemptID: candidateBinding.AttemptID, Fence: 1, ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, ProducerCheckID: 'inspect', Payload: candidateBytes.toString('base64'), ParentClaimIDs: candidate.parentClaimIds },
         Binding: candidateBinding, Termination: candidateTermination,
       };
-      const candidateEnvelopeWire = JSON.stringify(candidateEnvelope);
+      let candidateEnvelopeWire = JSON.stringify(candidateEnvelope);
       candidate = {
         ...candidate,
         proofAdmission: {
@@ -431,6 +445,21 @@ describe('EXP-0209 admitted discovery egress', () => {
           },
         },
       };
+      candidate = {
+        ...candidate,
+        claimId: sha256Canonical({
+          claim: candidate.claim,
+          payloadFingerprint: candidate.payloadFingerprint,
+          producerCheckId: candidate.producerCheckId,
+          scope: candidate.scope,
+          attemptId: candidate.attemptId,
+          fence: candidate.fence,
+          parentClaimIds: [...candidate.parentClaimIds].sort(),
+          proofCandidateEvidenceFingerprint: sha256Canonical(candidate.proofAdmission),
+        }),
+      };
+      candidateEnvelope.Publication.ClaimID = candidate.claimId;
+      candidateEnvelopeWire = JSON.stringify(candidateEnvelope);
       const admissionReceipt: Record<string, unknown> = {
         Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED',
         CandidateID: proofDomainDigest('proof.role-result-candidate-envelope/id/v1', candidateEnvelopeWire), ProbeResultDigest: proofGovernedResultDigest(candidatePayload), ProbeCanonicalBytes: candidateBytes.length,

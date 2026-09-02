@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import type { PRInfo } from '../pr-analyzer';
 import type { ReviewSummary } from '../reviewer';
-import { canonicalJson, immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../state-machine/graph/claim-kernel';
 import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
@@ -186,6 +186,36 @@ export function validateGovernedProofCandidateClaim(value: unknown, label = 'can
   if (derivedMode !== 'proof') invalid(`${label} invocation is not the governed onboarding schema`);
   if (value.wireMode !== undefined && value.wireMode !== derivedMode) {
     invalid(`${label} wire mode is detached from governed invocation`);
+  }
+  /*
+   * The evidence sidecar is part of the generated claim identity.  Recompute
+   * that identity before treating its invocation as Proof authority; otherwise
+   * a legacy direct claim view can omit wireMode and relabel a generic
+   * sidecar's schema while retaining the generic claim ID and result bytes.
+   */
+  if (value.claim !== PROOF_CANDIDATE_CLAIM || value.provenance !== 'attempt' ||
+      typeof value.claimId !== 'string' || typeof value.producerCheckId !== 'string' ||
+      !Array.isArray(value.parentClaimIds) || value.parentClaimIds.some(parent => typeof parent !== 'string') ||
+      typeof value.attemptId !== 'string' || !Number.isSafeInteger(value.fence)) {
+    invalid(`${label} generated claim provenance is invalid`);
+  }
+  let expectedClaimId: string;
+  try {
+    expectedClaimId = sha256Canonical({
+      claim: value.claim,
+      payloadFingerprint: value.payloadFingerprint,
+      producerCheckId: value.producerCheckId,
+      scope: value.scope,
+      attemptId: value.attemptId,
+      fence: value.fence,
+      parentClaimIds: [...value.parentClaimIds].sort(),
+      proofCandidateEvidenceFingerprint: sha256Canonical(value.proofAdmission),
+    });
+  } catch (error) {
+    invalid(`${label} generated claim identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (value.claimId !== expectedClaimId) {
+    invalid(`${label} generated claim identity is detached from its evidence`);
   }
   try {
     const payloadWire = governedCanonicalJson(value.payload, derivedMode);

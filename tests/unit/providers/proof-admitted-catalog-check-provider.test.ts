@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { compareProofStrings, validateProofCatalogRevalidationProjection } from '../../../src/providers/proof-catalog-check-providers';
+import { compareProofStrings, validateGovernedProofCandidateClaim, validateProofCatalogRevalidationProjection } from '../../../src/providers/proof-catalog-check-providers';
 import {
   canonicalJson,
   immutableCanonicalValue,
@@ -7,7 +7,7 @@ import {
 } from '../../../src/state-machine/graph/claim-kernel';
 import type { CandidateClaimInput } from '../../../src/providers/check-provider.interface';
 import { createHash } from 'node:crypto';
-import { immutableProofCanonicalValue, proofCanonicalJson, proofPayloadFingerprint } from '../../../src/providers/proof-wire';
+import { governedCanonicalJson, governedPayloadFingerprint, governedResultDigest, immutableProofCanonicalValue, proofCanonicalJson, proofPayloadFingerprint } from '../../../src/providers/proof-wire';
 
 const scope = Object.freeze([{
   kind: 'keyed' as const,
@@ -136,7 +136,22 @@ function fixture() {
   const inventoryPayload = inventory();
   const inventoryClaim = makeClaim('proof.structural_inventory@1', inventoryPayload, 'structural_inventory');
   const candidatePayloadValue = candidatePayload();
-  const candidate = { ...makeClaim('proof.candidate@1', candidatePayloadValue, 'inspect', [inventoryClaim.claimId]), proofAdmission: candidateEvidence(candidatePayloadValue) };
+  const evidence = candidateEvidence(candidatePayloadValue);
+  const candidateBase = makeClaim('proof.candidate@1', candidatePayloadValue, 'inspect', [inventoryClaim.claimId]);
+  const candidate = immutableCanonicalValue({
+    ...candidateBase,
+    proofAdmission: evidence,
+    claimId: sha256Canonical({
+      claim: candidateBase.claim,
+      payloadFingerprint: candidateBase.payloadFingerprint,
+      producerCheckId: candidateBase.producerCheckId,
+      scope: candidateBase.scope,
+      attemptId: candidateBase.attemptId,
+      fence: candidateBase.fence,
+      parentClaimIds: [...candidateBase.parentClaimIds].sort(),
+      proofCandidateEvidenceFingerprint: sha256Canonical(evidence),
+    }),
+  }) as CandidateClaimInput;
   const binding = { ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect', Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }], NodeInstanceID: 'b'.repeat(64), NodeGenerationID: 'c'.repeat(64), AttemptID: 'd'.repeat(64), Fence: 1 };
   const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: 'session', Scope: binding.Scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
   const candidateText = proofCanonicalJson(candidate.payload);
@@ -201,6 +216,48 @@ describe('proof-admitted catalog egress', () => {
     expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload, { ...unsignedCandidate, wireMode: 'proof' }, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).toThrow(/evidence|admission/i);
     const genericEvidence = { ...value.candidate.proofAdmission, role: { ...value.candidate.proofAdmission.role, invocation: { ...value.candidate.proofAdmission.role.invocation, output_schema_id: 'proof.generic-candidate@1' } } };
     expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload, { ...value.candidate, proofAdmission: genericEvidence }, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).toThrow(/onboarding|governed|wire/i);
+  });
+
+  it('rejects a generic candidate relabeled as Proof without changing its claim identity', () => {
+    const value: any = fixture();
+    const genericEvidence = {
+      ...value.candidate.proofAdmission,
+      role: {
+        ...value.candidate.proofAdmission.role,
+        invocation: { ...value.candidate.proofAdmission.role.invocation, output_schema_id: 'proof.generic-candidate@1' },
+      },
+      probe: {
+        ...value.candidate.proofAdmission.probe,
+        resultIdentity: {
+          ...value.candidate.proofAdmission.probe.resultIdentity,
+          resultDigest: governedResultDigest(value.candidate.payload, 'generic'),
+          canonicalBytes: Buffer.byteLength(governedCanonicalJson(value.candidate.payload, 'generic'), 'utf8'),
+        },
+      },
+    };
+    const genericCandidate: any = { ...value.candidate, payloadFingerprint: governedPayloadFingerprint(value.candidate.payload, 'generic'), proofAdmission: genericEvidence };
+    delete genericCandidate.wireMode;
+    genericCandidate.claimId = sha256Canonical({
+      claim: genericCandidate.claim,
+      payloadFingerprint: genericCandidate.payloadFingerprint,
+      producerCheckId: genericCandidate.producerCheckId,
+      scope: genericCandidate.scope,
+      attemptId: genericCandidate.attemptId,
+      fence: genericCandidate.fence,
+      parentClaimIds: [...genericCandidate.parentClaimIds].sort(),
+      proofCandidateEvidenceFingerprint: sha256Canonical(genericEvidence),
+    });
+    const relabeled = {
+      ...genericCandidate,
+      proofAdmission: {
+        ...genericEvidence,
+        role: {
+          ...genericEvidence.role,
+          invocation: { ...genericEvidence.role.invocation, output_schema_id: 'proof.component-catalog-candidate@1' },
+        },
+      },
+    };
+    expect(() => validateGovernedProofCandidateClaim(relabeled)).toThrow(/identity|detached/i);
   });
 
   it.each([
