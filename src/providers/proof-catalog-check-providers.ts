@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import type { PRInfo } from '../pr-analyzer';
 import type { ReviewSummary } from '../reviewer';
-import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
 import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
@@ -24,11 +24,16 @@ import {
   PROOF_ADMISSION_WIRE_FIELD,
   goCompatibleProofJson,
   proofCanonicalJson,
-  immutableProofCanonicalValue,
-  proofPayloadFingerprint,
   proofTopLevelJson,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
+import {
+  governedCanonicalJson,
+  governedPayloadFingerprint,
+  governedResultDigest,
+  immutableGovernedValue,
+  type GovernedWireMode,
+} from './proof-wire';
 
 const INTERNAL = Symbol('proof-catalog-provider');
 const REVALIDATION_REQUEST_VERSION = 'proof.catalog-revalidation-request/v2';
@@ -66,7 +71,6 @@ function exact(value: unknown, keys: readonly string[]): value is PlainRecord {
       return !!descriptor && 'value' in descriptor && descriptor.enumerable;
     })());
 }
-function digest(value: unknown): string { return sha256Canonical(value); }
 function fingerprint(value: unknown): value is string { return typeof value === 'string' && DIGEST.test(value); }
 function domainDigestBytes(domain: string, encoded: string): string {
   const bytes = Buffer.from(encoded, 'utf8');
@@ -111,11 +115,11 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
       value.parentClaimIds.some(item => typeof item !== 'string' || !/^[0-9a-f]{64}$/.test(item))) {
     invalid(`${label} claim identity is invalid`);
   }
-  const payload = expectedClaim === PROOF_CANDIDATE_CLAIM
-    ? immutableProofCanonicalValue(value.payload)
-    : immutableCanonicalValue(value.payload);
-  const payloadFingerprint = expectedClaim === PROOF_CANDIDATE_CLAIM ? proofPayloadFingerprint(payload) : digest(payload);
-  const nonCanonical = expectedClaim === PROOF_CANDIDATE_CLAIM ? false : canonicalJson(value.payload) !== JSON.stringify(value.payload);
+  const wireMode: GovernedWireMode = value.wireMode === undefined ? 'generic' : value.wireMode as GovernedWireMode;
+  if (wireMode !== 'generic' && wireMode !== 'proof') invalid(`${label} wire mode is invalid`);
+  const payload = immutableGovernedValue(value.payload, wireMode);
+  const payloadFingerprint = governedPayloadFingerprint(value.payload, wireMode);
+  const nonCanonical = wireMode === 'generic' ? canonicalJson(value.payload) !== JSON.stringify(value.payload) : false;
   if (bounded(value.payload, `${label} payload`, claimPayloadLimit(expectedClaim)) &&
       (nonCanonical || payloadFingerprint !== value.payloadFingerprint)) {
     invalid(`${label} payload is detached or noncanonical`);
@@ -132,12 +136,20 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
     producerCheckId: value.producerCheckId,
     scope: immutableCanonicalValue(value.scope),
     parentClaimIds: immutableCanonicalValue(value.parentClaimIds),
+    wireMode,
+    ...(value.proofAdmission !== undefined ? { proofAdmission: value.proofAdmission } : {}),
+  };
+  const project = (candidate: object): CandidateClaimInput => {
+    const projected = immutableCanonicalValue(candidate) as CandidateClaimInput;
+    return wireMode === 'proof'
+      ? Object.freeze({ ...projected, payload: immutableGovernedValue(value.payload, wireMode) }) as CandidateClaimInput
+      : projected;
   };
   if (value.provenance === 'controller' && typeof value.catalogClaimId === 'string' && Number.isSafeInteger(value.incarnation)) {
-    return immutableCanonicalValue({ ...base, provenance: 'controller' as const, catalogClaimId: value.catalogClaimId, incarnation: value.incarnation as number });
+    return project({ ...base, provenance: 'controller' as const, catalogClaimId: value.catalogClaimId, incarnation: value.incarnation as number });
   }
   if ((value.provenance === undefined || value.provenance === 'attempt') && typeof value.attemptId === 'string' && Number.isSafeInteger(value.fence)) {
-    return immutableCanonicalValue({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
+    return project({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
   }
   invalid(`${label} provenance is invalid`);
 }
@@ -655,9 +667,14 @@ function workItemWire(value: PlainRecord): PlainRecord {
 }
 
 export function validateProofCatalogRevalidationProjection(value: unknown, inventory: PlainRecord, candidate: CandidateClaimInput, admission: CandidateClaimInput, projectID: string, revalidationClaim?: CandidateClaimInput, inventoryClaimId?: string): PlainRecord {
+  // Catalog revalidation is the v2 onboarding lane. A historical generic
+  // proof.candidate@1 claim may still travel through the ordinary graph, but
+  // it is not eligible to enter this Proof-owned catalog protocol.
+  if (candidate.wireMode !== 'proof') invalid('catalog revalidation requires a governed Proof candidate');
   const keys = ['version', 'inventory', 'catalog', 'work_items', 'receipt'];
   if (!exact(value, keys) || value.version !== CATALOG_REVALIDATION_VERSION) invalid('catalog revalidation projection is not closed');
   const admitted = admissionTransport(admission.payload);
+  if (candidate.wireMode !== 'proof') invalid('catalog revalidation requires the governed Proof candidate wire');
   if (candidate.producerCheckId !== 'inspect' ||
       (inventoryClaimId !== undefined && !candidate.parentClaimIds.includes(inventoryClaimId)) || admission.producerCheckId !== 'proof_admit' || admission.parentClaimIds.length !== 1 ||
       admission.parentClaimIds[0] !== candidate.claimId || canonicalJson(admission.scope) !== canonicalJson(candidate.scope) ||
@@ -674,9 +691,9 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   if (admissionSubject.id !== projectID || (admitted.receipt.ProjectLineage === null && admissionSubject.fingerprint !== (currentInventory.authority as PlainRecord).subject_fingerprint)) {
     invalid('admission subject is not bound to the current Proof authority');
   }
-  const candidateWire = proofCanonicalJson(candidate.payload);
+  const candidateWire = governedCanonicalJson(candidate.payload, candidate.wireMode);
   if (admitted.receipt.ProbeCanonicalBytes !== Buffer.byteLength(candidateWire, 'utf8') ||
-      admitted.receipt.ProbeResultDigest !== domainDigestBytes('probe.governed-result-identity/data/v1', candidateWire)) {
+      admitted.receipt.ProbeResultDigest !== governedResultDigest(candidate.payload, candidate.wireMode)) {
     invalid('admission result is detached from the candidate catalog');
   }
   const components = candidateComponents(candidate.payload, projectID);
@@ -719,7 +736,7 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   const authority = (value.inventory as PlainRecord).authority;
   if (!plain(authority) || receipt.project_fingerprint !== authority.subject_fingerprint) invalid('catalog revalidation receipt project authority is detached');
   const expectedInventoryID = domainDigest('proof.structural-inventory/claim/v1', inventoryWire(currentInventory));
-  const expectedCatalogID = domainDigestBytes('proof.component-catalog-candidate/claim/v1', proofCanonicalJson(candidate.payload));
+  const expectedCatalogID = domainDigestBytes('proof.component-catalog-candidate/claim/v1', governedCanonicalJson(candidate.payload, candidate.wireMode));
   if (receipt.inventory_claim_id !== expectedInventoryID || receipt.catalog_claim_id !== expectedCatalogID || receipt.admission_candidate_id !== admitted.receipt.CandidateID || receipt.admission_result_digest !== admitted.receipt.ProbeResultDigest || receipt.admission_receipt_id !== admitted.receipt.receipt_id) invalid('catalog revalidation receipt lineage is detached');
   return bounded(value, 'catalog revalidation projection') as PlainRecord;
 }
@@ -783,7 +800,7 @@ export class ProofCatalogRevalidationCheckProvider extends ProofCatalogCliProvid
     // Go-struct-order receipt.
     let admissionObject: unknown;
     try { admissionObject = JSON.parse(admitted.wire); } catch { invalid('admission decision wire is not JSON'); }
-    const input = proofCanonicalJson({ version: REVALIDATION_REQUEST_VERSION, candidate: candidate.payload, admission: admissionObject });
+    const input = governedCanonicalJson({ version: REVALIDATION_REQUEST_VERSION, candidate: candidate.payload, admission: admissionObject }, 'proof');
     return startProofManagedCliChild({
       binding: request.binding,
       workingDirectory: request.workingDirectory || '',

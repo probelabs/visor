@@ -8,7 +8,11 @@ import type {
 } from '../../providers/check-provider.interface';
 import type { ReviewSummary } from '../../reviewer';
 import { validateProofCandidateEvidence } from '../../providers/governed-proof-inspect-check-provider';
-import { immutableProofCanonicalValue } from '../../providers/proof-wire';
+import {
+  governedWireModeFromEvidence,
+  immutableGovernedValue,
+  type GovernedWireMode,
+} from '../../providers/proof-wire';
 import { canonicalJson, immutableCanonicalValue } from '../graph/claim-kernel';
 import {
   requireKeyedScopePath,
@@ -448,7 +452,7 @@ export function normalizeManagedRunOutcome(
     const expectedKeys = kind === 'succeeded'
       ? ['version', 'kind', 'binding', 'summary']
       : kind === 'succeeded-proof-candidate'
-        ? ['version', 'kind', 'binding', 'summary', 'proofCandidateEvidence']
+        ? ['version', 'kind', 'binding', 'summary', 'proofCandidateEvidence', 'wireMode']
       : ['version', 'kind', 'binding'];
     if (!hasExactOwnKeys(value, expectedKeys)) throw protocolError(code);
 
@@ -464,10 +468,14 @@ export function normalizeManagedRunOutcome(
     if (!isPlainRecord(summary)) throw protocolError(code);
     if (kind === 'succeeded-proof-candidate') {
       const proofCandidateEvidence = validateProofCandidateEvidence(Reflect.get(value, 'proofCandidateEvidence', value));
+      const wireMode = Reflect.get(value, 'wireMode', value) as unknown;
+      if (wireMode !== 'generic' && wireMode !== 'proof' || wireMode !== governedWireModeFromEvidence(proofCandidateEvidence)) {
+        throw protocolError(code);
+      }
       const normalized = immutableCanonicalValue<ReviewSummary>(summary as ReviewSummary);
       const proofSummary = Object.freeze({
         ...normalized,
-        output: immutableProofCanonicalValue((summary as ReviewSummary & { output?: unknown }).output),
+        output: immutableGovernedValue((summary as ReviewSummary & { output?: unknown }).output, wireMode as GovernedWireMode),
       }) as ReviewSummary;
       return Object.freeze({
         version: 1,
@@ -475,6 +483,7 @@ export function normalizeManagedRunOutcome(
         binding,
         summary: proofSummary,
         proofCandidateEvidence,
+        wireMode: wireMode as GovernedWireMode,
       });
     }
     return Object.freeze({

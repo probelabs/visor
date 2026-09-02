@@ -3,7 +3,6 @@ import type { ReviewSummary } from '../reviewer';
 import {
   canonicalJson,
   immutableCanonicalValue,
-  sha256Canonical,
 } from '../state-machine/graph/claim-kernel';
 import {
   PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
@@ -22,14 +21,18 @@ import {
 } from './proof-catalog-check-providers';
 import {
   goCompatibleProofJson,
-  immutableProofCanonicalValue,
   proofAdmissionCapabilityValid,
   proofCanonicalJson,
-  proofPayloadFingerprint,
   PROOF_ADMISSION_UNAVAILABLE,
   PROOF_ADMISSION_WIRE_FIELD,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
+import {
+  governedCanonicalJson,
+  governedPayloadFingerprint,
+  immutableGovernedValue,
+  type GovernedWireMode,
+} from './proof-wire';
 
 type PlainRecord = Record<string, unknown>;
 const INTERNAL = Symbol('proof-admitted-catalog-provider');
@@ -61,9 +64,11 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
       !Array.isArray(value.scope) || typeof value.producerCheckId !== 'string') {
     fail('INVALID_CLAIM', `${label} is not the expected authoritative claim`);
   }
+  const wireMode: GovernedWireMode = value.wireMode === undefined ? 'generic' : value.wireMode as GovernedWireMode;
   try {
-    const payloadFingerprint = expectedClaim === PROOF_CANDIDATE_CLAIM ? proofPayloadFingerprint(value.payload) : sha256Canonical(value.payload);
-    if ((expectedClaim !== PROOF_CANDIDATE_CLAIM && canonicalJson(value.payload) !== JSON.stringify(value.payload)) || payloadFingerprint !== value.payloadFingerprint) {
+    if (wireMode !== 'generic' && wireMode !== 'proof') fail('INVALID_CLAIM', `${label} wire mode is invalid`);
+    const payloadFingerprint = governedPayloadFingerprint(value.payload, wireMode);
+    if ((wireMode === 'generic' && canonicalJson(value.payload) !== JSON.stringify(value.payload)) || payloadFingerprint !== value.payloadFingerprint) {
       fail('DETACHED_CLAIM', `${label} payload is detached`);
     }
     if (JSON.stringify(value.scope) !== canonicalJson(value.scope) ||
@@ -77,19 +82,24 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
   const base = {
     claimId: value.claimId,
     claim: value.claim,
-    payload: expectedClaim === PROOF_CANDIDATE_CLAIM
-      ? immutableProofCanonicalValue(value.payload)
-      : immutableCanonicalValue(value.payload),
+    payload: immutableGovernedValue(value.payload, wireMode),
     payloadFingerprint: value.payloadFingerprint,
     producerCheckId: value.producerCheckId,
     scope: immutableCanonicalValue(value.scope),
     parentClaimIds: immutableCanonicalValue(value.parentClaimIds),
+    wireMode,
+  };
+  const project = (candidate: object): CandidateClaimInput => {
+    const projected = immutableCanonicalValue(candidate) as CandidateClaimInput;
+    return wireMode === 'proof'
+      ? Object.freeze({ ...projected, payload: immutableGovernedValue(value.payload, wireMode) }) as CandidateClaimInput
+      : projected;
   };
   if (value.provenance === 'controller' && typeof value.catalogClaimId === 'string' && Number.isSafeInteger(value.incarnation)) {
-    return immutableCanonicalValue({ ...base, provenance: 'controller' as const, catalogClaimId: value.catalogClaimId, incarnation: value.incarnation as number });
+    return project({ ...base, provenance: 'controller' as const, catalogClaimId: value.catalogClaimId, incarnation: value.incarnation as number });
   }
   if ((value.provenance === undefined || value.provenance === 'attempt') && typeof value.attemptId === 'string' && Number.isSafeInteger(value.fence)) {
-    return immutableCanonicalValue({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
+    return project({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
   }
   fail('INVALID_CLAIM', `${label} provenance is invalid`);
 }
@@ -134,6 +144,7 @@ export class ProofAdmittedCatalogCheckProvider extends CheckProvider {
     const candidate = claim(values.candidate, PROOF_CANDIDATE_CLAIM, 'candidate');
     const admission = claim(values.receipt, PROOF_ADMITTED_RECEIPT_CLAIM, 'admission');
     const revalidation = claim(values.current_revalidation, PROOF_CATALOG_REVALIDATION_CLAIM, 'current revalidation');
+    if (candidate.wireMode !== 'proof') throw new Error(PROOF_ADMISSION_UNAVAILABLE);
     if (inventory.producerCheckId !== 'structural_inventory' || revalidation.producerCheckId !== 'revalidate_catalog' ||
         !plain(inventory.payload) || !plain(candidate.payload) || !plain(revalidation.payload) ||
         canonicalJson(inventory.scope) !== canonicalJson(candidate.scope) || canonicalJson(candidate.scope) !== canonicalJson(admission.scope) || canonicalJson(admission.scope) !== canonicalJson(revalidation.scope)) {
@@ -143,7 +154,7 @@ export class ProofAdmittedCatalogCheckProvider extends CheckProvider {
     const admitted = admissionWire(admission.payload);
     const projection = validateProofCatalogRevalidationProjection(revalidation.payload, inventory.payload as PlainRecord, candidate, admission, projectID, revalidation, inventory.claimId);
     const receipt = projection.receipt;
-    const input = `{"version":${goCompatibleProofJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(candidate.payload)},"admission":${admitted.wire},"revalidation_receipt":${proofCanonicalJson(receipt)}}`;
+    const input = `{"version":${goCompatibleProofJson('proof.onboarding-work-items-request/v1')},"candidate":${governedCanonicalJson(candidate.payload, candidate.wireMode)},"admission":${admitted.wire},"revalidation_receipt":${proofCanonicalJson(receipt)}}`;
     return startProofManagedCliChild({
       binding: request.binding,
       workingDirectory: request.workingDirectory || '',

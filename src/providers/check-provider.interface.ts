@@ -7,6 +7,7 @@ import type {
   ManagedRunBindingV1,
 } from '../state-machine/graph/instance-kernel';
 import type { ProofCandidateEvidenceV1 } from './governed-proof-inspect-check-provider';
+import type { GovernedWireMode } from './proof-wire';
 
 interface CandidateClaimInputBase {
   readonly claimId: string;
@@ -16,6 +17,8 @@ interface CandidateClaimInputBase {
   readonly producerCheckId: string;
   readonly scope: Readonly<ScopePath> | KeyedScopePath;
   readonly parentClaimIds: readonly string[];
+  /** Generated claim payload wire mode; absent only on legacy root claim views. */
+  readonly wireMode?: GovernedWireMode;
   /** Graph-owned governed evidence, present only for an admitted candidate claim. */
   readonly proofAdmission?: ProofCandidateEvidenceV1;
 }
@@ -184,6 +187,8 @@ export interface ManagedProofCandidateSucceededOutcomeV1 {
   readonly binding: ManagedRunBindingV1;
   readonly summary: ReviewSummary;
   readonly proofCandidateEvidence: ProofCandidateEvidenceV1;
+  /** Explicit payload wire mode, derived from the attested role invocation. */
+  readonly wireMode: GovernedWireMode;
 }
 
 export interface ManagedRunFailedOutcomeV1 {

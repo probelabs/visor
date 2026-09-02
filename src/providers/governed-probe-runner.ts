@@ -8,7 +8,7 @@ import {
   type ProbeAgentOptions,
 } from '@probelabs/probe';
 import { canonicalJson } from '../state-machine/graph/claim-kernel';
-import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest } from './proof-wire';
+import { governedWireModeFromInvocation, immutableGovernedValue, governedCanonicalJson, governedResultDigest } from './proof-wire';
 import type {
   GovernedProbeDispatchPreview,
   GovernedProbeRunner,
@@ -122,15 +122,16 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
     // ordering. The onboarding candidate is a Proof wire, so re-project that
     // one result with Proof's UTF-8 bytewise key ordering before Visor binds
     // its candidate evidence and claim publication.
-    if (_request.invocation.output_schema_id === 'proof.component-catalog-candidate@1') {
-      const data = immutableProofCanonicalValue(identified.data);
-      const canonical = Buffer.from(proofCanonicalJson(data), 'utf8');
+    const wireMode = governedWireModeFromInvocation(_request.invocation);
+    if (wireMode === 'proof') {
+      const data = immutableGovernedValue(identified.data, wireMode);
+      const canonical = Buffer.from(governedCanonicalJson(data, wireMode), 'utf8');
       return Object.freeze({
         ...identified,
         data,
         resultIdentity: Object.freeze({
           ...identified.resultIdentity,
-          resultDigest: proofGovernedResultDigest(data),
+          resultDigest: governedResultDigest(data, wireMode),
           canonicalBytes: canonical.length,
         }),
       });

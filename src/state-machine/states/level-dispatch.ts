@@ -32,6 +32,7 @@ import type {
   ManagedRunStartedReceiptV1,
 } from '../../providers/check-provider.interface';
 import { GOVERNED_PROOF_INSPECT_PROVIDER_NAME } from '../../providers/governed-proof-inspect-check-provider';
+import type { GovernedWireMode } from '../../providers/proof-wire';
 import type { CheckConfig } from '../../types/config';
 import type {
   CatalogRequestAttemptStartedEvent,
@@ -152,6 +153,7 @@ function stopCheckProgressTelemetry(timer: ReturnType<typeof setInterval> | null
 interface ManagedProviderSettlement {
   readonly result?: ReviewSummary;
   readonly proofCandidateEvidence?: import('../../providers/governed-proof-inspect-check-provider').ProofCandidateEvidenceV1;
+  readonly wireMode?: GovernedWireMode;
   readonly cleanupStatus: ManagedRunCleanupStatus;
   readonly failureCode?: ManagedRunFailureCode;
 }
@@ -294,7 +296,8 @@ async function runManagedProvider(input: {
     const finishOrdinary = async (
       baseFailure: ManagedRunFailureCode | undefined,
       result?: ReviewSummary,
-      proofCandidateEvidence?: import('../../providers/governed-proof-inspect-check-provider').ProofCandidateEvidenceV1
+      proofCandidateEvidence?: import('../../providers/governed-proof-inspect-check-provider').ProofCandidateEvidenceV1,
+      wireMode?: GovernedWireMode
     ): Promise<ManagedProviderSettlement> => {
       const close = settled(input.snapshot.closeOnce());
       const winner = await raceManagedPromises<
@@ -311,7 +314,7 @@ async function runManagedProvider(input: {
       const cleanup = validateManagedCleanup(input.snapshot, winner.value);
       if (cleanup.failureCode) return cleanup;
       return {
-        ...(baseFailure ? { failureCode: baseFailure } : { result, ...(proofCandidateEvidence ? { proofCandidateEvidence } : {}) }),
+        ...(baseFailure ? { failureCode: baseFailure } : { result, ...(proofCandidateEvidence ? { proofCandidateEvidence } : {}), ...(wireMode ? { wireMode } : {}) }),
         cleanupStatus: cleanup.cleanupStatus,
       };
     };
@@ -369,7 +372,7 @@ async function runManagedProvider(input: {
           (input.providerType !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || input.snapshot.binding.checkId !== 'inspect')) {
         return finishOrdinary('MANAGED_OUTCOME_RECEIPT_INVALID');
       }
-      return finishOrdinary(undefined, normalized.summary, normalized.kind === 'succeeded-proof-candidate' ? normalized.proofCandidateEvidence : undefined);
+      return finishOrdinary(undefined, normalized.summary, normalized.kind === 'succeeded-proof-candidate' ? normalized.proofCandidateEvidence : undefined, normalized.kind === 'succeeded-proof-candidate' ? normalized.wireMode : undefined);
     } catch (error) {
       return finishOrdinary(protocolFailure(error, 'MANAGED_OUTCOME_RECEIPT_INVALID'));
     }
@@ -3815,6 +3818,7 @@ async function executeSingleCheck(
               payload: (result as { output?: unknown }).output,
               executionConfigDigest: context.journal.getGeneratedExecution(dynamic.attempt.nodeGenerationId).node.executionConfigDigest,
               ...(managedSettlement?.proofCandidateEvidence ? { proofCandidateEvidence: managedSettlement.proofCandidateEvidence } : {}),
+              ...(managedSettlement?.wireMode ? { wireMode: managedSettlement.wireMode } : {}),
             });
             claimAttemptFinished = true;
             dynamic.terminalLatch.phase = 'terminal';

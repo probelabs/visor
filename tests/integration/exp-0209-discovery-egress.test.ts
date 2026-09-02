@@ -11,7 +11,7 @@ import { CheckProvider, type CheckProviderConfig, type ExecutionContext } from '
 import type { ReviewSummary } from '../../src/reviewer';
 import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
 import { createGovernedProofInspectProviderForFocusedTest, type GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
-import { proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
+import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
 const PROFILE = resolve(__dirname, '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml');
@@ -72,7 +72,7 @@ class TimedComponentStage2Provider extends TimedComponentProvider {
 }
 function fakeDiscovery(request: GovernedProbeRunnerRequest) {
   const data = { version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
-    { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }], uncertainty: [] },
+    { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }, { n: -0 }], uncertainty: [] },
     { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'], entry_points: ['beta.go:Apply'], state_effects: ['policy'], interfaces: [{ name: 'Policy' }], uncertainty: [] },
     { id: 'gamma', responsibility: 'storage domain', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'], entry_points: ['gamma.go:Store'], state_effects: ['storage'], interfaces: [{ name: 'Store' }], uncertainty: [] },
   ] };
@@ -88,7 +88,7 @@ function withProofFixture<T>(fn: (proof: string, root: string) => Promise<T>): P
 const fs=require('fs'),crypto=require('crypto');
 const root=${JSON.stringify(root)}; const pids=${JSON.stringify(join(root, 'pids'))}; const commands=${JSON.stringify(join(root, 'commands'))};
 fs.appendFileSync(pids,process.pid+'\\n'); fs.appendFileSync(commands,process.argv.slice(2).join(' ')+'\\n'); let input='';
-function canon(v){if(Array.isArray(v))return '['+v.map(canon).join(',')+']';if(v&&typeof v==='object')return '{'+Object.keys(v).sort((a,b)=>Buffer.from(a).compare(Buffer.from(b))).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';return JSON.stringify(v)}
+function canon(v){if(typeof v==='number'&&Object.is(v,-0))return '-0';if(Array.isArray(v))return '['+v.map(canon).join(',')+']';if(v&&typeof v==='object')return '{'+Object.keys(v).sort((a,b)=>Buffer.from(a).compare(Buffer.from(b))).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';return JSON.stringify(v)}
 function top(v, includeReceiptID=false){return '{'+Object.keys(v).filter(k=>includeReceiptID||k!=='receipt_id').sort((a,b)=>Buffer.from(a).compare(Buffer.from(b))).map(k=>JSON.stringify(k)+':'+JSON.stringify(v[k])).join(',')+'}'}
 function hasKeys(v,keys){return v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(v,k))}
 function digest(domain,bytes){const n=Buffer.alloc(8);n.writeBigUInt64BE(BigInt(bytes.length));return 'sha256:'+crypto.createHash('sha256').update(domain).update(Buffer.from([0])).update(n).update(bytes).digest('hex')}
@@ -240,11 +240,14 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
     const capability = child.createProofAdmissionCapability(pinnedProofBinary());
     const scope = [{ kind: 'keyed' as const, expansionOwnerCheck: 'project', key: 'journalservice', subgraphInstanceId: 'a'.repeat(64) }];
     const makeClaim = (claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []) => {
-      const payloadFingerprint = claim === 'proof.candidate@1' ? proofPayloadFingerprint(payload) : sha256Canonical(payload);
-      return immutableCanonicalValue({
-        claimId: sha256Canonical({ claim, payload, producerCheckId }), claim, payload, payloadFingerprint,
-        producerCheckId, scope, parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const,
+      const wireMode = claim === 'proof.candidate@1' ? 'proof' as const : 'generic' as const;
+      const immutablePayload = wireMode === 'proof' ? immutableProofCanonicalValue(payload) : immutableCanonicalValue(payload);
+      const payloadFingerprint = wireMode === 'proof' ? proofPayloadFingerprint(payload) : sha256Canonical(payload);
+      return Object.freeze({
+        claimId: sha256Canonical({ claim, payload: immutablePayload, producerCheckId }), claim, payload: immutablePayload, payloadFingerprint,
+        producerCheckId, scope: immutableCanonicalValue(scope), parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const,
         attemptId: 'b'.repeat(64), fence: 1,
+        wireMode,
       });
     };
     const binding = (checkId: string) => immutableCanonicalValue({
@@ -275,7 +278,7 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
     const outputSchema = Buffer.from('{"type":"object","additionalProperties":false}', 'utf8').toString('base64');
     const invocationRequest = { role_id: 'onboard', stance: 'owner', subject, output_schema_id: 'proof.component-catalog-candidate@1', output_schema: outputSchema };
     const invocation = await child.resolveProofRoleInvocation(capability, invocationRequest, root);
-    const candidatePayload = immutableCanonicalValue({
+      const candidatePayload = immutableProofCanonicalValue({
       version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
         { id: 'alpha', responsibility: 'HTTP <>&\u2028\u2029 adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['z', 'A'], state_effects: ['b', 'A'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }], uncertainty: ['u2', 'u1'] },
         { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'] },
@@ -363,7 +366,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       ]);
       const capability = createProofAdmissionCapability(proof);
       const scope = [{ kind: 'keyed' as const, expansionOwnerCheck: 'project', key: 'journalservice', subgraphInstanceId: 'a'.repeat(64) }];
-      const makeClaim = (claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []) => immutableCanonicalValue({ claimId: sha256Canonical({ claim, payload, producerCheckId }), claim, payload, payloadFingerprint: claim === 'proof.candidate@1' ? proofPayloadFingerprint(payload) : sha256Canonical(payload), producerCheckId, scope, parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const, attemptId: 'b'.repeat(64), fence: 1 });
+      const makeClaim = (claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []) => { const wireMode = claim === 'proof.candidate@1' ? 'proof' as const : 'generic' as const; const immutablePayload = wireMode === 'proof' ? immutableProofCanonicalValue(payload) : immutableCanonicalValue(payload); return Object.freeze({ claimId: sha256Canonical({ claim, payload: immutablePayload, producerCheckId }), claim, payload: immutablePayload, payloadFingerprint: wireMode === 'proof' ? proofPayloadFingerprint(payload) : sha256Canonical(payload), producerCheckId, scope: immutableCanonicalValue(scope), parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const, attemptId: 'b'.repeat(64), fence: 1, wireMode }); };
       const binding = (checkId: string) => immutableCanonicalValue({ managedRunId: sha256Canonical(checkId), sessionId: 'session', checkId, scope, nodeInstanceId: sha256Canonical(`${checkId}:node`), nodeGenerationId: sha256Canonical(`${checkId}:generation`), attemptId: sha256Canonical(`${checkId}:attempt`), fence: 1 });
       const project = makeClaim('project.discovery_item@1', { project_id: 'journalservice', root: '.' }, 'project');
       const structural = providers.createProofStructuralInventoryProviderFromCapability(capability);
@@ -468,7 +471,7 @@ describe('EXP-0209 admitted discovery egress', () => {
         expect(typeof admissionEvent.payload.__proof_admission_wire).toBe('string');
         expect(JSON.parse(admissionEvent.payload.__proof_admission_wire)).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: expect.objectContaining({ Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED', ProjectLineage: null }), reject_code: null }));
         const candidateEvent: any = events[candidate];
-        expect(Object.keys(candidateEvent.payload.components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']);
+        expect(Object.keys(candidateEvent.payload.components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']); expect(Object.is(candidateEvent.payload.components[0].interfaces[1].n, -0)).toBe(true);
         const components = Object.values(journal.getInstanceProjection().instancesById).filter((value: any) => value.scope.length === 2) as any[];
         expect(components.map(value => value.itemKey).sort()).toEqual(['alpha', 'beta', 'gamma']);
         const event = (component: string, stage: ComponentTimelineEvent['stage']) => timeline.find(value => value.component === component && value.stage === stage)?.at;
@@ -485,6 +488,7 @@ describe('EXP-0209 admitted discovery egress', () => {
           expect(stage1).toBeDefined(); expect(activation.activeInputClaimIds).toContain(stage1.claimId);
         }
         expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+        const checkpoint = journal.exportGraphCheckpoint((engine as any)._lastContext.sessionId); const restored = (await import('../../src/snapshot-store')).ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, checkpoint); const restoredCandidate: any = Object.values(restored.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); const liveCandidate: any = Object.values(journal.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); expect(Object.is(restoredCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true); expect(restoredCandidate.payloadFingerprint).toBe(liveCandidate.payloadFingerprint); expect(restoredCandidate.proofCandidateEvidence).toEqual(liveCandidate.proofCandidateEvidence);
       } finally { if (watchdog) clearTimeout(watchdog); providers.clear(); for (const entry of original) providers.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     });
   });

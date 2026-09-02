@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
-import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../../src/providers/proof-wire';
+import { governedCanonicalJson, governedPayloadFingerprint, immutableGovernedValue, immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../../src/providers/proof-wire';
+import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 
 describe('Proof canonical wire', () => {
   it('uses Go JSON escaping and UTF-8 bytewise key order', () => {
@@ -20,5 +21,13 @@ describe('Proof canonical wire', () => {
     expect(proofCanonicalJson(-0)).toBe('-0');
     expect(proofPayloadFingerprint({ '\uE000': 1, '\u{10000}': 2 })).toBe(proofPayloadFingerprint({ '\u{10000}': 2, '\uE000': 1 }));
     expect(proofGovernedResultDigest({ value: 1 })).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('keeps historical generic candidates on graph JSON semantics', () => {
+    const value = { text: '<>&', '\u{10000}': 2, '\uE000': 1, n: -0 };
+    expect(governedCanonicalJson(value, 'generic')).toBe(canonicalJson(value));
+    expect(governedPayloadFingerprint(value, 'generic')).toBe(sha256Canonical(value));
+    expect(Object.is((immutableGovernedValue(value, 'generic') as any).n, 0)).toBe(true);
+    expect(governedCanonicalJson(value, 'proof')).toContain('\\u003c');
   });
 });

@@ -4,6 +4,7 @@
  */
 
 import type { ReviewSummary } from './reviewer';
+import { createHash } from 'crypto';
 import type { EventTrigger } from './types/config';
 import type { CandidateClaimInput } from './providers/check-provider.interface';
 import {
@@ -36,6 +37,7 @@ import {
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
   immutableInstanceEvent,
+  immutableInstanceProjection,
   queryReadyGenerations,
   reduceInstanceEvent,
   reduceInstanceEventBatch,
@@ -61,7 +63,14 @@ import {
 } from './state-machine/graph/instance-kernel';
 import { PROOF_ADMIT_NODE_KEY, PROOF_CANDIDATE_CLAIM } from './state-machine/graph/instance-plan';
 import { goCompatibleProofJson } from './providers/proof-admission-cli-child';
-import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from './providers/proof-wire';
+import {
+  governedCanonicalJson,
+  governedPayloadFingerprint,
+  governedResultDigest,
+  governedWireModeFromEvidence,
+  immutableGovernedValue,
+  type GovernedWireMode,
+} from './providers/proof-wire';
 import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   qualifiedNestedExpansionOwner,
@@ -302,13 +311,13 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
       if (event.claim === PROOF_CANDIDATE_CLAIM && (!sidecar || !hasOwn(event, 'proofCandidateEvidenceFingerprint')) || event.claim !== PROOF_CANDIDATE_CLAIM && (hasOwn(event, 'proofCandidateEvidence') || hasOwn(event, 'proofCandidateEvidenceFingerprint'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof evidence sidecar fields are not paired or reserved');
       const evidenceKeys = sidecar ? ['proofCandidateEvidence', 'proofCandidateEvidenceFingerprint'] : [];
       const keys = node
-        ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', ...evidenceKeys]
+        ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', 'wireMode', ...evidenceKeys]
         : [...ATTEMPT_BASE_KEYS, 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', ...evidenceKeys];
       exact(keys);
       base();
       if (typeof event.checkId !== 'string' || typeof event.attemptId !== 'string' || typeof event.fence !== 'number' || !Number.isSafeInteger(event.fence) || event.fence < 1 ||
           typeof event.claimId !== 'string' || typeof event.claim !== 'string' || typeof event.payloadFingerprint !== 'string' || typeof event.producerCheckId !== 'string' || !Array.isArray(event.parentClaimIds) ||
-          (node && (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string')) || (sidecar && typeof event.proofCandidateEvidenceFingerprint !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Claim publication has invalid fields');
+          (node && (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string' || (event.wireMode !== 'generic' && event.wireMode !== 'proof'))) || (sidecar && typeof event.proofCandidateEvidenceFingerprint !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Claim publication has invalid fields');
       return event as unknown as CheckpointRuntimeEvent;
     }
     default:
@@ -417,14 +426,17 @@ function validateCheckpointPlanAuthority(
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
     if (!node || !node.emissions.some(emission => emission.claim === event.claim)) checkpointAuthorityFailure('Generated claim is not declared by its compiled template node');
     const sidecar = event.claim === PROOF_CANDIDATE_CLAIM;
+    if (event.wireMode !== 'generic' && event.wireMode !== 'proof') checkpointAuthorityFailure('Generated claim wire mode is invalid');
+    if (event.claim !== PROOF_CANDIDATE_CLAIM && event.wireMode !== 'generic') checkpointAuthorityFailure('Proof wire mode is reserved for governed evidence');
     if (sidecar) {
       if (generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== sha256Canonical(event.proofCandidateEvidence)) {
         checkpointAuthorityFailure('Generated proof candidate evidence is not bound to the compiled inspect authority');
       }
       try {
         const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
-        const candidatePayload = proofCanonicalJson(event.payload);
-        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== proofGovernedResultDigest(event.payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(candidatePayload, 'utf8')) {
+        if (event.wireMode !== governedWireModeFromEvidence(evidence)) checkpointAuthorityFailure('Generated claim wire mode is detached from governed invocation');
+        const candidatePayload = governedCanonicalJson(event.payload, event.wireMode);
+        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== governedResultDigest(event.payload, event.wireMode) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(candidatePayload, 'utf8')) {
           checkpointAuthorityFailure('Generated proof candidate evidence is detached from compiled inspect or payload authority');
         }
       } catch (error) {
@@ -451,9 +463,55 @@ function checkpointBody(value: Record<string, unknown>): Record<string, unknown>
   };
 }
 
+/* Checkpoints retain Proof's wire bytes for generated payloads. The envelope
+ * and all historical generic values continue to use the graph canonicalizer;
+ * only an explicitly governed ClaimPublished payload opts into Proof JSON. */
+function checkpointCanonicalJson(value: unknown): string {
+  const active = new Set<object>();
+  const encode = (current: unknown): string => {
+    if (current === null || typeof current === 'boolean' || typeof current === 'string') return JSON.stringify(current);
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) throw new Error('non-finite number is not canonical JSON');
+      return JSON.stringify(current);
+    }
+    if (current === undefined || typeof current === 'function' || typeof current === 'symbol' || typeof current === 'bigint') throw new Error('unsupported checkpoint JSON value');
+    if (active.has(current as object)) throw new Error('checkpoint value is cyclic');
+    active.add(current as object);
+    try {
+      if (Array.isArray(current)) return `[${current.map(item => encode(item)).join(',')}]`;
+      const prototype = Object.getPrototypeOf(current);
+      if (prototype !== Object.prototype && prototype !== null) throw new Error('checkpoint object is not plain');
+      const record = current as Record<string, unknown>;
+      const generated = record.type === 'ClaimPublished' && hasOwn(record, 'nodeGenerationId');
+      return `{${Object.keys(record).sort().map(key => {
+        const encoded = generated && key === 'payload'
+          ? governedCanonicalJson(record[key], record.wireMode === 'proof' ? 'proof' : 'generic')
+          : encode(record[key]);
+        return `${JSON.stringify(key)}:${encoded}`;
+      }).join(',')}}`;
+    } finally { active.delete(current as object); }
+  };
+  return encode(value);
+}
+
+function sha256Checkpoint(value: unknown): string {
+  return createHash('sha256').update(checkpointCanonicalJson(value), 'utf8').digest('hex');
+}
+
+function immutableCheckpointValue<T>(value: T): T {
+  const freeze = (current: unknown): unknown => {
+    if (current && typeof current === 'object') {
+      for (const child of Object.values(current as Record<string, unknown>)) freeze(child);
+      Object.freeze(current);
+    }
+    return current;
+  };
+  return freeze(JSON.parse(checkpointCanonicalJson(value))) as T;
+}
+
 function parseGraphCheckpoint(input: unknown): GraphJournalCheckpointV1 {
   try {
-    canonicalJson(input);
+    checkpointCanonicalJson(input);
   } catch (error) {
     throw checkpointWrap('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint is not canonical JSON', error);
   }
@@ -477,7 +535,7 @@ function parseGraphCheckpoint(input: unknown): GraphJournalCheckpointV1 {
     throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint integrity algorithm or digest is invalid');
   }
   if (!Array.isArray(value.events)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint events must be an array');
-  const expectedDigest = sha256Canonical(checkpointBody(value));
+  const expectedDigest = sha256Checkpoint(checkpointBody(value));
   if (integrity.digest !== expectedDigest) {
     throw new GraphJournalCheckpointError('CHECKPOINT_INTEGRITY_MISMATCH', 'Checkpoint integrity digest does not match its canonical body');
   }
@@ -581,7 +639,7 @@ export class ExecutionJournal {
    * by restoreGraphCheckpoint once the trusted configuration is available.
    */
   static validateGraphCheckpointIntegrity(input: unknown): GraphJournalCheckpointV1 {
-    return immutableCanonicalValue(parseGraphCheckpoint(input));
+    return immutableCheckpointValue(parseGraphCheckpoint(input));
   }
 
   /** Export the immutable Graph-v2 runtime prefix and its canonical integrity digest. */
@@ -591,7 +649,7 @@ export class ExecutionJournal {
     if (!plan.expansionPlan?.active) {
       throw new GraphJournalCheckpointError('CHECKPOINT_GRAPH_MISMATCH', 'Graph journal checkpoints require an active expansion plan');
     }
-    const events = immutableCanonicalValue(this.runtimeEvents) as readonly CheckpointRuntimeEvent[];
+    const events = immutableCheckpointValue(this.runtimeEvents) as readonly CheckpointRuntimeEvent[];
     if (events.some(event => event.sessionId !== sessionId)) {
       throw new GraphJournalCheckpointError('CHECKPOINT_SESSION_MISMATCH', 'Runtime event session differs from export session');
     }
@@ -603,9 +661,9 @@ export class ExecutionJournal {
       frontier: { eventCount: events.length, lastEventId: events.length === 0 ? 0 : events.length },
       events,
     };
-    return immutableCanonicalValue({
+    return immutableCheckpointValue({
       ...body,
-      integrity: { algorithm: 'sha256' as const, digest: sha256Canonical(body) },
+      integrity: { algorithm: 'sha256' as const, digest: sha256Checkpoint(body) },
     });
   }
 
@@ -620,7 +678,7 @@ export class ExecutionJournal {
     }
 
     const validatedEvents = validateCheckpointPrefix(checkpoint);
-    const events = immutableCanonicalValue(validatedEvents) as readonly CheckpointRuntimeEvent[];
+    const events = immutableCheckpointValue(validatedEvents) as readonly CheckpointRuntimeEvent[];
     const claimEvents: ClaimRuntimeEvent[] = [];
     const instanceEvents: InstanceRuntimeEvent[] = [];
     let claimPrefix = createInitialClaimProjection();
@@ -665,14 +723,9 @@ export class ExecutionJournal {
 
     const restored = new ExecutionJournal(claimPlan);
     // Keep the journal's internal lane appendable while retaining immutable event values.
-    restored.runtimeEvents = events.map(event => {
-      const immutable = immutableCanonicalValue(event);
-      return event.type === 'ClaimPublished' && event.claim === PROOF_CANDIDATE_CLAIM
-        ? Object.freeze({ ...immutable, payload: immutableProofCanonicalValue(event.payload) })
-        : immutable;
-    }) as Array<CheckpointRuntimeEvent>;
+    restored.runtimeEvents = events.map(event => immutableCheckpointValue(event)) as Array<CheckpointRuntimeEvent>;
     restored.claimProjection = immutableCanonicalValue(claimProjection);
-    restored.instanceProjection = immutableCanonicalValue(instanceProjection);
+    restored.instanceProjection = immutableInstanceProjection(instanceProjection);
     restored.nextFence = allocators.nextFence;
     restored.attemptOrdinals = allocators.attemptOrdinals;
     restored.requestOrdinals = allocators.requestOrdinals;
@@ -921,6 +974,7 @@ export class ExecutionJournal {
         producerCheckId: claim.producerCheckId,
         scope: claim.scope,
         parentClaimIds: claim.parentClaimIds,
+        wireMode: claim.wireMode,
         ...provenance,
         ...(claim.claim === PROOF_CANDIDATE_CLAIM && claim.proofCandidateEvidence && claim.proofCandidateEvidenceFingerprint
           ? { proofAdmission: claim.proofCandidateEvidence }
@@ -939,6 +993,8 @@ export class ExecutionJournal {
     const candidateClaim = Object.values(execution.claims).find(claim => claim.claim === PROOF_CANDIDATE_CLAIM);
     const evidence = candidateClaim?.proofAdmission;
     if (!candidateClaim || !evidence) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof candidate evidence is missing');
+    const wireMode = governedWireModeFromEvidence(evidence);
+    if (candidateClaim.wireMode !== wireMode) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof candidate wire mode is detached');
     if (candidateClaim.provenance !== 'attempt' || typeof candidateClaim.attemptId !== 'string' || !Number.isSafeInteger(candidateClaim.fence)) {
       throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof candidate provenance is invalid');
     }
@@ -958,7 +1014,7 @@ export class ExecutionJournal {
     if (publications.length !== 1) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is ambiguous');
     const publication = publications[0];
     const publicationIndex = this.runtimeEvents.indexOf(publication);
-    if (publicationIndex < 0 || publicationIndex >= proofAttemptIndex || publication.producerCheckId !== candidateClaim.producerCheckId || publication.payloadFingerprint !== candidateClaim.payloadFingerprint || canonicalJson(publication.scope) !== canonicalJson(candidateClaim.scope) || canonicalJson(publication.parentClaimIds) !== canonicalJson(candidateClaim.parentClaimIds) || publication.attemptId !== candidateClaim.attemptId || publication.fence !== candidateClaim.fence || proofCanonicalJson(publication.payload) !== proofCanonicalJson(candidateClaim.payload)) {
+    if (publicationIndex < 0 || publicationIndex >= proofAttemptIndex || publication.producerCheckId !== candidateClaim.producerCheckId || publication.wireMode !== wireMode || publication.payloadFingerprint !== candidateClaim.payloadFingerprint || canonicalJson(publication.scope) !== canonicalJson(candidateClaim.scope) || canonicalJson(publication.parentClaimIds) !== canonicalJson(candidateClaim.parentClaimIds) || publication.attemptId !== candidateClaim.attemptId || publication.fence !== candidateClaim.fence || governedCanonicalJson(publication.payload, wireMode) !== governedCanonicalJson(candidateClaim.payload, wireMode)) {
       throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is detached');
     }
     const terminations = this.runtimeEvents.filter(event =>
@@ -1013,7 +1069,7 @@ export class ExecutionJournal {
       output_schema_id: invocation.output_schema_id,
       output_schema: invocation.output_schema,
     };
-    const payloadBytes = Buffer.from(proofCanonicalJson(publication.payload), 'utf8');
+    const payloadBytes = Buffer.from(governedCanonicalJson(publication.payload, wireMode), 'utf8');
     const candidate = {
       Version: 'proof.role-result-candidate-envelope/v1',
       Invocation: invocationWire,
@@ -1201,6 +1257,7 @@ export class ExecutionJournal {
     attempt: GeneratedAttemptStartedEvent;
     payload: unknown;
     proofCandidateEvidence?: ProofCandidateEvidenceV1;
+    wireMode?: GovernedWireMode;
   }): void {
     const staged = this.stageGeneratedCompletion(input);
     this.runtimeEvents.push(...staged.events);
@@ -1213,6 +1270,7 @@ export class ExecutionJournal {
     payload: unknown;
     executionConfigDigest: string;
     proofCandidateEvidence?: ProofCandidateEvidenceV1;
+    wireMode?: GovernedWireMode;
   }): void {
     const terminal = immutableInstanceEvent({
       version: 1,
@@ -1231,7 +1289,7 @@ export class ExecutionJournal {
   }
 
   private stageGeneratedCompletion(
-    input: { attempt: GeneratedAttemptStartedEvent; payload: unknown; executionConfigDigest?: string; proofCandidateEvidence?: ProofCandidateEvidenceV1 },
+    input: { attempt: GeneratedAttemptStartedEvent; payload: unknown; executionConfigDigest?: string; proofCandidateEvidence?: ProofCandidateEvidenceV1; wireMode?: GovernedWireMode },
     prefix: readonly InstanceRuntimeEvent[] = []
   ): { events: readonly InstanceRuntimeEvent[]; projection: InstanceProjection } {
     const { attempt, payload } = input;
@@ -1259,11 +1317,13 @@ export class ExecutionJournal {
       }
       try {
         const evidence = validateProofCandidateEvidence(input.proofCandidateEvidence);
+        const candidateWireMode = governedWireModeFromEvidence(evidence);
+        if (input.wireMode !== undefined && input.wireMode !== candidateWireMode) throw new Error('wire mode is detached from governed invocation');
         if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation)) {
           throw new Error('evidence invocation is detached from compiled inspect config');
         }
-        const payloadJson = proofCanonicalJson(payload);
-        if (evidence.probe.resultIdentity.resultDigest !== proofGovernedResultDigest(payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) {
+        const payloadJson = governedCanonicalJson(payload, candidateWireMode);
+        if (evidence.probe.resultIdentity.resultDigest !== governedResultDigest(payload, candidateWireMode) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) {
           throw new Error('evidence result identity is detached from candidate payload');
         }
       } catch (error) {
@@ -1282,15 +1342,15 @@ export class ExecutionJournal {
     };
     for (const event of prefix) stage(event);
     const publications: GeneratedClaimPublishedEvent[] = [];
+    const candidateWireMode = input.proofCandidateEvidence
+      ? governedWireModeFromEvidence(input.proofCandidateEvidence)
+      : undefined;
     for (const emission of node.emissions) {
       this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
       const proofCandidateEmission = emission.claim === PROOF_CANDIDATE_CLAIM;
-      const immutablePayload = proofCandidateEmission
-        ? immutableProofCanonicalValue(payload)
-        : immutableCanonicalValue(payload);
-      const payloadFingerprint = proofCandidateEmission
-        ? proofPayloadFingerprint(payload)
-        : sha256Canonical(immutablePayload);
+      const wireMode: GovernedWireMode = proofCandidateEmission ? (candidateWireMode || 'generic') : 'generic';
+      const immutablePayload = immutableGovernedValue(payload, wireMode);
+      const payloadFingerprint = governedPayloadFingerprint(payload, wireMode);
       const parentClaimIds = [...generation.activeInputClaimIds].sort();
       const eventId =
         Math.max(this.claimProjection.lastEventId, staged.lastEventId) + publications.length + 1;
@@ -1301,6 +1361,7 @@ export class ExecutionJournal {
         nodeInstanceId: attempt.nodeInstanceId, nodeGenerationId: attempt.nodeGenerationId,
         claim: emission.claim, payload: immutablePayload, payloadFingerprint,
         producerCheckId: attempt.checkId, parentClaimIds,
+        wireMode,
         claimId: sha256Canonical({ claim: emission.claim, payloadFingerprint,
           producerCheckId: attempt.checkId, scope: attempt.scope, attemptId: attempt.attemptId,
           fence: attempt.fence, parentClaimIds,
@@ -1424,14 +1485,7 @@ export class ExecutionJournal {
   }
 
   getInstanceProjection(): InstanceProjection {
-    const projection = immutableCanonicalValue(this.instanceProjection);
-    const claimsById = Object.fromEntries(Object.entries(projection.claimsById).map(([claimId, claim]) => {
-      const source = this.instanceProjection.claimsById[claimId];
-      return source?.claim === PROOF_CANDIDATE_CLAIM
-        ? [claimId, Object.freeze({ ...claim, payload: immutableProofCanonicalValue(source.payload) })]
-        : [claimId, claim];
-    }));
-    return Object.freeze({ ...projection, claimsById: Object.freeze(claimsById) }) as InstanceProjection;
+    return immutableInstanceProjection(this.instanceProjection);
   }
 
   getExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection {
@@ -2016,12 +2070,11 @@ export class ExecutionJournal {
   }
 
   readRuntimeEvents(): readonly (ClaimRuntimeEvent | InstanceRuntimeEvent)[] {
-    return Object.freeze(this.runtimeEvents.map(event => {
-      const immutable = immutableCanonicalValue(event);
-      return event.type === 'ClaimPublished' && event.claim === PROOF_CANDIDATE_CLAIM
-        ? Object.freeze({ ...immutable, payload: immutableProofCanonicalValue(event.payload) })
-        : immutable;
-    }));
+    return Object.freeze(this.runtimeEvents.map(event =>
+      event.type === 'ClaimPublished' && 'nodeGenerationId' in event
+        ? immutableInstanceEvent(event as InstanceRuntimeEvent)
+        : immutableCanonicalValue(event)
+    ));
   }
 
   getClaimProjection(): ClaimProjection {

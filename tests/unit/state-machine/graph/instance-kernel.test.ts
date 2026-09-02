@@ -244,6 +244,7 @@ function successfulGeneration(
     payloadFingerprint,
     producerCheckId: activation.checkId,
     parentClaimIds: activation.activeInputClaimIds,
+    wireMode: 'generic',
   };
   const completed: GeneratedAttemptCompletedEvent = {
     ...started,
@@ -461,7 +462,7 @@ describe('Graph v2 C2 instance kernel', () => {
     const [started, , published, completed] = successfulGeneration(7, activation);
     const payload = { id: 'A', inspected: true };
     const evidence = candidateEvidence(payload);
-    const candidate = { ...published, claim: PROOF_CANDIDATE_CLAIM, payload, payloadFingerprint: sha256Canonical(payload), proofCandidateEvidence: evidence, proofCandidateEvidenceFingerprint: sha256Canonical(evidence), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(payload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
+    const candidate = { ...published, claim: PROOF_CANDIDATE_CLAIM, wireMode: 'generic' as const, payload, payloadFingerprint: sha256Canonical(payload), proofCandidateEvidence: evidence, proofCandidateEvidenceFingerprint: sha256Canonical(evidence), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(payload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
     const managedEvents = [...fixture.events, managedAcquired(fixture.binding, 6), managedStarted(fixture.binding, 7)];
     const managed = replayInstanceEvents(managedEvents);
     const terminated = managedTerminated(fixture.binding, 8, { cleanupStatus: 'clean', controllerDecision: 'completed', failureCode: null });

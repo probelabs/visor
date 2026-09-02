@@ -12,7 +12,14 @@ import {
   validateProofCandidateEvidence,
   type ProofCandidateEvidenceV1,
 } from '../../providers/governed-proof-inspect-check-provider';
-import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../providers/proof-wire';
+import {
+  governedCanonicalJson,
+  governedPayloadFingerprint,
+  governedResultDigest,
+  governedWireModeFromEvidence,
+  immutableGovernedValue,
+  type GovernedWireMode,
+} from '../../providers/proof-wire';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -415,6 +422,7 @@ export interface GeneratedClaimPublishedEvent extends BoundAttemptEventBase {
   readonly payloadFingerprint: string;
   readonly producerCheckId: string;
   readonly parentClaimIds: readonly string[];
+  readonly wireMode: GovernedWireMode;
   readonly proofCandidateEvidence?: ProofCandidateEvidenceV1;
   readonly proofCandidateEvidenceFingerprint?: string;
 }
@@ -595,6 +603,7 @@ export interface InstanceClaimProjection {
   readonly producerFence?: number;
   readonly controllerCatalogClaimId?: string;
   readonly parentClaimIds: readonly string[];
+  readonly wireMode: GovernedWireMode;
   readonly scope: KeyedScopePath;
   readonly active: boolean;
   readonly kind: 'controller-item' | 'generated-output';
@@ -832,13 +841,21 @@ export function createInitialInstanceProjection(): InstanceProjection {
 
 export function immutableInstanceEvent<T extends InstanceRuntimeEvent>(event: T): T {
   const immutable = immutableCanonicalValue(event);
-  // Proof candidate payloads are governed by Proof's UTF-8 key ordering. The
-  // generic graph canonicalizer is retained for every other event, but must
-  // not silently rewrite this payload before admission sees its bytes.
-  if (event.type === 'ClaimPublished' && event.claim === PROOF_CANDIDATE_CLAIM) {
-    return Object.freeze({ ...immutable, payload: immutableProofCanonicalValue(event.payload) }) as T;
+  if (event.type === 'ClaimPublished' && 'nodeGenerationId' in event) {
+    return Object.freeze({ ...immutable, payload: immutableGovernedValue(event.payload, event.wireMode) }) as T;
   }
   return immutable;
+}
+
+export function immutableInstanceProjection(projection: InstanceProjection): InstanceProjection {
+  const immutable = immutableCanonicalValue(projection) as InstanceProjection;
+  const claimsById = Object.fromEntries(Object.entries(projection.claimsById).map(([claimId, source]) => [
+    claimId,
+    source.wireMode === 'proof'
+      ? Object.freeze({ ...immutable.claimsById[claimId], payload: immutableGovernedValue(source.payload, 'proof') })
+      : immutable.claimsById[claimId],
+  ]));
+  return Object.freeze({ ...immutable, claimsById: Object.freeze(claimsById) }) as InstanceProjection;
 }
 
 function ownerKey(
@@ -1510,15 +1527,16 @@ function reduceGeneratedLifecycle(
     }
   }
   if (event.type === 'ClaimPublished') {
+    if (event.wireMode !== 'generic' && event.wireMode !== 'proof') {
+      throw new InstanceKernelError('INVALID_WIRE_MODE', 'Generated claim wire mode is invalid');
+    }
     if (event.producerCheckId !== generation.checkId) {
       throw new InstanceKernelError('INVALID_GENERATION_BINDING', 'Generated claim has wrong producer');
     }
     if (!sameStrings(event.parentClaimIds, generation.activeInputClaimIds)) {
       throw new InstanceKernelError('INVALID_PARENT_CLAIMS', 'Generated claim has wrong exact parents');
     }
-    const payloadFingerprint = event.claim === PROOF_CANDIDATE_CLAIM
-      ? proofPayloadFingerprint(event.payload)
-      : sha256Canonical(event.payload);
+    const payloadFingerprint = governedPayloadFingerprint(event.payload, event.wireMode);
     if (payloadFingerprint !== event.payloadFingerprint) {
       throw new InstanceKernelError('INVALID_PAYLOAD_FINGERPRINT', 'Generated claim fingerprint is invalid');
     }
@@ -1529,6 +1547,7 @@ function reduceGeneratedLifecycle(
       }
       try {
         const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
+        if (event.wireMode !== governedWireModeFromEvidence(evidence)) throw new Error('wire mode is detached from governed invocation');
         const parentClaims = generation.activeInputClaimIds
           .map(claimId => projection.claimsById[claimId])
           .filter((claim): claim is NonNullable<typeof claim> => claim !== undefined);
@@ -1543,14 +1562,14 @@ function reduceGeneratedLifecycle(
           attemptId: event.attemptId,
           fence: event.fence,
         });
-        const payloadJson = proofCanonicalJson(event.payload);
+        const payloadJson = governedCanonicalJson(event.payload, event.wireMode);
         const identity = event.proofCandidateEvidence.probe.resultIdentity;
-        if (identity.resultDigest !== proofGovernedResultDigest(event.payload) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) throw new Error('result identity is detached from canonical claim payload');
+        if (identity.resultDigest !== governedResultDigest(event.payload, event.wireMode) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) throw new Error('result identity is detached from canonical claim payload');
       } catch { throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate evidence is invalid or detached'); }
       if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
         throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
       }
-    } else if (hasEvidence) {
+    } else if (hasEvidence || event.wireMode !== 'generic') {
       throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
     }
     const claimIdentity = {
@@ -1570,14 +1589,13 @@ function reduceGeneratedLifecycle(
     next.claimsById[event.claimId] = {
       claimId: event.claimId,
       claim: event.claim,
-      payload: event.claim === PROOF_CANDIDATE_CLAIM
-        ? immutableProofCanonicalValue(event.payload)
-        : immutableCanonicalValue(event.payload),
+      payload: immutableGovernedValue(event.payload, event.wireMode),
       payloadFingerprint,
       producerCheckId: event.producerCheckId,
       producerAttemptId: event.attemptId,
       producerFence: event.fence,
       parentClaimIds: [...event.parentClaimIds],
+      wireMode: event.wireMode,
       scope: requireKeyedScopePath(event.scope, instance.scope),
       active: true,
       kind: 'generated-output',
@@ -1870,6 +1888,7 @@ export function reduceInstanceEvent(
         producerCheckId: event.expansionOwnerCheck,
         controllerCatalogClaimId: event.catalogClaimId,
         parentClaimIds: [event.catalogClaimId],
+        wireMode: 'generic',
         scope,
         active: true,
         kind: 'controller-item',
@@ -2075,7 +2094,7 @@ export function reduceInstanceEvent(
       break;
   }
 
-  return immutableCanonicalValue<InstanceProjection>(next);
+  return immutableInstanceProjection(next as InstanceProjection);
 }
 
 function isGeneratedAttemptTerminal(

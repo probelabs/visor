@@ -114,7 +114,8 @@ describe('governed Proof inspect provider', () => {
     expect(captured.invocationDigest).toBe(config().invocation_digest);
     expect(captured.resultSchema).toBe(config().result_schema);
     expect(captured.workingDirectory).toBe(process.cwd());
-    expect(Object.keys(outcome)).toEqual(['version', 'kind', 'binding', 'summary', 'proofCandidateEvidence']);
+    expect(Object.keys(outcome)).toEqual(['version', 'kind', 'binding', 'summary', 'proofCandidateEvidence', 'wireMode']);
+    expect(outcome.wireMode).toBe('generic');
     expect(Object.isFrozen(outcome.proofCandidateEvidence)).toBe(true);
     expect(Object.isFrozen(outcome.proofCandidateEvidence.probe.attestation)).toBe(true);
     expect(answer).toHaveBeenCalledTimes(1);

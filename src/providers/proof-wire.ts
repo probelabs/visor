@@ -1,4 +1,23 @@
 import { createHash } from 'crypto';
+import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../state-machine/graph/claim-kernel';
+
+export const PROOF_CANDIDATE_OUTPUT_SCHEMA_ID = 'proof.component-catalog-candidate@1';
+export type GovernedWireMode = 'generic' | 'proof';
+
+/** The mode is an attested property of the governed role invocation. */
+export function governedWireModeFromEvidence(value: unknown): GovernedWireMode {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'generic';
+  const role = (value as Record<string, unknown>).role;
+  if (!role || typeof role !== 'object' || Array.isArray(role)) return 'generic';
+  const invocation = (role as Record<string, unknown>).invocation;
+  if (!invocation || typeof invocation !== 'object' || Array.isArray(invocation)) return 'generic';
+  return (invocation as Record<string, unknown>).output_schema_id === PROOF_CANDIDATE_OUTPUT_SCHEMA_ID ? 'proof' : 'generic';
+}
+
+export function governedWireModeFromInvocation(value: unknown): GovernedWireMode {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'generic';
+  return (value as Record<string, unknown>).output_schema_id === PROOF_CANDIDATE_OUTPUT_SCHEMA_ID ? 'proof' : 'generic';
+}
 
 function proofJSON(value: unknown): string {
   if (typeof value === 'number') {
@@ -78,4 +97,24 @@ export function proofGovernedResultDigest(value: unknown): string {
 /** Plain SHA-256 over Proof's canonical JSON bytes (claim payload fingerprint). */
 export function proofPayloadFingerprint(value: unknown): string {
   return createHash('sha256').update(proofCanonicalJson(value), 'utf8').digest('hex');
+}
+
+export function governedCanonicalJson(value: unknown, mode: GovernedWireMode): string {
+  return mode === 'proof' ? proofCanonicalJson(value) : canonicalJson(value);
+}
+
+export function governedPayloadFingerprint(value: unknown, mode: GovernedWireMode): string {
+  return mode === 'proof' ? proofPayloadFingerprint(value) : sha256Canonical(value);
+}
+
+export function governedResultDigest(value: unknown, mode: GovernedWireMode): string {
+  if (mode === 'proof') return proofGovernedResultDigest(value);
+  const bytes = Buffer.from(canonicalJson(value), 'utf8');
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update('probe.governed-result-identity/data/v1').update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+
+export function immutableGovernedValue<T>(value: T, mode: GovernedWireMode): T {
+  return mode === 'proof' ? immutableProofCanonicalValue(value) : immutableCanonicalValue(value);
 }

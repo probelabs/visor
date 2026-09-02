@@ -7,7 +7,13 @@ import { CheckProvider, type CandidateClaimInput, type CheckProviderConfig, type
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
 import type { GovernedIdentifiedAnswerResult } from '@probelabs/probe';
 import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE } from './governed-probe-runner';
-import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest } from './proof-wire';
+import {
+  governedCanonicalJson,
+  governedResultDigest as governedWireResultDigest,
+  governedWireModeFromEvidence,
+  governedWireModeFromInvocation,
+  immutableGovernedValue,
+} from './proof-wire';
 
 export const GOVERNED_PROOF_INSPECT_PROVIDER_NAME = 'governed-proof-inspect';
 export const GOVERNED_PROBE_UNAVAILABLE = 'GOVERNED_PROBE_UNAVAILABLE';
@@ -15,7 +21,6 @@ export const GOVERNED_PROOF_INSPECT_MESSAGE = GOVERNED_PROOF_ROLE_MESSAGE;
 const GOVERNED_RESULT_IDENTITY_DOMAIN = 'probe.governed-result-identity/data/v1';
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const PROFILE = 'luna-xhigh-readonly-v1';
-const PROOF_CANDIDATE_OUTPUT_SCHEMA_ID = 'proof.component-catalog-candidate@1';
 /** Runtime claims used by the onboarding component context contract. */
 export const COMPONENT_WORK_ITEM_CLAIM = 'component.work_item@1';
 export const PROOF_ROLE_AUTHORITY_CLAIM = 'proof.component_role_authority@1';
@@ -214,8 +219,8 @@ function validateRunnerResult(value: unknown): { data: unknown; runtimeAttestati
 }
 function candidateClaimKeys(value: CandidateClaimInput): readonly string[] {
   return value.provenance === 'controller'
-    ? ['claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'scope', 'parentClaimIds', 'provenance', 'catalogClaimId', 'incarnation']
-    : ['claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'scope', 'parentClaimIds', 'provenance', 'attemptId', 'fence'];
+    ? ['claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'scope', 'parentClaimIds', 'wireMode', 'provenance', 'catalogClaimId', 'incarnation']
+    : ['claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'scope', 'parentClaimIds', 'wireMode', 'provenance', 'attemptId', 'fence'];
 }
 
 function validateRuntimeContextClaim(
@@ -368,10 +373,10 @@ function evidenceFromResult(
 ): ProofCandidateEvidenceV1 {
   validateRunnerResult(result);
   if (!validMaterialized(result.data)) fail('runner data is not materialized JSON');
-  const proofCandidate = plain(config.invocation) && config.invocation.output_schema_id === PROOF_CANDIDATE_OUTPUT_SCHEMA_ID;
-  const dataBytes = Buffer.from(proofCandidate ? proofCanonicalJson(result.data) : canonicalJson(result.data), 'utf8');
-  if (!proofCandidate && JSON.stringify(result.data) !== dataBytes.toString('utf8')) fail('runner data is not canonical JSON');
-  const identity = result.resultIdentity; if (!plain(identity) || !exact(identity, ['version', 'source', 'resultDigest', 'canonicalBytes']) || identity.version !== 'probe.governed-result-identity/v1' || identity.source !== 'probe-host-schema-valid-json' || identity.resultDigest !== (proofCandidate ? proofGovernedResultDigest(result.data) : governedResultDigest(result.data)) || identity.canonicalBytes !== dataBytes.length || typeof identity.canonicalBytes !== 'number' || !Number.isSafeInteger(identity.canonicalBytes) || identity.canonicalBytes < 0) fail('result identity invalid');
+  const wireMode = governedWireModeFromInvocation(config.invocation);
+  const dataBytes = Buffer.from(governedCanonicalJson(result.data, wireMode), 'utf8');
+  if (wireMode === 'generic' && JSON.stringify(result.data) !== dataBytes.toString('utf8')) fail('runner data is not canonical JSON');
+  const identity = result.resultIdentity; if (!plain(identity) || !exact(identity, ['version', 'source', 'resultDigest', 'canonicalBytes']) || identity.version !== 'probe.governed-result-identity/v1' || identity.source !== 'probe-host-schema-valid-json' || identity.resultDigest !== (wireMode === 'proof' ? governedWireResultDigest(result.data, wireMode) : governedResultDigest(result.data)) || identity.canonicalBytes !== dataBytes.length || typeof identity.canonicalBytes !== 'number' || !Number.isSafeInteger(identity.canonicalBytes) || identity.canonicalBytes < 0) fail('result identity invalid');
   const digest = config.invocation_digest as string;
   const att = validateAttestation(result.runtimeAttestation, digest, context ? dispatchPreview : undefined);
   const invocation = config.invocation as Record<string, unknown>;
@@ -450,10 +455,9 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       .then(({ value, preview }) => {
         const validated = validateRunnerResult(value);
         const evidence = evidenceFromResult(config, validated, context, preview);
-        const output = plain(config.invocation) && config.invocation.output_schema_id === PROOF_CANDIDATE_OUTPUT_SCHEMA_ID
-          ? immutableProofCanonicalValue(validated.data)
-          : immutableCanonicalValue(validated.data);
-        return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: Object.freeze({ issues: [], output }), proofCandidateEvidence: evidence });
+        const wireMode = governedWireModeFromEvidence(evidence);
+        const output = immutableGovernedValue(validated.data, wireMode);
+        return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: Object.freeze({ issues: [], output }), proofCandidateEvidence: evidence, wireMode });
       });
     return { binding, started: Promise.resolve({ version: 1, kind: 'started', binding }), outcome: answer, cancel: async (reason, fence) => { if (fence !== binding.fence) throw new Error('GOVERNED_PROOF_INVALID: cancellation fence is stale'); if (!cancelled) { cancelled = true; await runner.cancel(reason); } return { version: 1, kind: 'cancelled', binding, reason }; }, close: async () => { if (!closed) { closed = true; await runner.close(); } return { version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }; } };
   }

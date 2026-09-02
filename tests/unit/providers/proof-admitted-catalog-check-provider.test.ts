@@ -7,6 +7,7 @@ import {
 } from '../../../src/state-machine/graph/claim-kernel';
 import type { CandidateClaimInput } from '../../../src/providers/check-provider.interface';
 import { createHash } from 'node:crypto';
+import { immutableProofCanonicalValue, proofCanonicalJson, proofPayloadFingerprint } from '../../../src/providers/proof-wire';
 
 const scope = Object.freeze([{
   kind: 'keyed' as const,
@@ -55,11 +56,15 @@ function admissionID(value: Record<string, unknown>): string {
 }
 
 function makeClaim(claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []): CandidateClaimInput {
+  const proof = claim === 'proof.candidate@1';
+  const immutable = proof ? immutableProofCanonicalValue(payload) : immutableCanonicalValue(payload);
+  const payloadFingerprint = proof ? proofPayloadFingerprint(payload) : sha256Canonical(payload);
   return immutableCanonicalValue({
-    claimId: sha256Canonical({ claim, payload, producerCheckId }), claim, payload,
-    payloadFingerprint: sha256Canonical(payload), producerCheckId, scope,
+    claimId: sha256Canonical({ claim, payload: immutable, producerCheckId }), claim, payload: immutable,
+    payloadFingerprint, producerCheckId, scope,
     parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const,
     attemptId: 'b'.repeat(64), fence: 1,
+    ...(proof ? { wireMode: 'proof' as const } : {}),
   }) as CandidateClaimInput;
 }
 
@@ -105,10 +110,10 @@ function workItem(id: string, path: string, hashDigit: string): Record<string, u
 function fixture() {
   const inventoryPayload = inventory();
   const inventoryClaim = makeClaim('proof.structural_inventory@1', inventoryPayload, 'structural_inventory');
-  const candidate = makeClaim('proof.candidate@1', immutableCanonicalValue(candidatePayload()), 'inspect', [inventoryClaim.claimId]);
+  const candidate = makeClaim('proof.candidate@1', candidatePayload(), 'inspect', [inventoryClaim.claimId]);
   const binding = { ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect', Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }], NodeInstanceID: 'b'.repeat(64), NodeGenerationID: 'c'.repeat(64), AttemptID: 'd'.repeat(64), Fence: 1 };
   const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: 'session', Scope: binding.Scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
-  const candidateText = canonicalJson(candidate.payload);
+  const candidateText = proofCanonicalJson(candidate.payload);
   const admissionReceipt = {
     Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED', CandidateID: encodedDigest('proof.role-result-candidate-envelope/id/v1', candidateText),
     ProbeResultDigest: encodedDigest('probe.governed-result-identity/data/v1', candidateText), ProbeCanonicalBytes: Buffer.byteLength(candidateText), ClaimID: candidate.claimId,

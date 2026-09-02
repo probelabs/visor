@@ -8,7 +8,13 @@ import type {
 } from './check-provider.interface';
 import { canonicalJson } from '../state-machine/graph/claim-kernel';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
-import { proofCanonicalJson, proofTopLevelJson } from './proof-wire';
+import {
+  governedWireModeFromInvocation,
+  governedCanonicalJson,
+  proofCanonicalJson,
+  proofTopLevelJson,
+  type GovernedWireMode,
+} from './proof-wire';
 export { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint, proofTopLevelJson } from './proof-wire';
 
 export const PROOF_ADMISSION_UNAVAILABLE = 'PROOF_ADMISSION_UNAVAILABLE';
@@ -28,11 +34,15 @@ const STDERR_LIMIT = 65536;
 const PROOF_CHILD_ENV = Object.freeze({ PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' });
 const COMMAND_TIMEOUT_MS = process.env.NODE_ENV === 'test' && Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) > 0 ? Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) : 120000;
 const DECISION_VERSION = 'proof.role-result-candidate-cli-decision/v1';
-const RECEIPT_VERSION = 'proof.role-result-candidate-admission/v2';
+const RECEIPT_VERSION_V1 = 'proof.role-result-candidate-admission/v1';
+const RECEIPT_VERSION_V2 = 'proof.role-result-candidate-admission/v2';
 const CANDIDATE_ID_DOMAIN = 'proof.role-result-candidate-envelope/id/v1';
-const RECEIPT_ID_DOMAIN = 'proof.role-result-candidate-receipt/id/v2';
+const RECEIPT_ID_DOMAIN_V1 = 'proof.role-result-candidate-receipt/id/v1';
+const RECEIPT_ID_DOMAIN_V2 = 'proof.role-result-candidate-receipt/id/v2';
 const C0_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] as const;
 const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
+const RECEIPT_COMMON_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
+const RECEIPT_V2_KEYS = [...RECEIPT_COMMON_KEYS.slice(0, 16), 'ProjectLineage', 'receipt_id'] as const;
 type ExecutableStat = Readonly<{
   realpath: string; dev: number; ino: number; mode: number; uid: number; gid: number; size: number;
   mtimeMs: number; ctimeMs: number; digest: string;
@@ -69,6 +79,9 @@ function json(value: unknown): string {
     return `\\u${code}`;
   });
 }
+function proofStructJson(fields: Readonly<Record<string, string>>): string {
+  return `{${Object.entries(fields).map(([key, value]) => `${json(key)}:${value}`).join(',')}}`;
+}
 
 function validUnicode(value: unknown): boolean {
   if (typeof value === 'string') {
@@ -88,7 +101,7 @@ function digest(domain: string, bytes: Buffer): string {
   length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
 }
-function parseRequest(request: string): { raw: Buffer; candidate: Record<string, unknown>; candidateRaw: Buffer } {
+function parseRequest(request: string): { raw: Buffer; candidate: Record<string, unknown>; candidateRaw: Buffer; wireMode: GovernedWireMode } {
   const raw = Buffer.from(request, 'utf8');
   if (raw.length > REQUEST_LIMIT) fail('request exceeds bounded wire limit');
   try { new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { fail('request UTF-8 is invalid'); }
@@ -99,20 +112,21 @@ function parseRequest(request: string): { raw: Buffer; candidate: Record<string,
   const candidate = outer.candidate as Record<string, unknown>;
   const candidateKeys = ['Version', 'Invocation', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'AttestationVersion', 'ExecutionSource', 'ProbeInvocationDigest', 'IdentityVersion', 'IdentitySource', 'ResultDigest', 'CanonicalBytes', 'ProbeResultBytes', 'VisorPayloadBytes', 'Publication', 'Binding', 'Termination'];
   if (!exact(candidate, candidateKeys) || !validUnicode(candidate)) fail('candidate wire keys or Unicode are invalid');
-  validateCandidateShape(candidate);
+  const wireMode = governedWireModeFromInvocation(candidate.Invocation);
+  validateCandidateShape(candidate, wireMode);
   const marker = request.indexOf('"candidate":');
   const start = marker + '"candidate":'.length;
   const encoded = json(candidate);
   if (marker < 0 || request.slice(start, start + encoded.length) !== encoded || request.slice(start + encoded.length) !== '}') fail('candidate wire is not canonical');
-  return { raw, candidate, candidateRaw: Buffer.from(encoded, 'utf8') };
+  return { raw, candidate, candidateRaw: Buffer.from(encoded, 'utf8'), wireMode };
 }
 function b64(value: unknown): Buffer {
   if (typeof value !== 'string' || value.length === 0 || Buffer.from(value, 'base64').toString('base64') !== value) fail('wire bytes are invalid');
   return Buffer.from(value, 'base64');
 }
-function validateCandidateShape(candidate: Record<string, unknown>): void {
+function validateCandidateShape(candidate: Record<string, unknown>, wireMode: GovernedWireMode): void {
   const invocation = candidate.Invocation as Record<string, unknown>;
-  if (!exact(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || !exact(candidate.Subject, ['kind', 'id', 'fingerprint'])) fail('invocation wire shape is invalid');
+  if (!exact(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || !exact(candidate.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(invocation.subject, candidate.Subject)) fail('invocation wire shape is invalid');
   const scope = (value: unknown): void => {
     if (!Array.isArray(value) || value.length < 1 || value.length > 2 || value.some(part => !exact(part, ['Kind', 'ExpansionOwnerCheck', 'Key', 'SubgraphInstanceID']))) fail('scope wire shape is invalid');
   };
@@ -133,7 +147,7 @@ function validateCandidateShape(candidate: Record<string, unknown>): void {
   try {
     const payloadText = new TextDecoder('utf-8', { fatal: true }).decode(probe);
     const payload = JSON.parse(payloadText);
-    if (!validUnicode(payload) || proofCanonicalJson(payload) !== payloadText) fail('candidate payload is not canonical');
+    if (!validUnicode(payload) || governedCanonicalJson(payload, wireMode) !== payloadText) fail('candidate payload is not canonical');
   } catch { fail('candidate payload is not valid UTF-8 JSON'); }
 }
 function equalJson(left: unknown, right: unknown): boolean { return json(left) === json(right); }
@@ -180,7 +194,7 @@ function proofTermination(value: unknown): Record<string, unknown> {
     FailureCode: termination.FailureCode,
   };
 }
-function validateReceipt(decision: unknown, candidate: Record<string, unknown>, rawCandidate: Buffer): void {
+function validateReceipt(decision: unknown, candidate: Record<string, unknown>, rawCandidate: Buffer, wireMode: GovernedWireMode): void {
   if (!exactUnordered(decision, ['version', 'status', 'receipt', 'reject_code']) || decision.version !== DECISION_VERSION) fail('decision envelope is invalid');
   const publication = candidate.Publication as Record<string, unknown>;
   const binding = candidate.Binding;
@@ -189,17 +203,22 @@ function validateReceipt(decision: unknown, candidate: Record<string, unknown>, 
     if (decision.receipt !== null || decision.reject_code !== 'CANDIDATE_INVALID') fail('rejection decision is invalid');
     return;
   }
-  if (decision.status !== 'ADMITTED' || decision.reject_code !== null || !exactUnordered(decision.receipt, ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'ProjectLineage', 'receipt_id'])) fail('admission decision is invalid');
+  if (decision.status !== 'ADMITTED' || decision.reject_code !== null || !plain(decision.receipt)) fail('admission decision is invalid');
   const receipt = decision.receipt as Record<string, unknown>;
+  const expectedVersion = (candidate.Subject as Record<string, unknown>).kind === 'project' ? RECEIPT_VERSION_V2 : RECEIPT_VERSION_V1;
+  const receiptKeys = expectedVersion === RECEIPT_VERSION_V2 ? RECEIPT_V2_KEYS : RECEIPT_COMMON_KEYS;
+  if (!exactUnordered(receipt, receiptKeys) || receipt.Version !== expectedVersion) fail('admission version or fields are invalid');
+  if (wireMode === 'proof' && expectedVersion !== RECEIPT_VERSION_V2) fail('Proof candidate requires project admission');
+  if (wireMode === 'generic' && expectedVersion === RECEIPT_VERSION_V2 && (candidate.Subject as Record<string, unknown>).kind !== 'project') fail('generic project admission is inconsistent');
   const lineage = receipt.ProjectLineage;
-  if (lineage !== null && (!plain(lineage) || !exactUnordered(lineage, ['version', 'fingerprint', 'object_format', 'baseline_revision']) || lineage.version !== 'proof.git-project-lineage-binding/v1' || typeof lineage.fingerprint !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(lineage.fingerprint) || (lineage.object_format !== 'sha1' && lineage.object_format !== 'sha256') || (lineage.object_format === 'sha1' ? !/^sha1:[0-9a-f]{40}$/.test(String(lineage.baseline_revision)) : !/^sha256:[0-9a-f]{64}$/.test(String(lineage.baseline_revision))))) fail('admission project lineage is invalid');
-  if (receipt.Version !== RECEIPT_VERSION || receipt.Status !== 'ADMITTED' || receipt.CandidateID !== digest(CANDIDATE_ID_DOMAIN, rawCandidate) || receipt.ProbeResultDigest !== candidate.ResultDigest || receipt.ProbeCanonicalBytes !== candidate.CanonicalBytes || receipt.ClaimID !== publication.ClaimID || receipt.Claim !== publication.Claim || receipt.PayloadFingerprint !== publication.PayloadFingerprint || receipt.InvocationDigest !== candidate.InvocationDigest || receipt.RoleID !== candidate.RoleID || receipt.Stance !== candidate.Stance || !exactUnordered(receipt.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(receipt.Subject, candidate.Subject) || receipt.ProducerCheckID !== publication.ProducerCheckID || !equalCanonicalJson(receipt.ParentClaimIDs, publication.ParentClaimIDs) || !equalCanonicalJson(receipt.Binding, binding) || !exactUnordered(receipt.Binding, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence']) || !equalCanonicalJson(receipt.Termination, termination) || !exactUnordered(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || typeof receipt.receipt_id !== 'string') fail('admission receipt identity is invalid');
+  if (expectedVersion === RECEIPT_VERSION_V2 && lineage !== null && (!plain(lineage) || !exactUnordered(lineage, ['version', 'fingerprint', 'object_format', 'baseline_revision']) || lineage.version !== 'proof.git-project-lineage-binding/v1' || typeof lineage.fingerprint !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(lineage.fingerprint) || (lineage.object_format !== 'sha1' && lineage.object_format !== 'sha256') || (lineage.object_format === 'sha1' ? !/^sha1:[0-9a-f]{40}$/.test(String(lineage.baseline_revision)) : !/^sha256:[0-9a-f]{64}$/.test(String(lineage.baseline_revision))))) fail('admission project lineage is invalid');
+  if (receipt.Status !== 'ADMITTED' || receipt.CandidateID !== digest(CANDIDATE_ID_DOMAIN, rawCandidate) || receipt.ProbeResultDigest !== candidate.ResultDigest || receipt.ProbeCanonicalBytes !== candidate.CanonicalBytes || receipt.ClaimID !== publication.ClaimID || receipt.Claim !== publication.Claim || receipt.PayloadFingerprint !== publication.PayloadFingerprint || receipt.InvocationDigest !== candidate.InvocationDigest || receipt.RoleID !== candidate.RoleID || receipt.Stance !== candidate.Stance || !exactUnordered(receipt.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(receipt.Subject, candidate.Subject) || receipt.ProducerCheckID !== publication.ProducerCheckID || !equalCanonicalJson(receipt.ParentClaimIDs, publication.ParentClaimIDs) || !equalCanonicalJson(receipt.Binding, binding) || !exactUnordered(receipt.Binding, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence']) || !equalCanonicalJson(receipt.Termination, termination) || !exactUnordered(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || typeof receipt.receipt_id !== 'string') fail('admission receipt identity is invalid');
   // ReceiptID is a Proof domain digest over the Go struct's json.Marshal
   // field order. The surrounding CLI decision is canonical-key JSON, so
   // iterating the parsed receipt's keys here would silently hash a different
   // byte sequence.
   const subject = receipt.Subject as Record<string, unknown>;
-  const unsigned = proofTopLevelJson({
+  const unsignedFields: Record<string, string> = {
     Version: json(receipt.Version),
     Status: json(receipt.Status),
     CandidateID: json(receipt.CandidateID),
@@ -216,10 +235,12 @@ function validateReceipt(decision: unknown, candidate: Record<string, unknown>, 
     ParentClaimIDs: json(receipt.ParentClaimIDs),
     Binding: json(proofBinding(receipt.Binding)),
     Termination: json(proofTermination(receipt.Termination)),
+  };
+  if (expectedVersion === RECEIPT_VERSION_V2) {
     // ProjectLineage is a Go struct nested in the receipt preimage. The
     // decision wire itself is CanonicalJSON, so its parsed map order must not
     // leak into this nested encoding.
-    ProjectLineage: json(lineage === null ? null : (() => {
+    unsignedFields.ProjectLineage = json(lineage === null ? null : (() => {
       const projectLineage = lineage as Record<string, unknown>;
       return {
         version: projectLineage.version,
@@ -227,9 +248,13 @@ function validateReceipt(decision: unknown, candidate: Record<string, unknown>, 
         object_format: projectLineage.object_format,
         baseline_revision: projectLineage.baseline_revision,
       };
-    })()),
-  });
-  if (receipt.receipt_id !== digest(RECEIPT_ID_DOMAIN, Buffer.from(unsigned, 'utf8'))) fail('admission receipt ID is invalid');
+    })());
+  }
+  const unsigned = expectedVersion === RECEIPT_VERSION_V2
+    ? proofTopLevelJson(unsignedFields)
+    : proofStructJson(unsignedFields);
+  const receiptDomain = expectedVersion === RECEIPT_VERSION_V2 ? RECEIPT_ID_DOMAIN_V2 : RECEIPT_ID_DOMAIN_V1;
+  if (receipt.receipt_id !== digest(receiptDomain, Buffer.from(unsigned, 'utf8'))) fail('admission receipt ID is invalid');
 }
 
 function executableStat(path: string): ExecutableStat | undefined {
@@ -647,7 +672,7 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     outputLimit: STDOUT_LIMIT,
     outputCanonical: true,
     projectOutput: (value, raw) => {
-      validateReceipt(value, parsed.candidate, parsed.candidateRaw);
+      validateReceipt(value, parsed.candidate, parsed.candidateRaw, parsed.wireMode);
       const decision = value as Record<string, unknown>;
       if (decision.status !== 'ADMITTED' || !plain(decision.receipt)) fail('candidate was not admitted');
       // Claim payloads are recursively canonicalized by Visor. Preserve the
