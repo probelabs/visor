@@ -97,6 +97,31 @@ function candidatePayload(): Record<string, unknown> {
   };
 }
 
+function candidateEvidence(payload: unknown): Record<string, unknown> {
+  const digest = `sha256:${'b'.repeat(64)}`;
+  const subject = { kind: 'project', id: 'journalservice', fingerprint: `sha256:${'1'.repeat(64)}` };
+  const invocation = {
+    role_id: 'onboard', stance: 'owner', subject,
+    output_schema_id: 'proof.component-catalog-candidate@1',
+    output_schema: Buffer.from('{"type":"object"}', 'utf8').toString('base64'),
+  };
+  const profileDigest = 'a'.repeat(64);
+  const attestation = {
+    version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+    requested: { profileDigest, cwdDigest: profileDigest, probeToolsDigest: profileDigest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+    observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: profileDigest, permissionProfileDigest: profileDigest, filesystem: 'restricted-read-root', network: 'restricted' },
+    executionContext: { source: 'caller', invocationDigest: digest },
+    dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${profileDigest}`, promptBytes: 0 },
+    evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+  };
+  const text = proofCanonicalJson(payload);
+  return {
+    version: 'visor.proof-candidate-evidence/v1',
+    role: { invocation, invocationDigest: digest },
+    probe: { attestation, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: encodedDigest('probe.governed-result-identity/data/v1', text), canonicalBytes: Buffer.byteLength(text, 'utf8') } },
+  };
+}
+
 function workItem(id: string, path: string, hashDigit: string): Record<string, unknown> {
   const subject = { version: 'proof.component-subject/v1', project_id: 'journalservice', component_id: id, sorted_owned_paths: [path], sorted_dependency_closure: [path], fingerprint: `sha256:${('7' + hashDigit).repeat(32)}` };
   return {
@@ -110,7 +135,8 @@ function workItem(id: string, path: string, hashDigit: string): Record<string, u
 function fixture() {
   const inventoryPayload = inventory();
   const inventoryClaim = makeClaim('proof.structural_inventory@1', inventoryPayload, 'structural_inventory');
-  const candidate = makeClaim('proof.candidate@1', candidatePayload(), 'inspect', [inventoryClaim.claimId]);
+  const candidatePayloadValue = candidatePayload();
+  const candidate = { ...makeClaim('proof.candidate@1', candidatePayloadValue, 'inspect', [inventoryClaim.claimId]), proofAdmission: candidateEvidence(candidatePayloadValue) };
   const binding = { ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect', Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }], NodeInstanceID: 'b'.repeat(64), NodeGenerationID: 'c'.repeat(64), AttemptID: 'd'.repeat(64), Fence: 1 };
   const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: 'session', Scope: binding.Scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
   const candidateText = proofCanonicalJson(candidate.payload);
@@ -166,6 +192,15 @@ describe('proof-admitted catalog egress', () => {
     expect(['a', 'B'].sort(compareProofStrings)).toEqual(['B', 'a']);
     const value = fixture();
     expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload as any, value.candidate, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).not.toThrow();
+  });
+
+  it('derives onboarding eligibility from attested invocation evidence', () => {
+    const value: any = fixture();
+    const unsignedCandidate = { ...value.candidate };
+    delete unsignedCandidate.proofAdmission;
+    expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload, { ...unsignedCandidate, wireMode: 'proof' }, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).toThrow(/evidence|admission/i);
+    const genericEvidence = { ...value.candidate.proofAdmission, role: { ...value.candidate.proofAdmission.role, invocation: { ...value.candidate.proofAdmission.role.invocation, output_schema_id: 'proof.generic-candidate@1' } } };
+    expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload, { ...value.candidate, proofAdmission: genericEvidence }, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).toThrow(/onboarding|governed|wire/i);
   });
 
   it.each([

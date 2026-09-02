@@ -27,7 +27,7 @@ function binding(scope: any): any {
 function claim(claimName: string, id: string, scope: any, payload: unknown): CandidateClaimInput {
   return {
     claimId: id, claim: claimName, payload, payloadFingerprint: sha256Canonical(payload),
-    producerCheckId: 'materialize', scope, parentClaimIds: [], provenance: 'controller',
+    producerCheckId: 'materialize', scope, parentClaimIds: [], wireMode: 'generic', provenance: 'controller',
     catalogClaimId: 'c'.repeat(64), incarnation: 1,
   } as CandidateClaimInput;
 }

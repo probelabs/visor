@@ -16,6 +16,8 @@ import { CheckProvider } from './check-provider.interface';
 import {
   PROOF_REVALIDATION_REQUEST_MAX_BYTES,
   PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES,
+  validateGovernedProofCandidateClaim,
+  validateProofCandidateAdmissionBinding,
   validateProofCatalogRevalidationProjection,
   validateProofWorkItemsProjection,
 } from './proof-catalog-check-providers';
@@ -24,7 +26,6 @@ import {
   proofAdmissionCapabilityValid,
   proofCanonicalJson,
   PROOF_ADMISSION_UNAVAILABLE,
-  PROOF_ADMISSION_WIRE_FIELD,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
 import {
@@ -64,7 +65,15 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
       !Array.isArray(value.scope) || typeof value.producerCheckId !== 'string') {
     fail('INVALID_CLAIM', `${label} is not the expected authoritative claim`);
   }
-  const wireMode: GovernedWireMode = value.wireMode === undefined ? 'generic' : value.wireMode as GovernedWireMode;
+  const candidateAuthority = expectedClaim === PROOF_CANDIDATE_CLAIM
+    ? validateGovernedProofCandidateClaim(value, label)
+    : undefined;
+  if (expectedClaim !== PROOF_CANDIDATE_CLAIM && value.proofAdmission !== undefined) {
+    fail('INVALID_CLAIM', `${label} proof admission evidence is reserved for governed candidates`);
+  }
+  const wireMode: GovernedWireMode = candidateAuthority
+    ? candidateAuthority.wireMode
+    : value.wireMode === undefined ? 'generic' : value.wireMode as GovernedWireMode;
   try {
     if (wireMode !== 'generic' && wireMode !== 'proof') fail('INVALID_CLAIM', `${label} wire mode is invalid`);
     const payloadFingerprint = governedPayloadFingerprint(value.payload, wireMode);
@@ -88,6 +97,7 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
     scope: immutableCanonicalValue(value.scope),
     parentClaimIds: immutableCanonicalValue(value.parentClaimIds),
     wireMode,
+    ...(candidateAuthority ? { proofAdmission: candidateAuthority.evidence } : {}),
   };
   const project = (candidate: object): CandidateClaimInput => {
     const projected = immutableCanonicalValue(candidate) as CandidateClaimInput;
@@ -151,7 +161,7 @@ export class ProofAdmittedCatalogCheckProvider extends CheckProvider {
       throw new Error(PROOF_ADMISSION_UNAVAILABLE);
     }
     const projectID = projectIDFromInventory(inventory);
-    const admitted = admissionWire(admission.payload);
+    const admitted = validateProofCandidateAdmissionBinding(candidate, admission);
     const projection = validateProofCatalogRevalidationProjection(revalidation.payload, inventory.payload as PlainRecord, candidate, admission, projectID, revalidation, inventory.claimId);
     const receipt = projection.receipt;
     const input = `{"version":${goCompatibleProofJson('proof.onboarding-work-items-request/v1')},"candidate":${governedCanonicalJson(candidate.payload, candidate.wireMode)},"admission":${admitted.wire},"revalidation_receipt":${proofCanonicalJson(receipt)}}`;
@@ -185,13 +195,4 @@ function projectIDFromInventory(inventory: CandidateClaimInput): string {
   const authority = payload.authority as PlainRecord;
   if (!plain(authority) || typeof authority.project_id !== 'string' || authority.project_id.length === 0) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   return authority.project_id;
-}
-
-function admissionWire(value: unknown): { wire: string; receipt: PlainRecord } {
-  if (!plain(value) || typeof value[PROOF_ADMISSION_WIRE_FIELD] !== 'string') throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  const wire = value[PROOF_ADMISSION_WIRE_FIELD] as string;
-  let parsed: unknown;
-  try { parsed = JSON.parse(wire); } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
-  if (!plain(parsed) || !plain(parsed.receipt)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  return { wire, receipt: parsed.receipt };
 }

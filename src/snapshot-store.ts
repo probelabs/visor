@@ -193,9 +193,25 @@ function eventHasRequestDiscriminator(event: Record<string, unknown>): boolean {
 }
 
 function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
-  const event = checkpointObject(value);
+  let event = checkpointObject(value);
   if (!event || typeof event.type !== 'string') {
     throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Runtime event must be an object with a discriminator');
+  }
+
+  // Checkpoint v1 predates the explicit generated-publication wire mode.  It
+  // is safe to migrate at the trusted restore boundary: non-candidate
+  // generated claims were always graph-canonical, while candidate mode is
+  // derivable only from its validated governed evidence invocation.
+  if (event.type === 'ClaimPublished' && eventHasNodeDiscriminator(event) && !hasOwn(event, 'wireMode')) {
+    let wireMode: GovernedWireMode = 'generic';
+    if (event.claim === PROOF_CANDIDATE_CLAIM) {
+      try {
+        wireMode = governedWireModeFromEvidence(validateProofCandidateEvidence(event.proofCandidateEvidence));
+      } catch (error) {
+        throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Legacy Proof candidate publication cannot derive its wire mode', error);
+      }
+    }
+    event = { ...event, wireMode };
   }
 
   const exact = (keys: readonly string[]): void => checkpointExactEventKeys(event, keys);
@@ -466,7 +482,8 @@ function checkpointBody(value: Record<string, unknown>): Record<string, unknown>
 /* Checkpoints retain Proof's wire bytes for generated payloads. The envelope
  * and all historical generic values continue to use the graph canonicalizer;
  * only an explicitly governed ClaimPublished payload opts into Proof JSON. */
-function checkpointCanonicalJson(value: unknown): string {
+/** Canonical bytes used for both checkpoint integrity and file publication. */
+export function canonicalGraphCheckpointJson(value: unknown): string {
   const active = new Set<object>();
   const encode = (current: unknown): string => {
     if (current === null || typeof current === 'boolean' || typeof current === 'string') return JSON.stringify(current);
@@ -495,7 +512,7 @@ function checkpointCanonicalJson(value: unknown): string {
 }
 
 function sha256Checkpoint(value: unknown): string {
-  return createHash('sha256').update(checkpointCanonicalJson(value), 'utf8').digest('hex');
+  return createHash('sha256').update(canonicalGraphCheckpointJson(value), 'utf8').digest('hex');
 }
 
 function immutableCheckpointValue<T>(value: T): T {
@@ -506,12 +523,12 @@ function immutableCheckpointValue<T>(value: T): T {
     }
     return current;
   };
-  return freeze(JSON.parse(checkpointCanonicalJson(value))) as T;
+  return freeze(JSON.parse(canonicalGraphCheckpointJson(value))) as T;
 }
 
 function parseGraphCheckpoint(input: unknown): GraphJournalCheckpointV1 {
   try {
-    checkpointCanonicalJson(input);
+    canonicalGraphCheckpointJson(input);
   } catch (error) {
     throw checkpointWrap('INVALID_CHECKPOINT_ENVELOPE', 'Checkpoint is not canonical JSON', error);
   }

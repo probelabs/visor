@@ -288,7 +288,7 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
     const candidateBytes = Buffer.from(proofCanonicalJson(candidatePayload), 'utf8');
     expect(proofCanonicalJson({ '\uE000': 1, '\u{10000}': 2 })).toBe('{"\uE000":1,"\u{10000}":2}');
     expect(Object.keys(JSON.parse(candidateBytes.toString('utf8')).components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']);
-    const candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
+    let candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
     const proofScope = scope.map(part => ({ Kind: 'keyed', ExpansionOwnerCheck: part.expansionOwnerCheck, Key: part.key, SubgraphInstanceID: part.subgraphInstanceId }));
     const candidateBinding = { ManagedRunID: sha256Canonical('candidate-managed'), SessionID: 'real-managed-session', CheckID: 'inspect', Scope: proofScope, NodeInstanceID: sha256Canonical('candidate-node'), NodeGenerationID: sha256Canonical('candidate-generation'), AttemptID: sha256Canonical('candidate-attempt'), Fence: 1 };
     const candidateTermination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: candidateBinding.SessionID, Scope: proofScope, Binding: candidateBinding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
@@ -301,6 +301,22 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
       Publication: { Version: 1, Type: 'ClaimPublished', SessionID: candidateBinding.SessionID, CheckID: 'inspect', Scope: proofScope, NodeInstanceID: candidateBinding.NodeInstanceID, NodeGenerationID: candidateBinding.NodeGenerationID, AttemptID: candidateBinding.AttemptID, Fence: 1, ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, ProducerCheckID: 'inspect', Payload: candidateBytes.toString('base64'), ParentClaimIDs: candidate.parentClaimIds },
       Binding: candidateBinding, Termination: candidateTermination,
     };
+    const candidateEvidence = {
+      version: 'visor.proof-candidate-evidence/v1',
+      role: { invocation: invocationRequest, invocationDigest: invocation.invocation_digest },
+      probe: {
+        attestation: {
+          version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+          requested: { profileDigest: 'a'.repeat(64), cwdDigest: 'a'.repeat(64), probeToolsDigest: 'a'.repeat(64), model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+          observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: 'a'.repeat(64), permissionProfileDigest: 'a'.repeat(64), filesystem: 'restricted-read-root', network: 'restricted' },
+          executionContext: { source: 'caller', invocationDigest: invocation.invocation_digest },
+          dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'a'.repeat(64)}`, promptBytes: 0 },
+          evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+        },
+        resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: proofGovernedResultDigest(candidatePayload), canonicalBytes: candidateBytes.length },
+      },
+    };
+    candidate = { ...candidate, proofAdmission: candidateEvidence };
     const admissionProvider = admitModule.createProofAdmitProviderFromCapability(capability);
     const admissionRun = admissionProvider.startManaged({
       prInfo, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [] },
@@ -377,7 +393,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       await expect(structuralRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
       const inventory = makeClaim('proof.structural_inventory@1', structuralOutcome.summary.output, 'structural_inventory', [project.claimId]);
       const candidatePayload = fakeDiscovery({} as GovernedProbeRunnerRequest).data;
-      const candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
+      let candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
       const candidateBytes = Buffer.from(proofCanonicalJson(candidatePayload), 'utf8');
       const candidateBinding = {
         ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect',
@@ -397,6 +413,24 @@ describe('EXP-0209 admitted discovery egress', () => {
         Binding: candidateBinding, Termination: candidateTermination,
       };
       const candidateEnvelopeWire = JSON.stringify(candidateEnvelope);
+      candidate = {
+        ...candidate,
+        proofAdmission: {
+          version: 'visor.proof-candidate-evidence/v1',
+          role: { invocation: candidateEnvelope.Invocation, invocationDigest: candidateEnvelope.InvocationDigest },
+          probe: {
+            attestation: {
+              version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+              requested: { profileDigest: 'a'.repeat(64), cwdDigest: 'a'.repeat(64), probeToolsDigest: 'a'.repeat(64), model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+              observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: 'a'.repeat(64), permissionProfileDigest: 'a'.repeat(64), filesystem: 'restricted-read-root', network: 'restricted' },
+              executionContext: { source: 'caller', invocationDigest: candidateEnvelope.InvocationDigest },
+              dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'a'.repeat(64)}`, promptBytes: 0 },
+              evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+            },
+            resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: proofGovernedResultDigest(candidatePayload), canonicalBytes: candidateBytes.length },
+          },
+        },
+      };
       const admissionReceipt: Record<string, unknown> = {
         Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED',
         CandidateID: proofDomainDigest('proof.role-result-candidate-envelope/id/v1', candidateEnvelopeWire), ProbeResultDigest: proofGovernedResultDigest(candidatePayload), ProbeCanonicalBytes: candidateBytes.length,
@@ -488,7 +522,7 @@ describe('EXP-0209 admitted discovery egress', () => {
           expect(stage1).toBeDefined(); expect(activation.activeInputClaimIds).toContain(stage1.claimId);
         }
         expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
-        const checkpoint = journal.exportGraphCheckpoint((engine as any)._lastContext.sessionId); const restored = (await import('../../src/snapshot-store')).ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, checkpoint); const restoredCandidate: any = Object.values(restored.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); const liveCandidate: any = Object.values(journal.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); expect(Object.is(restoredCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true); expect(restoredCandidate.payloadFingerprint).toBe(liveCandidate.payloadFingerprint); expect(restoredCandidate.proofCandidateEvidence).toEqual(liveCandidate.proofCandidateEvidence);
+        const checkpoint = journal.exportGraphCheckpoint((engine as any)._lastContext.sessionId); const { publishGraphCheckpointFile, readGraphCheckpointFile } = await import('../../src/graph-checkpoint-file'); const checkpointPath = join(root, 'graph-checkpoint.json'); publishGraphCheckpointFile(checkpoint, checkpointPath); expect(readFileSync(checkpointPath, 'utf8')).toContain('-0'); const fileCheckpoint = readGraphCheckpointFile(checkpointPath); const restored = (await import('../../src/snapshot-store')).ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, fileCheckpoint); const restoredCandidate: any = Object.values(restored.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); const liveCandidate: any = Object.values(journal.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); expect(Object.is(restoredCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true); expect(restoredCandidate.payloadFingerprint).toBe(liveCandidate.payloadFingerprint); expect(restoredCandidate.proofCandidateEvidence).toEqual(liveCandidate.proofCandidateEvidence);
       } finally { if (watchdog) clearTimeout(watchdog); providers.clear(); for (const entry of original) providers.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     });
   });

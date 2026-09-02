@@ -1376,6 +1376,17 @@ describe('Graph-v2 journal checkpoints', () => {
     expectDeeplyFrozen(restored.exportGraphCheckpoint('c2-session'));
   });
 
+  it('migrates legacy v1 generated publications without wireMode', () => {
+    const source = completedC2Journal();
+    const legacy = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+    for (const event of legacy.events) {
+      if (event.type === 'ClaimPublished' && event.nodeGenerationId) delete event.wireMode;
+    }
+    rehash(legacy);
+    const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), legacy);
+    expect(restored.readRuntimeEvents().filter((event: any) => event.type === 'ClaimPublished' && event.nodeGenerationId).every((event: any) => event.wireMode === 'generic')).toBe(true);
+  });
+
   it('round-trips nested reconciliation after all generated work is quiescent', () => {
     const source = c4Journal();
     publishCatalog(source, { components: [{ id: 'A', revision: 1 }] });

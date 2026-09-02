@@ -1,8 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { canonicalJson } from './state-machine/graph/claim-kernel';
-import { ExecutionJournal, type GraphJournalCheckpointV1 } from './snapshot-store';
+import { canonicalGraphCheckpointJson, ExecutionJournal, type GraphJournalCheckpointV1 } from './snapshot-store';
 
 const MAX_CHECKPOINT_BYTES = 64 * 1024 * 1024;
 export const GRAPH_CHECKPOINT_READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
@@ -111,7 +110,7 @@ export function validateGraphCheckpointOutputTarget(target: string): void {
  * replaced.
  */
 export function publishGraphCheckpointFile(checkpoint: GraphJournalCheckpointV1, target: string): void {
-  const bytes = Buffer.from(canonicalJson(checkpoint) + '\n', 'utf8');
+  const bytes = Buffer.from(canonicalGraphCheckpointJson(checkpoint) + '\n', 'utf8');
   const { parent, name } = privateParent(target, 'graph checkpoint output');
   assertAbsent(parent, name, 'graph checkpoint output');
   const finalTarget = path.join(parent, name);
