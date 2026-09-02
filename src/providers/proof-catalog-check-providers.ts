@@ -66,6 +66,50 @@ function plain(value: unknown): value is PlainRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value) &&
     (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 }
+/**
+ * Capture caller-owned data through descriptors exactly once.  In particular,
+ * never re-read a getter or a Proxy-backed property while validating its
+ * contents or deriving an identity.  The returned graph contains only plain
+ * objects/arrays and data-property values.
+ */
+function snapshotData(value: unknown, label: string, seen = new Set<object>()): unknown {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return value;
+  if (!value || typeof value !== 'object' || seen.has(value)) invalid(`${label} is not a finite acyclic JSON value`);
+  seen.add(value);
+  try {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (Array.isArray(value)) {
+      const length = descriptors.length;
+      if (!length || !('value' in length) || length.enumerable || typeof length.value !== 'number' || !Number.isSafeInteger(length.value) || length.value < 0 ||
+          keys.some(key => typeof key !== 'string' || (key !== 'length' && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length.value)))) {
+        invalid(`${label} contains an accessor, proxy field, or sparse array`);
+      }
+      const output: unknown[] = [];
+      for (let index = 0; index < length.value; index++) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) invalid(`${label} contains an accessor or sparse array`);
+        output.push(snapshotData(descriptor.value, `${label}[${index}]`, seen));
+      }
+      return output;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) invalid(`${label} is not a plain object`);
+    const output: PlainRecord = Object.create(null);
+    for (const key of keys) {
+      if (typeof key !== 'string') invalid(`${label} contains a symbol key`);
+      const descriptor = descriptors[key];
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) invalid(`${label} contains an accessor or proxy field`);
+      output[key] = snapshotData(descriptor.value, `${label}.${key}`, seen);
+    }
+    return output;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('PROOF_CATALOG_INVALID:')) throw error;
+    invalid(`${label} cannot be snapshotted: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    seen.delete(value);
+  }
+}
 function exact(value: unknown, keys: readonly string[]): value is PlainRecord {
   return plain(value) && Reflect.ownKeys(value).length === keys.length &&
     Reflect.ownKeys(value).every(key => typeof key === 'string' && keys.includes(key) && (() => {
@@ -110,56 +154,57 @@ function sortedStrings(value: unknown, label: string, allowEmpty = false): reado
   return value;
 }
 function claim(value: unknown, expectedClaim: string, label: string): CandidateClaimInput {
-  if (!plain(value) || value.claim !== expectedClaim || typeof value.claimId !== 'string' ||
-      !/^[0-9a-f]{64}$/.test(value.claimId) || typeof value.payloadFingerprint !== 'string' ||
-      !/^[0-9a-f]{64}$/.test(value.payloadFingerprint) || typeof value.producerCheckId !== 'string' ||
-      !Array.isArray(value.scope) || !Array.isArray(value.parentClaimIds) ||
-      value.parentClaimIds.some(item => typeof item !== 'string' || !/^[0-9a-f]{64}$/.test(item))) {
-    invalid(`${label} claim identity is invalid`);
-  }
   const candidateAuthority = expectedClaim === PROOF_CANDIDATE_CLAIM
     ? validateGovernedProofCandidateClaim(value, label)
     : undefined;
-  if (expectedClaim !== PROOF_CANDIDATE_CLAIM && value.proofAdmission !== undefined) {
+  const source = candidateAuthority?.snapshot ?? value;
+  if (!plain(source) || source.claim !== expectedClaim || typeof source.claimId !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(source.claimId) || typeof source.payloadFingerprint !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(source.payloadFingerprint) || typeof source.producerCheckId !== 'string' ||
+      !Array.isArray(source.scope) || !Array.isArray(source.parentClaimIds) ||
+      source.parentClaimIds.some(item => typeof item !== 'string' || !/^[0-9a-f]{64}$/.test(item))) {
+    invalid(`${label} claim identity is invalid`);
+  }
+  if (expectedClaim !== PROOF_CANDIDATE_CLAIM && source.proofAdmission !== undefined) {
     invalid(`${label} proof admission evidence is reserved for governed candidates`);
   }
   const wireMode: GovernedWireMode = candidateAuthority
     ? candidateAuthority.wireMode
-    : value.wireMode === undefined ? 'generic' : value.wireMode as GovernedWireMode;
+    : source.wireMode === undefined ? 'generic' : source.wireMode as GovernedWireMode;
   if (wireMode !== 'generic' && wireMode !== 'proof') invalid(`${label} wire mode is invalid`);
-  const payload = immutableGovernedValue(value.payload, wireMode);
-  const payloadFingerprint = governedPayloadFingerprint(value.payload, wireMode);
-  const nonCanonical = wireMode === 'generic' ? canonicalJson(value.payload) !== JSON.stringify(value.payload) : false;
-  if (bounded(value.payload, `${label} payload`, claimPayloadLimit(expectedClaim)) &&
-      (nonCanonical || payloadFingerprint !== value.payloadFingerprint)) {
+  const payload = immutableGovernedValue(source.payload, wireMode);
+  const payloadFingerprint = governedPayloadFingerprint(source.payload, wireMode);
+  const nonCanonical = wireMode === 'generic' ? canonicalJson(source.payload) !== JSON.stringify(source.payload) : false;
+  if (bounded(source.payload, `${label} payload`, claimPayloadLimit(expectedClaim)) &&
+      (nonCanonical || payloadFingerprint !== source.payloadFingerprint)) {
     invalid(`${label} payload is detached or noncanonical`);
   }
-  if (canonicalJson(value.scope) !== JSON.stringify(value.scope) ||
-      canonicalJson(value.parentClaimIds) !== canonicalJson([...value.parentClaimIds].sort())) {
+  if (canonicalJson(source.scope) !== JSON.stringify(source.scope) ||
+      canonicalJson(source.parentClaimIds) !== canonicalJson([...source.parentClaimIds].sort())) {
     invalid(`${label} scope or parents are noncanonical`);
   }
   const base = {
-    claimId: value.claimId,
-    claim: value.claim,
+    claimId: source.claimId,
+    claim: source.claim,
     payload,
-    payloadFingerprint: value.payloadFingerprint,
-    producerCheckId: value.producerCheckId,
-    scope: immutableCanonicalValue(value.scope),
-    parentClaimIds: immutableCanonicalValue(value.parentClaimIds),
+    payloadFingerprint: source.payloadFingerprint,
+    producerCheckId: source.producerCheckId,
+    scope: immutableCanonicalValue(source.scope),
+    parentClaimIds: immutableCanonicalValue(source.parentClaimIds),
     wireMode,
     ...(candidateAuthority ? { proofAdmission: candidateAuthority.evidence } : {}),
   };
   const project = (candidate: object): CandidateClaimInput => {
     const projected = immutableCanonicalValue(candidate) as CandidateClaimInput;
     return wireMode === 'proof'
-      ? Object.freeze({ ...projected, payload: immutableGovernedValue(value.payload, wireMode) }) as CandidateClaimInput
+      ? Object.freeze({ ...projected, payload: immutableGovernedValue(source.payload, wireMode) }) as CandidateClaimInput
       : projected;
   };
-  if (value.provenance === 'controller' && typeof value.catalogClaimId === 'string' && Number.isSafeInteger(value.incarnation)) {
-    return project({ ...base, provenance: 'controller' as const, catalogClaimId: value.catalogClaimId, incarnation: value.incarnation as number });
+  if (source.provenance === 'controller' && typeof source.catalogClaimId === 'string' && Number.isSafeInteger(source.incarnation)) {
+    return project({ ...base, provenance: 'controller' as const, catalogClaimId: source.catalogClaimId, incarnation: source.incarnation as number });
   }
-  if ((value.provenance === undefined || value.provenance === 'attempt') && typeof value.attemptId === 'string' && Number.isSafeInteger(value.fence)) {
-    return project({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
+  if ((source.provenance === undefined || source.provenance === 'attempt') && typeof source.attemptId === 'string' && Number.isSafeInteger(source.fence)) {
+    return project({ ...base, provenance: 'attempt' as const, attemptId: source.attemptId, fence: source.fence as number });
   }
   invalid(`${label} provenance is invalid`);
 }
@@ -172,19 +217,21 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
 export function validateGovernedProofCandidateClaim(value: unknown, label = 'candidate'): {
   readonly evidence: ProofCandidateEvidenceV1;
   readonly wireMode: 'proof';
+  readonly snapshot: PlainRecord;
 } {
-  if (!plain(value) || value.proofAdmission === undefined) {
+  const candidate = snapshotData(value, label);
+  if (!plain(candidate) || candidate.proofAdmission === undefined) {
     invalid(`${label} proof admission evidence is missing`);
   }
   let evidence: ProofCandidateEvidenceV1;
   try {
-    evidence = validateProofCandidateEvidence(value.proofAdmission);
+    evidence = validateProofCandidateEvidence(candidate.proofAdmission);
   } catch (error) {
     invalid(`${label} proof admission evidence is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
   const derivedMode = governedWireModeFromEvidence(evidence);
   if (derivedMode !== 'proof') invalid(`${label} invocation is not the governed onboarding schema`);
-  if (value.wireMode !== undefined && value.wireMode !== derivedMode) {
+  if (candidate.wireMode !== undefined && candidate.wireMode !== derivedMode) {
     invalid(`${label} wire mode is detached from governed invocation`);
   }
   /*
@@ -193,41 +240,45 @@ export function validateGovernedProofCandidateClaim(value: unknown, label = 'can
    * a legacy direct claim view can omit wireMode and relabel a generic
    * sidecar's schema while retaining the generic claim ID and result bytes.
    */
-  if (value.claim !== PROOF_CANDIDATE_CLAIM || value.provenance !== 'attempt' ||
-      typeof value.claimId !== 'string' || typeof value.producerCheckId !== 'string' ||
-      !Array.isArray(value.parentClaimIds) || value.parentClaimIds.some(parent => typeof parent !== 'string') ||
-      typeof value.attemptId !== 'string' || !Number.isSafeInteger(value.fence)) {
+  if (candidate.claim !== PROOF_CANDIDATE_CLAIM || candidate.provenance !== 'attempt' ||
+      typeof candidate.claimId !== 'string' || typeof candidate.producerCheckId !== 'string' ||
+      !Array.isArray(candidate.parentClaimIds) || candidate.parentClaimIds.some(parent => typeof parent !== 'string') ||
+      typeof candidate.attemptId !== 'string' || !Number.isSafeInteger(candidate.fence)) {
     invalid(`${label} generated claim provenance is invalid`);
+  }
+  if (typeof candidate.payloadFingerprint !== 'string' || candidate.payloadFingerprint !== governedPayloadFingerprint(candidate.payload, derivedMode)) {
+    invalid(`${label} payload fingerprint is detached from its governed payload`);
   }
   let expectedClaimId: string;
   try {
     expectedClaimId = sha256Canonical({
-      claim: value.claim,
-      payloadFingerprint: value.payloadFingerprint,
-      producerCheckId: value.producerCheckId,
-      scope: value.scope,
-      attemptId: value.attemptId,
-      fence: value.fence,
-      parentClaimIds: [...value.parentClaimIds].sort(),
-      proofCandidateEvidenceFingerprint: sha256Canonical(value.proofAdmission),
+      claim: candidate.claim,
+      payloadFingerprint: candidate.payloadFingerprint,
+      producerCheckId: candidate.producerCheckId,
+      scope: candidate.scope,
+      attemptId: candidate.attemptId,
+      fence: candidate.fence,
+      parentClaimIds: [...candidate.parentClaimIds].sort(),
+      proofCandidateEvidenceFingerprint: sha256Canonical(evidence),
     });
   } catch (error) {
     invalid(`${label} generated claim identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (value.claimId !== expectedClaimId) {
+  if (candidate.claimId !== expectedClaimId) {
     invalid(`${label} generated claim identity is detached from its evidence`);
   }
   try {
-    const payloadWire = governedCanonicalJson(value.payload, derivedMode);
+    const payloadWire = governedCanonicalJson(candidate.payload, derivedMode);
     const identity = evidence.probe.resultIdentity;
-    if (identity.resultDigest !== governedResultDigest(value.payload, derivedMode) ||
+    if (identity.resultDigest !== governedResultDigest(candidate.payload, derivedMode) ||
         identity.canonicalBytes !== Buffer.byteLength(payloadWire, 'utf8')) {
       invalid(`${label} result identity is detached from candidate payload`);
     }
   } catch (error) {
     invalid(`${label} payload is not valid governed JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return { evidence, wireMode: 'proof' };
+  const snapshot = Object.freeze({ ...candidate, proofAdmission: evidence });
+  return { evidence, wireMode: 'proof', snapshot };
 }
 function onlyClaims(value: unknown, aliases: readonly string[]): PlainRecord {
   if (!exact(value, aliases)) invalid(`expected claim aliases ${aliases.join(', ')}`);
@@ -353,19 +404,20 @@ function admissionTransport(value: unknown): { receipt: PlainRecord; wire: strin
 export function validateProofCandidateAdmissionBinding(
   candidate: CandidateClaimInput,
   admission: CandidateClaimInput,
-): { receipt: PlainRecord; wire: string } {
+): { receipt: PlainRecord; wire: string; candidate: CandidateClaimInput } {
   const authority = validateGovernedProofCandidateClaim(candidate, 'candidate');
+  const candidateSnapshot = authority.snapshot as unknown as CandidateClaimInput;
   if (admission.claim !== PROOF_ADMITTED_RECEIPT_CLAIM || admission.producerCheckId !== 'proof_admit' ||
-      admission.parentClaimIds.length !== 1 || admission.parentClaimIds[0] !== candidate.claimId ||
-      canonicalJson(admission.scope) !== canonicalJson(candidate.scope)) {
+      admission.parentClaimIds.length !== 1 || admission.parentClaimIds[0] !== candidateSnapshot.claimId ||
+      canonicalJson(admission.scope) !== canonicalJson(candidateSnapshot.scope)) {
     invalid('admission lineage is detached from the governed candidate');
   }
   const admitted = admissionTransport(admission.payload);
   const receipt = admitted.receipt;
   const invocation = authority.evidence.role.invocation;
-  if (receipt.ClaimID !== candidate.claimId || receipt.Claim !== candidate.claim ||
-      receipt.PayloadFingerprint !== candidate.payloadFingerprint || receipt.ProducerCheckID !== candidate.producerCheckId ||
-      canonicalJson(receipt.ParentClaimIDs) !== canonicalJson(candidate.parentClaimIds) ||
+  if (receipt.ClaimID !== candidateSnapshot.claimId || receipt.Claim !== candidateSnapshot.claim ||
+      receipt.PayloadFingerprint !== candidateSnapshot.payloadFingerprint || receipt.ProducerCheckID !== candidateSnapshot.producerCheckId ||
+      canonicalJson(receipt.ParentClaimIDs) !== canonicalJson(candidateSnapshot.parentClaimIds) ||
       receipt.InvocationDigest !== authority.evidence.role.invocationDigest ||
       receipt.RoleID !== invocation.role_id || receipt.Stance !== invocation.stance ||
       canonicalJson(receipt.Subject) !== canonicalJson(invocation.subject) ||
@@ -373,7 +425,7 @@ export function validateProofCandidateAdmissionBinding(
       receipt.ProbeCanonicalBytes !== authority.evidence.probe.resultIdentity.canonicalBytes) {
     invalid('admission receipt is detached from the governed candidate invocation or result');
   }
-  return admitted;
+  return { ...admitted, candidate: candidateSnapshot };
 }
 
 function validateAuthority(value: unknown, projectID: string, label: string): PlainRecord {
@@ -774,6 +826,7 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   // proof.candidate@1 claim may still travel through the ordinary graph, but
   // it is not eligible to enter this Proof-owned catalog protocol.
   const admitted = validateProofCandidateAdmissionBinding(candidate, admission);
+  candidate = admitted.candidate;
   const candidateWireMode: GovernedWireMode = 'proof';
   const keys = ['version', 'inventory', 'catalog', 'work_items', 'receipt'];
   if (!exact(value, keys) || value.version !== CATALOG_REVALIDATION_VERSION) invalid('catalog revalidation projection is not closed');

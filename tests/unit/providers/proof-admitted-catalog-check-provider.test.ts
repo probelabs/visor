@@ -195,6 +195,37 @@ function fixture() {
   return { inventory: inventoryClaim, candidate, admission, revalidation };
 }
 
+function genericCandidateFromFixture(value: any): { candidate: any; evidence: any } {
+  const genericEvidence = {
+    ...value.candidate.proofAdmission,
+    role: {
+      ...value.candidate.proofAdmission.role,
+      invocation: { ...value.candidate.proofAdmission.role.invocation, output_schema_id: 'proof.generic-candidate@1' },
+    },
+    probe: {
+      ...value.candidate.proofAdmission.probe,
+      resultIdentity: {
+        ...value.candidate.proofAdmission.probe.resultIdentity,
+        resultDigest: governedResultDigest(value.candidate.payload, 'generic'),
+        canonicalBytes: Buffer.byteLength(governedCanonicalJson(value.candidate.payload, 'generic'), 'utf8'),
+      },
+    },
+  };
+  const candidate: any = { ...value.candidate, payloadFingerprint: governedPayloadFingerprint(value.candidate.payload, 'generic'), proofAdmission: genericEvidence };
+  delete candidate.wireMode;
+  candidate.claimId = sha256Canonical({
+    claim: candidate.claim,
+    payloadFingerprint: candidate.payloadFingerprint,
+    producerCheckId: candidate.producerCheckId,
+    scope: candidate.scope,
+    attemptId: candidate.attemptId,
+    fence: candidate.fence,
+    parentClaimIds: [...candidate.parentClaimIds].sort(),
+    proofCandidateEvidenceFingerprint: sha256Canonical(genericEvidence),
+  });
+  return { candidate, evidence: genericEvidence };
+}
+
 describe('proof-admitted catalog egress', () => {
   it('materializes the exact current Proof projection and retains complete admission wire', () => {
     const value = fixture();
@@ -220,33 +251,7 @@ describe('proof-admitted catalog egress', () => {
 
   it('rejects a generic candidate relabeled as Proof without changing its claim identity', () => {
     const value: any = fixture();
-    const genericEvidence = {
-      ...value.candidate.proofAdmission,
-      role: {
-        ...value.candidate.proofAdmission.role,
-        invocation: { ...value.candidate.proofAdmission.role.invocation, output_schema_id: 'proof.generic-candidate@1' },
-      },
-      probe: {
-        ...value.candidate.proofAdmission.probe,
-        resultIdentity: {
-          ...value.candidate.proofAdmission.probe.resultIdentity,
-          resultDigest: governedResultDigest(value.candidate.payload, 'generic'),
-          canonicalBytes: Buffer.byteLength(governedCanonicalJson(value.candidate.payload, 'generic'), 'utf8'),
-        },
-      },
-    };
-    const genericCandidate: any = { ...value.candidate, payloadFingerprint: governedPayloadFingerprint(value.candidate.payload, 'generic'), proofAdmission: genericEvidence };
-    delete genericCandidate.wireMode;
-    genericCandidate.claimId = sha256Canonical({
-      claim: genericCandidate.claim,
-      payloadFingerprint: genericCandidate.payloadFingerprint,
-      producerCheckId: genericCandidate.producerCheckId,
-      scope: genericCandidate.scope,
-      attemptId: genericCandidate.attemptId,
-      fence: genericCandidate.fence,
-      parentClaimIds: [...genericCandidate.parentClaimIds].sort(),
-      proofCandidateEvidenceFingerprint: sha256Canonical(genericEvidence),
-    });
+    const { candidate: genericCandidate, evidence: genericEvidence } = genericCandidateFromFixture(value);
     const relabeled = {
       ...genericCandidate,
       proofAdmission: {
@@ -258,6 +263,23 @@ describe('proof-admitted catalog egress', () => {
       },
     };
     expect(() => validateGovernedProofCandidateClaim(relabeled)).toThrow(/identity|detached/i);
+  });
+
+  it('rejects a TOCTOU evidence accessor before it can relabel generic bytes as Proof', () => {
+    const value: any = fixture();
+    const { candidate, evidence: genericEvidence } = genericCandidateFromFixture(value);
+    const proofEvidence = value.candidate.proofAdmission;
+    let reads = 0;
+    Object.defineProperty(candidate, 'proofAdmission', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return reads <= 2 ? proofEvidence : genericEvidence;
+      },
+    });
+    expect(() => validateGovernedProofCandidateClaim(candidate)).toThrow(/accessor|materialized|identity|invalid/i);
+    expect(reads).toBe(0);
   });
 
   it.each([
