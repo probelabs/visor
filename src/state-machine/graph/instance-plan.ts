@@ -13,6 +13,7 @@ import {
   sha256Canonical,
   type ClaimSchemaValidator,
 } from './claim-kernel';
+import { PROOF_ROLE_AUTHORITY_CLAIM } from '../../providers/governed-proof-inspect-check-provider';
 
 const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -333,11 +334,15 @@ function validateReservedProofAdmissionTemplate(
   if (claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
     rejectReservedProfile(name, `inspect must emit only ${PROOF_CANDIDATE_CLAIM}`);
   }
+  const inspectInputs = claimList(inspect, 'consumes');
+  const expectedInspectInputs = inspectInputs.includes(PROOF_ROLE_AUTHORITY_CLAIM)
+    ? [inputClaim, PROOF_ROLE_AUTHORITY_CLAIM].sort()
+    : [inputClaim];
   if (
-    claimList(inspect, 'consumes').length !== 1 ||
-    claimList(inspect, 'consumes')[0] !== inputClaim
+    inspectInputs.length !== expectedInspectInputs.length ||
+    inspectInputs.some((claim, index) => claim !== expectedInspectInputs[index])
   ) {
-    rejectReservedProfile(name, 'inspect must consume only the template input claim');
+    rejectReservedProfile(name, `inspect must consume the template input claim and, when present, ${PROOF_ROLE_AUTHORITY_CLAIM}`);
   }
 
   const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];

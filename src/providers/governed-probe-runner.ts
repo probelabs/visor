@@ -7,6 +7,7 @@ import {
   type GovernedIdentifiedAnswerResult,
   type ProbeAgentOptions,
 } from '@probelabs/probe';
+import { canonicalJson } from '../state-machine/graph/claim-kernel';
 import type {
   GovernedProbeRunner,
   GovernedProbeRunnerRequest,
@@ -65,6 +66,7 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
   private readonly agent: ProbeAgent;
   private readonly resultSchema: string;
   private readonly invocationDigest: string;
+  private readonly userMessage: string;
   private initializePromise: Promise<void> | undefined;
   private cancelled = false;
   private closed = false;
@@ -74,6 +76,9 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
     const root = controllerRoot(request.workingDirectory);
     this.resultSchema = request.resultSchema;
     this.invocationDigest = request.invocationDigest;
+    this.userMessage = request.context
+      ? `${GOVERNED_PROOF_ROLE_MESSAGE}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`
+      : GOVERNED_PROOF_ROLE_MESSAGE;
     const governedCodexProfile = profileFor(root);
     const options: ExactProbeAgentOptions = {
       provider: 'codex',
@@ -104,7 +109,7 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
       invocationDigest: this.invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
     };
-    return this.agent.answerGoverned(GOVERNED_PROOF_ROLE_MESSAGE, options);
+    return this.agent.answerGoverned(this.userMessage, options);
   }
 
   cancel(_reason: 'deadline'): void {

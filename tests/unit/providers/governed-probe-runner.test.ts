@@ -4,6 +4,8 @@ import {
   GOVERNED_PROOF_ROLE_MESSAGE,
   GovernedProbeAgentRunner,
 } from '../../../src/providers/governed-probe-runner';
+import { governedProofRuntimePrompt } from '../../../src/providers/governed-proof-inspect-check-provider';
+import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GovernedProbeRunnerRequest } from '../../../src/providers/governed-proof-inspect-check-provider';
 
 const root = process.cwd();
@@ -95,6 +97,21 @@ describe('private governed Probe runner', () => {
       resultIdentity: 'probe.governed-result-identity/v1',
     });
     expect(answerGoverned).toHaveBeenNthCalledWith(2, GOVERNED_PROOF_ROLE_MESSAGE, {
+      schema: '{"type":"object"}',
+      invocationDigest,
+      resultIdentity: 'probe.governed-result-identity/v1',
+    });
+  });
+
+  it('puts the exact canonical component context in the Probe user message', async () => {
+    const context: any = immutableCanonicalValue({
+      version: 'visor.proof-runtime-context/v1',
+      component: { claimId: '1'.repeat(64), claim: 'component.work_item@1', payloadFingerprint: sha256Canonical({ componentId: 'http-adapter' }), scope: [], payload: { componentId: 'http-adapter' } },
+      authority: { claimId: '3'.repeat(64), claim: 'proof.role_authority@1', payloadFingerprint: sha256Canonical({ roleId: 'onboard' }), scope: [], payload: { roleId: 'onboard' } },
+    });
+    const runner = new GovernedProbeAgentRunner(request({ context, contextDigest: `sha256:${'5'.repeat(64)}` }));
+    await runner.answer(request({ context }));
+    expect(answerGoverned).toHaveBeenCalledWith(governedProofRuntimePrompt(context), {
       schema: '{"type":"object"}',
       invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',

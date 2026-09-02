@@ -7,7 +7,12 @@ import {
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 import { PROOF_CANDIDATE_CLAIM } from './instance-plan';
-import { governedResultDigest, validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from '../../providers/governed-proof-inspect-check-provider';
+import {
+  governedResultDigest,
+  validateGovernedProofRuntimeContextAgainstClaims,
+  validateProofCandidateEvidence,
+  type ProofCandidateEvidenceV1,
+} from '../../providers/governed-proof-inspect-check-provider';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -1514,7 +1519,21 @@ function reduceGeneratedLifecycle(
         throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate publication requires its exact evidence sidecar');
       }
       try {
-        validateProofCandidateEvidence(event.proofCandidateEvidence);
+        const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
+        const parentClaims = generation.activeInputClaimIds
+          .map(claimId => projection.claimsById[claimId])
+          .filter((claim): claim is NonNullable<typeof claim> => claim !== undefined);
+        if (parentClaims.length !== generation.activeInputClaimIds.length) throw new Error('activated parent claim is missing');
+        validateGovernedProofRuntimeContextAgainstClaims(evidence, parentClaims, {
+          managedRunId: 'kernel-validation',
+          sessionId: event.sessionId,
+          checkId: event.checkId,
+          scope: event.scope,
+          nodeInstanceId: event.nodeInstanceId,
+          nodeGenerationId: event.nodeGenerationId,
+          attemptId: event.attemptId,
+          fence: event.fence,
+        });
         const payloadJson = canonicalJson(event.payload);
         const identity = event.proofCandidateEvidence.probe.resultIdentity;
         if (identity.resultDigest !== governedResultDigest(event.payload) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(event.payload) !== payloadJson) throw new Error('result identity is detached from canonical claim payload');
