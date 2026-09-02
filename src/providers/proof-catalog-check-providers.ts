@@ -21,6 +21,7 @@ import { CheckProvider } from './check-provider.interface';
 import {
   proofAdmissionCapabilityValid,
   PROOF_ADMISSION_UNAVAILABLE,
+  PROOF_ADMISSION_WIRE_FIELD,
   goCompatibleProofJson,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
@@ -32,12 +33,21 @@ export const CATALOG_REVALIDATION_VERSION = 'proof.catalog-revalidation/v1';
 export const CATALOG_REVALIDATION_RECEIPT_VERSION = 'proof.catalog-revalidation-receipt/v1';
 export const COMPONENT_CATALOG_CANDIDATE_VERSION = 'proof.component-catalog-candidate/v1';
 /** These are the bounds enforced by Proof's onboarding commands. */
-const INVENTORY_OUTPUT_LIMIT = 8 * 1024 * 1024;
-const REVALIDATION_INPUT_LIMIT = 4 * 1024 * 1024 + 9 * 1024 * 1024;
-const REVALIDATION_OUTPUT_LIMIT = 8 * 1024 * 1024 + 4 * 1024 * 1024;
-const CATALOG_INPUT_LIMIT = 4 * 1024 * 1024;
+export const PROOF_CATALOG_INPUT_MAX_BYTES = 4 * 1024 * 1024;
+export const PROOF_INVENTORY_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
+export const PROOF_REVALIDATION_REQUEST_MAX_BYTES = PROOF_CATALOG_INPUT_MAX_BYTES + 9 * 1024 * 1024;
+export const PROOF_REVALIDATION_OUTPUT_MAX_BYTES = PROOF_INVENTORY_OUTPUT_MAX_BYTES + 4 * 1024 * 1024;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 type PlainRecord = Record<string, unknown>;
+
+/** Proof's sort.Strings order compares the UTF-8 bytes of Go strings. */
+export function compareProofStrings(left: string, right: string): number {
+  return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
+}
+
+function proofSorted<T extends string>(values: readonly T[]): T[] {
+  return [...values].sort(compareProofStrings);
+}
 
 function invalid(detail: string): never { throw new Error(`PROOF_CATALOG_INVALID: ${detail}`); }
 function plain(value: unknown): value is PlainRecord {
@@ -62,24 +72,24 @@ function domainDigest(domain: string, value: unknown): string {
 function plainDigest(value: unknown): string {
   return `sha256:${createHash('sha256').update(goCompatibleProofJson(value), 'utf8').digest('hex')}`;
 }
-function bounded(value: unknown, label: string, limit = REVALIDATION_OUTPUT_LIMIT): unknown {
+function bounded(value: unknown, label: string, limit = PROOF_REVALIDATION_OUTPUT_MAX_BYTES): unknown {
   let encoded: string;
   try { encoded = canonicalJson(value); } catch { invalid(`${label} is not canonical JSON`); }
   if (Buffer.byteLength(encoded, 'utf8') > limit) invalid(`${label} exceeds ${limit} bytes`);
   return immutableCanonicalValue(value);
 }
 function claimPayloadLimit(claimName: string): number {
-  if (claimName === PROOF_STRUCTURAL_INVENTORY_CLAIM) return INVENTORY_OUTPUT_LIMIT;
-  if (claimName === PROOF_CATALOG_REVALIDATION_CLAIM) return REVALIDATION_OUTPUT_LIMIT;
-  if (claimName === PROOF_CANDIDATE_CLAIM) return CATALOG_INPUT_LIMIT;
-  return INVENTORY_OUTPUT_LIMIT;
+  if (claimName === PROOF_STRUCTURAL_INVENTORY_CLAIM) return PROOF_INVENTORY_OUTPUT_MAX_BYTES;
+  if (claimName === PROOF_CATALOG_REVALIDATION_CLAIM) return PROOF_REVALIDATION_OUTPUT_MAX_BYTES;
+  if (claimName === PROOF_CANDIDATE_CLAIM) return PROOF_CATALOG_INPUT_MAX_BYTES;
+  return PROOF_INVENTORY_OUTPUT_MAX_BYTES;
 }
 function sortedStrings(value: unknown, label: string, allowEmpty = false): readonly string[] {
-  if (!Array.isArray(value) || value.length > 4096 || (!allowEmpty && value.length === 0) ||
-      value.some(item => typeof item !== 'string' || item.length === 0 || item.length > 4096)) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) ||
+      value.some(item => typeof item !== 'string' || item.length === 0)) {
     invalid(`${label} is invalid`);
   }
-  const sorted = [...value].sort();
+  const sorted = proofSorted(value);
   if (new Set(value).size !== value.length || canonicalJson(value) !== canonicalJson(sorted)) {
     invalid(`${label} must be unique and sorted`);
   }
@@ -127,6 +137,40 @@ function sameScope(values: readonly CandidateClaimInput[]): boolean {
   return values.every(value => canonicalJson(value.scope) === canonicalJson(values[0].scope));
 }
 
+const ADMISSION_DECISION_KEYS = ['version', 'status', 'receipt', 'reject_code'] as const;
+const ADMISSION_RECEIPT_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
+
+function admissionScope(value: unknown): boolean {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 2 && value.every(part => plain(part) && exact(part, ['Kind', 'ExpansionOwnerCheck', 'Key', 'SubgraphInstanceID']) && part.Kind === 'keyed' && typeof part.ExpansionOwnerCheck === 'string' && part.ExpansionOwnerCheck.length > 0 && typeof part.Key === 'string' && part.Key.length > 0 && typeof part.SubgraphInstanceID === 'string' && /^[0-9a-f]{64}$/.test(part.SubgraphInstanceID));
+}
+
+function admissionBinding(value: unknown): boolean {
+  return plain(value) && exact(value, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence']) && typeof value.ManagedRunID === 'string' && value.ManagedRunID.length > 0 && typeof value.SessionID === 'string' && value.SessionID.length > 0 && typeof value.CheckID === 'string' && value.CheckID.length > 0 && admissionScope(value.Scope) && typeof value.NodeInstanceID === 'string' && value.NodeInstanceID.length > 0 && typeof value.NodeGenerationID === 'string' && value.NodeGenerationID.length > 0 && typeof value.AttemptID === 'string' && value.AttemptID.length > 0 && Number.isSafeInteger(value.Fence) && (value.Fence as number) > 0;
+}
+
+/**
+ * Recover the exact Proof decision from the admitted claim. Claim-kernel
+ * canonicalization is intentionally not used for this transport evidence:
+ * Proof owns the byte representation of the admission decision.
+ */
+function admissionTransport(value: unknown): { receipt: PlainRecord; wire: string } {
+  if (!plain(value) || typeof value[PROOF_ADMISSION_WIRE_FIELD] !== 'string') {
+    invalid('admission does not carry the complete Proof decision wire');
+  }
+  const wire = value[PROOF_ADMISSION_WIRE_FIELD] as string;
+  let decision: unknown;
+  try { decision = JSON.parse(wire); } catch { invalid('admission decision wire is not JSON'); }
+  const receipt = plain(decision) && plain(decision.receipt) ? decision.receipt : undefined;
+  if (!exact(decision, ADMISSION_DECISION_KEYS) || decision.version !== 'proof.role-result-candidate-cli-decision/v1' ||
+      decision.status !== 'ADMITTED' || decision.reject_code !== null || !receipt ||
+      goCompatibleProofJson(decision) !== wire ||
+      !exact(receipt, ADMISSION_RECEIPT_KEYS) || receipt.Version !== 'proof.role-result-candidate-admission/v1' || receipt.Status !== 'ADMITTED' || !fingerprint(receipt.CandidateID) || !fingerprint(receipt.ProbeResultDigest) || !Number.isSafeInteger(receipt.ProbeCanonicalBytes) || (receipt.ProbeCanonicalBytes as number) <= 0 || typeof receipt.ClaimID !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.ClaimID) || receipt.Claim !== PROOF_CANDIDATE_CLAIM || typeof receipt.PayloadFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.PayloadFingerprint) || !fingerprint(receipt.InvocationDigest) || receipt.RoleID !== 'onboard' || receipt.Stance !== 'owner' || !plain(receipt.Subject) || !exact(receipt.Subject, ['kind', 'id', 'fingerprint']) || receipt.Subject.kind !== 'project' || typeof receipt.Subject.id !== 'string' || receipt.Subject.id.length === 0 || !fingerprint(receipt.Subject.fingerprint) || receipt.ProducerCheckID !== 'inspect' || !Array.isArray(receipt.ParentClaimIDs) || receipt.ParentClaimIDs.some(parent => typeof parent !== 'string' || !/^[0-9a-f]{64}$/.test(parent)) || !admissionBinding(receipt.Binding) || !plain(receipt.Termination) || !exact(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || receipt.Termination.Version !== 1 || receipt.Termination.Type !== 'ManagedRunTerminated' || receipt.Termination.SessionID !== (receipt.Binding as PlainRecord).SessionID || !admissionScope(receipt.Termination.Scope) || !admissionBinding(receipt.Termination.Binding) || canonicalJson(receipt.Termination.Binding) !== canonicalJson(receipt.Binding) || receipt.Termination.CleanupStatus !== 'clean' || receipt.Termination.ControllerDecision !== 'completed' || receipt.Termination.FailureCode !== null || !fingerprint(receipt.receipt_id) ||
+      canonicalJson(receipt) !== canonicalJson(Object.fromEntries(Object.entries(value).filter(([key]) => key !== PROOF_ADMISSION_WIRE_FIELD)))) {
+    invalid('admission decision wire is incomplete or detached');
+  }
+  return { receipt, wire };
+}
+
 function validateAuthority(value: unknown, projectID: string, label: string): PlainRecord {
   const keys = ['version', 'project_id', 'subject_fingerprint', 'code_fingerprint', 'tests_fingerprint'];
   if (!exact(value, keys) || value.version !== 'proof.project-authority/v1' || value.project_id !== projectID ||
@@ -137,17 +181,18 @@ function validateAuthority(value: unknown, projectID: string, label: string): Pl
 }
 
 function validateInputState(value: unknown, label: string, expectedOwnerKind?: string, expectedOwnerID?: string): void {
-  if (!Array.isArray(value) || value.length > 65536) invalid(`${label} is invalid`);
+  if (!Array.isArray(value)) invalid(`${label} is invalid`);
   let previous = '';
   const paths = new Set<string>();
   for (const [index, item] of value.entries()) {
     if (!plain(item) || !exact(item, ['owner_kind', 'owner_id', 'input_kind', 'path', 'file_hash']) ||
-        typeof item.owner_kind !== 'string' || typeof item.owner_id !== 'string' || typeof item.input_kind !== 'string' ||
-        typeof item.path !== 'string' || !fingerprint(item.file_hash) ||
+        typeof item.owner_kind !== 'string' || item.owner_kind.length === 0 || typeof item.owner_id !== 'string' || item.owner_id.length === 0 || typeof item.input_kind !== 'string' || item.input_kind.length === 0 ||
+        typeof item.path !== 'string' || item.path.length === 0 || !fingerprint(item.file_hash) ||
         (expectedOwnerKind !== undefined && item.owner_kind !== expectedOwnerKind) ||
         (expectedOwnerID !== undefined && item.owner_id !== expectedOwnerID) || paths.has(item.path)) invalid(`${label}[${index}] is invalid`);
+    if (normalizeProofPath(item.path) !== item.path) invalid(`${label}[${index}].path is not a canonical project-relative path`);
     const order = `${item.input_kind}\u0000${item.path}`;
-    if (order < previous) invalid(`${label} must be sorted by input kind and path`);
+    if (compareProofStrings(order, previous) < 0) invalid(`${label} must be sorted by input kind and path`);
     previous = order;
     paths.add(item.path);
   }
@@ -160,9 +205,18 @@ function validateStructuralInventory(value: unknown, projectID: string): PlainRe
   }
   validateAuthority(value.authority, projectID, 'structural inventory authority');
   sortedStrings(value.sorted_paths, 'structural inventory sorted_paths', true);
-  sortedStrings(value.sorted_module_paths, 'structural inventory sorted_module_paths', true);
+  proofPathList(value.sorted_paths, 'structural inventory sorted_paths', true);
+  // encoding/json emits a nil []string as null; this is the genuine Proof
+  // projection for projects without a recognized module manifest.
+  if (value.sorted_module_paths !== null) {
+    sortedStrings(value.sorted_module_paths, 'structural inventory sorted_module_paths', true);
+    proofPathList(value.sorted_module_paths, 'structural inventory sorted_module_paths', true);
+  }
   validateInputState(value.input_state, 'structural inventory input_state', 'onboarding_structural_inventory', projectID);
-  return bounded(value, 'structural inventory', INVENTORY_OUTPUT_LIMIT) as PlainRecord;
+  const inventoryPaths = value.sorted_paths as string[];
+  const inputPaths = proofSorted((value.input_state as PlainRecord[]).map(row => row.path as string));
+  if (!sameStringSet(inventoryPaths, inputPaths)) invalid('structural inventory input_state does not cover sorted_paths');
+  return bounded(value, 'structural inventory', PROOF_INVENTORY_OUTPUT_MAX_BYTES) as PlainRecord;
 }
 
 function candidateComponents(value: unknown, projectID?: string): readonly PlainRecord[] {
@@ -176,26 +230,86 @@ function candidateComponents(value: unknown, projectID?: string): readonly Plain
   const ids = new Set<string>();
   return value.components.map((component, index) => {
     const componentKeys = ['id', 'responsibility', 'owned_paths', 'dependency_closure', 'entry_points', 'state_effects', 'interfaces', 'uncertainty'];
-    if (!exact(component, componentKeys) || typeof component.id !== 'string' || component.id.length === 0 ||
-        typeof component.responsibility !== 'string' || component.responsibility.length === 0 || ids.has(component.id)) {
+    if (!plain(component) || !Reflect.ownKeys(component).every(key => typeof key === 'string' && componentKeys.includes(key)) ||
+        !('id' in component) || !('responsibility' in component) || !('owned_paths' in component) ||
+        typeof component.responsibility !== 'string' || component.responsibility.length === 0) {
       invalid(`discovery component ${index} is not closed or is duplicated`);
     }
-    ids.add(component.id);
-    stringList(component.owned_paths, `discovery component ${component.id}.owned_paths`);
-    stringList(component.dependency_closure, `discovery component ${component.id}.dependency_closure`);
-    sortedStrings(component.entry_points, `discovery component ${component.id}.entry_points`, true);
-    sortedStrings(component.state_effects, `discovery component ${component.id}.state_effects`, true);
-    if (!Array.isArray(component.interfaces) || component.interfaces.length > 4096 || !component.interfaces.every(item => validMaterialized(item))) invalid(`discovery component ${component.id}.interfaces is invalid`);
-    sortedStrings(component.uncertainty, `discovery component ${component.id}.uncertainty`, true);
+    const id = normalizedIdentifier(component.id, `discovery component ${index}.id`);
+    if (ids.has(id)) invalid(`discovery component ${index} is duplicated`);
+    ids.add(id);
+    proofPathList(component.owned_paths, `discovery component ${component.id}.owned_paths`);
+    if (component.dependency_closure !== undefined) proofPathList(component.dependency_closure, `discovery component ${component.id}.dependency_closure`);
+    if (component.entry_points !== undefined) stringList(component.entry_points, `discovery component ${component.id}.entry_points`, true);
+    if (component.state_effects !== undefined) stringList(component.state_effects, `discovery component ${component.id}.state_effects`, true);
+    if (component.interfaces !== undefined && (!Array.isArray(component.interfaces) || !component.interfaces.every(item => validMaterialized(item)))) invalid(`discovery component ${component.id}.interfaces is invalid`);
+    if (component.uncertainty !== undefined) stringList(component.uncertainty, `discovery component ${component.id}.uncertainty`, true);
     return component;
   });
 }
 function stringList(value: unknown, label: string, allowEmpty = false): readonly string[] {
-  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.length > 4096 ||
-      value.some(item => typeof item !== 'string' || item.length === 0 || item.length > 4096 || /[\u0000-\u001f\u007f]/.test(item))) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) ||
+      value.some(item => typeof item !== 'string' || item.length === 0)) {
     invalid(`${label} is invalid`);
   }
   return value;
+}
+
+function proofPathList(value: unknown, label: string, allowEmpty = false): readonly string[] {
+  stringList(value, label, allowEmpty);
+  const seen = new Set<string>();
+  for (const path of value as string[]) {
+    const normalized = normalizeProofPath(path);
+    // Proof trims surrounding whitespace, then requires filepath.Clean to
+    // leave the project-relative spelling unchanged.  Keep this boundary
+    // equally strict: `a//b`, `a/./b`, and `a/../b` are not accepted input
+    // spellings even though they could be normalized to a usable path.
+    if (normalized === undefined || normalized !== path.trim() || seen.has(normalized)) {
+      invalid(`${label} contains a noncanonical or duplicate project-relative path`);
+    }
+    seen.add(normalized);
+  }
+  return value as readonly string[];
+}
+
+function normalizeProofPath(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.includes('\u0000') || trimmed.startsWith('/')) return undefined;
+  const parts: string[] = [];
+  for (const part of trimmed.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      if (parts.length === 0) return undefined;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.length === 0 ? undefined : parts.join('/');
+}
+
+function normalizedPathList(value: unknown, label: string): string[] {
+  proofPathList(value, label);
+  return (value as string[]).map(path => normalizeProofPath(path) as string);
+}
+
+function normalizedIdentifier(value: unknown, label: string): string {
+  if (typeof value !== 'string') invalid(`${label} is invalid`);
+  const normalized = value.trim();
+  if (!visibleIdentifier(normalized)) invalid(`${label} is not a visible identifier`);
+  return normalized;
+}
+
+function visibleIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+    [...value].every(char => {
+      const code = char.codePointAt(0) as number;
+      return code >= 0x21 && code <= 0x7e;
+    });
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function projectedCatalog(value: unknown, projectID: string): PlainRecord {
@@ -209,16 +323,20 @@ function projectedCatalog(value: unknown, projectID: string): PlainRecord {
     if (!plain(component)) invalid(`catalog component ${index} is not an object`);
     const allowed = ['id', 'responsibility', 'owned_paths', 'dependency_closure', 'entry_points', 'state_effects', 'interfaces', 'uncertainty'];
     if (!Reflect.ownKeys(component).every(key => typeof key === 'string' && allowed.includes(key))) invalid(`catalog component ${index} contains an unknown field`);
-    if (!('id' in component) || !('responsibility' in component) || !('owned_paths' in component) || !('dependency_closure' in component) ||
-        typeof component.id !== 'string' || component.id.length === 0 || typeof component.responsibility !== 'string' || component.responsibility.length === 0 ||
+    if (!('id' in component) || !('responsibility' in component) || !('owned_paths' in component) ||
+        !visibleIdentifier(component.id) || typeof component.responsibility !== 'string' || component.responsibility.length === 0 ||
         ids.has(component.id)) invalid(`catalog component ${index} is invalid or duplicated`);
     ids.add(component.id);
-    stringList(component.owned_paths, `catalog component ${component.id}.owned_paths`);
-    stringList(component.dependency_closure, `catalog component ${component.id}.dependency_closure`);
+    sortedStrings(component.owned_paths, `catalog component ${component.id}.owned_paths`);
+    proofPathList(component.owned_paths, `catalog component ${component.id}.owned_paths`);
+    if (component.dependency_closure !== undefined) {
+      sortedStrings(component.dependency_closure, `catalog component ${component.id}.dependency_closure`);
+      proofPathList(component.dependency_closure, `catalog component ${component.id}.dependency_closure`);
+    }
     for (const field of ['entry_points', 'state_effects', 'uncertainty'] as const) {
       if (component[field] !== undefined) stringList(component[field], `catalog component ${component.id}.${field}`, true);
     }
-    if (component.interfaces !== undefined && (!Array.isArray(component.interfaces) || component.interfaces.length > 4096 || !component.interfaces.every(item => validMaterialized(item)))) {
+    if (component.interfaces !== undefined && (!Array.isArray(component.interfaces) || !component.interfaces.every(item => validMaterialized(item)))) {
       invalid(`catalog component ${component.id}.interfaces is invalid`);
     }
   }
@@ -228,17 +346,17 @@ function projectedCatalog(value: unknown, projectID: string): PlainRecord {
 function expectedCatalog(candidate: CandidateClaimInput, projectID: string): PlainRecord {
   const components = candidateComponents(candidate.payload, projectID).map(component => {
     const result: PlainRecord = {
-      id: component.id,
+      id: normalizedIdentifier(component.id, `discovery component ${String(component.id)}.id`),
       responsibility: component.responsibility,
-      owned_paths: [...(component.owned_paths as string[])].sort(),
-      dependency_closure: [...(component.dependency_closure as string[])].sort(),
+      owned_paths: proofSorted(normalizedPathList(component.owned_paths, `discovery component ${String(component.id)}.owned_paths`)),
     };
+    if (component.dependency_closure !== undefined) result.dependency_closure = proofSorted(normalizedPathList(component.dependency_closure, `discovery component ${String(component.id)}.dependency_closure`));
     for (const field of ['entry_points', 'state_effects', 'interfaces', 'uncertainty'] as const) {
-      const list = component[field] as unknown[];
-      if (list.length > 0) result[field] = field === 'interfaces' ? list : [...(list as string[])].sort();
+      const list = component[field] as unknown[] | undefined;
+      if (list !== undefined && list.length > 0) result[field] = field === 'interfaces' ? list : proofSorted(list as string[]);
     }
     return result;
-  }).sort((left, right) => (left.id as string).localeCompare(right.id as string));
+  }).sort((left, right) => compareProofStrings(left.id as string, right.id as string));
   return { version: COMPONENT_CATALOG_CANDIDATE_VERSION, project_id: projectID, components };
 }
 function validMaterialized(value: unknown, seen = new Set<object>()): boolean {
@@ -259,6 +377,9 @@ function validateWorkItem(value: unknown, projectID: string, label: string): Pla
   sortedStrings(value.sorted_owned_paths, `${label}.sorted_owned_paths`);
   sortedStrings(value.sorted_dependency_closure, `${label}.sorted_dependency_closure`);
   validateInputState(value.proof_input_state, `${label}.proof_input_state`, 'onboarding_component', value.component_id as string);
+  const closure = value.sorted_dependency_closure as string[];
+  const inputPaths = proofSorted((value.proof_input_state as PlainRecord[]).map(row => row.path as string));
+  if (!sameStringSet(closure, inputPaths)) invalid(`${label}.proof_input_state does not cover sorted_dependency_closure`);
   const subject = value.proof_component_subject;
   if (!exact(subject, ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure', 'fingerprint']) ||
       subject.version !== 'proof.component-subject/v1' || subject.project_id !== projectID || subject.component_id !== value.component_id ||
@@ -268,13 +389,14 @@ function validateWorkItem(value: unknown, projectID: string, label: string): Pla
   if (!exact(mapping, ['paths', 'components', 'owner', 'risk_tier', 'enforcement']) ||
       !Array.isArray(mapping.paths) || !Array.isArray(mapping.components) || mapping.components.length !== 1 || mapping.components[0] !== value.component_id ||
       mapping.owner !== 'onboard' || mapping.risk_tier !== 0 || mapping.enforcement !== 'soft' ||
-      canonicalJson(mapping.paths) !== canonicalJson(value.sorted_owned_paths)) invalid(`${label}.proof_path_mapping is detached`);
+      canonicalJson(mapping.paths) !== canonicalJson(value.sorted_owned_paths) ||
+      mapping.paths.some(path => typeof path !== 'string' || path.length === 0)) invalid(`${label}.proof_path_mapping is detached`);
   return value;
 }
 
-function validateReceipt(value: unknown, projectID: string, ids: ReadonlySet<string>, workItems: readonly PlainRecord[]): PlainRecord {
+function validateReceipt(value: unknown, projectID: string, boundaryFingerprint: string, ids: ReadonlySet<string>, workItems: readonly PlainRecord[]): PlainRecord {
   const keys = ['version', 'decision', 'project_id', 'project_fingerprint', 'boundary_fingerprint', 'inventory_claim_id', 'catalog_claim_id', 'admission_candidate_id', 'admission_result_digest', 'admission_receipt_id', 'component_authorities', 'receipt_id'];
-  if (!exact(value, keys) || value.version !== CATALOG_REVALIDATION_RECEIPT_VERSION || value.decision !== 'accepted' || value.project_id !== projectID ||
+  if (!exact(value, keys) || value.version !== CATALOG_REVALIDATION_RECEIPT_VERSION || value.decision !== 'accepted' || value.project_id !== projectID || value.boundary_fingerprint !== boundaryFingerprint ||
       !fingerprint(value.project_fingerprint) || !fingerprint(value.boundary_fingerprint) || !fingerprint(value.inventory_claim_id) ||
       !fingerprint(value.catalog_claim_id) || !fingerprint(value.admission_candidate_id) || !fingerprint(value.admission_result_digest) ||
       !fingerprint(value.admission_receipt_id) || !fingerprint(value.receipt_id) || !Array.isArray(value.component_authorities)) invalid('catalog revalidation receipt is invalid');
@@ -286,8 +408,23 @@ function validateReceipt(value: unknown, projectID: string, ids: ReadonlySet<str
     if (!item || authority.work_item_digest !== plainDigest(workItemWire(item)) || canonicalJson(authority.subject) !== canonicalJson(item.proof_component_subject)) invalid(`catalog revalidation receipt component_authorities[${index}] is detached`);
     seen.add(authority.component_id);
   }
-  const sorted = [...value.component_authorities].sort((left, right) => left.component_id.localeCompare(right.component_id));
+  const sorted = [...value.component_authorities].sort((left, right) => compareProofStrings(left.component_id, right.component_id));
   if (canonicalJson(value.component_authorities) !== canonicalJson(sorted)) invalid('catalog revalidation receipt component authorities are not sorted');
+  const componentAuthoritiesWire = (value.component_authorities as PlainRecord[]).map(authority => {
+    const subject = authority.subject as PlainRecord;
+    return {
+      component_id: authority.component_id,
+      work_item_digest: authority.work_item_digest,
+      subject: {
+        version: subject.version,
+        project_id: subject.project_id,
+        component_id: subject.component_id,
+        sorted_owned_paths: subject.sorted_owned_paths,
+        sorted_dependency_closure: subject.sorted_dependency_closure,
+        fingerprint: subject.fingerprint,
+      },
+    };
+  });
   const unsigned: PlainRecord = {
     version: value.version,
     decision: value.decision,
@@ -299,7 +436,7 @@ function validateReceipt(value: unknown, projectID: string, ids: ReadonlySet<str
     admission_candidate_id: value.admission_candidate_id,
     admission_result_digest: value.admission_result_digest,
     admission_receipt_id: value.admission_receipt_id,
-    component_authorities: value.component_authorities,
+    component_authorities: componentAuthoritiesWire,
     receipt_id: '',
   };
   if (value.receipt_id !== domainDigest('proof.catalog-revalidation-receipt/id/v1', unsigned)) invalid('catalog revalidation receipt ID is invalid');
@@ -357,9 +494,20 @@ function workItemWire(value: PlainRecord): PlainRecord {
   };
 }
 
-function validateRevalidationProjection(value: unknown, inventory: PlainRecord, candidate: CandidateClaimInput, admission: CandidateClaimInput, projectID: string): unknown {
+export function validateProofCatalogRevalidationProjection(value: unknown, inventory: PlainRecord, candidate: CandidateClaimInput, admission: CandidateClaimInput, projectID: string, revalidationClaim?: CandidateClaimInput, inventoryClaimId?: string): PlainRecord {
   const keys = ['version', 'inventory', 'catalog', 'work_items', 'receipt'];
   if (!exact(value, keys) || value.version !== CATALOG_REVALIDATION_VERSION) invalid('catalog revalidation projection is not closed');
+  const admitted = admissionTransport(admission.payload);
+  if (candidate.producerCheckId !== 'inspect' ||
+      (inventoryClaimId !== undefined && !candidate.parentClaimIds.includes(inventoryClaimId)) || admission.producerCheckId !== 'proof_admit' || admission.parentClaimIds.length !== 1 ||
+      admission.parentClaimIds[0] !== candidate.claimId || canonicalJson(admission.scope) !== canonicalJson(candidate.scope) ||
+      !Array.isArray(candidate.parentClaimIds)) invalid('admission lineage is detached');
+  if (candidate.parentClaimIds.some(parent => typeof parent !== 'string')) invalid('candidate lineage is invalid');
+  if (revalidationClaim !== undefined) {
+    if (inventoryClaimId === undefined || revalidationClaim.producerCheckId !== 'revalidate_catalog' ||
+        revalidationClaim.parentClaimIds.length !== 3 || canonicalJson(revalidationClaim.parentClaimIds) !== canonicalJson([inventoryClaimId, candidate.claimId, admission.claimId].sort()) ||
+        canonicalJson(revalidationClaim.scope) !== canonicalJson(candidate.scope)) invalid('revalidation lineage is detached');
+  }
   const currentInventory = validateStructuralInventory(value.inventory, projectID);
   if (canonicalJson(currentInventory) !== canonicalJson(inventory)) invalid('catalog revalidation inventory is stale');
   const components = candidateComponents(candidate.payload, projectID);
@@ -369,18 +517,42 @@ function validateRevalidationProjection(value: unknown, inventory: PlainRecord, 
   if (canonicalJson(catalog) !== canonicalJson(expected)) invalid('catalog revalidation catalog is detached from candidate');
   const catalogComponents = (catalog.components as PlainRecord[]);
   if (new Set(catalogComponents.map(component => component.id as string)).size !== ids.size || catalogComponents.some(component => !ids.has(component.id as string))) invalid('catalog revalidation catalog is detached from candidate');
+  const inventoryPaths = value.inventory && plain(value.inventory) && Array.isArray(value.inventory.sorted_paths)
+    ? value.inventory.sorted_paths as string[] : [];
+  const ownedPaths = proofSorted(catalogComponents.flatMap(component => component.owned_paths as string[]));
+  if (new Set(ownedPaths).size !== ownedPaths.length || !sameStringSet(ownedPaths, inventoryPaths)) invalid('catalog revalidation catalog does not cover the current inventory');
   if (!Array.isArray(value.work_items) || value.work_items.length !== ids.size) invalid('catalog revalidation WorkItems are incomplete');
   const workItems = value.work_items.map((item, index) => validateWorkItem(item, projectID, `catalog revalidation work_items[${index}]`));
+  const inventoryInputByPath = new Map((currentInventory.input_state as PlainRecord[]).map(row => [row.path, row]));
+  for (const item of workItems) {
+    for (const row of item.proof_input_state as PlainRecord[]) {
+      const inventoryRow = inventoryInputByPath.get(row.path as string);
+      if (!inventoryRow || inventoryRow.input_kind !== row.input_kind || inventoryRow.file_hash !== row.file_hash) {
+        invalid(`catalog revalidation WorkItem ${item.component_id as string} input state is detached from inventory`);
+      }
+    }
+  }
   const itemIDs = new Set(workItems.map(item => item.component_id as string));
   if (itemIDs.size !== ids.size || [...ids].some(id => !itemIDs.has(id))) invalid('catalog revalidation WorkItems are detached from candidate');
-  const receipt = validateReceipt(value.receipt, projectID, ids, workItems);
-  if (admission.producerCheckId !== 'proof_admit' || !plain(admission.payload) || admission.payload.Status !== 'ADMITTED' || admission.payload.ClaimID !== candidate.claimId || admission.payload.PayloadFingerprint !== candidate.payloadFingerprint) invalid('admission is not the exact admitted candidate');
+  const catalogByID = new Map(catalogComponents.map(component => [component.id as string, component]));
+  for (const item of workItems) {
+    const component = catalogByID.get(item.component_id as string);
+    if (!component || !sameStringSet(item.sorted_owned_paths as string[], component.owned_paths as string[]) ||
+        (component.dependency_closure !== undefined && !sameStringSet(item.sorted_dependency_closure as string[], component.dependency_closure as string[])) ||
+        (component.dependency_closure === undefined && !sameStringSet(item.sorted_dependency_closure as string[], item.sorted_owned_paths as string[]))) {
+      invalid(`catalog revalidation WorkItem ${item.component_id as string} is detached from catalog paths`);
+    }
+  }
+  const sortedItems = [...workItems].sort((left, right) => compareProofStrings(left.component_id as string, right.component_id as string));
+  if (canonicalJson(workItems) !== canonicalJson(sortedItems)) invalid('catalog revalidation WorkItems are not sorted by component_id');
+  const receipt = validateReceipt(value.receipt, projectID, (value.inventory as PlainRecord).boundary_fingerprint as string, ids, workItems);
+  if (admission.producerCheckId !== 'proof_admit' || admitted.receipt.Status !== 'ADMITTED' || admitted.receipt.ClaimID !== candidate.claimId || admitted.receipt.PayloadFingerprint !== candidate.payloadFingerprint) invalid('admission is not the exact admitted candidate');
   const authority = (value.inventory as PlainRecord).authority;
   if (!plain(authority) || receipt.project_fingerprint !== authority.subject_fingerprint) invalid('catalog revalidation receipt project authority is detached');
   const expectedInventoryID = domainDigest('proof.structural-inventory/claim/v1', inventoryWire(currentInventory));
   const expectedCatalogID = domainDigest('proof.component-catalog-candidate/claim/v1', candidate.payload);
-  if (receipt.inventory_claim_id !== expectedInventoryID || receipt.catalog_claim_id !== expectedCatalogID || receipt.admission_candidate_id !== admission.payload.CandidateID || receipt.admission_result_digest !== admission.payload.ProbeResultDigest || receipt.admission_receipt_id !== admission.payload.receipt_id) invalid('catalog revalidation receipt lineage is detached');
-  return bounded(value, 'catalog revalidation projection');
+  if (receipt.inventory_claim_id !== expectedInventoryID || receipt.catalog_claim_id !== expectedCatalogID || receipt.admission_candidate_id !== admitted.receipt.CandidateID || receipt.admission_result_digest !== admitted.receipt.ProbeResultDigest || receipt.admission_receipt_id !== admitted.receipt.receipt_id) invalid('catalog revalidation receipt lineage is detached');
+  return bounded(value, 'catalog revalidation projection') as PlainRecord;
 }
 
 abstract class ProofCatalogCliProvider extends CheckProvider {
@@ -411,7 +583,7 @@ export class ProofStructuralInventoryCheckProvider extends ProofCatalogCliProvid
       command: ['onboarding', 'inventory'],
       input: '',
       inputLimit: 0,
-      outputLimit: INVENTORY_OUTPUT_LIMIT,
+      outputLimit: PROOF_INVENTORY_OUTPUT_MAX_BYTES,
       outputCanonical: false,
       projectOutput: value => validateStructuralInventory(value, projectPayload.project_id as string),
     }, this.capability);
@@ -427,7 +599,7 @@ export class ProofCatalogRevalidationCheckProvider extends ProofCatalogCliProvid
     const inventory = claim(claims.current_inventory, PROOF_STRUCTURAL_INVENTORY_CLAIM, 'current inventory');
     const candidate = claim(claims.candidate, PROOF_CANDIDATE_CLAIM, 'candidate');
     const admission = claim(claims.receipt, PROOF_ADMITTED_RECEIPT_CLAIM, 'admission');
-    if (!sameScope([inventory, candidate, admission]) || !plain(inventory.payload) || !plain(candidate.payload)) invalid('revalidation claims are cross-scope');
+    if (inventory.producerCheckId !== 'structural_inventory' || !sameScope([inventory, candidate, admission]) || !plain(inventory.payload) || !plain(candidate.payload)) invalid('revalidation claims are cross-scope');
     const inventoryPayload = inventory.payload as PlainRecord;
     const candidatePayload = candidate.payload as PlainRecord;
     const projectID = typeof inventoryPayload.authority === 'object' && inventoryPayload.authority && typeof (inventoryPayload.authority as PlainRecord).project_id === 'string'
@@ -435,24 +607,20 @@ export class ProofCatalogRevalidationCheckProvider extends ProofCatalogCliProvid
     if (!projectID) invalid('revalidation project id is missing');
     validateStructuralInventory(inventory.payload, projectID);
     candidateComponents(candidate.payload, projectID);
-    // Proof's CLI accepts the candidate bytes and the complete admission
-    // decision, while Visor's admitted_receipt claim intentionally publishes
-    // only the receipt. Re-wrap that exact receipt into the CLI decision
-    // envelope at this boundary; no admission fields are synthesized.
-    const input = goCompatibleProofJson({
-      version: REVALIDATION_REQUEST_VERSION,
-      candidate: candidate.payload,
-      admission: { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: admission.payload, reject_code: null },
-    });
+    const admitted = admissionTransport(admission.payload);
+    // Proof owns the complete admission decision bytes. Embed the candidate
+    // projection and that exact decision wire in the Go request envelope;
+    // Visor does not reconstruct or reorder the receipt.
+    const input = `{"version":${JSON.stringify(REVALIDATION_REQUEST_VERSION)},"candidate":${goCompatibleProofJson(candidate.payload)},"admission":${admitted.wire}}`;
     return startProofManagedCliChild({
       binding: request.binding,
       workingDirectory: request.workingDirectory || '',
       command: ['onboarding', 'revalidate'],
       input,
-      inputLimit: REVALIDATION_INPUT_LIMIT,
-      outputLimit: REVALIDATION_OUTPUT_LIMIT,
+      inputLimit: PROOF_REVALIDATION_REQUEST_MAX_BYTES,
+      outputLimit: PROOF_REVALIDATION_OUTPUT_MAX_BYTES,
       outputCanonical: false,
-      projectOutput: value => validateRevalidationProjection(value, inventory.payload as PlainRecord, candidate, admission, projectID),
+      projectOutput: value => validateProofCatalogRevalidationProjection(value, inventory.payload as PlainRecord, candidate, admission, projectID, undefined, inventory.claimId),
     }, this.capability);
   }
 }

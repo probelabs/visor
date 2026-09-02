@@ -11,6 +11,8 @@ import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel
 
 export const PROOF_ADMISSION_UNAVAILABLE = 'PROOF_ADMISSION_UNAVAILABLE';
 export const PROOF_ADMISSION_CLEANUP_FAILED = 'PROOF_ADMISSION_CLEANUP_FAILED';
+/** The exact decision wire retained beside the complete admitted receipt. */
+export const PROOF_ADMISSION_WIRE_FIELD = '__proof_admission_wire';
 const REQUEST_LIMIT = 2162688;
 const STDOUT_LIMIT = 2097153;
 const STDERR_LIMIT = 65536;
@@ -41,6 +43,13 @@ function plain(value: unknown): value is Record<string, unknown> {
 function exact(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   return plain(value) && Reflect.ownKeys(value).length === keys.length &&
     Reflect.ownKeys(value).every((key, index) => typeof key === 'string' && key === keys[index]);
+}
+/** Closed object check for Proof's canonical decision wire. CanonicalJSON
+ * sorts object keys, while the Go candidate request and receipt ID retain
+ * struct order at their own boundaries. */
+function exactUnordered(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return plain(value) && Reflect.ownKeys(value).length === keys.length &&
+    Reflect.ownKeys(value).every(key => typeof key === 'string' && keys.includes(key));
 }
 function json(value: unknown): string {
   const encoded = JSON.stringify(value);
@@ -117,6 +126,7 @@ function validateCandidateShape(candidate: Record<string, unknown>): void {
   } catch { fail('candidate payload is not valid UTF-8 JSON'); }
 }
 function equalJson(left: unknown, right: unknown): boolean { return json(left) === json(right); }
+function equalCanonicalJson(left: unknown, right: unknown): boolean { return canonicalJson(left) === canonicalJson(right); }
 function freeze(value: unknown): unknown {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     for (const child of Object.values(value as Record<string, unknown>)) freeze(child);
@@ -124,8 +134,43 @@ function freeze(value: unknown): unknown {
   }
   return value;
 }
+function proofScope(value: unknown): unknown {
+  const scope = value as Record<string, unknown>[];
+  return scope.map(segment => ({
+    Kind: segment.Kind,
+    ExpansionOwnerCheck: segment.ExpansionOwnerCheck,
+    Key: segment.Key,
+    SubgraphInstanceID: segment.SubgraphInstanceID,
+  }));
+}
+function proofBinding(value: unknown): Record<string, unknown> {
+  const binding = value as Record<string, unknown>;
+  return {
+    ManagedRunID: binding.ManagedRunID,
+    SessionID: binding.SessionID,
+    CheckID: binding.CheckID,
+    Scope: proofScope(binding.Scope),
+    NodeInstanceID: binding.NodeInstanceID,
+    NodeGenerationID: binding.NodeGenerationID,
+    AttemptID: binding.AttemptID,
+    Fence: binding.Fence,
+  };
+}
+function proofTermination(value: unknown): Record<string, unknown> {
+  const termination = value as Record<string, unknown>;
+  return {
+    Version: termination.Version,
+    Type: termination.Type,
+    SessionID: termination.SessionID,
+    Scope: proofScope(termination.Scope),
+    Binding: proofBinding(termination.Binding),
+    CleanupStatus: termination.CleanupStatus,
+    ControllerDecision: termination.ControllerDecision,
+    FailureCode: termination.FailureCode,
+  };
+}
 function validateReceipt(decision: unknown, candidate: Record<string, unknown>, rawCandidate: Buffer): void {
-  if (!exact(decision, ['version', 'status', 'receipt', 'reject_code']) || decision.version !== DECISION_VERSION) fail('decision envelope is invalid');
+  if (!exactUnordered(decision, ['version', 'status', 'receipt', 'reject_code']) || decision.version !== DECISION_VERSION) fail('decision envelope is invalid');
   const publication = candidate.Publication as Record<string, unknown>;
   const binding = candidate.Binding;
   const termination = candidate.Termination;
@@ -133,11 +178,34 @@ function validateReceipt(decision: unknown, candidate: Record<string, unknown>, 
     if (decision.receipt !== null || decision.reject_code !== 'CANDIDATE_INVALID') fail('rejection decision is invalid');
     return;
   }
-  if (decision.status !== 'ADMITTED' || decision.reject_code !== null || !exact(decision.receipt, ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'])) fail('admission decision is invalid');
+  if (decision.status !== 'ADMITTED' || decision.reject_code !== null || !exactUnordered(decision.receipt, ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'])) fail('admission decision is invalid');
   const receipt = decision.receipt as Record<string, unknown>;
-  if (receipt.Version !== RECEIPT_VERSION || receipt.Status !== 'ADMITTED' || receipt.CandidateID !== digest(CANDIDATE_ID_DOMAIN, rawCandidate) || receipt.ProbeResultDigest !== candidate.ResultDigest || receipt.ProbeCanonicalBytes !== candidate.CanonicalBytes || receipt.ClaimID !== publication.ClaimID || receipt.Claim !== publication.Claim || receipt.PayloadFingerprint !== publication.PayloadFingerprint || receipt.InvocationDigest !== candidate.InvocationDigest || receipt.RoleID !== candidate.RoleID || receipt.Stance !== candidate.Stance || !equalJson(receipt.Subject, candidate.Subject) || receipt.ProducerCheckID !== publication.ProducerCheckID || !equalJson(receipt.ParentClaimIDs, publication.ParentClaimIDs) || !equalJson(receipt.Binding, binding) || !equalJson(receipt.Termination, termination) || typeof receipt.receipt_id !== 'string') fail('admission receipt identity is invalid');
-  const unsigned: Record<string, unknown> = {};
-  for (const key of Object.keys(receipt)) if (key !== 'receipt_id') unsigned[key] = receipt[key];
+  if (receipt.Version !== RECEIPT_VERSION || receipt.Status !== 'ADMITTED' || receipt.CandidateID !== digest(CANDIDATE_ID_DOMAIN, rawCandidate) || receipt.ProbeResultDigest !== candidate.ResultDigest || receipt.ProbeCanonicalBytes !== candidate.CanonicalBytes || receipt.ClaimID !== publication.ClaimID || receipt.Claim !== publication.Claim || receipt.PayloadFingerprint !== publication.PayloadFingerprint || receipt.InvocationDigest !== candidate.InvocationDigest || receipt.RoleID !== candidate.RoleID || receipt.Stance !== candidate.Stance || !exactUnordered(receipt.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(receipt.Subject, candidate.Subject) || receipt.ProducerCheckID !== publication.ProducerCheckID || !equalCanonicalJson(receipt.ParentClaimIDs, publication.ParentClaimIDs) || !equalCanonicalJson(receipt.Binding, binding) || !exactUnordered(receipt.Binding, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence']) || !equalCanonicalJson(receipt.Termination, termination) || !exactUnordered(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || typeof receipt.receipt_id !== 'string') fail('admission receipt identity is invalid');
+  // ReceiptID is a Proof domain digest over the Go struct's json.Marshal
+  // field order. The surrounding CLI decision is canonical-key JSON, so
+  // iterating the parsed receipt's keys here would silently hash a different
+  // byte sequence.
+  const unsigned: Record<string, unknown> = {
+    Version: receipt.Version,
+    Status: receipt.Status,
+    CandidateID: receipt.CandidateID,
+    ProbeResultDigest: receipt.ProbeResultDigest,
+    ProbeCanonicalBytes: receipt.ProbeCanonicalBytes,
+    ClaimID: receipt.ClaimID,
+    Claim: receipt.Claim,
+    PayloadFingerprint: receipt.PayloadFingerprint,
+    InvocationDigest: receipt.InvocationDigest,
+    RoleID: receipt.RoleID,
+    Stance: receipt.Stance,
+    Subject: (() => {
+      const subject = receipt.Subject as Record<string, unknown>;
+      return { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint };
+    })(),
+    ProducerCheckID: receipt.ProducerCheckID,
+    ParentClaimIDs: receipt.ParentClaimIDs,
+    Binding: proofBinding(receipt.Binding),
+    Termination: proofTermination(receipt.Termination),
+  };
   if (receipt.receipt_id !== digest(RECEIPT_ID_DOMAIN, Buffer.from(json(unsigned), 'utf8'))) fail('admission receipt ID is invalid');
 }
 
@@ -351,7 +419,7 @@ interface ProofManagedCliRequest {
   /** Proof onboarding projections are emitted by its human-readable CLI as
    * indented JSON. Candidate admission remains byte-canonical. */
   readonly outputCanonical: boolean;
-  readonly projectOutput: (value: unknown) => unknown;
+  readonly projectOutput: (value: unknown, raw: string) => unknown;
 }
 
 function validProofManagedCommand(value: unknown): value is ProofManagedCommand {
@@ -482,7 +550,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
       const parsedOutput = JSON.parse(decoded);
       if (request.outputCanonical && json(parsedOutput) !== decoded) failOnce('decision is not canonical');
       else {
-        output = freeze(request.projectOutput(parsedOutput));
+        output = freeze(request.projectOutput(parsedOutput, decoded));
         accepted = true;
       }
     } catch { failOnce('decision protocol invalid'); }
@@ -546,11 +614,15 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     inputLimit: REQUEST_LIMIT,
     outputLimit: STDOUT_LIMIT,
     outputCanonical: true,
-    projectOutput: value => {
+    projectOutput: (value, raw) => {
       validateReceipt(value, parsed.candidate, parsed.candidateRaw);
       const decision = value as Record<string, unknown>;
       if (decision.status !== 'ADMITTED' || !plain(decision.receipt)) fail('candidate was not admitted');
-      return decision.receipt;
+      // Claim payloads are recursively canonicalized by Visor. Preserve the
+      // full receipt as fields for graph consumers and retain the exact Proof
+      // decision wire so revalidation can pass it back without synthesizing
+      // or reordering the admission envelope.
+      return { ...decision.receipt, [PROOF_ADMISSION_WIRE_FIELD]: raw };
     },
   }, executablePath);
 }
