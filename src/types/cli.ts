@@ -23,6 +23,8 @@ export interface CliOptions {
   configPath?: string;
   /** Absolute trusted Proof executable used for role projection and admission */
   proofBin?: string;
+  /** Absolute, controller-owned path for the terminal governed receipt */
+  governedReceipt?: string;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */

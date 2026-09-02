@@ -53,6 +53,7 @@ export class CLI {
       .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
       .option('--config <path>', 'Path to configuration file')
       .option('--proof-bin <path>', 'Absolute trusted Proof executable for governed graph runs')
+      .option('--governed-receipt <path>', 'Write the terminal governed receipt to an absolute new file')
       .option(
         '--timeout <ms>',
         'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
@@ -158,6 +159,9 @@ export class CLI {
       if (normalizedArgv.filter(arg => arg === '--proof-bin' || arg.startsWith('--proof-bin=')).length > 1) {
         throw new Error('--proof-bin may be supplied only once');
       }
+      if (normalizedArgv.filter(arg => arg === '--governed-receipt' || arg.startsWith('--governed-receipt=')).length > 1) {
+        throw new Error('--governed-receipt may be supplied only once');
+      }
 
       // Create a fresh program instance for each parse to avoid state issues
       const tempProgram = new Command();
@@ -219,6 +223,7 @@ export class CLI {
         outputFile: options.outputFile,
         configPath: options.config,
         proofBin: typeof options.proofBin === 'string' ? options.proofBin : undefined,
+        governedReceipt: typeof options.governedReceipt === 'string' ? options.governedReceipt : undefined,
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
@@ -305,6 +310,9 @@ export class CLI {
 
     if (options.proofBin !== undefined && options.proofBin !== true && (typeof options.proofBin !== 'string' || !path.isAbsolute(options.proofBin))) {
       throw new Error('--proof-bin must be an absolute executable path');
+    }
+    if (options.governedReceipt !== undefined && options.governedReceipt !== true && (typeof options.governedReceipt !== 'string' || !path.isAbsolute(options.governedReceipt))) {
+      throw new Error('--governed-receipt must be an absolute new file path');
     }
 
     // Validate timeout

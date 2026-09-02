@@ -66,6 +66,8 @@ subgraphs:
         type: governed-proof-inspect
         message: "Execute the bound Proof role and return only the required JSON."
         profile: luna-xhigh-readonly-v1
+        ai:
+          timeout: 600000
         invocation:
           role_id: spec-review
           stance: owner

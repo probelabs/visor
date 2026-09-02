@@ -23,6 +23,7 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
+import { createHash } from 'crypto';
 import { withVisorRun, getVisorRunAttributes } from './telemetry/trace-helpers';
 import { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import open from 'open';
@@ -38,6 +39,7 @@ import {
   resolveProofRoleInvocation,
 } from './providers/proof-admission-cli-child';
 import type { VisorConfig } from './types/config';
+import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 
 const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 
@@ -87,6 +89,19 @@ function hasRemoteExtends(configPath: string): boolean {
     const sources = Array.isArray(value) ? value : value === undefined ? [] : [value];
     return sources.some(source => typeof source === 'string' && /^https?:\/\//i.test(source));
   } catch { return false; }
+}
+
+function validateGovernedReceiptMode(options: import('./types/cli').CliOptions): void {
+  if (!options.governedReceipt) return;
+  if (!options.configPath || !options.proofBin || options.checks.length !== 1 || options.output !== 'json') throw new Error('--governed-receipt requires --config, --proof-bin, one --check, and --output json');
+  if (options.watch || options.tui || options.debugServer || options.slack || options.telegram || options.email || options.whatsapp || options.teams || options.a2a || options.mcp) throw new Error('--governed-receipt is not compatible with watch, TUI, runner, or server modes');
+  const target = path.resolve(options.governedReceipt);
+  if (options.outputFile && path.resolve(options.outputFile) === target) throw new Error('--governed-receipt cannot alias --output-file');
+  const requestedParent = path.dirname(target); const requestedParentStat = fs.lstatSync(requestedParent);
+  if (requestedParentStat.isSymbolicLink() || !requestedParentStat.isDirectory()) throw new Error('--governed-receipt parent must be an existing real directory');
+  const parent = fs.realpathSync(requestedParent); const parentStat = fs.lstatSync(parent); const stat = fs.statSync(parent);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory() || !stat.isDirectory() || (stat.mode & 0o777) !== 0o700) throw new Error('--governed-receipt parent must be an existing private 0700 directory');
+  try { fs.lstatSync(path.join(parent, path.basename(target))); throw new Error('--governed-receipt target must be absent'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
 
 async function loadNormalizedForGovernanceCheck(configManager: ConfigManager, configPath: string): Promise<VisorConfig> {
@@ -1526,6 +1541,10 @@ export async function main(): Promise<void> {
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
+    validateGovernedReceiptMode(options);
+    const receiptSourceConfigSha256 = options.governedReceipt && options.configPath
+      ? createHash('sha256').update(fs.readFileSync(path.resolve(options.configPath))).digest('hex')
+      : undefined;
     const explicitChecks =
       options.checks.length > 0
         ? new Set<string>(options.checks.map(check => check.toString()))
@@ -2593,6 +2612,8 @@ export async function main(): Promise<void> {
     // Skip initial automatic run for TUI mode - wait for user to type a message
     // TUI workflows are typically chat-style and expect user input first
     let executionResult: import('./types/execution').ExecutionResult;
+    let receiptDraft: GovernedGraphTerminalReceiptDraft | undefined;
+    let receiptProjectionFailed = false;
     if (chatTui) {
       logger.info('[TUI] Waiting for user input - type a message to start the workflow');
       chatTui.setRunning(false);
@@ -2652,6 +2673,14 @@ export async function main(): Promise<void> {
           executionResult = await cliExecFn();
         }
       } finally {
+        if (options.governedReceipt && receiptSourceConfigSha256) {
+          try {
+            receiptDraft = engine.getGovernedGraphTerminalReceiptDraft(receiptSourceConfigSha256);
+          } catch (error) {
+            receiptProjectionFailed = true;
+            logger.error(`Governed receipt projection failed closed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
         await cleanupOwnedMemoryNamespace();
       }
     }
@@ -2840,7 +2869,8 @@ export async function main(): Promise<void> {
     // Force exit to prevent hanging from unclosed resources (MCP connections, etc.)
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
-    const exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed ? 1 : 0;
+    const receiptTerminalFailed = receiptDraft !== undefined && receiptDraft.failureCode !== null;
+    let exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed || receiptProjectionFailed || receiptTerminalFailed ? 1 : 0;
     // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {
@@ -2891,6 +2921,20 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
+    if (options.governedReceipt && receiptDraft && !memoryCleanupFailed && !receiptProjectionFailed) {
+      try {
+        const finalReceipt = finalizeGovernedGraphTerminalReceipt(
+          receiptDraft,
+          exitCode === 0 ? 'passed' : 'failed',
+          'clean',
+          exitCode === 0 ? 0 : 1
+        );
+        publishGovernedGraphTerminalReceipt(finalReceipt, options.governedReceipt);
+      } catch (error) {
+        exitCode = 1;
+        logger.error(`Governed receipt publication failed closed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     process.exit(exitCode);
   } catch (error) {
     await cleanupOwnedMemoryNamespace();

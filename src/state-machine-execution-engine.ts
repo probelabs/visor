@@ -16,6 +16,7 @@ import type {
   BuiltGraphCheckpointContext,
   GraphCheckpointBootstrap,
 } from './state-machine/context/build-engine-context';
+import { projectGovernedGraphTerminalReceipt, type GovernedGraphTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 
 export interface GraphCheckpointContinuationInput {
   checkpoint: unknown;
@@ -802,6 +803,18 @@ export class StateMachineExecutionEngine {
       throw error;
     }
     return journal.replayInstanceProjection();
+  }
+
+  /** Narrow, read-only terminal receipt projection; never exposes the journal. */
+  public getGovernedGraphTerminalReceiptDraft(sourceConfigSha256: string): GovernedGraphTerminalReceiptDraft {
+    const context = this._lastContext;
+    if (!context) {
+      const error = new Error('Governed terminal receipt requires a prior or active run') as Error & { code: string };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    if (!context.claimPlan) throw new Error('Governed terminal receipt requires compiled claim plan');
+    return projectGovernedGraphTerminalReceipt({ journal: context.journal, claimPlan: context.claimPlan, sourceConfigSha256 });
   }
 
   /** Read the deterministic request-bound expansion coverage projection. */

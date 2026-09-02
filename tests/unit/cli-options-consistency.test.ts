@@ -45,6 +45,7 @@ describe('CLI options consistency', () => {
       'output-file': '/tmp/test',
       config: '/tmp/test.yaml',
       'proof-bin': '/tmp/proof',
+      'governed-receipt': '/tmp/receipt.json',
       timeout: '1000',
       'max-parallelism': '2',
       tags: 'foo',
