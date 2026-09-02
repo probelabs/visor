@@ -216,7 +216,7 @@ describe('Proof admission CLI child', () => {
   }
 
   it('accounts stdout exact, plus-one, and split-chunk boundaries before overflow', async () => {
-    const limit = 2097153;
+    const limit = 2097152;
     await streamBoundaryCase('stdout', [Buffer.alloc(limit, 97)], []);
     await streamBoundaryCase('stdout', [Buffer.alloc(limit + 1, 97)], ['SIGTERM']);
     await streamBoundaryCase('stdout', [Buffer.alloc(limit - 1, 97), Buffer.from('ab')], ['SIGTERM']);

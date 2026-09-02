@@ -23,20 +23,23 @@ import {
   PROOF_ADMISSION_UNAVAILABLE,
   PROOF_ADMISSION_WIRE_FIELD,
   goCompatibleProofJson,
+  proofCanonicalJson,
+  proofTopLevelJson,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
 
 const INTERNAL = Symbol('proof-catalog-provider');
-const REVALIDATION_REQUEST_VERSION = 'proof.catalog-revalidation-request/v1';
+const REVALIDATION_REQUEST_VERSION = 'proof.catalog-revalidation-request/v2';
 export const STRUCTURAL_INVENTORY_VERSION = 'proof.structural-inventory/v1';
-export const CATALOG_REVALIDATION_VERSION = 'proof.catalog-revalidation/v1';
-export const CATALOG_REVALIDATION_RECEIPT_VERSION = 'proof.catalog-revalidation-receipt/v1';
+export const CATALOG_REVALIDATION_VERSION = 'proof.catalog-revalidation/v2';
+export const CATALOG_REVALIDATION_RECEIPT_VERSION = 'proof.catalog-revalidation-receipt/v2';
 export const COMPONENT_CATALOG_CANDIDATE_VERSION = 'proof.component-catalog-candidate/v1';
 /** These are the bounds enforced by Proof's onboarding commands. */
 export const PROOF_CATALOG_INPUT_MAX_BYTES = 4 * 1024 * 1024;
 export const PROOF_INVENTORY_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 export const PROOF_REVALIDATION_REQUEST_MAX_BYTES = PROOF_CATALOG_INPUT_MAX_BYTES + 9 * 1024 * 1024;
 export const PROOF_REVALIDATION_OUTPUT_MAX_BYTES = PROOF_INVENTORY_OUTPUT_MAX_BYTES + 4 * 1024 * 1024;
+export const PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 type PlainRecord = Record<string, unknown>;
 
@@ -63,11 +66,14 @@ function exact(value: unknown, keys: readonly string[]): value is PlainRecord {
 }
 function digest(value: unknown): string { return sha256Canonical(value); }
 function fingerprint(value: unknown): value is string { return typeof value === 'string' && DIGEST.test(value); }
-function domainDigest(domain: string, value: unknown): string {
-  const bytes = Buffer.from(goCompatibleProofJson(value), 'utf8');
+function domainDigestBytes(domain: string, encoded: string): string {
+  const bytes = Buffer.from(encoded, 'utf8');
   const length = Buffer.alloc(8);
   length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+function domainDigest(domain: string, value: unknown): string {
+  return domainDigestBytes(domain, goCompatibleProofJson(value));
 }
 function plainDigest(value: unknown): string {
   return `sha256:${createHash('sha256').update(goCompatibleProofJson(value), 'utf8').digest('hex')}`;
@@ -90,7 +96,7 @@ function sortedStrings(value: unknown, label: string, allowEmpty = false): reado
     invalid(`${label} is invalid`);
   }
   const sorted = proofSorted(value);
-  if (new Set(value).size !== value.length || canonicalJson(value) !== canonicalJson(sorted)) {
+  if (new Set(value).size !== value.length || proofCanonicalJson(value) !== proofCanonicalJson(sorted)) {
     invalid(`${label} must be unique and sorted`);
   }
   return value;
@@ -138,7 +144,7 @@ function sameScope(values: readonly CandidateClaimInput[]): boolean {
 }
 
 const ADMISSION_DECISION_KEYS = ['version', 'status', 'receipt', 'reject_code'] as const;
-const ADMISSION_RECEIPT_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
+const ADMISSION_RECEIPT_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'ProjectLineage', 'receipt_id'] as const;
 
 function admissionScope(value: unknown): boolean {
   return Array.isArray(value) && value.length >= 1 && value.length <= 2 && value.every(part => plain(part) && exact(part, ['Kind', 'ExpansionOwnerCheck', 'Key', 'SubgraphInstanceID']) && part.Kind === 'keyed' && typeof part.ExpansionOwnerCheck === 'string' && part.ExpansionOwnerCheck.length > 0 && typeof part.Key === 'string' && part.Key.length > 0 && typeof part.SubgraphInstanceID === 'string' && /^[0-9a-f]{64}$/.test(part.SubgraphInstanceID));
@@ -146,6 +152,84 @@ function admissionScope(value: unknown): boolean {
 
 function admissionBinding(value: unknown): boolean {
   return plain(value) && exact(value, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence']) && typeof value.ManagedRunID === 'string' && value.ManagedRunID.length > 0 && typeof value.SessionID === 'string' && value.SessionID.length > 0 && typeof value.CheckID === 'string' && value.CheckID.length > 0 && admissionScope(value.Scope) && typeof value.NodeInstanceID === 'string' && value.NodeInstanceID.length > 0 && typeof value.NodeGenerationID === 'string' && value.NodeGenerationID.length > 0 && typeof value.AttemptID === 'string' && value.AttemptID.length > 0 && Number.isSafeInteger(value.Fence) && (value.Fence as number) > 0;
+}
+
+function admissionLineage(value: unknown): boolean {
+  if (value === null) return true;
+  return plain(value) && exact(value, ['version', 'fingerprint', 'object_format', 'baseline_revision']) &&
+    value.version === 'proof.git-project-lineage-binding/v1' && fingerprint(value.fingerprint) &&
+    (value.object_format === 'sha1' || value.object_format === 'sha256') &&
+    typeof value.baseline_revision === 'string' &&
+    (value.object_format === 'sha1' ? /^sha1:[0-9a-f]{40}$/.test(value.baseline_revision) : /^sha256:[0-9a-f]{64}$/.test(value.baseline_revision));
+}
+
+function proofScope(value: unknown): PlainRecord[] {
+  return (value as PlainRecord[]).map(segment => ({
+    Kind: segment.Kind,
+    ExpansionOwnerCheck: segment.ExpansionOwnerCheck,
+    Key: segment.Key,
+    SubgraphInstanceID: segment.SubgraphInstanceID,
+  }));
+}
+
+function proofBinding(value: unknown): PlainRecord {
+  const binding = value as PlainRecord;
+  return {
+    ManagedRunID: binding.ManagedRunID,
+    SessionID: binding.SessionID,
+    CheckID: binding.CheckID,
+    Scope: proofScope(binding.Scope),
+    NodeInstanceID: binding.NodeInstanceID,
+    NodeGenerationID: binding.NodeGenerationID,
+    AttemptID: binding.AttemptID,
+    Fence: binding.Fence,
+  };
+}
+
+function proofTermination(value: unknown): PlainRecord {
+  const termination = value as PlainRecord;
+  return {
+    Version: termination.Version,
+    Type: termination.Type,
+    SessionID: termination.SessionID,
+    Scope: proofScope(termination.Scope),
+    Binding: proofBinding(termination.Binding),
+    CleanupStatus: termination.CleanupStatus,
+    ControllerDecision: termination.ControllerDecision,
+    FailureCode: termination.FailureCode,
+  };
+}
+
+function admissionReceiptID(receipt: PlainRecord): string {
+  const subject = receipt.Subject as PlainRecord;
+  const unsigned = proofTopLevelJson({
+    Version: goCompatibleProofJson(receipt.Version),
+    Status: goCompatibleProofJson(receipt.Status),
+    CandidateID: goCompatibleProofJson(receipt.CandidateID),
+    ProbeResultDigest: goCompatibleProofJson(receipt.ProbeResultDigest),
+    ProbeCanonicalBytes: goCompatibleProofJson(receipt.ProbeCanonicalBytes),
+    ClaimID: goCompatibleProofJson(receipt.ClaimID),
+    Claim: goCompatibleProofJson(receipt.Claim),
+    PayloadFingerprint: goCompatibleProofJson(receipt.PayloadFingerprint),
+    InvocationDigest: goCompatibleProofJson(receipt.InvocationDigest),
+    RoleID: goCompatibleProofJson(receipt.RoleID),
+    Stance: goCompatibleProofJson(receipt.Stance),
+    Subject: goCompatibleProofJson({ kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint }),
+    ProducerCheckID: goCompatibleProofJson(receipt.ProducerCheckID),
+    ParentClaimIDs: goCompatibleProofJson(receipt.ParentClaimIDs),
+    Binding: goCompatibleProofJson(proofBinding(receipt.Binding)),
+    Termination: goCompatibleProofJson(proofTermination(receipt.Termination)),
+    ProjectLineage: goCompatibleProofJson(receipt.ProjectLineage === null ? null : (() => {
+      const lineage = receipt.ProjectLineage as PlainRecord;
+      return {
+        version: lineage.version,
+        fingerprint: lineage.fingerprint,
+        object_format: lineage.object_format,
+        baseline_revision: lineage.baseline_revision,
+      };
+    })()),
+  });
+  return domainDigestBytes('proof.role-result-candidate-receipt/id/v2', unsigned);
 }
 
 /**
@@ -163,9 +247,9 @@ function admissionTransport(value: unknown): { receipt: PlainRecord; wire: strin
   const receipt = plain(decision) && plain(decision.receipt) ? decision.receipt : undefined;
   if (!exact(decision, ADMISSION_DECISION_KEYS) || decision.version !== 'proof.role-result-candidate-cli-decision/v1' ||
       decision.status !== 'ADMITTED' || decision.reject_code !== null || !receipt ||
-      goCompatibleProofJson(decision) !== wire ||
-      !exact(receipt, ADMISSION_RECEIPT_KEYS) || receipt.Version !== 'proof.role-result-candidate-admission/v1' || receipt.Status !== 'ADMITTED' || !fingerprint(receipt.CandidateID) || !fingerprint(receipt.ProbeResultDigest) || !Number.isSafeInteger(receipt.ProbeCanonicalBytes) || (receipt.ProbeCanonicalBytes as number) <= 0 || typeof receipt.ClaimID !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.ClaimID) || receipt.Claim !== PROOF_CANDIDATE_CLAIM || typeof receipt.PayloadFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.PayloadFingerprint) || !fingerprint(receipt.InvocationDigest) || receipt.RoleID !== 'onboard' || receipt.Stance !== 'owner' || !plain(receipt.Subject) || !exact(receipt.Subject, ['kind', 'id', 'fingerprint']) || receipt.Subject.kind !== 'project' || typeof receipt.Subject.id !== 'string' || receipt.Subject.id.length === 0 || !fingerprint(receipt.Subject.fingerprint) || receipt.ProducerCheckID !== 'inspect' || !Array.isArray(receipt.ParentClaimIDs) || receipt.ParentClaimIDs.some(parent => typeof parent !== 'string' || !/^[0-9a-f]{64}$/.test(parent)) || !admissionBinding(receipt.Binding) || !plain(receipt.Termination) || !exact(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || receipt.Termination.Version !== 1 || receipt.Termination.Type !== 'ManagedRunTerminated' || receipt.Termination.SessionID !== (receipt.Binding as PlainRecord).SessionID || !admissionScope(receipt.Termination.Scope) || !admissionBinding(receipt.Termination.Binding) || canonicalJson(receipt.Termination.Binding) !== canonicalJson(receipt.Binding) || receipt.Termination.CleanupStatus !== 'clean' || receipt.Termination.ControllerDecision !== 'completed' || receipt.Termination.FailureCode !== null || !fingerprint(receipt.receipt_id) ||
-      canonicalJson(receipt) !== canonicalJson(Object.fromEntries(Object.entries(value).filter(([key]) => key !== PROOF_ADMISSION_WIRE_FIELD)))) {
+      proofCanonicalJson(decision) !== wire ||
+      !exact(receipt, ADMISSION_RECEIPT_KEYS) || receipt.Version !== 'proof.role-result-candidate-admission/v2' || receipt.Status !== 'ADMITTED' || !fingerprint(receipt.CandidateID) || !fingerprint(receipt.ProbeResultDigest) || !Number.isSafeInteger(receipt.ProbeCanonicalBytes) || (receipt.ProbeCanonicalBytes as number) <= 0 || typeof receipt.ClaimID !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.ClaimID) || receipt.Claim !== PROOF_CANDIDATE_CLAIM || typeof receipt.PayloadFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.PayloadFingerprint) || !fingerprint(receipt.InvocationDigest) || receipt.RoleID !== 'onboard' || receipt.Stance !== 'owner' || !plain(receipt.Subject) || !exact(receipt.Subject, ['kind', 'id', 'fingerprint']) || receipt.Subject.kind !== 'project' || typeof receipt.Subject.id !== 'string' || receipt.Subject.id.length === 0 || !fingerprint(receipt.Subject.fingerprint) || receipt.ProducerCheckID !== 'inspect' || !Array.isArray(receipt.ParentClaimIDs) || receipt.ParentClaimIDs.some(parent => typeof parent !== 'string' || !/^[0-9a-f]{64}$/.test(parent)) || !admissionBinding(receipt.Binding) || !plain(receipt.Termination) || !exact(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || receipt.Termination.Version !== 1 || receipt.Termination.Type !== 'ManagedRunTerminated' || receipt.Termination.SessionID !== (receipt.Binding as PlainRecord).SessionID || !admissionScope(receipt.Termination.Scope) || !admissionBinding(receipt.Termination.Binding) || canonicalJson(receipt.Termination.Binding) !== canonicalJson(receipt.Binding) || receipt.Termination.CleanupStatus !== 'clean' || receipt.Termination.ControllerDecision !== 'completed' || receipt.Termination.FailureCode !== null || !fingerprint(receipt.receipt_id) || !admissionLineage(receipt.ProjectLineage) || receipt.receipt_id !== admissionReceiptID(receipt) ||
+      proofCanonicalJson(receipt) !== proofCanonicalJson(Object.fromEntries(Object.entries(value).filter(([key]) => key !== PROOF_ADMISSION_WIRE_FIELD)))) {
     invalid('admission decision wire is incomplete or detached');
   }
   return { receipt, wire };
@@ -264,7 +348,7 @@ function proofPathList(value: unknown, label: string, allowEmpty = false): reado
     // leave the project-relative spelling unchanged.  Keep this boundary
     // equally strict: `a//b`, `a/./b`, and `a/../b` are not accepted input
     // spellings even though they could be normalized to a usable path.
-    if (normalized === undefined || normalized !== path.trim() || seen.has(normalized)) {
+    if (normalized === undefined || normalized !== trimProofSpace(path) || seen.has(normalized)) {
       invalid(`${label} contains a noncanonical or duplicate project-relative path`);
     }
     seen.add(normalized);
@@ -273,7 +357,7 @@ function proofPathList(value: unknown, label: string, allowEmpty = false): reado
 }
 
 function normalizeProofPath(value: string): string | undefined {
-  const trimmed = value.trim();
+  const trimmed = trimProofSpace(value);
   if (trimmed.length === 0 || trimmed.includes('\u0000') || trimmed.startsWith('/')) return undefined;
   const parts: string[] = [];
   for (const part of trimmed.split('/')) {
@@ -288,6 +372,25 @@ function normalizeProofPath(value: string): string | undefined {
   return parts.length === 0 ? undefined : parts.join('/');
 }
 
+/** Go strings.TrimSpace uses unicode.IsSpace (which trims U+0085 but does
+ * not trim the historical BOM U+FEFF). ECMAScript String#trim differs here. */
+function trimProofSpace(value: string): string {
+  const chars = [...value];
+  let start = 0;
+  let end = chars.length;
+  while (start < end && isProofSpace(chars[start])) start++;
+  while (end > start && isProofSpace(chars[end - 1])) end--;
+  return chars.slice(start, end).join('');
+}
+
+function isProofSpace(value: string): boolean {
+  const code = value.codePointAt(0) as number;
+  return code === 0x0009 || code === 0x000a || code === 0x000b || code === 0x000c || code === 0x000d ||
+    code === 0x0020 || code === 0x0085 || code === 0x00a0 || code === 0x1680 ||
+    (code >= 0x2000 && code <= 0x200a) || code === 0x2028 || code === 0x2029 ||
+    code === 0x202f || code === 0x205f || code === 0x3000;
+}
+
 function normalizedPathList(value: unknown, label: string): string[] {
   proofPathList(value, label);
   return (value as string[]).map(path => normalizeProofPath(path) as string);
@@ -295,7 +398,7 @@ function normalizedPathList(value: unknown, label: string): string[] {
 
 function normalizedIdentifier(value: unknown, label: string): string {
   if (typeof value !== 'string') invalid(`${label} is invalid`);
-  const normalized = value.trim();
+  const normalized = trimProofSpace(value);
   if (!visibleIdentifier(normalized)) invalid(`${label} is not a visible identifier`);
   return normalized;
 }
@@ -394,13 +497,58 @@ function validateWorkItem(value: unknown, projectID: string, label: string): Pla
   return value;
 }
 
+/** Validate the activation-safe work-items projection as a complete Proof
+ * output. This is deliberately separate from the revalidation projection:
+ * activation consumes only the fresh command result, never its embedded
+ * revalidation.work_items member. */
+export function validateProofWorkItemsProjection(
+  value: unknown,
+  revalidation: PlainRecord,
+  inventory: PlainRecord,
+  candidate: CandidateClaimInput,
+  admission: CandidateClaimInput,
+  projectID: string,
+): PlainRecord {
+  const keys = ['version', 'authority', 'catalog', 'work_items'];
+  if (!exact(value, keys) || value.version !== 'proof.onboarding-work-item-projection/v1') invalid('work-items projection is not closed');
+  const authority = validateAuthority(value.authority, projectID, 'work-items authority');
+  const expectedAuthority = (inventory.authority as PlainRecord);
+  if (!plain(expectedAuthority) || canonicalJson(authority) !== canonicalJson(expectedAuthority)) invalid('work-items authority is detached from current inventory');
+  const expected = expectedCatalog(candidate, projectID);
+  const catalog = projectedCatalog(value.catalog, projectID);
+  if (canonicalJson(catalog) !== canonicalJson(expected)) invalid('work-items catalog is detached from candidate');
+  if (!Array.isArray(value.work_items) || value.work_items.length !== (expected.components as PlainRecord[]).length) invalid('work-items projection is incomplete');
+  const items = value.work_items.map((item, index) => validateWorkItem(item, projectID, `work-items[${index}]`));
+  const sortedItems = [...items].sort((left, right) => compareProofStrings(left.component_id as string, right.component_id as string));
+  if (canonicalJson(items) !== canonicalJson(sortedItems)) invalid('work-items projection is not sorted by component_id');
+  const catalogByID = new Map((catalog.components as PlainRecord[]).map(component => [component.id as string, component]));
+  const inventoryInput = new Map(((inventory.input_state as PlainRecord[]) || []).map(row => [row.path, row]));
+  for (const item of items) {
+    const component = catalogByID.get(item.component_id as string);
+    if (!component || !sameStringSet(item.sorted_owned_paths as string[], component.owned_paths as string[]) ||
+        !sameStringSet(item.sorted_dependency_closure as string[], component.dependency_closure === undefined ? item.sorted_owned_paths as string[] : component.dependency_closure as string[])) invalid(`work-items ${item.component_id as string} is detached from catalog`);
+    for (const row of item.proof_input_state as PlainRecord[]) {
+      const current = inventoryInput.get(row.path as string);
+      if (!current || current.input_kind !== row.input_kind || current.file_hash !== row.file_hash) invalid(`work-items ${item.component_id as string} input state is stale`);
+    }
+  }
+  const revalidationProjection = validateProofCatalogRevalidationProjection(revalidation, inventory, candidate, admission, projectID);
+  const receipt = revalidationProjection.receipt as PlainRecord;
+  const authorities = receipt.component_authorities as PlainRecord[];
+  for (const item of items) {
+    const authorityRow = authorities.find(row => row.component_id === item.component_id);
+    if (!authorityRow || authorityRow.work_item_digest !== plainDigest(workItemWire(item)) || canonicalJson(authorityRow.subject) !== canonicalJson(item.proof_component_subject)) invalid(`work-items ${item.component_id as string} is not authorized by revalidation receipt`);
+  }
+  return bounded(value, 'work-items projection', PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES) as PlainRecord;
+}
+
 function validateReceipt(value: unknown, projectID: string, boundaryFingerprint: string, ids: ReadonlySet<string>, workItems: readonly PlainRecord[]): PlainRecord {
-  const keys = ['version', 'decision', 'project_id', 'project_fingerprint', 'boundary_fingerprint', 'inventory_claim_id', 'catalog_claim_id', 'admission_candidate_id', 'admission_result_digest', 'admission_receipt_id', 'component_authorities', 'receipt_id'];
+  const keys = ['version', 'decision', 'project_id', 'project_fingerprint', 'boundary_fingerprint', 'inventory_claim_id', 'catalog_claim_id', 'admission_candidate_id', 'admission_result_digest', 'admission_receipt_id', 'component_authorities', 'project_lineage', 'receipt_id'];
   if (!exact(value, keys) || value.version !== CATALOG_REVALIDATION_RECEIPT_VERSION || value.decision !== 'accepted' || value.project_id !== projectID || value.boundary_fingerprint !== boundaryFingerprint ||
       !fingerprint(value.project_fingerprint) || !fingerprint(value.boundary_fingerprint) || !fingerprint(value.inventory_claim_id) ||
       !fingerprint(value.catalog_claim_id) || !fingerprint(value.admission_candidate_id) || !fingerprint(value.admission_result_digest) ||
       !fingerprint(value.admission_receipt_id) || !fingerprint(value.receipt_id) || !Array.isArray(value.component_authorities)) invalid('catalog revalidation receipt is invalid');
-  if (value.component_authorities.length !== ids.size) invalid('catalog revalidation receipt has the wrong component count');
+  if (value.component_authorities.length !== ids.size || !admissionLineage(value.project_lineage)) invalid('catalog revalidation receipt has the wrong component count or lineage');
   const seen = new Set<string>();
   for (const [index, authority] of value.component_authorities.entries()) {
     if (!plain(authority) || !exact(authority, ['component_id', 'work_item_digest', 'subject']) || typeof authority.component_id !== 'string' || !fingerprint(authority.work_item_digest) || !plain(authority.subject) || !exact(authority.subject, ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure', 'fingerprint']) || authority.subject.version !== 'proof.component-subject/v1' || !fingerprint(authority.subject.fingerprint) || authority.subject.component_id !== authority.component_id || authority.subject.project_id !== projectID || seen.has(authority.component_id) || !ids.has(authority.component_id)) invalid(`catalog revalidation receipt component_authorities[${index}] is invalid`);
@@ -425,21 +573,24 @@ function validateReceipt(value: unknown, projectID: string, boundaryFingerprint:
       },
     };
   });
-  const unsigned: PlainRecord = {
-    version: value.version,
-    decision: value.decision,
-    project_id: value.project_id,
-    project_fingerprint: value.project_fingerprint,
-    boundary_fingerprint: value.boundary_fingerprint,
-    inventory_claim_id: value.inventory_claim_id,
-    catalog_claim_id: value.catalog_claim_id,
-    admission_candidate_id: value.admission_candidate_id,
-    admission_result_digest: value.admission_result_digest,
-    admission_receipt_id: value.admission_receipt_id,
-    component_authorities: componentAuthoritiesWire,
-    receipt_id: '',
-  };
-  if (value.receipt_id !== domainDigest('proof.catalog-revalidation-receipt/id/v1', unsigned)) invalid('catalog revalidation receipt ID is invalid');
+  const unsigned = proofTopLevelJson({
+    version: goCompatibleProofJson(value.version),
+    decision: goCompatibleProofJson(value.decision),
+    project_id: goCompatibleProofJson(value.project_id),
+    project_fingerprint: goCompatibleProofJson(value.project_fingerprint),
+    boundary_fingerprint: goCompatibleProofJson(value.boundary_fingerprint),
+    inventory_claim_id: goCompatibleProofJson(value.inventory_claim_id),
+    catalog_claim_id: goCompatibleProofJson(value.catalog_claim_id),
+    admission_candidate_id: goCompatibleProofJson(value.admission_candidate_id),
+    admission_result_digest: goCompatibleProofJson(value.admission_result_digest),
+    admission_receipt_id: goCompatibleProofJson(value.admission_receipt_id),
+    component_authorities: goCompatibleProofJson(componentAuthoritiesWire),
+    project_lineage: goCompatibleProofJson(value.project_lineage === null ? null : (() => {
+      const lineage = value.project_lineage as PlainRecord;
+      return { version: lineage.version, fingerprint: lineage.fingerprint, object_format: lineage.object_format, baseline_revision: lineage.baseline_revision };
+    })()),
+  });
+  if (value.receipt_id !== domainDigestBytes('proof.catalog-revalidation-receipt/id/v2', unsigned)) invalid('catalog revalidation receipt ID is invalid');
   return value;
 }
 
@@ -510,6 +661,15 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   }
   const currentInventory = validateStructuralInventory(value.inventory, projectID);
   if (canonicalJson(currentInventory) !== canonicalJson(inventory)) invalid('catalog revalidation inventory is stale');
+  const admissionSubject = admitted.receipt.Subject as PlainRecord;
+  if (admissionSubject.id !== projectID || (admitted.receipt.ProjectLineage === null && admissionSubject.fingerprint !== (currentInventory.authority as PlainRecord).subject_fingerprint)) {
+    invalid('admission subject is not bound to the current Proof authority');
+  }
+  const candidateWire = proofCanonicalJson(candidate.payload);
+  if (admitted.receipt.ProbeCanonicalBytes !== Buffer.byteLength(candidateWire, 'utf8') ||
+      admitted.receipt.ProbeResultDigest !== domainDigestBytes('probe.governed-result-identity/data/v1', candidateWire)) {
+    invalid('admission result is detached from the candidate catalog');
+  }
   const components = candidateComponents(candidate.payload, projectID);
   const ids = new Set(components.map(component => component.id as string));
   const catalog = projectedCatalog(value.catalog, projectID);
@@ -608,10 +768,13 @@ export class ProofCatalogRevalidationCheckProvider extends ProofCatalogCliProvid
     validateStructuralInventory(inventory.payload, projectID);
     candidateComponents(candidate.payload, projectID);
     const admitted = admissionTransport(admission.payload);
-    // Proof owns the complete admission decision bytes. Embed the candidate
-    // projection and that exact decision wire in the Go request envelope;
-    // Visor does not reconstruct or reorder the receipt.
-    const input = `{"version":${JSON.stringify(REVALIDATION_REQUEST_VERSION)},"candidate":${goCompatibleProofJson(candidate.payload)},"admission":${admitted.wire}}`;
+    // Revalidation v2 is Proof CanonicalJSON at the complete envelope: the
+    // canonical top-level order is admission, candidate, version. Preserve
+    // the complete admission decision as decoded data; do not synthesize a
+    // Go-struct-order receipt.
+    let admissionObject: unknown;
+    try { admissionObject = JSON.parse(admitted.wire); } catch { invalid('admission decision wire is not JSON'); }
+    const input = proofCanonicalJson({ version: REVALIDATION_REQUEST_VERSION, candidate: candidate.payload, admission: admissionObject });
     return startProofManagedCliChild({
       binding: request.binding,
       workingDirectory: request.workingDirectory || '',

@@ -12,11 +12,25 @@ import {
   PROOF_CANDIDATE_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
 } from '../state-machine/graph/instance-plan';
-import type { CandidateClaimInput, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
+import type { CandidateClaimInput, CheckProviderConfig, ExecutionContext, ManagedAgentRun, ManagedRunStartRequest } from './check-provider.interface';
 import { CheckProvider } from './check-provider.interface';
-import { validateProofCatalogRevalidationProjection } from './proof-catalog-check-providers';
+import {
+  PROOF_REVALIDATION_REQUEST_MAX_BYTES,
+  PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES,
+  validateProofCatalogRevalidationProjection,
+  validateProofWorkItemsProjection,
+} from './proof-catalog-check-providers';
+import {
+  goCompatibleProofJson,
+  proofAdmissionCapabilityValid,
+  proofCanonicalJson,
+  PROOF_ADMISSION_UNAVAILABLE,
+  PROOF_ADMISSION_WIRE_FIELD,
+  startProofManagedCliChild,
+} from './proof-admission-cli-child';
 
 type PlainRecord = Record<string, unknown>;
+const INTERNAL = Symbol('proof-admitted-catalog-provider');
 
 export class ProofAdmittedCatalogError extends Error {
   readonly code: string;
@@ -125,36 +139,92 @@ export function materializeAdmittedCatalog(
 }
 
 export class ProofAdmittedCatalogCheckProvider extends CheckProvider {
+  private readonly capability: object | undefined;
+
+  constructor(capability?: object, token?: typeof INTERNAL) {
+    super();
+    if (capability && (token !== INTERNAL || !proofAdmissionCapabilityValid(capability))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+    this.capability = capability;
+  }
   getName(): string { return PROOF_ADMITTED_CATALOG_PROVIDER_TYPE; }
   getDescription(): string { return 'Sealed deterministic egress from current Proof-admitted discovery'; }
   async validateConfig(config: unknown): Promise<boolean> {
     return plain(config) && config.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE;
   }
-  async isAvailable(): Promise<boolean> { return true; }
-  getRequirements(): string[] { return ['No model or transport; requires exact Proof candidate, admission, and revalidation claims']; }
+  async isAvailable(): Promise<boolean> { return this.capability !== undefined; }
+  getRequirements(): string[] { return [PROOF_ADMISSION_UNAVAILABLE]; }
   getSupportedConfigKeys(): string[] { return ['type', 'consumes', 'emits', 'expand']; }
 
   async execute(
     _prInfo: PRInfo,
     _config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>,
-    context?: ExecutionContext,
+    _context?: ExecutionContext,
   ): Promise<ReviewSummary> {
-    const claims = context?.claims;
-    if (!claims || !plain(claims)) fail('INVALID_RUNTIME_CONTEXT', 'materializer requires projected claims');
-    const values = Object.values(claims);
-    const candidate = values.find(value => value.claim === PROOF_CANDIDATE_CLAIM);
-    const admission = values.find(value => value.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
-    const revalidation = values.find(value => value.claim === PROOF_CATALOG_REVALIDATION_CLAIM);
-    const inventory = values.find(value => value.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
-    if (!inventory || !candidate || !admission || !revalidation || values.length !== 4) {
-      fail('MISSING_ADMISSION_INPUT', 'materializer requires exactly inventory, candidate, admission, and revalidation claims');
+    throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  }
+
+  /**
+   * The expansion egress is activation-safe only when Proof recomputes the
+   * WorkItems immediately before Visor emits the component catalog. The
+   * revalidation.work_items member is evidence, never an activation source.
+   */
+  startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
+    if (!this.capability) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+    const claims = request.executionContext.claims;
+    if (!plain(claims)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+    const values = claims as Record<string, unknown>;
+    const inventory = claim(values.current_inventory, PROOF_STRUCTURAL_INVENTORY_CLAIM, 'current inventory');
+    const candidate = claim(values.candidate, PROOF_CANDIDATE_CLAIM, 'candidate');
+    const admission = claim(values.receipt, PROOF_ADMITTED_RECEIPT_CLAIM, 'admission');
+    const revalidation = claim(values.current_revalidation, PROOF_CATALOG_REVALIDATION_CLAIM, 'current revalidation');
+    if (inventory.producerCheckId !== 'structural_inventory' || revalidation.producerCheckId !== 'revalidate_catalog' ||
+        !plain(inventory.payload) || !plain(candidate.payload) || !plain(revalidation.payload) ||
+        canonicalJson(inventory.scope) !== canonicalJson(candidate.scope) || canonicalJson(candidate.scope) !== canonicalJson(admission.scope) || canonicalJson(admission.scope) !== canonicalJson(revalidation.scope)) {
+      throw new Error(PROOF_ADMISSION_UNAVAILABLE);
     }
-    return { issues: [], output: materializeAdmittedCatalog({ inventory, candidate, admission, revalidation }) };
+    const projectID = projectIDFromInventory(inventory);
+    const admitted = admissionWire(admission.payload);
+    const projection = validateProofCatalogRevalidationProjection(revalidation.payload, inventory.payload as PlainRecord, candidate, admission, projectID, revalidation, inventory.claimId);
+    const receipt = projection.receipt;
+    const input = `{"version":${goCompatibleProofJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(candidate.payload)},"admission":${admitted.wire},"revalidation_receipt":${proofCanonicalJson(receipt)}}`;
+    return startProofManagedCliChild({
+      binding: request.binding,
+      workingDirectory: request.workingDirectory || '',
+      command: ['onboarding', 'work-items'],
+      input,
+      inputLimit: PROOF_REVALIDATION_REQUEST_MAX_BYTES,
+      outputLimit: PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES,
+      outputCanonical: false,
+      projectOutput: value => {
+        const workItems = validateProofWorkItemsProjection(value, revalidation.payload as PlainRecord, inventory.payload as PlainRecord, candidate, admission, projectID);
+        return { components: (workItems.work_items as PlainRecord[]) };
+      },
+    }, this.capability);
   }
 }
 
 /** Internal-only factory for focused zero-model tests. */
 export function createProofAdmittedCatalogProviderForFocusedTest(): ProofAdmittedCatalogCheckProvider {
   return new ProofAdmittedCatalogCheckProvider();
+}
+
+export function createProofAdmittedCatalogProviderFromCapability(capability: object): ProofAdmittedCatalogCheckProvider {
+  return new ProofAdmittedCatalogCheckProvider(capability, INTERNAL);
+}
+
+function projectIDFromInventory(inventory: CandidateClaimInput): string {
+  const payload = inventory.payload as PlainRecord;
+  const authority = payload.authority as PlainRecord;
+  if (!plain(authority) || typeof authority.project_id !== 'string' || authority.project_id.length === 0) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  return authority.project_id;
+}
+
+function admissionWire(value: unknown): { wire: string; receipt: PlainRecord } {
+  if (!plain(value) || typeof value[PROOF_ADMISSION_WIRE_FIELD] !== 'string') throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const wire = value[PROOF_ADMISSION_WIRE_FIELD] as string;
+  let parsed: unknown;
+  try { parsed = JSON.parse(wire); } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
+  if (!plain(parsed) || !plain(parsed.receipt)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  return { wire, receipt: parsed.receipt };
 }

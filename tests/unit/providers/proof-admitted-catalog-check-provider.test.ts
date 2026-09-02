@@ -5,6 +5,7 @@ import {
 } from '../../../src/providers/proof-admitted-catalog-check-provider';
 import { compareProofStrings } from '../../../src/providers/proof-catalog-check-providers';
 import {
+  canonicalJson,
   immutableCanonicalValue,
   sha256Canonical,
 } from '../../../src/state-machine/graph/claim-kernel';
@@ -30,9 +31,31 @@ function domainDigest(domain: string, value: unknown): string {
   length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
 }
+function encodedDigest(domain: string, encoded: string): string {
+  const bytes = Buffer.from(encoded, 'utf8');
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
 
 function plainDigest(value: unknown): string {
   return `sha256:${createHash('sha256').update(goJson(value), 'utf8').digest('hex')}`;
+}
+
+function topJson(value: Record<string, unknown>): string {
+  return `{${Object.keys(value).sort((a, b) => Buffer.from(a).compare(Buffer.from(b))).map(key => `${JSON.stringify(key)}:${goJson(value[key])}`).join(',')}}`;
+}
+
+function receiptID(value: Record<string, unknown>): string {
+  const unsigned = { ...value };
+  delete unsigned.receipt_id;
+  return encodedDigest('proof.catalog-revalidation-receipt/id/v2', topJson(unsigned));
+}
+
+function admissionID(value: Record<string, unknown>): string {
+  const unsigned = { ...value };
+  delete unsigned.receipt_id;
+  return encodedDigest('proof.role-result-candidate-receipt/id/v2', topJson(unsigned));
 }
 
 function makeClaim(claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []): CandidateClaimInput {
@@ -87,17 +110,20 @@ function fixture() {
   const inventoryPayload = inventory();
   const inventoryClaim = makeClaim('proof.structural_inventory@1', inventoryPayload, 'structural_inventory');
   const candidate = makeClaim('proof.candidate@1', immutableCanonicalValue(candidatePayload()), 'inspect', [inventoryClaim.claimId]);
-  const binding = { ManagedRunID: 'managed', SessionID: 'session', CheckID: 'inspect', Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }], NodeInstanceID: 'node', NodeGenerationID: 'generation', AttemptID: 'attempt', Fence: 1 };
+  const binding = { ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect', Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }], NodeInstanceID: 'b'.repeat(64), NodeGenerationID: 'c'.repeat(64), AttemptID: 'd'.repeat(64), Fence: 1 };
   const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: 'session', Scope: binding.Scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
+  const candidateText = canonicalJson(candidate.payload);
   const admissionReceipt = {
-    Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED', CandidateID: `sha256:${'9'.repeat(64)}`,
-    ProbeResultDigest: `sha256:${'a'.repeat(64)}`, ProbeCanonicalBytes: Buffer.byteLength(sha256Canonical(candidate.payload)), ClaimID: candidate.claimId,
+    Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED', CandidateID: encodedDigest('proof.role-result-candidate-envelope/id/v1', candidateText),
+    ProbeResultDigest: encodedDigest('probe.governed-result-identity/data/v1', candidateText), ProbeCanonicalBytes: Buffer.byteLength(candidateText), ClaimID: candidate.claimId,
     Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, InvocationDigest: `sha256:${'b'.repeat(64)}`,
-    RoleID: 'onboard', Stance: 'owner', Subject: { kind: 'project', id: 'journalservice', fingerprint: `sha256:${'c'.repeat(64)}` },
-    ProducerCheckID: 'inspect', ParentClaimIDs: candidate.parentClaimIds, Binding: binding, Termination: termination, receipt_id: `sha256:${'d'.repeat(64)}`,
+    RoleID: 'onboard', Stance: 'owner', Subject: { kind: 'project', id: 'journalservice', fingerprint: `sha256:${'1'.repeat(64)}` },
+    ProducerCheckID: 'inspect', ParentClaimIDs: candidate.parentClaimIds, Binding: binding, Termination: termination, ProjectLineage: null, receipt_id: '',
   };
+  admissionReceipt.receipt_id = admissionID(admissionReceipt);
   const admissionDecision = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: admissionReceipt, reject_code: null };
-  const admission = makeClaim('proof.admitted_receipt@1', { ...admissionReceipt, __proof_admission_wire: goJson(admissionDecision) }, 'proof_admit', [candidate.claimId]);
+  const admissionWire = canonicalJson(admissionDecision);
+  const admission = makeClaim('proof.admitted_receipt@1', { ...admissionReceipt, __proof_admission_wire: admissionWire }, 'proof_admit', [candidate.claimId]);
   const catalog = {
     version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
       { id: 'B', responsibility: 'B component', owned_paths: ['B.go'] },
@@ -116,13 +142,13 @@ function fixture() {
     sorted_module_paths: inventoryPayload.sorted_module_paths, boundary_fingerprint: inventoryPayload.boundary_fingerprint, input_state: inventoryPayload.input_state,
   };
   const receiptUnsigned = {
-    version: 'proof.catalog-revalidation-receipt/v1', decision: 'accepted', project_id: 'journalservice', project_fingerprint: (inventoryPayload.authority as any).subject_fingerprint,
+    version: 'proof.catalog-revalidation-receipt/v2', decision: 'accepted', project_id: 'journalservice', project_fingerprint: (inventoryPayload.authority as any).subject_fingerprint,
     boundary_fingerprint: inventoryPayload.boundary_fingerprint, inventory_claim_id: domainDigest('proof.structural-inventory/claim/v1', inventoryWire),
     catalog_claim_id: domainDigest('proof.component-catalog-candidate/claim/v1', candidate.payload), admission_candidate_id: admissionReceipt.CandidateID,
-    admission_result_digest: admissionReceipt.ProbeResultDigest, admission_receipt_id: admissionReceipt.receipt_id, component_authorities: authorities, receipt_id: '',
+    admission_result_digest: admissionReceipt.ProbeResultDigest, admission_receipt_id: admissionReceipt.receipt_id, component_authorities: authorities, project_lineage: null, receipt_id: '',
   };
-  const receipt = { ...receiptUnsigned, receipt_id: domainDigest('proof.catalog-revalidation-receipt/id/v1', receiptUnsigned) };
-  const revalidationPayload = { version: 'proof.catalog-revalidation/v1', inventory: inventoryPayload, catalog, work_items: workItems, receipt };
+  const receipt = { ...receiptUnsigned, receipt_id: receiptID(receiptUnsigned) };
+  const revalidationPayload = { version: 'proof.catalog-revalidation/v2', inventory: inventoryPayload, catalog, work_items: workItems, receipt };
   const revalidation = makeClaim('proof.catalog_revalidation@1', revalidationPayload, 'revalidate_catalog', [inventoryClaim.claimId, candidate.claimId, admission.claimId]);
   return { inventory: inventoryClaim, candidate, admission, revalidation };
 }

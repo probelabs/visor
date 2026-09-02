@@ -26,7 +26,7 @@ import {
   GovernedProofInspectCheckProvider,
   GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
 } from './governed-proof-inspect-check-provider';
-import { ProofAdmittedCatalogCheckProvider } from './proof-admitted-catalog-check-provider';
+import { ProofAdmittedCatalogCheckProvider, createProofAdmittedCatalogProviderFromCapability } from './proof-admitted-catalog-check-provider';
 import { PROOF_ADMITTED_CATALOG_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
 import {
   ProofCatalogRevalidationCheckProvider,
@@ -150,6 +150,7 @@ export class CheckProviderRegistry {
     this.providers.set(PROOF_ADMIT_PROVIDER_NAME, createProofAdmitProviderFromCapability(capability));
     this.providers.set(PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE, createProofStructuralInventoryProviderFromCapability(capability));
     this.providers.set(PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE, createProofCatalogRevalidationProviderFromCapability(capability));
+    this.providers.set(PROOF_ADMITTED_CATALOG_PROVIDER_TYPE, createProofAdmittedCatalogProviderFromCapability(capability));
     this.proofAdmissionBootstrapped = true;
   }
 

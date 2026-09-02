@@ -63,9 +63,9 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [Version, Status, CandidateID, ProbeResultDigest, ProbeCanonicalBytes, ClaimID, Claim, PayloadFingerprint, InvocationDigest, RoleID, Stance, Subject, ProducerCheckID, ParentClaimIDs, Binding, Termination, receipt_id, __proof_admission_wire]
+      required: [Version, Status, CandidateID, ProbeResultDigest, ProbeCanonicalBytes, ClaimID, Claim, PayloadFingerprint, InvocationDigest, RoleID, Stance, Subject, ProducerCheckID, ParentClaimIDs, Binding, Termination, ProjectLineage, receipt_id, __proof_admission_wire]
       properties:
-        Version: { const: proof.role-result-candidate-admission/v1 }
+        Version: { const: proof.role-result-candidate-admission/v2 }
         Status: { const: ADMITTED }
         CandidateID: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         ProbeResultDigest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
@@ -136,6 +136,15 @@ claim_types:
             CleanupStatus: { const: clean }
             ControllerDecision: { const: completed }
             FailureCode: { const: null }
+        ProjectLineage:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [version, fingerprint, object_format, baseline_revision]
+          properties:
+            version: { const: proof.git-project-lineage-binding/v1 }
+            fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            object_format: { enum: [sha1, sha256] }
+            baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
         receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         __proof_admission_wire: { type: string, minLength: 1 }
   proof.structural_inventory@1:
@@ -176,7 +185,7 @@ claim_types:
       additionalProperties: false
       required: [version, inventory, catalog, work_items, receipt]
       properties:
-        version: { const: proof.catalog-revalidation/v1 }
+        version: { const: proof.catalog-revalidation/v2 }
         inventory:
           type: object
           additionalProperties: false
@@ -283,9 +292,9 @@ claim_types:
         receipt:
           type: object
           additionalProperties: false
-          required: [version, decision, project_id, project_fingerprint, boundary_fingerprint, inventory_claim_id, catalog_claim_id, admission_candidate_id, admission_result_digest, admission_receipt_id, component_authorities, receipt_id]
+          required: [version, decision, project_id, project_fingerprint, boundary_fingerprint, inventory_claim_id, catalog_claim_id, admission_candidate_id, admission_result_digest, admission_receipt_id, component_authorities, project_lineage, receipt_id]
           properties:
-            version: { const: proof.catalog-revalidation-receipt/v1 }
+            version: { const: proof.catalog-revalidation-receipt/v2 }
             decision: { const: accepted }
             project_id: { type: string, minLength: 1 }
             project_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
@@ -317,6 +326,15 @@ claim_types:
                       sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
                       sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
                       fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            project_lineage:
+              type: [object, 'null']
+              additionalProperties: false
+              required: [version, fingerprint, object_format, baseline_revision]
+              properties:
+                version: { const: proof.git-project-lineage-binding/v1 }
+                fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                object_format: { enum: [sha1, sha256] }
+                baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
             receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
   component.catalog@1:
     schema:

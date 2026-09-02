@@ -13,14 +13,19 @@ export const PROOF_ADMISSION_UNAVAILABLE = 'PROOF_ADMISSION_UNAVAILABLE';
 export const PROOF_ADMISSION_CLEANUP_FAILED = 'PROOF_ADMISSION_CLEANUP_FAILED';
 /** The exact decision wire retained beside the complete admitted receipt. */
 export const PROOF_ADMISSION_WIRE_FIELD = '__proof_admission_wire';
-const REQUEST_LIMIT = 2162688;
-const STDOUT_LIMIT = 2097153;
+/** Proof roles constants: request max includes bytes before execution; output max includes LF. */
+export const PROOF_C0_REQUEST_MAX_BYTES = 1463640;
+export const PROOF_C0_RESPONSE_MAX_BYTES = 8388608;
+export const PROOF_ADMISSION_REQUEST_MAX_BYTES = 2162688;
+export const PROOF_ADMISSION_OUTPUT_MAX_BYTES = 2097152;
+const REQUEST_LIMIT = PROOF_ADMISSION_REQUEST_MAX_BYTES;
+const STDOUT_LIMIT = PROOF_ADMISSION_OUTPUT_MAX_BYTES;
 const STDERR_LIMIT = 65536;
 const COMMAND_TIMEOUT_MS = process.env.NODE_ENV === 'test' && Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) > 0 ? Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) : 120000;
 const DECISION_VERSION = 'proof.role-result-candidate-cli-decision/v1';
-const RECEIPT_VERSION = 'proof.role-result-candidate-admission/v1';
+const RECEIPT_VERSION = 'proof.role-result-candidate-admission/v2';
 const CANDIDATE_ID_DOMAIN = 'proof.role-result-candidate-envelope/id/v1';
-const RECEIPT_ID_DOMAIN = 'proof.role-result-candidate-receipt/id/v1';
+const RECEIPT_ID_DOMAIN = 'proof.role-result-candidate-receipt/id/v2';
 const C0_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] as const;
 const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 type ExecutableStat = Readonly<{
@@ -58,6 +63,39 @@ function json(value: unknown): string {
     const code = char.charCodeAt(0).toString(16).padStart(4, '0');
     return `\\u${code}`;
   });
+}
+
+/**
+ * Proof's CanonicalJSON equivalent for values already decoded at a JSON
+ * boundary. JavaScript's default UTF-16 sort differs for non-ASCII keys;
+ * Proof sorts map keys by their UTF-8 bytes. Keep this separate from the
+ * claim-kernel canonicalizer because this is Proof wire/preimage data.
+ */
+export function proofCanonicalJson(value: unknown): string {
+  const active = new Set<object>();
+  const encode = (current: unknown): string => {
+    if (current === null || typeof current === 'boolean' || typeof current === 'number' || typeof current === 'string') return json(current);
+    if (Array.isArray(current)) {
+      if (active.has(current)) fail('value is cyclic');
+      active.add(current);
+      try { return `[${current.map(item => encode(item)).join(',')}]`; }
+      finally { active.delete(current); }
+    }
+    if (!plain(current)) fail('value is not a JSON object');
+    if (active.has(current)) fail('value is cyclic');
+    active.add(current);
+    try {
+      const keys = Object.keys(current).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+      return `{${keys.map(key => `${json(key)}:${encode(current[key])}`).join(',')}}`;
+    } finally { active.delete(current); }
+  };
+  return encode(value);
+}
+
+/** Sort only the top-level object; nested values are encoded in their Proof
+ * Go struct order when a receipt preimage requires it. */
+export function proofTopLevelJson(fields: Readonly<Record<string, string>>): string {
+  return `{${Object.keys(fields).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'))).map(key => `${json(key)}:${fields[key]}`).join(',')}}`;
 }
 function validUnicode(value: unknown): boolean {
   if (typeof value === 'string') {
@@ -122,7 +160,7 @@ function validateCandidateShape(candidate: Record<string, unknown>): void {
   try {
     const payloadText = new TextDecoder('utf-8', { fatal: true }).decode(probe);
     const payload = JSON.parse(payloadText);
-    if (!validUnicode(payload) || canonicalJson(payload) !== payloadText) fail('candidate payload is not canonical');
+    if (!validUnicode(payload) || proofCanonicalJson(payload) !== payloadText) fail('candidate payload is not canonical');
   } catch { fail('candidate payload is not valid UTF-8 JSON'); }
 }
 function equalJson(left: unknown, right: unknown): boolean { return json(left) === json(right); }
@@ -178,35 +216,47 @@ function validateReceipt(decision: unknown, candidate: Record<string, unknown>, 
     if (decision.receipt !== null || decision.reject_code !== 'CANDIDATE_INVALID') fail('rejection decision is invalid');
     return;
   }
-  if (decision.status !== 'ADMITTED' || decision.reject_code !== null || !exactUnordered(decision.receipt, ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'])) fail('admission decision is invalid');
+  if (decision.status !== 'ADMITTED' || decision.reject_code !== null || !exactUnordered(decision.receipt, ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'ProjectLineage', 'receipt_id'])) fail('admission decision is invalid');
   const receipt = decision.receipt as Record<string, unknown>;
+  const lineage = receipt.ProjectLineage;
+  if (lineage !== null && (!plain(lineage) || !exactUnordered(lineage, ['version', 'fingerprint', 'object_format', 'baseline_revision']) || lineage.version !== 'proof.git-project-lineage-binding/v1' || typeof lineage.fingerprint !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(lineage.fingerprint) || (lineage.object_format !== 'sha1' && lineage.object_format !== 'sha256') || (lineage.object_format === 'sha1' ? !/^sha1:[0-9a-f]{40}$/.test(String(lineage.baseline_revision)) : !/^sha256:[0-9a-f]{64}$/.test(String(lineage.baseline_revision))))) fail('admission project lineage is invalid');
   if (receipt.Version !== RECEIPT_VERSION || receipt.Status !== 'ADMITTED' || receipt.CandidateID !== digest(CANDIDATE_ID_DOMAIN, rawCandidate) || receipt.ProbeResultDigest !== candidate.ResultDigest || receipt.ProbeCanonicalBytes !== candidate.CanonicalBytes || receipt.ClaimID !== publication.ClaimID || receipt.Claim !== publication.Claim || receipt.PayloadFingerprint !== publication.PayloadFingerprint || receipt.InvocationDigest !== candidate.InvocationDigest || receipt.RoleID !== candidate.RoleID || receipt.Stance !== candidate.Stance || !exactUnordered(receipt.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(receipt.Subject, candidate.Subject) || receipt.ProducerCheckID !== publication.ProducerCheckID || !equalCanonicalJson(receipt.ParentClaimIDs, publication.ParentClaimIDs) || !equalCanonicalJson(receipt.Binding, binding) || !exactUnordered(receipt.Binding, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence']) || !equalCanonicalJson(receipt.Termination, termination) || !exactUnordered(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || typeof receipt.receipt_id !== 'string') fail('admission receipt identity is invalid');
   // ReceiptID is a Proof domain digest over the Go struct's json.Marshal
   // field order. The surrounding CLI decision is canonical-key JSON, so
   // iterating the parsed receipt's keys here would silently hash a different
   // byte sequence.
-  const unsigned: Record<string, unknown> = {
-    Version: receipt.Version,
-    Status: receipt.Status,
-    CandidateID: receipt.CandidateID,
-    ProbeResultDigest: receipt.ProbeResultDigest,
-    ProbeCanonicalBytes: receipt.ProbeCanonicalBytes,
-    ClaimID: receipt.ClaimID,
-    Claim: receipt.Claim,
-    PayloadFingerprint: receipt.PayloadFingerprint,
-    InvocationDigest: receipt.InvocationDigest,
-    RoleID: receipt.RoleID,
-    Stance: receipt.Stance,
-    Subject: (() => {
-      const subject = receipt.Subject as Record<string, unknown>;
-      return { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint };
-    })(),
-    ProducerCheckID: receipt.ProducerCheckID,
-    ParentClaimIDs: receipt.ParentClaimIDs,
-    Binding: proofBinding(receipt.Binding),
-    Termination: proofTermination(receipt.Termination),
-  };
-  if (receipt.receipt_id !== digest(RECEIPT_ID_DOMAIN, Buffer.from(json(unsigned), 'utf8'))) fail('admission receipt ID is invalid');
+  const subject = receipt.Subject as Record<string, unknown>;
+  const unsigned = proofTopLevelJson({
+    Version: json(receipt.Version),
+    Status: json(receipt.Status),
+    CandidateID: json(receipt.CandidateID),
+    ProbeResultDigest: json(receipt.ProbeResultDigest),
+    ProbeCanonicalBytes: json(receipt.ProbeCanonicalBytes),
+    ClaimID: json(receipt.ClaimID),
+    Claim: json(receipt.Claim),
+    PayloadFingerprint: json(receipt.PayloadFingerprint),
+    InvocationDigest: json(receipt.InvocationDigest),
+    RoleID: json(receipt.RoleID),
+    Stance: json(receipt.Stance),
+    Subject: json({ kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint }),
+    ProducerCheckID: json(receipt.ProducerCheckID),
+    ParentClaimIDs: json(receipt.ParentClaimIDs),
+    Binding: json(proofBinding(receipt.Binding)),
+    Termination: json(proofTermination(receipt.Termination)),
+    // ProjectLineage is a Go struct nested in the receipt preimage. The
+    // decision wire itself is CanonicalJSON, so its parsed map order must not
+    // leak into this nested encoding.
+    ProjectLineage: json(lineage === null ? null : (() => {
+      const projectLineage = lineage as Record<string, unknown>;
+      return {
+        version: projectLineage.version,
+        fingerprint: projectLineage.fingerprint,
+        object_format: projectLineage.object_format,
+        baseline_revision: projectLineage.baseline_revision,
+      };
+    })()),
+  });
+  if (receipt.receipt_id !== digest(RECEIPT_ID_DOMAIN, Buffer.from(unsigned, 'utf8'))) fail('admission receipt ID is invalid');
 }
 
 function executableStat(path: string): ExecutableStat | undefined {
@@ -250,6 +300,7 @@ function runBoundedProofCommand(
   args: readonly string[],
   input: string,
   workingDirectory: string,
+  stdoutLimit: number,
 ): Promise<ProofCommandResult> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess | undefined, pid: number | undefined, status: number | null = null, signal: NodeJS.Signals | null = null, stdout: Buffer = Buffer.alloc(0), stderr: Buffer = Buffer.alloc(0), stdoutEnded = false, stderrEnded = false, closeSeen = false, settled = false, terminationRequested = false, termSent = false, killSent = false, inputWritten = false, timedOut = false;
@@ -325,7 +376,7 @@ function runBoundedProofCommand(
       });
       pid = child.pid;
       child.stdout?.on('data', (chunk: Buffer) => {
-        const appended = append(stdout, chunk, STDOUT_LIMIT);
+        const appended = append(stdout, chunk, stdoutLimit);
         stdout = appended.value;
         if (appended.overflow) forceStop();
       });
@@ -391,8 +442,8 @@ export async function resolveProofRoleInvocation(
   if (process.platform === 'win32' || !executable || !workingDirectory.startsWith('/') || !exact(request, C0_REQUEST_KEYS)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   const input = json(request);
-  if (Buffer.byteLength(input, 'utf8') > REQUEST_LIMIT || !validUnicode(request)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  const result = await runBoundedProofCommand(executable, ['resolve-role-invocation'], input, workingDirectory);
+  if (Buffer.byteLength(input, 'utf8') > PROOF_C0_REQUEST_MAX_BYTES || !validUnicode(request)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const result = await runBoundedProofCommand(executable, ['resolve-role-invocation'], input, workingDirectory, PROOF_C0_RESPONSE_MAX_BYTES);
   if (!sameExecutable(executable, executableStat(executable.realpath)) || result.status !== 0 || result.signal || result.stderr.length !== 0 || result.stdout.length === 0 || result.stdout[result.stdout.length - 1] !== 10) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   let stdout: string;
   try { stdout = new TextDecoder('utf-8', { fatal: true }).decode(result.stdout); } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
@@ -407,7 +458,8 @@ export async function resolveProofRoleInvocation(
 type ProofManagedCommand =
   | readonly ['admit-candidate']
   | readonly ['onboarding', 'inventory']
-  | readonly ['onboarding', 'revalidate'];
+  | readonly ['onboarding', 'revalidate']
+  | readonly ['onboarding', 'work-items'];
 
 interface ProofManagedCliRequest {
   readonly binding: ManagedRunBindingV1;
@@ -426,7 +478,7 @@ function validProofManagedCommand(value: unknown): value is ProofManagedCommand 
   return Array.isArray(value) && (
     (value.length === 1 && value[0] === 'admit-candidate') ||
     (value.length === 2 && value[0] === 'onboarding' &&
-      (value[1] === 'inventory' || value[1] === 'revalidate'))
+      (value[1] === 'inventory' || value[1] === 'revalidate' || value[1] === 'work-items'))
   );
 }
 
@@ -548,7 +600,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { failOnce('decision UTF-8 invalid'); return; }
     try {
       const parsedOutput = JSON.parse(decoded);
-      if (request.outputCanonical && json(parsedOutput) !== decoded) failOnce('decision is not canonical');
+      if (request.outputCanonical && proofCanonicalJson(parsedOutput) !== decoded) failOnce('decision is not canonical');
       else {
         output = freeze(request.projectOutput(parsedOutput, decoded));
         accepted = true;
