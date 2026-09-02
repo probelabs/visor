@@ -237,7 +237,7 @@ function projectMultiComponentReceipt(input: GovernedReceiptProjectionInput, liv
   if (reconciliations.length !== 1) throw new Error('receipt requires exactly one final whole-project reconciliation');
   const reconciliation: any = reconciliations[0];
   const requiredReconciliationInputs = [revalidation.claimId, ...componentEntries.map(component => component.admittedReceiptClaimId!)].sort();
-  if (!requiredReconciliationInputs.every(claimId => reconciliation.parentClaimIds.includes(claimId)) || new Set(reconciliation.parentClaimIds).size !== reconciliation.parentClaimIds.length) throw new Error('whole-project reconciliation inputs are incomplete or duplicated');
+  if (canonicalJson(reconciliation.parentClaimIds) !== canonicalJson(requiredReconciliationInputs)) throw new Error('whole-project reconciliation inputs are incomplete, duplicated, or foreign');
   const discovery = {
     candidateClaimId: discoveryCandidate.claimId,
     admittedReceiptClaimId: discoveryReceipt.claimId,
@@ -425,6 +425,9 @@ function validateMultiTerminalReceipt(value: any): asserts value is GovernedGrap
     if (!c.attestation || c.admittedReceiptClaimId === null || ['inspect','proof_admit','verify'].some(key => !['completed','failed'].includes((generation as any)[key].status)) || c.verifyInputClaimIds.length !== 2 || canonicalJson([...c.verifyInputClaimIds].sort()) !== canonicalJson([c.candidateClaimId, c.admittedReceiptClaimId].sort())) throw new Error('invalid incomplete governed component');
     if (c.status === 'passed' && (!c.attestation || (generation as any).inspect.status !== 'completed' || (generation as any).proof_admit.status !== 'completed' || (generation as any).verify.status !== 'completed' || c.admittedReceiptClaimId === null || c.candidateClaimId === c.admittedReceiptClaimId || c.workItemClaimId === c.candidateClaimId || c.verifyInputClaimIds.length !== 2 || canonicalJson([...c.verifyInputClaimIds].sort()) !== canonicalJson([c.candidateClaimId, c.admittedReceiptClaimId].sort()))) throw new Error('invalid passed governed component');
   }
+  if (['inspect','proof_admit','verify'].some(key => r.nodes[key].status !== 'completed' || r.nodes[key].terminalCount !== r.componentCount)) throw new Error('multi-component governed receipt has a nonterminal aggregate');
+  const expectedReconciliationInputs = [d.catalogRevalidationClaimId, ...r.components.map((component: any) => component.admittedReceiptClaimId)].sort();
+  if (canonicalJson(d.projectReconciliationInputClaimIds) !== canonicalJson(expectedReconciliationInputs)) throw new Error('invalid whole-project reconciliation inputs');
   if (r.status === 'passed' && (r.exitStatus !== 0 || r.memoryStatus !== 'clean' || r.failureCode !== null || r.discovery.status !== 'completed' || r.nodes.inspect.status !== 'completed' || r.nodes.inspect.terminalCount !== r.componentCount || r.nodes.proof_admit.status !== 'completed' || r.nodes.proof_admit.terminalCount !== r.componentCount || r.nodes.verify.status !== 'completed' || r.nodes.verify.terminalCount !== r.componentCount || r.components.some((component: any) => component.status !== 'passed'))) throw new Error('invalid passed multi-component governed receipt');
   const canonical = canonicalJson(value); if (!canonical.endsWith('}') || Buffer.byteLength(canonical + '\n', 'utf8') > 262144) throw new Error('governed receipt is oversized or noncanonical');
 }

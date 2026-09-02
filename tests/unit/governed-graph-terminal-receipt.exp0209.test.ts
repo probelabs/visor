@@ -19,7 +19,7 @@ function receipt(): any {
   return {
     version: 'visor.governed-graph-terminal-receipt/v2', status: 'passed', sourceConfigSha256: idA, sessionId: 'session', graphSemanticDigest: idB, componentCount: 3,
     nodes: { inspect: { terminalCount: 3, status: 'completed' }, proof_admit: { terminalCount: 3, status: 'completed' }, verify: { terminalCount: 3, status: 'completed' } },
-    discovery: { candidateClaimId: idC, admittedReceiptClaimId: idD, verifyInputClaimIds: [idC], structuralInventoryClaimId: idH, catalogRevalidationClaimId: idI, projectReconciliationClaimId: idJ, projectReconciliationInputClaimIds: [idI, idK, idL].sort(), attestation: null, status: 'completed' },
+    discovery: { candidateClaimId: idC, admittedReceiptClaimId: idD, verifyInputClaimIds: [idC], structuralInventoryClaimId: idH, catalogRevalidationClaimId: idI, projectReconciliationClaimId: idJ, projectReconciliationInputClaimIds: [idI, idB, idD, idF].sort(), attestation: null, status: 'completed' },
     components: [component('http-adapter', idE, 'a'), component('service-policy', idF, 'c'), component('storage-domain', idG, 'e')],
     providerCleanupStatus: 'clean', managedUncleanTerminalCount: 0, activeChildren: 0, activeResources: 0, memoryStatus: 'clean', projectionReplayEqual: true, failureCode: null, exitStatus: 0,
   };
@@ -47,5 +47,14 @@ describe('EXP-0209 multi-component governed terminal receipt', () => {
   it('rejects a component entry whose key is foreign to its keyed scope', () => {
     const value = receipt(); value.components[0] = { ...value.components[0], componentKey: 'foreign-component' };
     expect(() => validateGovernedGraphTerminalReceipt(value)).toThrow(/component receipt/);
+  });
+
+  it('rejects nonterminal aggregate state and foreign reconciliation parents for failed receipts', () => {
+    const nonterminal = receipt(); nonterminal.status = 'failed'; nonterminal.exitStatus = 1; nonterminal.nodes.verify = { terminalCount: 2, status: 'nonterminal' };
+    expect(() => validateGovernedGraphTerminalReceipt(nonterminal)).toThrow(/nonterminal aggregate/);
+    const absent = receipt(); absent.status = 'failed'; absent.exitStatus = 1; absent.nodes.verify = { terminalCount: 0, status: 'absent' };
+    expect(() => validateGovernedGraphTerminalReceipt(absent)).toThrow(/nonterminal aggregate/);
+    const foreign = receipt(); foreign.discovery = { ...foreign.discovery, projectReconciliationInputClaimIds: [...foreign.discovery.projectReconciliationInputClaimIds, idA].sort() };
+    expect(() => validateGovernedGraphTerminalReceipt(foreign)).toThrow(/reconciliation inputs/);
   });
 });

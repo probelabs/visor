@@ -108,14 +108,17 @@ function validateGovernedReceiptMode(options: import('./types/cli').CliOptions):
 }
 
 export function validateArtifactPathAliases(options: import('./types/cli').CliOptions): void {
-  const identity = (target: string): string => {
+  const identity = (target: string): { canonical: string; dev?: number; ino?: number } => {
     const resolved = path.resolve(target);
-    try { return fs.realpathSync(resolved); } catch (error) {
+    try {
+      const stat = fs.statSync(resolved);
+      return { canonical: fs.realpathSync(resolved), dev: stat.dev, ino: stat.ino };
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       const parent = path.dirname(resolved);
       let realParent = parent;
       try { realParent = fs.realpathSync(parent); } catch {}
-      return path.join(realParent, path.basename(resolved));
+      return { canonical: path.join(realParent, path.basename(resolved)) };
     }
   };
   const paths = [
@@ -124,9 +127,12 @@ export function validateArtifactPathAliases(options: import('./types/cli').CliOp
     ['--governed-receipt', options.governedReceipt],
     ['--output-file', options.outputFile],
   ].filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  const identities = paths.map(([, target]) => identity(target));
   for (let left = 0; left < paths.length; left++) {
     for (let right = left + 1; right < paths.length; right++) {
-      if (identity(paths[left][1]) === identity(paths[right][1])) {
+      const samePath = identities[left].canonical === identities[right].canonical;
+      const sameInode = identities[left].dev !== undefined && identities[right].dev !== undefined && identities[left].dev === identities[right].dev && identities[left].ino === identities[right].ino;
+      if (samePath || sameInode) {
         throw new Error(`${paths[left][0]} cannot alias ${paths[right][0]}`);
       }
     }

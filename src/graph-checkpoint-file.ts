@@ -4,6 +4,9 @@ import { randomBytes } from 'node:crypto';
 import { canonicalJson } from './state-machine/graph/claim-kernel';
 import { ExecutionJournal, type GraphJournalCheckpointV1 } from './snapshot-store';
 
+const MAX_CHECKPOINT_BYTES = 64 * 1024 * 1024;
+export const GRAPH_CHECKPOINT_READ_FLAGS = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+
 /**
  * File boundary for the portable Graph-v2 checkpoint.
  *
@@ -56,14 +59,38 @@ function sameDirectory(parent: string, identity: fs.Stats): boolean {
 export function readGraphCheckpointFile(target: string): GraphJournalCheckpointV1 {
   const { parent, name } = privateParent(target, 'graph checkpoint input');
   const finalTarget = path.join(parent, name);
-  const stat = fs.lstatSync(finalTarget);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('graph checkpoint input must be a regular file');
-  const text = fs.readFileSync(finalTarget, 'utf8');
+  let fd: number | undefined;
+  let text: string;
   try {
-    return ExecutionJournal.validateGraphCheckpointIntegrity(JSON.parse(text));
+    fd = fs.openSync(finalTarget, GRAPH_CHECKPOINT_READ_FLAGS);
+    const descriptor = fs.fstatSync(fd);
+    const pathname = fs.lstatSync(finalTarget);
+    if (!descriptor.isFile() || pathname.isSymbolicLink() || !pathname.isFile() || descriptor.dev !== pathname.dev || descriptor.ino !== pathname.ino || (descriptor.mode & 0o777) !== 0o600 || descriptor.size < 1 || descriptor.size > MAX_CHECKPOINT_BYTES) {
+      throw new Error('graph checkpoint input identity, mode, or size is invalid');
+    }
+    const bytes = Buffer.alloc(descriptor.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (!Number.isInteger(count) || count <= 0) throw new Error('graph checkpoint input read made no progress');
+      offset += count;
+    }
+    const after = fs.lstatSync(finalTarget);
+    if (after.isSymbolicLink() || !after.isFile() || after.dev !== descriptor.dev || after.ino !== descriptor.ino || after.size !== descriptor.size || (after.mode & 0o777) !== 0o600) throw new Error('graph checkpoint input identity changed during read');
+    text = bytes.toString('utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') throw new Error('graph checkpoint input must be a regular file, not a symlink');
+    throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
   } catch (error) {
     throw new Error(`graph checkpoint input is not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
+  return ExecutionJournal.validateGraphCheckpointIntegrity(parsed);
 }
 
 /** Validate an input path before the engine is constructed or providers run. */

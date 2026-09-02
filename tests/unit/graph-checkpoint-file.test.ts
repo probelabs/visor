@@ -1,9 +1,9 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, constants, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
-import { publishGraphCheckpointFile, readGraphCheckpointFile, validateGraphCheckpointInputFile } from '../../src/graph-checkpoint-file';
+import { GRAPH_CHECKPOINT_READ_FLAGS, publishGraphCheckpointFile, readGraphCheckpointFile, validateGraphCheckpointInputFile } from '../../src/graph-checkpoint-file';
 
 const checkpointBody: any = {
   kind: 'visor.graph-journal-checkpoint', version: 1, sessionId: 'session', graphSemanticDigest: 'a'.repeat(64),
@@ -29,7 +29,7 @@ describe('public Graph-v2 checkpoint file boundary', () => {
     try {
       expect(() => validateGraphCheckpointInputFile(join(publicRoot, 'missing.json'))).toThrow(/private/);
       expect(() => publishGraphCheckpointFile(checkpoint, join(publicRoot, 'out.json'))).toThrow(/private/);
-      const regular = join(root, 'regular.json'); writeFileSync(regular, canonicalJson(checkpoint));
+      const regular = join(root, 'regular.json'); writeFileSync(regular, canonicalJson(checkpoint), { mode: 0o600 }); chmodSync(regular, 0o600);
       expect(() => validateGraphCheckpointInputFile(regular)).not.toThrow();
       const linked = join(root, 'linked.json'); symlinkSync(regular, linked);
       expect(() => validateGraphCheckpointInputFile(linked)).toThrow(/regular file/);
@@ -40,8 +40,18 @@ describe('public Graph-v2 checkpoint file boundary', () => {
     const root = mkdtempSync(join(tmpdir(), 'visor-checkpoint-')); chmodSync(root, 0o700);
     const target = join(root, 'corrupt.json');
     try {
-      writeFileSync(target, canonicalJson({ ...checkpoint, sessionId: 'tampered' }));
+      writeFileSync(target, canonicalJson({ ...checkpoint, sessionId: 'tampered' }), { mode: 0o600 }); chmodSync(target, 0o600);
       expect(() => validateGraphCheckpointInputFile(target)).toThrow(/integrity digest/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('opens input exactly once with no-follow read-only flags and reads from that descriptor', () => {
+    const root = mkdtempSync(join(tmpdir(), 'visor-checkpoint-')); chmodSync(root, 0o700);
+    const target = join(root, 'input.json'); writeFileSync(target, canonicalJson(checkpoint), { mode: 0o600 }); chmodSync(target, 0o600);
+    try {
+      expect(readGraphCheckpointFile(target)).toEqual(checkpoint);
+      expect(GRAPH_CHECKPOINT_READ_FLAGS & constants.O_ACCMODE).toBe(constants.O_RDONLY);
+      expect(GRAPH_CHECKPOINT_READ_FLAGS & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
