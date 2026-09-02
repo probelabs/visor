@@ -8,11 +8,11 @@ import {
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 import { PROOF_CANDIDATE_CLAIM } from './instance-plan';
 import {
-  governedResultDigest,
   validateGovernedProofRuntimeContextAgainstClaims,
   validateProofCandidateEvidence,
   type ProofCandidateEvidenceV1,
 } from '../../providers/governed-proof-inspect-check-provider';
+import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../providers/proof-wire';
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -831,7 +831,14 @@ export function createInitialInstanceProjection(): InstanceProjection {
 }
 
 export function immutableInstanceEvent<T extends InstanceRuntimeEvent>(event: T): T {
-  return immutableCanonicalValue(event);
+  const immutable = immutableCanonicalValue(event);
+  // Proof candidate payloads are governed by Proof's UTF-8 key ordering. The
+  // generic graph canonicalizer is retained for every other event, but must
+  // not silently rewrite this payload before admission sees its bytes.
+  if (event.type === 'ClaimPublished' && event.claim === PROOF_CANDIDATE_CLAIM) {
+    return Object.freeze({ ...immutable, payload: immutableProofCanonicalValue(event.payload) }) as T;
+  }
+  return immutable;
 }
 
 function ownerKey(
@@ -1509,7 +1516,9 @@ function reduceGeneratedLifecycle(
     if (!sameStrings(event.parentClaimIds, generation.activeInputClaimIds)) {
       throw new InstanceKernelError('INVALID_PARENT_CLAIMS', 'Generated claim has wrong exact parents');
     }
-    const payloadFingerprint = sha256Canonical(event.payload);
+    const payloadFingerprint = event.claim === PROOF_CANDIDATE_CLAIM
+      ? proofPayloadFingerprint(event.payload)
+      : sha256Canonical(event.payload);
     if (payloadFingerprint !== event.payloadFingerprint) {
       throw new InstanceKernelError('INVALID_PAYLOAD_FINGERPRINT', 'Generated claim fingerprint is invalid');
     }
@@ -1534,9 +1543,9 @@ function reduceGeneratedLifecycle(
           attemptId: event.attemptId,
           fence: event.fence,
         });
-        const payloadJson = canonicalJson(event.payload);
+        const payloadJson = proofCanonicalJson(event.payload);
         const identity = event.proofCandidateEvidence.probe.resultIdentity;
-        if (identity.resultDigest !== governedResultDigest(event.payload) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(event.payload) !== payloadJson) throw new Error('result identity is detached from canonical claim payload');
+        if (identity.resultDigest !== proofGovernedResultDigest(event.payload) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) throw new Error('result identity is detached from canonical claim payload');
       } catch { throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate evidence is invalid or detached'); }
       if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
         throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
@@ -1561,7 +1570,9 @@ function reduceGeneratedLifecycle(
     next.claimsById[event.claimId] = {
       claimId: event.claimId,
       claim: event.claim,
-      payload: immutableCanonicalValue(event.payload),
+      payload: event.claim === PROOF_CANDIDATE_CLAIM
+        ? immutableProofCanonicalValue(event.payload)
+        : immutableCanonicalValue(event.payload),
       payloadFingerprint,
       producerCheckId: event.producerCheckId,
       producerAttemptId: event.attemptId,

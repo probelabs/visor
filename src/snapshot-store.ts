@@ -61,7 +61,8 @@ import {
 } from './state-machine/graph/instance-kernel';
 import { PROOF_ADMIT_NODE_KEY, PROOF_CANDIDATE_CLAIM } from './state-machine/graph/instance-plan';
 import { goCompatibleProofJson } from './providers/proof-admission-cli-child';
-import { governedResultDigest, validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './providers/governed-proof-inspect-check-provider';
+import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from './providers/proof-wire';
+import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -422,7 +423,8 @@ function validateCheckpointPlanAuthority(
       }
       try {
         const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
-        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== governedResultDigest(event.payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(canonicalJson(event.payload), 'utf8') || JSON.stringify(event.payload) !== canonicalJson(event.payload)) {
+        const candidatePayload = proofCanonicalJson(event.payload);
+        if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation) || evidence.probe.resultIdentity.resultDigest !== proofGovernedResultDigest(event.payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(candidatePayload, 'utf8')) {
           checkpointAuthorityFailure('Generated proof candidate evidence is detached from compiled inspect or payload authority');
         }
       } catch (error) {
@@ -663,7 +665,12 @@ export class ExecutionJournal {
 
     const restored = new ExecutionJournal(claimPlan);
     // Keep the journal's internal lane appendable while retaining immutable event values.
-    restored.runtimeEvents = events.map(event => immutableCanonicalValue(event)) as Array<CheckpointRuntimeEvent>;
+    restored.runtimeEvents = events.map(event => {
+      const immutable = immutableCanonicalValue(event);
+      return event.type === 'ClaimPublished' && event.claim === PROOF_CANDIDATE_CLAIM
+        ? Object.freeze({ ...immutable, payload: immutableProofCanonicalValue(event.payload) })
+        : immutable;
+    }) as Array<CheckpointRuntimeEvent>;
     restored.claimProjection = immutableCanonicalValue(claimProjection);
     restored.instanceProjection = immutableCanonicalValue(instanceProjection);
     restored.nextFence = allocators.nextFence;
@@ -951,7 +958,7 @@ export class ExecutionJournal {
     if (publications.length !== 1) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is ambiguous');
     const publication = publications[0];
     const publicationIndex = this.runtimeEvents.indexOf(publication);
-    if (publicationIndex < 0 || publicationIndex >= proofAttemptIndex || publication.producerCheckId !== candidateClaim.producerCheckId || publication.payloadFingerprint !== candidateClaim.payloadFingerprint || canonicalJson(publication.scope) !== canonicalJson(candidateClaim.scope) || canonicalJson(publication.parentClaimIds) !== canonicalJson(candidateClaim.parentClaimIds) || publication.attemptId !== candidateClaim.attemptId || publication.fence !== candidateClaim.fence || canonicalJson(publication.payload) !== canonicalJson(candidateClaim.payload) || JSON.stringify(publication.payload) !== canonicalJson(publication.payload)) {
+    if (publicationIndex < 0 || publicationIndex >= proofAttemptIndex || publication.producerCheckId !== candidateClaim.producerCheckId || publication.payloadFingerprint !== candidateClaim.payloadFingerprint || canonicalJson(publication.scope) !== canonicalJson(candidateClaim.scope) || canonicalJson(publication.parentClaimIds) !== canonicalJson(candidateClaim.parentClaimIds) || publication.attemptId !== candidateClaim.attemptId || publication.fence !== candidateClaim.fence || proofCanonicalJson(publication.payload) !== proofCanonicalJson(candidateClaim.payload)) {
       throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is detached');
     }
     const terminations = this.runtimeEvents.filter(event =>
@@ -1006,10 +1013,7 @@ export class ExecutionJournal {
       output_schema_id: invocation.output_schema_id,
       output_schema: invocation.output_schema,
     };
-    const payloadBytes = Buffer.from(canonicalJson(publication.payload), 'utf8');
-    if (JSON.stringify(publication.payload) !== canonicalJson(publication.payload)) {
-      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate payload is not canonical');
-    }
+    const payloadBytes = Buffer.from(proofCanonicalJson(publication.payload), 'utf8');
     const candidate = {
       Version: 'proof.role-result-candidate-envelope/v1',
       Invocation: invocationWire,
@@ -1258,8 +1262,8 @@ export class ExecutionJournal {
         if (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation)) {
           throw new Error('evidence invocation is detached from compiled inspect config');
         }
-        const payloadJson = canonicalJson(payload);
-        if (evidence.probe.resultIdentity.resultDigest !== governedResultDigest(payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8') || JSON.stringify(payload) !== payloadJson) {
+        const payloadJson = proofCanonicalJson(payload);
+        if (evidence.probe.resultIdentity.resultDigest !== proofGovernedResultDigest(payload) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) {
           throw new Error('evidence result identity is detached from candidate payload');
         }
       } catch (error) {
@@ -1280,8 +1284,13 @@ export class ExecutionJournal {
     const publications: GeneratedClaimPublishedEvent[] = [];
     for (const emission of node.emissions) {
       this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
-      const immutablePayload = immutableCanonicalValue(payload);
-      const payloadFingerprint = sha256Canonical(immutablePayload);
+      const proofCandidateEmission = emission.claim === PROOF_CANDIDATE_CLAIM;
+      const immutablePayload = proofCandidateEmission
+        ? immutableProofCanonicalValue(payload)
+        : immutableCanonicalValue(payload);
+      const payloadFingerprint = proofCandidateEmission
+        ? proofPayloadFingerprint(payload)
+        : sha256Canonical(immutablePayload);
       const parentClaimIds = [...generation.activeInputClaimIds].sort();
       const eventId =
         Math.max(this.claimProjection.lastEventId, staged.lastEventId) + publications.length + 1;
@@ -1415,7 +1424,14 @@ export class ExecutionJournal {
   }
 
   getInstanceProjection(): InstanceProjection {
-    return immutableCanonicalValue(this.instanceProjection);
+    const projection = immutableCanonicalValue(this.instanceProjection);
+    const claimsById = Object.fromEntries(Object.entries(projection.claimsById).map(([claimId, claim]) => {
+      const source = this.instanceProjection.claimsById[claimId];
+      return source?.claim === PROOF_CANDIDATE_CLAIM
+        ? [claimId, Object.freeze({ ...claim, payload: immutableProofCanonicalValue(source.payload) })]
+        : [claimId, claim];
+    }));
+    return Object.freeze({ ...projection, claimsById: Object.freeze(claimsById) }) as InstanceProjection;
   }
 
   getExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection {
@@ -2000,7 +2016,12 @@ export class ExecutionJournal {
   }
 
   readRuntimeEvents(): readonly (ClaimRuntimeEvent | InstanceRuntimeEvent)[] {
-    return immutableCanonicalValue(this.runtimeEvents);
+    return Object.freeze(this.runtimeEvents.map(event => {
+      const immutable = immutableCanonicalValue(event);
+      return event.type === 'ClaimPublished' && event.claim === PROOF_CANDIDATE_CLAIM
+        ? Object.freeze({ ...immutable, payload: immutableProofCanonicalValue(event.payload) })
+        : immutable;
+    }));
   }
 
   getClaimProjection(): ClaimProjection {

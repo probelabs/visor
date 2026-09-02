@@ -1,9 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import {
-  materializeAdmittedCatalog,
-  ProofAdmittedCatalogError,
-} from '../../../src/providers/proof-admitted-catalog-check-provider';
-import { compareProofStrings } from '../../../src/providers/proof-catalog-check-providers';
+import { compareProofStrings, validateProofCatalogRevalidationProjection } from '../../../src/providers/proof-catalog-check-providers';
 import {
   canonicalJson,
   immutableCanonicalValue,
@@ -48,7 +44,7 @@ function topJson(value: Record<string, unknown>): string {
 
 function receiptID(value: Record<string, unknown>): string {
   const unsigned = { ...value };
-  delete unsigned.receipt_id;
+  unsigned.receipt_id = '';
   return encodedDigest('proof.catalog-revalidation-receipt/id/v2', topJson(unsigned));
 }
 
@@ -156,14 +152,15 @@ function fixture() {
 describe('proof-admitted catalog egress', () => {
   it('materializes the exact current Proof projection and retains complete admission wire', () => {
     const value = fixture();
-    const result = materializeAdmittedCatalog(value);
-    expect(result.components.map(item => item.component_id)).toEqual(['B', 'a', 'gamma']);
+    const result = validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload as any, value.candidate, value.admission, 'journalservice', value.revalidation, value.inventory.claimId);
+    expect(result.work_items.map((item: any) => item.component_id)).toEqual(['B', 'a', 'gamma']);
     expect((value.admission.payload as any).__proof_admission_wire).toContain('proof.role-result-candidate-cli-decision/v1');
   });
 
   it('uses Proof bytewise ordering rather than locale ordering', () => {
     expect(['a', 'B'].sort(compareProofStrings)).toEqual(['B', 'a']);
-    expect(() => materializeAdmittedCatalog(fixture())).not.toThrow();
+    const value = fixture();
+    expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload as any, value.candidate, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).not.toThrow();
   });
 
   it.each([
@@ -174,6 +171,6 @@ describe('proof-admitted catalog egress', () => {
     ['incomplete WorkItem catalog', (value: any) => { value.revalidation = makeClaim('proof.catalog_revalidation@1', { ...value.revalidation.payload, work_items: value.revalidation.payload.work_items.slice(0, 2) }, 'revalidate_catalog', value.revalidation.parentClaimIds); }],
   ])('fails closed for %s', (_name, mutate) => {
     const value: any = fixture(); mutate(value);
-    expect(() => materializeAdmittedCatalog(value)).toThrow(ProofAdmittedCatalogError);
+    expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload as any, value.candidate, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).toThrow();
   });
 });

@@ -8,6 +8,8 @@ import type {
 } from './check-provider.interface';
 import { canonicalJson } from '../state-machine/graph/claim-kernel';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
+import { proofCanonicalJson, proofTopLevelJson } from './proof-wire';
+export { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint, proofTopLevelJson } from './proof-wire';
 
 export const PROOF_ADMISSION_UNAVAILABLE = 'PROOF_ADMISSION_UNAVAILABLE';
 export const PROOF_ADMISSION_CLEANUP_FAILED = 'PROOF_ADMISSION_CLEANUP_FAILED';
@@ -21,6 +23,9 @@ export const PROOF_ADMISSION_OUTPUT_MAX_BYTES = 2097152;
 const REQUEST_LIMIT = PROOF_ADMISSION_REQUEST_MAX_BYTES;
 const STDOUT_LIMIT = PROOF_ADMISSION_OUTPUT_MAX_BYTES;
 const STDERR_LIMIT = 65536;
+// The Proof child may invoke Git for project lineage. Keep this environment
+// deliberately small and identical for C0 and every managed onboarding call.
+const PROOF_CHILD_ENV = Object.freeze({ PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' });
 const COMMAND_TIMEOUT_MS = process.env.NODE_ENV === 'test' && Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) > 0 ? Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) : 120000;
 const DECISION_VERSION = 'proof.role-result-candidate-cli-decision/v1';
 const RECEIPT_VERSION = 'proof.role-result-candidate-admission/v2';
@@ -65,38 +70,6 @@ function json(value: unknown): string {
   });
 }
 
-/**
- * Proof's CanonicalJSON equivalent for values already decoded at a JSON
- * boundary. JavaScript's default UTF-16 sort differs for non-ASCII keys;
- * Proof sorts map keys by their UTF-8 bytes. Keep this separate from the
- * claim-kernel canonicalizer because this is Proof wire/preimage data.
- */
-export function proofCanonicalJson(value: unknown): string {
-  const active = new Set<object>();
-  const encode = (current: unknown): string => {
-    if (current === null || typeof current === 'boolean' || typeof current === 'number' || typeof current === 'string') return json(current);
-    if (Array.isArray(current)) {
-      if (active.has(current)) fail('value is cyclic');
-      active.add(current);
-      try { return `[${current.map(item => encode(item)).join(',')}]`; }
-      finally { active.delete(current); }
-    }
-    if (!plain(current)) fail('value is not a JSON object');
-    if (active.has(current)) fail('value is cyclic');
-    active.add(current);
-    try {
-      const keys = Object.keys(current).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
-      return `{${keys.map(key => `${json(key)}:${encode(current[key])}`).join(',')}}`;
-    } finally { active.delete(current); }
-  };
-  return encode(value);
-}
-
-/** Sort only the top-level object; nested values are encoded in their Proof
- * Go struct order when a receipt preimage requires it. */
-export function proofTopLevelJson(fields: Readonly<Record<string, string>>): string {
-  return `{${Object.keys(fields).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'))).map(key => `${json(key)}:${fields[key]}`).join(',')}}`;
-}
 function validUnicode(value: unknown): boolean {
   if (typeof value === 'string') {
     for (let i = 0; i < value.length; i++) {
@@ -369,7 +342,7 @@ function runBoundedProofCommand(
     try {
       child = spawn(executable.realpath, [...args], {
         cwd: workingDirectory,
-        env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+        env: PROOF_CHILD_ENV,
         shell: false,
         detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -403,7 +376,6 @@ function runBoundedProofCommand(
       child.once('exit', (code, exitedSignal) => {
         status = code;
         signal = exitedSignal;
-        if (pid && !proveGroupGone()) { forceStop(); return; }
         settle();
       });
       child.once('close', () => {
@@ -620,7 +592,6 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     });
     proc.on('exit', (code, exitedSignal) => {
       exitCode = code; signal = exitedSignal;
-      if (pid && !groupAbsent(pid)) { failOnce('detached process group survived parent'); killIfNeeded(); }
       settle();
     });
     proc.on('close', () => {
@@ -631,7 +602,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
   };
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   try {
-    child = spawn(executable.realpath, [...request.command], { cwd: request.workingDirectory, env: {}, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(executable.realpath, [...request.command], { cwd: request.workingDirectory, env: PROOF_CHILD_ENV, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     attach(child);
     child.once('spawn', () => {
       pid = child?.pid;
@@ -639,20 +610,29 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
       resolveStarted(Object.freeze({ version: 1 as const, kind: 'started' as const, binding }));
       if (terminationRequested) { killIfNeeded(); return; }
       if (!sameExecutable(executable, executableStat(executable.realpath))) { failOnce('executable changed before write'); killIfNeeded(); return; }
-      child?.stdin?.once('error', () => { failOnce('request write failed'); killIfNeeded(); });
-      child?.stdin?.end(request.input, 'utf8', () => { writeDone = true; settle(); });
+      if (request.input.length === 0) {
+        // `onboarding inventory` is a no-stdin command. Destroy the pipe
+        // without writing: a fast Proof process may otherwise emit EPIPE
+        // after it has already produced the valid inventory projection.
+        writeDone = true;
+        child?.stdin?.destroy();
+        settle();
+      } else {
+        child?.stdin?.once('error', () => { failOnce('request write failed'); killIfNeeded(); });
+        child?.stdin?.end(request.input, 'utf8', () => { writeDone = true; settle(); });
+      }
     });
   } catch {
     failOnce('child acquisition failed'); rejectStarted(new Error(PROOF_ADMISSION_UNAVAILABLE));
     if (pid) { killIfNeeded(); } else { closeSeen = true; stdoutEnd = true; stderrEnd = true; settleBeforePid(); }
   }
-  const terminate = async () => { terminationRequested = true; if (pid) killIfNeeded(); await cleanup; return { version: 1 as const, kind: 'cancelled' as const, binding, reason: 'deadline' as const }; };
+  const terminate = async () => { if (!cleaned) { terminationRequested = true; if (pid) killIfNeeded(); } await cleanup; return { version: 1 as const, kind: 'cancelled' as const, binding, reason: 'deadline' as const }; };
   return Object.freeze({
     binding,
     started,
     outcome,
     cancel: async (reason: 'deadline', fence: number) => { if (fence !== binding.fence) throw new Error('stale cancellation fence'); return terminate(); },
-    close: async () => { terminationRequested = true; if (pid) killIfNeeded(); return cleanup; },
+    close: async () => { if (!cleaned) { terminationRequested = true; if (pid) killIfNeeded(); } return cleanup; },
   });
 }
 

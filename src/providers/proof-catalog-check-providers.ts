@@ -24,6 +24,8 @@ import {
   PROOF_ADMISSION_WIRE_FIELD,
   goCompatibleProofJson,
   proofCanonicalJson,
+  immutableProofCanonicalValue,
+  proofPayloadFingerprint,
   proofTopLevelJson,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
@@ -109,9 +111,13 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
       value.parentClaimIds.some(item => typeof item !== 'string' || !/^[0-9a-f]{64}$/.test(item))) {
     invalid(`${label} claim identity is invalid`);
   }
-  const payload = immutableCanonicalValue(value.payload);
+  const payload = expectedClaim === PROOF_CANDIDATE_CLAIM
+    ? immutableProofCanonicalValue(value.payload)
+    : immutableCanonicalValue(value.payload);
+  const payloadFingerprint = expectedClaim === PROOF_CANDIDATE_CLAIM ? proofPayloadFingerprint(payload) : digest(payload);
+  const nonCanonical = expectedClaim === PROOF_CANDIDATE_CLAIM ? false : canonicalJson(value.payload) !== JSON.stringify(value.payload);
   if (bounded(value.payload, `${label} payload`, claimPayloadLimit(expectedClaim)) &&
-      (canonicalJson(value.payload) !== JSON.stringify(value.payload) || digest(payload) !== value.payloadFingerprint)) {
+      (nonCanonical || payloadFingerprint !== value.payloadFingerprint)) {
     invalid(`${label} payload is detached or noncanonical`);
   }
   if (canonicalJson(value.scope) !== JSON.stringify(value.scope) ||
@@ -589,6 +595,9 @@ function validateReceipt(value: unknown, projectID: string, boundaryFingerprint:
       const lineage = value.project_lineage as PlainRecord;
       return { version: lineage.version, fingerprint: lineage.fingerprint, object_format: lineage.object_format, baseline_revision: lineage.baseline_revision };
     })()),
+    // CatalogRevalidationReceipt.receipt_id is not `omitempty`; Proof clears
+    // it and includes the empty member in its v2 preimage before hashing.
+    receipt_id: goCompatibleProofJson(''),
   });
   if (value.receipt_id !== domainDigestBytes('proof.catalog-revalidation-receipt/id/v2', unsigned)) invalid('catalog revalidation receipt ID is invalid');
   return value;
@@ -710,7 +719,7 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   const authority = (value.inventory as PlainRecord).authority;
   if (!plain(authority) || receipt.project_fingerprint !== authority.subject_fingerprint) invalid('catalog revalidation receipt project authority is detached');
   const expectedInventoryID = domainDigest('proof.structural-inventory/claim/v1', inventoryWire(currentInventory));
-  const expectedCatalogID = domainDigest('proof.component-catalog-candidate/claim/v1', candidate.payload);
+  const expectedCatalogID = domainDigestBytes('proof.component-catalog-candidate/claim/v1', proofCanonicalJson(candidate.payload));
   if (receipt.inventory_claim_id !== expectedInventoryID || receipt.catalog_claim_id !== expectedCatalogID || receipt.admission_candidate_id !== admitted.receipt.CandidateID || receipt.admission_result_digest !== admitted.receipt.ProbeResultDigest || receipt.admission_receipt_id !== admitted.receipt.receipt_id) invalid('catalog revalidation receipt lineage is detached');
   return bounded(value, 'catalog revalidation projection') as PlainRecord;
 }

@@ -18,7 +18,6 @@ export { ScriptCheckProvider } from './script-check-provider';
 export { UtcpCheckProvider } from './utcp-check-provider';
 export {
   ProofAdmittedCatalogCheckProvider,
-  materializeAdmittedCatalog,
   createProofAdmittedCatalogProviderForFocusedTest,
 } from './proof-admitted-catalog-check-provider';
 export {

@@ -2,7 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 jest.unmock('child_process');
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as yaml from 'js-yaml';
@@ -10,7 +10,8 @@ import type { PRInfo } from '../../src/pr-analyzer';
 import { CheckProvider, type CheckProviderConfig, type ExecutionContext } from '../../src/providers/check-provider.interface';
 import type { ReviewSummary } from '../../src/reviewer';
 import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
-import { createGovernedProofInspectProviderForFocusedTest, governedResultDigest, type GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
+import { createGovernedProofInspectProviderForFocusedTest, type GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
+import { proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
 const PROFILE = resolve(__dirname, '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml');
@@ -70,13 +71,13 @@ class TimedComponentStage2Provider extends TimedComponentProvider {
   }
 }
 function fakeDiscovery(request: GovernedProbeRunnerRequest) {
-  const data = immutableCanonicalValue({ version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
-    { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: [{ name: 'HTTP' }], uncertainty: [] },
+  const data = { version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
+    { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }], uncertainty: [] },
     { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'], entry_points: ['beta.go:Apply'], state_effects: ['policy'], interfaces: [{ name: 'Policy' }], uncertainty: [] },
     { id: 'gamma', responsibility: 'storage domain', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'], entry_points: ['gamma.go:Store'], state_effects: ['storage'], interfaces: [{ name: 'Store' }], uncertainty: [] },
-  ] });
+  ] };
   const d = 'a'.repeat(64);
-  return { data, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 17 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: governedResultDigest(data), canonicalBytes: Buffer.byteLength(canonicalJson(data)) } };
+  return { data, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 17 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: proofGovernedResultDigest(data), canonicalBytes: Buffer.byteLength(proofCanonicalJson(data), 'utf8') } };
 }
 function withProofFixture<T>(fn: (proof: string, root: string) => Promise<T>): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'visor-exp0209-')); const proof = join(root, 'proof');
@@ -88,7 +89,7 @@ const fs=require('fs'),crypto=require('crypto');
 const root=${JSON.stringify(root)}; const pids=${JSON.stringify(join(root, 'pids'))}; const commands=${JSON.stringify(join(root, 'commands'))};
 fs.appendFileSync(pids,process.pid+'\\n'); fs.appendFileSync(commands,process.argv.slice(2).join(' ')+'\\n'); let input='';
 function canon(v){if(Array.isArray(v))return '['+v.map(canon).join(',')+']';if(v&&typeof v==='object')return '{'+Object.keys(v).sort((a,b)=>Buffer.from(a).compare(Buffer.from(b))).map(k=>JSON.stringify(k)+':'+canon(v[k])).join(',')+'}';return JSON.stringify(v)}
-function top(v){return '{'+Object.keys(v).filter(k=>k!=='receipt_id').sort((a,b)=>Buffer.from(a).compare(Buffer.from(b))).map(k=>JSON.stringify(k)+':'+JSON.stringify(v[k])).join(',')+'}'}
+function top(v, includeReceiptID=false){return '{'+Object.keys(v).filter(k=>includeReceiptID||k!=='receipt_id').sort((a,b)=>Buffer.from(a).compare(Buffer.from(b))).map(k=>JSON.stringify(k)+':'+JSON.stringify(v[k])).join(',')+'}'}
 function hasKeys(v,keys){return v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.prototype.hasOwnProperty.call(v,k))}
 function digest(domain,bytes){const n=Buffer.alloc(8);n.writeBigUInt64BE(BigInt(bytes.length));return 'sha256:'+crypto.createHash('sha256').update(domain).update(Buffer.from([0])).update(n).update(bytes).digest('hex')}
 function sha(bytes){return 'sha256:'+crypto.createHash('sha256').update(bytes).digest('hex')}
@@ -97,7 +98,7 @@ function inventory(){return {version:'proof.structural-inventory/v1',authority:{
 function item(component){const id=component.id,paths=[...component.owned_paths].sort(goSort),closure=[...(component.dependency_closure||component.owned_paths)].sort(goSort);const subject={version:'proof.component-subject/v1',project_id:'journalservice',component_id:id,sorted_owned_paths:paths,sorted_dependency_closure:closure,fingerprint:'sha256:'+'4'.repeat(64)};return {version:'reqproof.onboarding-component-work-item/v1',project_id:'journalservice',component_id:id,sorted_owned_paths:paths,sorted_dependency_closure:closure,proof_path_mapping:{paths,components:[id],owner:'onboard',risk_tier:0,enforcement:'soft'},proof_input_state:closure.map(path=>({owner_kind:'onboarding_component',owner_id:id,input_kind:'code',path,file_hash:fileHash(path)})),proof_component_subject:subject}}
 function goSort(a,b){return Buffer.from(a).compare(Buffer.from(b))}
 function catalog(candidate){return {version:candidate.version,project_id:candidate.project_id,components:[...candidate.components].sort((a,b)=>goSort(a.id,b.id)).map(component=>{const out={id:component.id,responsibility:component.responsibility,owned_paths:[...component.owned_paths].sort(goSort)};if(component.dependency_closure!==undefined)out.dependency_closure=[...component.dependency_closure].sort(goSort);for(const key of ['entry_points','state_effects','interfaces','uncertainty'])if(component[key]&&component[key].length)out[key]=key==='interfaces'?component[key]:[...component[key]].sort(goSort);return out})}}
-function receipt(projection, candidate, admission){const items=projection.work_items;const authorities=items.map(value=>({component_id:value.component_id,work_item_digest:sha(Buffer.from(JSON.stringify(value))),subject:value.proof_component_subject})).sort((a,b)=>goSort(a.component_id,b.component_id));const inv=projection.inventory;const r={version:'proof.catalog-revalidation-receipt/v2',decision:'accepted',project_id:'journalservice',project_fingerprint:inv.authority.subject_fingerprint,boundary_fingerprint:inv.boundary_fingerprint,inventory_claim_id:digest('proof.structural-inventory/claim/v1',Buffer.from(JSON.stringify(inv))),catalog_claim_id:digest('proof.component-catalog-candidate/claim/v1',Buffer.from(canon(candidate))),admission_candidate_id:admission.receipt.CandidateID,admission_result_digest:admission.receipt.ProbeResultDigest,admission_receipt_id:admission.receipt.receipt_id,component_authorities:authorities,project_lineage:null,receipt_id:''};r.receipt_id=digest('proof.catalog-revalidation-receipt/id/v2',Buffer.from(top(r)));return r}
+function receipt(projection, candidate, admission){const items=projection.work_items;const authorities=items.map(value=>({component_id:value.component_id,work_item_digest:sha(Buffer.from(JSON.stringify(value))),subject:value.proof_component_subject})).sort((a,b)=>goSort(a.component_id,b.component_id));const inv=projection.inventory;const r={version:'proof.catalog-revalidation-receipt/v2',decision:'accepted',project_id:'journalservice',project_fingerprint:inv.authority.subject_fingerprint,boundary_fingerprint:inv.boundary_fingerprint,inventory_claim_id:digest('proof.structural-inventory/claim/v1',Buffer.from(JSON.stringify(inv))),catalog_claim_id:digest('proof.component-catalog-candidate/claim/v1',Buffer.from(canon(candidate))),admission_candidate_id:admission.receipt.CandidateID,admission_result_digest:admission.receipt.ProbeResultDigest,admission_receipt_id:admission.receipt.receipt_id,component_authorities:authorities,project_lineage:null,receipt_id:''};r.receipt_id=digest('proof.catalog-revalidation-receipt/id/v2',Buffer.from(top(r,true)));return r}
 process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{try{const args=process.argv.slice(2).join(' ');if(args==='onboarding inventory'){if(input!=='')throw new Error('inventory accepts no stdin');const o=inventory();process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='admit-candidate'){const req=JSON.parse(input),c=req.candidate,p=c&&c.Publication;if(!c||!p||c.Version!=='proof.role-result-candidate-envelope/v1'||!hasKeys(c,['Version','Invocation','InvocationDigest','RoleID','Stance','Subject','AttestationVersion','ExecutionSource','ProbeInvocationDigest','IdentityVersion','IdentitySource','ResultDigest','CanonicalBytes','ProbeResultBytes','VisorPayloadBytes','Publication','Binding','Termination'])||!hasKeys(p,['Version','Type','SessionID','CheckID','Scope','NodeInstanceID','NodeGenerationID','AttemptID','Fence','ClaimID','Claim','PayloadFingerprint','ProducerCheckID','Payload','ParentClaimIDs'])||!hasKeys(c.Binding,['ManagedRunID','SessionID','CheckID','Scope','NodeInstanceID','NodeGenerationID','AttemptID','Fence'])||!hasKeys(c.Termination,['Version','Type','SessionID','Scope','Binding','CleanupStatus','ControllerDecision','FailureCode']))throw new Error('candidate is truncated');const unsigned={Version:'proof.role-result-candidate-admission/v2',Status:'ADMITTED',CandidateID:digest('proof.role-result-candidate-envelope/id/v1',Buffer.from(JSON.stringify(c))),ProbeResultDigest:c.ResultDigest,ProbeCanonicalBytes:c.CanonicalBytes,ClaimID:p.ClaimID,Claim:p.Claim,PayloadFingerprint:p.PayloadFingerprint,InvocationDigest:c.InvocationDigest,RoleID:c.RoleID,Stance:c.Stance,Subject:c.Subject,ProducerCheckID:p.ProducerCheckID,ParentClaimIDs:p.ParentClaimIDs,Binding:c.Binding,Termination:c.Termination,ProjectLineage:null};const receipt={...unsigned,receipt_id:digest('proof.role-result-candidate-receipt/id/v2',Buffer.from(top(unsigned)))};const o={version:'proof.role-result-candidate-cli-decision/v1',status:'ADMITTED',receipt,reject_code:null};process.stdout.write(canon(o)+'\\n');return}if(args==='onboarding revalidate'){const req=JSON.parse(input),candidate=req&&req.candidate,admission=req&&req.admission,admissionKeys=['version','status','receipt','reject_code'],receiptKeys=['Version','Status','CandidateID','ProbeResultDigest','ProbeCanonicalBytes','ClaimID','Claim','PayloadFingerprint','InvocationDigest','RoleID','Stance','Subject','ProducerCheckID','ParentClaimIDs','Binding','Termination','ProjectLineage','receipt_id'];if(!req||canon(req)!==input||req.version!=='proof.catalog-revalidation-request/v2'||!candidate||!admission||JSON.stringify(Object.keys(admission).sort())!==JSON.stringify(admissionKeys.slice().sort())||admission.status!=='ADMITTED'||admission.reject_code!==null||!admission.receipt||JSON.stringify(Object.keys(admission.receipt).sort())!==JSON.stringify(receiptKeys.slice().sort()))throw new Error('admission is truncated');if(candidate.version!=='proof.component-catalog-candidate/v1'||!Array.isArray(candidate.components)||candidate.components.length<2||candidate.components.length>4)throw new Error('candidate is truncated');const inv=inventory(),items=candidate.components.map(item),o={version:'proof.catalog-revalidation/v2',inventory:inv,catalog:catalog(candidate),work_items:items,receipt:null};o.receipt=receipt(o,candidate,admission);process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='onboarding work-items'){const req=JSON.parse(input),keys=['version','candidate','admission','revalidation_receipt'];if(!req||JSON.stringify(Object.keys(req))!==JSON.stringify(keys)||req.version!=='proof.onboarding-work-items-request/v1'||!req.candidate||!req.admission||!req.revalidation_receipt)throw new Error('work-items request is truncated');const candidate=req.candidate,inv=inventory(),o={version:'proof.onboarding-work-item-projection/v1',authority:inv.authority,catalog:catalog(candidate),work_items:candidate.components.map(item)};process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}throw new Error('unsupported command '+args)}catch(e){process.stderr.write(String(e));process.exitCode=1}});`;
   writeFileSync(proof, script, 'utf8'); chmodSync(proof, 0o755);
   return Promise.resolve(fn(proof, root)).finally(() => rmSync(root, { recursive: true, force: true }));
@@ -216,6 +217,142 @@ it('runs the real pinned Proof admission, revalidation, and activation-safe Work
   }
 }, 60000);
 
+it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems through Visor managed providers', async () => {
+  expect(existsSync(PROOF_AUTHORITY)).toBe(true);
+  const repository = mkdtempSync(join(tmpdir(), 'visor-exp0209-managed-proof-'));
+  const root = join(repository, 'nested-project');
+  const files = ['alpha.go', 'beta.go', 'gamma.go'];
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: journalservice\n', 'utf8');
+  for (const path of files) writeFileSync(join(root, path), `package journal\n// ${path}\n`, 'utf8');
+  execFileSync('git', ['init', '-q'], { cwd: repository });
+  execFileSync('git', ['config', 'user.email', 'visor-test@example.invalid'], { cwd: repository });
+  execFileSync('git', ['config', 'user.name', 'Visor test'], { cwd: repository });
+  execFileSync('git', ['add', '.'], { cwd: repository });
+  execFileSync('git', ['commit', '-qm', 'fixture'], { cwd: repository });
+  try {
+    const [child, providers, admitModule, admittedModule] = await Promise.all([
+      import('../../src/providers/proof-admission-cli-child'),
+      import('../../src/providers/proof-catalog-check-providers'),
+      import('../../src/providers/proof-admit-check-provider'),
+      import('../../src/providers/proof-admitted-catalog-check-provider'),
+    ]);
+    const capability = child.createProofAdmissionCapability(pinnedProofBinary());
+    const scope = [{ kind: 'keyed' as const, expansionOwnerCheck: 'project', key: 'journalservice', subgraphInstanceId: 'a'.repeat(64) }];
+    const makeClaim = (claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []) => {
+      const payloadFingerprint = claim === 'proof.candidate@1' ? proofPayloadFingerprint(payload) : sha256Canonical(payload);
+      return immutableCanonicalValue({
+        claimId: sha256Canonical({ claim, payload, producerCheckId }), claim, payload, payloadFingerprint,
+        producerCheckId, scope, parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const,
+        attemptId: 'b'.repeat(64), fence: 1,
+      });
+    };
+    const binding = (checkId: string) => immutableCanonicalValue({
+      managedRunId: sha256Canonical(`managed:${checkId}`), sessionId: 'real-managed-session', checkId, scope,
+      nodeInstanceId: sha256Canonical(`node:${checkId}`), nodeGenerationId: sha256Canonical(`generation:${checkId}`),
+      attemptId: sha256Canonical(`attempt:${checkId}`), fence: 1,
+    });
+    const project = makeClaim('project.discovery_item@1', { project_id: 'journalservice', root }, 'project');
+    const structural = providers.createProofStructuralInventoryProviderFromCapability(capability);
+    const inventoryRun = structural.startManaged({
+      prInfo, checkConfig: { type: 'proof-structural-inventory', consumes: [], emits: [] }, dependencyResults: new Map(),
+      executionContext: { claims: { project } }, binding: binding('structural_inventory'), executionConfigDigest: '1'.repeat(64), workingDirectory: root,
+    });
+    await expect(inventoryRun.started).resolves.toMatchObject({ kind: 'started' });
+    let inventoryOutput: Record<string, unknown>;
+    try {
+      const outcome: any = await inventoryRun.outcome;
+      expect(outcome.kind).toBe('succeeded');
+      inventoryOutput = outcome.summary.output;
+    } finally {
+      await expect(inventoryRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+    }
+    expect(inventoryOutput!.version).toBe('proof.structural-inventory/v1');
+    expect(inventoryOutput!.sorted_paths).toEqual(files);
+    const inventory = makeClaim('proof.structural_inventory@1', inventoryOutput!, 'structural_inventory', [project.claimId]);
+    const authority = inventoryOutput!.authority as Record<string, unknown>;
+    const subject = { kind: 'project', id: 'journalservice', fingerprint: authority.subject_fingerprint };
+    const outputSchema = Buffer.from('{"type":"object","additionalProperties":false}', 'utf8').toString('base64');
+    const invocationRequest = { role_id: 'onboard', stance: 'owner', subject, output_schema_id: 'proof.component-catalog-candidate@1', output_schema: outputSchema };
+    const invocation = await child.resolveProofRoleInvocation(capability, invocationRequest, root);
+    const candidatePayload = immutableCanonicalValue({
+      version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
+        { id: 'alpha', responsibility: 'HTTP <>&\u2028\u2029 adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['z', 'A'], state_effects: ['b', 'A'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }], uncertainty: ['u2', 'u1'] },
+        { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'] },
+        { id: 'gamma', responsibility: 'storage domain', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'] },
+      ],
+    });
+    const candidateBytes = Buffer.from(proofCanonicalJson(candidatePayload), 'utf8');
+    expect(proofCanonicalJson({ '\uE000': 1, '\u{10000}': 2 })).toBe('{"\uE000":1,"\u{10000}":2}');
+    expect(Object.keys(JSON.parse(candidateBytes.toString('utf8')).components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']);
+    const candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
+    const proofScope = scope.map(part => ({ Kind: 'keyed', ExpansionOwnerCheck: part.expansionOwnerCheck, Key: part.key, SubgraphInstanceID: part.subgraphInstanceId }));
+    const candidateBinding = { ManagedRunID: sha256Canonical('candidate-managed'), SessionID: 'real-managed-session', CheckID: 'inspect', Scope: proofScope, NodeInstanceID: sha256Canonical('candidate-node'), NodeGenerationID: sha256Canonical('candidate-generation'), AttemptID: sha256Canonical('candidate-attempt'), Fence: 1 };
+    const candidateTermination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: candidateBinding.SessionID, Scope: proofScope, Binding: candidateBinding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
+    const candidateEnvelope = {
+      Version: 'proof.role-result-candidate-envelope/v1', Invocation: invocationRequest, InvocationDigest: invocation.invocation_digest,
+      RoleID: invocation.role_id, Stance: invocation.stance, Subject: invocation.subject,
+      AttestationVersion: 'probe.governed-codex-attestation/v2', ExecutionSource: 'caller', ProbeInvocationDigest: invocation.invocation_digest,
+      IdentityVersion: 'probe.governed-result-identity/v1', IdentitySource: 'probe-host-schema-valid-json', ResultDigest: proofGovernedResultDigest(candidatePayload), CanonicalBytes: candidateBytes.length,
+      ProbeResultBytes: candidateBytes.toString('base64'), VisorPayloadBytes: candidateBytes.toString('base64'),
+      Publication: { Version: 1, Type: 'ClaimPublished', SessionID: candidateBinding.SessionID, CheckID: 'inspect', Scope: proofScope, NodeInstanceID: candidateBinding.NodeInstanceID, NodeGenerationID: candidateBinding.NodeGenerationID, AttemptID: candidateBinding.AttemptID, Fence: 1, ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, ProducerCheckID: 'inspect', Payload: candidateBytes.toString('base64'), ParentClaimIDs: candidate.parentClaimIds },
+      Binding: candidateBinding, Termination: candidateTermination,
+    };
+    const admissionProvider = admitModule.createProofAdmitProviderFromCapability(capability);
+    const admissionRun = admissionProvider.startManaged({
+      prInfo, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [] },
+      dependencyResults: new Map([['inspect', { issues: [], output: candidatePayload }]]), executionContext: { claims: { candidate } }, binding: binding('proof_admit'), executionConfigDigest: '2'.repeat(64), workingDirectory: root,
+      proofAdmissionRequest: JSON.stringify({ version: 'proof.role-result-candidate-cli-request/v1', candidate: candidateEnvelope }),
+    });
+    await expect(admissionRun.started).resolves.toMatchObject({ kind: 'started' });
+    let admissionOutput: Record<string, unknown>;
+    try {
+      const outcome: any = await admissionRun.outcome;
+      expect(outcome.kind).toBe('succeeded');
+      admissionOutput = outcome.summary.output;
+    } finally {
+      await expect(admissionRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+    }
+    expect(admissionOutput!.Version).toBe('proof.role-result-candidate-admission/v2');
+    expect(admissionOutput!.ProjectLineage).toEqual(expect.objectContaining({ version: 'proof.git-project-lineage-binding/v1' }));
+    const admission = makeClaim('proof.admitted_receipt@1', admissionOutput!, 'proof_admit', [candidate.claimId]);
+    const revalidator = providers.createProofCatalogRevalidationProviderFromCapability(capability);
+    const revalidationRun = revalidator.startManaged({
+      prInfo, checkConfig: { type: 'proof-catalog-revalidate', consumes: [], emits: [] }, dependencyResults: new Map(),
+      executionContext: { claims: { current_inventory: inventory, candidate, receipt: admission } }, binding: binding('revalidate_catalog'), executionConfigDigest: '3'.repeat(64), workingDirectory: root,
+    });
+    await expect(revalidationRun.started).resolves.toMatchObject({ kind: 'started' });
+    let revalidationOutput: Record<string, unknown>;
+    try {
+      const outcome: any = await revalidationRun.outcome;
+      expect(outcome.kind).toBe('succeeded');
+      revalidationOutput = outcome.summary.output;
+    } finally {
+      await expect(revalidationRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+    }
+    expect(revalidationOutput!.version).toBe('proof.catalog-revalidation/v2');
+    expect((revalidationOutput!.receipt as Record<string, unknown>).project_lineage).toEqual(expect.objectContaining({ version: 'proof.git-project-lineage-binding/v1' }));
+    expect((revalidationOutput!.work_items as unknown[]).map(item => (item as Record<string, unknown>).component_id)).toEqual(['alpha', 'beta', 'gamma']);
+    const revalidation = makeClaim('proof.catalog_revalidation@1', revalidationOutput!, 'revalidate_catalog', [inventory.claimId, candidate.claimId, admission.claimId]);
+    const materializer = admittedModule.createProofAdmittedCatalogProviderFromCapability(capability);
+    const workItemsRun = materializer.startManaged({
+      prInfo, checkConfig: { type: 'proof-admitted-catalog', consumes: [], emits: [] }, dependencyResults: new Map(),
+      executionContext: { claims: { current_inventory: inventory, candidate, receipt: admission, current_revalidation: revalidation } }, binding: binding('materialize_catalog'), executionConfigDigest: '4'.repeat(64), workingDirectory: root,
+    });
+    await expect(workItemsRun.started).resolves.toMatchObject({ kind: 'started' });
+    try {
+      const outcome: any = await workItemsRun.outcome;
+      expect(outcome.kind).toBe('succeeded');
+      expect(outcome.summary.output.components.map((item: Record<string, unknown>) => item.component_id)).toEqual(['alpha', 'beta', 'gamma']);
+      expect(outcome.summary.output.components).toHaveLength(3);
+    } finally {
+      await expect(workItemsRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+    }
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+}, 120000);
+
 describe('EXP-0209 admitted discovery egress', () => {
   it('settles both new managed Proof providers and reaps their process groups', async () => {
     await withProofFixture(async (proof, root) => {
@@ -226,7 +363,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       ]);
       const capability = createProofAdmissionCapability(proof);
       const scope = [{ kind: 'keyed' as const, expansionOwnerCheck: 'project', key: 'journalservice', subgraphInstanceId: 'a'.repeat(64) }];
-      const makeClaim = (claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []) => immutableCanonicalValue({ claimId: sha256Canonical({ claim, payload, producerCheckId }), claim, payload, payloadFingerprint: sha256Canonical(payload), producerCheckId, scope, parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const, attemptId: 'b'.repeat(64), fence: 1 });
+      const makeClaim = (claim: string, payload: unknown, producerCheckId: string, parentClaimIds: string[] = []) => immutableCanonicalValue({ claimId: sha256Canonical({ claim, payload, producerCheckId }), claim, payload, payloadFingerprint: claim === 'proof.candidate@1' ? proofPayloadFingerprint(payload) : sha256Canonical(payload), producerCheckId, scope, parentClaimIds: [...parentClaimIds].sort(), provenance: 'attempt' as const, attemptId: 'b'.repeat(64), fence: 1 });
       const binding = (checkId: string) => immutableCanonicalValue({ managedRunId: sha256Canonical(checkId), sessionId: 'session', checkId, scope, nodeInstanceId: sha256Canonical(`${checkId}:node`), nodeGenerationId: sha256Canonical(`${checkId}:generation`), attemptId: sha256Canonical(`${checkId}:attempt`), fence: 1 });
       const project = makeClaim('project.discovery_item@1', { project_id: 'journalservice', root: '.' }, 'project');
       const structural = providers.createProofStructuralInventoryProviderFromCapability(capability);
@@ -238,7 +375,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       const inventory = makeClaim('proof.structural_inventory@1', structuralOutcome.summary.output, 'structural_inventory', [project.claimId]);
       const candidatePayload = fakeDiscovery({} as GovernedProbeRunnerRequest).data;
       const candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
-      const candidateBytes = Buffer.from(canonicalJson(candidatePayload), 'utf8');
+      const candidateBytes = Buffer.from(proofCanonicalJson(candidatePayload), 'utf8');
       const candidateBinding = {
         ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect',
         Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }],
@@ -252,14 +389,14 @@ describe('EXP-0209 admitted discovery egress', () => {
         Version: 'proof.role-result-candidate-envelope/v1',
         Invocation: { role_id: 'onboard', stance: 'owner', subject: { kind: 'project', id: 'journalservice', fingerprint: (inventory.payload as any).authority.subject_fingerprint }, output_schema_id: 'proof.component-catalog-candidate@1', output_schema: 'e30=' },
         InvocationDigest: 'sha256:' + '4'.repeat(64), RoleID: 'onboard', Stance: 'owner', Subject: { kind: 'project', id: 'journalservice', fingerprint: (inventory.payload as any).authority.subject_fingerprint },
-        AttestationVersion: 'probe.governed-codex-attestation/v2', ExecutionSource: 'caller', ProbeInvocationDigest: 'sha256:' + '4'.repeat(64), IdentityVersion: 'probe.governed-result-identity/v1', IdentitySource: 'probe-host-schema-valid-json', ResultDigest: governedResultDigest(candidatePayload), CanonicalBytes: candidateBytes.length, ProbeResultBytes: candidateBytes.toString('base64'), VisorPayloadBytes: candidateBytes.toString('base64'),
+        AttestationVersion: 'probe.governed-codex-attestation/v2', ExecutionSource: 'caller', ProbeInvocationDigest: 'sha256:' + '4'.repeat(64), IdentityVersion: 'probe.governed-result-identity/v1', IdentitySource: 'probe-host-schema-valid-json', ResultDigest: proofGovernedResultDigest(candidatePayload), CanonicalBytes: candidateBytes.length, ProbeResultBytes: candidateBytes.toString('base64'), VisorPayloadBytes: candidateBytes.toString('base64'),
         Publication: { Version: 1, Type: 'ClaimPublished', SessionID: 'session', CheckID: 'inspect', Scope: candidateBinding.Scope, NodeInstanceID: candidateBinding.NodeInstanceID, NodeGenerationID: candidateBinding.NodeGenerationID, AttemptID: candidateBinding.AttemptID, Fence: 1, ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, ProducerCheckID: 'inspect', Payload: candidateBytes.toString('base64'), ParentClaimIDs: candidate.parentClaimIds },
         Binding: candidateBinding, Termination: candidateTermination,
       };
       const candidateEnvelopeWire = JSON.stringify(candidateEnvelope);
       const admissionReceipt: Record<string, unknown> = {
         Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED',
-        CandidateID: proofDomainDigest('proof.role-result-candidate-envelope/id/v1', candidateEnvelopeWire), ProbeResultDigest: governedResultDigest(candidatePayload), ProbeCanonicalBytes: candidateBytes.length,
+        CandidateID: proofDomainDigest('proof.role-result-candidate-envelope/id/v1', candidateEnvelopeWire), ProbeResultDigest: proofGovernedResultDigest(candidatePayload), ProbeCanonicalBytes: candidateBytes.length,
         ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint,
         InvocationDigest: 'sha256:' + '4'.repeat(64), RoleID: 'onboard', Stance: 'owner', Subject: { kind: 'project', id: 'journalservice', fingerprint: (inventory.payload as any).authority.subject_fingerprint },
         ProducerCheckID: 'inspect', ParentClaimIDs: candidate.parentClaimIds,
@@ -330,6 +467,8 @@ describe('EXP-0209 admitted discovery egress', () => {
         const admissionEvent: any = events[admission];
         expect(typeof admissionEvent.payload.__proof_admission_wire).toBe('string');
         expect(JSON.parse(admissionEvent.payload.__proof_admission_wire)).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: expect.objectContaining({ Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED', ProjectLineage: null }), reject_code: null }));
+        const candidateEvent: any = events[candidate];
+        expect(Object.keys(candidateEvent.payload.components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']);
         const components = Object.values(journal.getInstanceProjection().instancesById).filter((value: any) => value.scope.length === 2) as any[];
         expect(components.map(value => value.itemKey).sort()).toEqual(['alpha', 'beta', 'gamma']);
         const event = (component: string, stage: ComponentTimelineEvent['stage']) => timeline.find(value => value.component === component && value.stage === stage)?.at;

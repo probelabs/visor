@@ -22,8 +22,10 @@ import {
 } from './proof-catalog-check-providers';
 import {
   goCompatibleProofJson,
+  immutableProofCanonicalValue,
   proofAdmissionCapabilityValid,
   proofCanonicalJson,
+  proofPayloadFingerprint,
   PROOF_ADMISSION_UNAVAILABLE,
   PROOF_ADMISSION_WIRE_FIELD,
   startProofManagedCliChild,
@@ -32,7 +34,7 @@ import {
 type PlainRecord = Record<string, unknown>;
 const INTERNAL = Symbol('proof-admitted-catalog-provider');
 
-export class ProofAdmittedCatalogError extends Error {
+class ProofAdmittedCatalogError extends Error {
   readonly code: string;
 
   constructor(code: string, message: string) {
@@ -60,7 +62,8 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
     fail('INVALID_CLAIM', `${label} is not the expected authoritative claim`);
   }
   try {
-    if (canonicalJson(value.payload) !== JSON.stringify(value.payload) || sha256Canonical(value.payload) !== value.payloadFingerprint) {
+    const payloadFingerprint = expectedClaim === PROOF_CANDIDATE_CLAIM ? proofPayloadFingerprint(value.payload) : sha256Canonical(value.payload);
+    if ((expectedClaim !== PROOF_CANDIDATE_CLAIM && canonicalJson(value.payload) !== JSON.stringify(value.payload)) || payloadFingerprint !== value.payloadFingerprint) {
       fail('DETACHED_CLAIM', `${label} payload is detached`);
     }
     if (JSON.stringify(value.scope) !== canonicalJson(value.scope) ||
@@ -74,7 +77,9 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
   const base = {
     claimId: value.claimId,
     claim: value.claim,
-    payload: immutableCanonicalValue(value.payload),
+    payload: expectedClaim === PROOF_CANDIDATE_CLAIM
+      ? immutableProofCanonicalValue(value.payload)
+      : immutableCanonicalValue(value.payload),
     payloadFingerprint: value.payloadFingerprint,
     producerCheckId: value.producerCheckId,
     scope: immutableCanonicalValue(value.scope),
@@ -87,55 +92,6 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
     return immutableCanonicalValue({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
   }
   fail('INVALID_CLAIM', `${label} provenance is invalid`);
-}
-
-function projectID(inventory: CandidateClaimInput): string {
-  if (!plain(inventory.payload) || !plain(inventory.payload.authority) || typeof inventory.payload.authority.project_id !== 'string' || inventory.payload.authority.project_id.length === 0) {
-    fail('INVALID_REVALIDATION_RECEIPT', 'current inventory has no Proof project authority');
-  }
-  return inventory.payload.authority.project_id;
-}
-
-export interface AdmittedCatalogMaterializationInput {
-  readonly inventory: CandidateClaimInput;
-  readonly candidate: CandidateClaimInput;
-  readonly admission: CandidateClaimInput;
-  readonly revalidation: CandidateClaimInput;
-}
-
-/**
- * Materialize only Proof's current, accepted component WorkItems. The shared
- * validator is also used by the managed revalidation provider, so graph
- * activation and deterministic egress cannot disagree about the wire.
- */
-export function materializeAdmittedCatalog(
-  input: AdmittedCatalogMaterializationInput,
-): Readonly<{ components: readonly PlainRecord[] }> {
-  const inventory = claim(input.inventory, PROOF_STRUCTURAL_INVENTORY_CLAIM, 'current inventory');
-  const candidate = claim(input.candidate, PROOF_CANDIDATE_CLAIM, 'candidate');
-  const admission = claim(input.admission, PROOF_ADMITTED_RECEIPT_CLAIM, 'admission');
-  const revalidation = claim(input.revalidation, PROOF_CATALOG_REVALIDATION_CLAIM, 'revalidation');
-  if (inventory.producerCheckId !== 'structural_inventory') {
-    fail('INVALID_CLAIM', 'current inventory is not produced by structural_inventory');
-  }
-  try {
-    const projection = validateProofCatalogRevalidationProjection(
-      revalidation.payload,
-      inventory.payload as PlainRecord,
-      candidate,
-      admission,
-      projectID(inventory),
-      revalidation,
-      inventory.claimId,
-    );
-    if (!plain(projection) || !Array.isArray(projection.work_items)) {
-      fail('INVALID_REVALIDATION_RECEIPT', 'Proof projection has no WorkItems');
-    }
-    return immutableCanonicalValue({ components: projection.work_items as readonly PlainRecord[] });
-  } catch (error) {
-    if (error instanceof ProofAdmittedCatalogError) throw error;
-    fail('INVALID_REVALIDATION_RECEIPT', error instanceof Error ? error.message : String(error));
-  }
 }
 
 export class ProofAdmittedCatalogCheckProvider extends CheckProvider {

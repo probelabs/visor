@@ -8,6 +8,7 @@ import type {
 } from '../../providers/check-provider.interface';
 import type { ReviewSummary } from '../../reviewer';
 import { validateProofCandidateEvidence } from '../../providers/governed-proof-inspect-check-provider';
+import { immutableProofCanonicalValue } from '../../providers/proof-wire';
 import { canonicalJson, immutableCanonicalValue } from '../graph/claim-kernel';
 import {
   requireKeyedScopePath,
@@ -463,11 +464,16 @@ export function normalizeManagedRunOutcome(
     if (!isPlainRecord(summary)) throw protocolError(code);
     if (kind === 'succeeded-proof-candidate') {
       const proofCandidateEvidence = validateProofCandidateEvidence(Reflect.get(value, 'proofCandidateEvidence', value));
+      const normalized = immutableCanonicalValue<ReviewSummary>(summary as ReviewSummary);
+      const proofSummary = Object.freeze({
+        ...normalized,
+        output: immutableProofCanonicalValue((summary as ReviewSummary & { output?: unknown }).output),
+      }) as ReviewSummary;
       return Object.freeze({
         version: 1,
         kind,
         binding,
-        summary: immutableCanonicalValue<ReviewSummary>(summary as ReviewSummary),
+        summary: proofSummary,
         proofCandidateEvidence,
       });
     }
