@@ -40,8 +40,9 @@ import {
 } from './providers/proof-admission-cli-child';
 import type { VisorConfig } from './types/config';
 import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
-import { readGraphCheckpointFile, publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
+import { publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
 import { compileClaimPlan } from './state-machine/graph/claim-plan';
+import type { GraphJournalCheckpointV1 } from './snapshot-store';
 
 const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 
@@ -106,20 +107,43 @@ function validateGovernedReceiptMode(options: import('./types/cli').CliOptions):
   try { fs.lstatSync(path.join(parent, path.basename(target))); throw new Error('--governed-receipt target must be absent'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
 
-function validateGraphCheckpointMode(options: import('./types/cli').CliOptions): void {
-  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner) return;
+export function validateArtifactPathAliases(options: import('./types/cli').CliOptions): void {
+  const identity = (target: string): string => {
+    const resolved = path.resolve(target);
+    try { return fs.realpathSync(resolved); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(resolved);
+      let realParent = parent;
+      try { realParent = fs.realpathSync(parent); } catch {}
+      return path.join(realParent, path.basename(resolved));
+    }
+  };
+  const paths = [
+    ['--graph-checkpoint-in', options.graphCheckpointIn],
+    ['--graph-checkpoint-out', options.graphCheckpointOut],
+    ['--governed-receipt', options.governedReceipt],
+    ['--output-file', options.outputFile],
+  ].filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  for (let left = 0; left < paths.length; left++) {
+    for (let right = left + 1; right < paths.length; right++) {
+      if (identity(paths[left][1]) === identity(paths[right][1])) {
+        throw new Error(`${paths[left][0]} cannot alias ${paths[right][0]}`);
+      }
+    }
+  }
+}
+
+export function validateGraphCheckpointMode(options: import('./types/cli').CliOptions): GraphJournalCheckpointV1 | undefined {
+  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner) return undefined;
   if (options.graphCheckpointOwner && !options.graphCheckpointIn) throw new Error('--graph-checkpoint-owner requires --graph-checkpoint-in');
   if ((options.graphCheckpointIn || options.graphCheckpointOut) && (!options.configPath || options.checks.length !== 1 || options.output !== 'json')) {
     throw new Error('--graph-checkpoint-in/out requires --config, one --check, and --output json');
   }
-  if (options.graphCheckpointIn) validateGraphCheckpointInputFile(path.resolve(options.graphCheckpointIn));
+  const checkpoint = options.graphCheckpointIn
+    ? validateGraphCheckpointInputFile(path.resolve(options.graphCheckpointIn))
+    : undefined;
   if (options.graphCheckpointOut) validateGraphCheckpointOutputTarget(path.resolve(options.graphCheckpointOut));
-  if (options.graphCheckpointIn && options.graphCheckpointOut && path.resolve(options.graphCheckpointIn) === path.resolve(options.graphCheckpointOut)) {
-    throw new Error('--graph-checkpoint-in and --graph-checkpoint-out cannot refer to the same file');
-  }
-  if (options.graphCheckpointOut && options.governedReceipt && path.resolve(options.graphCheckpointOut) === path.resolve(options.governedReceipt)) {
-    throw new Error('--graph-checkpoint-out cannot alias --governed-receipt');
-  }
+  return checkpoint;
 }
 
 function resolveGraphCheckpointOwner(config: VisorConfig, checks: readonly string[], explicit?: string): string {
@@ -1569,8 +1593,11 @@ export async function main(): Promise<void> {
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
+    validateArtifactPathAliases(options);
     validateGovernedReceiptMode(options);
-    validateGraphCheckpointMode(options);
+    // Parse and authenticate the checkpoint before Proof role resolution,
+    // provider registry mutation, telemetry, or any other external launch.
+    const graphCheckpointInput = validateGraphCheckpointMode(options);
     const receiptSourceConfigSha256 = options.governedReceipt && options.configPath
       ? createHash('sha256').update(fs.readFileSync(path.resolve(options.configPath))).digest('hex')
       : undefined;
@@ -2673,7 +2700,7 @@ export async function main(): Promise<void> {
           { source: 'cli', workflowId: checksToRun.join(',') },
           async () => {
             if (options.graphCheckpointIn) {
-              const checkpoint = readGraphCheckpointFile(options.graphCheckpointIn);
+              const checkpoint = graphCheckpointInput!;
               const ownerCheck = resolveGraphCheckpointOwner(config, checksToRun, options.graphCheckpointOwner);
               const continued = await engine.continueGraphCheckpoint({
                 checkpoint,

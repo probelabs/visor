@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { canonicalJson } from './state-machine/graph/claim-kernel';
-import type { GraphJournalCheckpointV1 } from './snapshot-store';
+import { ExecutionJournal, type GraphJournalCheckpointV1 } from './snapshot-store';
 
 /**
  * File boundary for the portable Graph-v2 checkpoint.
@@ -53,24 +53,22 @@ function sameDirectory(parent: string, identity: fs.Stats): boolean {
 }
 
 /** Read a checkpoint file without granting it any authority. */
-export function readGraphCheckpointFile(target: string): unknown {
+export function readGraphCheckpointFile(target: string): GraphJournalCheckpointV1 {
   const { parent, name } = privateParent(target, 'graph checkpoint input');
   const finalTarget = path.join(parent, name);
   const stat = fs.lstatSync(finalTarget);
   if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('graph checkpoint input must be a regular file');
   const text = fs.readFileSync(finalTarget, 'utf8');
   try {
-    return JSON.parse(text);
+    return ExecutionJournal.validateGraphCheckpointIntegrity(JSON.parse(text));
   } catch (error) {
     throw new Error(`graph checkpoint input is not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 /** Validate an input path before the engine is constructed or providers run. */
-export function validateGraphCheckpointInputFile(target: string): void {
-  const { parent, name } = privateParent(target, 'graph checkpoint input');
-  const stat = fs.lstatSync(path.join(parent, name));
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('graph checkpoint input must be a regular file');
+export function validateGraphCheckpointInputFile(target: string): GraphJournalCheckpointV1 {
+  return readGraphCheckpointFile(target);
 }
 
 /** Validate an output path before the engine is constructed or providers run. */

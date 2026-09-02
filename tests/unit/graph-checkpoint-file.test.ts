@@ -2,13 +2,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, syml
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
-import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 import { publishGraphCheckpointFile, readGraphCheckpointFile, validateGraphCheckpointInputFile } from '../../src/graph-checkpoint-file';
 
-const checkpoint: any = {
+const checkpointBody: any = {
   kind: 'visor.graph-journal-checkpoint', version: 1, sessionId: 'session', graphSemanticDigest: 'a'.repeat(64),
-  frontier: { eventCount: 0, lastEventId: 0 }, events: [], integrity: { algorithm: 'sha256', digest: 'b'.repeat(64) },
+  frontier: { eventCount: 0, lastEventId: 0 }, events: [],
 };
+const checkpoint: any = { ...checkpointBody, integrity: { algorithm: 'sha256', digest: sha256Canonical(checkpointBody) } };
 
 describe('public Graph-v2 checkpoint file boundary', () => {
   it('publishes canonical JSON atomically to a new 0600 file and reads it back', () => {
@@ -28,10 +29,19 @@ describe('public Graph-v2 checkpoint file boundary', () => {
     try {
       expect(() => validateGraphCheckpointInputFile(join(publicRoot, 'missing.json'))).toThrow(/private/);
       expect(() => publishGraphCheckpointFile(checkpoint, join(publicRoot, 'out.json'))).toThrow(/private/);
-      const regular = join(root, 'regular.json'); writeFileSync(regular, '{}');
+      const regular = join(root, 'regular.json'); writeFileSync(regular, canonicalJson(checkpoint));
       expect(() => validateGraphCheckpointInputFile(regular)).not.toThrow();
       const linked = join(root, 'linked.json'); symlinkSync(regular, linked);
       expect(() => validateGraphCheckpointInputFile(linked)).toThrow(/regular file/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('rejects corrupt integrity before returning any checkpoint authority', () => {
+    const root = mkdtempSync(join(tmpdir(), 'visor-checkpoint-')); chmodSync(root, 0o700);
+    const target = join(root, 'corrupt.json');
+    try {
+      writeFileSync(target, canonicalJson({ ...checkpoint, sessionId: 'tampered' }));
+      expect(() => validateGraphCheckpointInputFile(target)).toThrow(/integrity digest/);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

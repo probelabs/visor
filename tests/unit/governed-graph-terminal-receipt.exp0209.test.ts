@@ -19,7 +19,7 @@ function receipt(): any {
   return {
     version: 'visor.governed-graph-terminal-receipt/v2', status: 'passed', sourceConfigSha256: idA, sessionId: 'session', graphSemanticDigest: idB, componentCount: 3,
     nodes: { inspect: { terminalCount: 3, status: 'completed' }, proof_admit: { terminalCount: 3, status: 'completed' }, verify: { terminalCount: 3, status: 'completed' } },
-    discovery: { candidateClaimId: idC, admittedReceiptClaimId: idD, verifyInputClaimIds: [idC], attestation: null, status: 'completed' },
+    discovery: { candidateClaimId: idC, admittedReceiptClaimId: idD, verifyInputClaimIds: [idC], structuralInventoryClaimId: idH, catalogRevalidationClaimId: idI, projectReconciliationClaimId: idJ, projectReconciliationInputClaimIds: [idI, idK, idL].sort(), attestation: null, status: 'completed' },
     components: [component('http-adapter', idE, 'a'), component('service-policy', idF, 'c'), component('storage-domain', idG, 'e')],
     providerCleanupStatus: 'clean', managedUncleanTerminalCount: 0, activeChildren: 0, activeResources: 0, memoryStatus: 'clean', projectionReplayEqual: true, failureCode: null, exitStatus: 0,
   };
@@ -34,5 +34,18 @@ describe('EXP-0209 multi-component governed terminal receipt', () => {
     const duplicate = receipt(); duplicate.components[1] = { ...duplicate.components[0] }; expect(() => validateGovernedGraphTerminalReceipt(duplicate)).toThrow(/sorted|duplicate/);
     const incomplete = receipt(); incomplete.components[0] = { ...incomplete.components[0], verifyInputClaimIds: [incomplete.components[0].candidateClaimId] }; expect(() => validateGovernedGraphTerminalReceipt(incomplete)).toThrow();
     const missing = receipt(); missing.components = missing.components.slice(0, 2); expect(() => validateGovernedGraphTerminalReceipt(missing)).toThrow();
+  });
+
+  it('rejects absent and nonterminal component generations even for a failed receipt', () => {
+    for (const status of ['absent', 'nonterminal']) {
+      const value = receipt(); value.status = 'failed'; value.exitStatus = 1;
+      value.components[0] = { ...value.components[0], status: 'failed', generation: { ...value.components[0].generation, verify: { generationId: status === 'absent' ? null : idL, status } } };
+      expect(() => validateGovernedGraphTerminalReceipt(value)).toThrow(/incomplete/);
+    }
+  });
+
+  it('rejects a component entry whose key is foreign to its keyed scope', () => {
+    const value = receipt(); value.components[0] = { ...value.components[0], componentKey: 'foreign-component' };
+    expect(() => validateGovernedGraphTerminalReceipt(value)).toThrow(/component receipt/);
   });
 });

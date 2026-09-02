@@ -2,15 +2,18 @@ import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { canonicalJson } from './state-machine/graph/claim-kernel';
-import { PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CANDIDATE_CLAIM } from './state-machine/graph/instance-plan';
+import { PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM, PROOF_STRUCTURAL_INVENTORY_CLAIM } from './state-machine/graph/instance-plan';
 import type { ExecutionJournal } from './snapshot-store';
-import type { InstanceProjection, NodeGenerationProjection } from './state-machine/graph/instance-kernel';
+import { requireKeyedScopePath, type InstanceProjection, type NodeGenerationProjection } from './state-machine/graph/instance-kernel';
 import { validateProofCandidateEvidence } from './providers/governed-proof-inspect-check-provider';
 import { COMPONENT_WORK_ITEM_CLAIM } from './providers/governed-proof-inspect-check-provider';
 
 export const GOVERNED_GRAPH_TERMINAL_RECEIPT_SCHEMA = 'visor.governed-graph-terminal-receipt/v1';
 /** Multi-component extension; v1 remains the wire shape for one-component callers. */
 export const GOVERNED_GRAPH_MULTI_TERMINAL_RECEIPT_SCHEMA = 'visor.governed-graph-terminal-receipt/v2';
+export const PROOF_DISCOVERY_CATALOG_CANDIDATE_CLAIM = 'proof.component_catalog_candidate@1';
+export const PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM = 'proof.project_reconciliation_receipt@1';
+export const PROOF_ONBOARDING_CANDIDATE_CLAIM = 'proof.onboarding_candidate@1';
 const SHA = /^[0-9a-f]{64}$/;
 const FAILURE_CODES = new Set(['MANAGED_HANDLE_INVALID','MANAGED_BINDING_MISMATCH','MANAGED_START_FAILED','MANAGED_STARTED_RECEIPT_INVALID','MANAGED_OUTCOME_FAILED','MANAGED_OUTCOME_RECEIPT_INVALID','MANAGED_DEADLINE_EXCEEDED','MANAGED_CANCEL_FAILED','MANAGED_CANCEL_RECEIPT_INVALID','MANAGED_CLOSE_FAILED','MANAGED_CLEANUP_RECEIPT_INVALID','MANAGED_SANDBOX_UNSUPPORTED','MANAGED_DEBOUNCE_UNSUPPORTED','MANAGED_FATAL_SUMMARY','MANAGED_FAIL_IF','MANAGED_HALT_EXECUTION','MANAGED_CLAIM_VALIDATION_FAILED','MANAGED_POST_PROVIDER_FAILED']);
 const ATTESTATION_VERSION = 'probe.governed-codex-attestation/v2';
@@ -75,6 +78,10 @@ export interface GovernedGraphDiscoveryTerminalReceiptEntry {
   readonly candidateClaimId: string;
   readonly admittedReceiptClaimId: string;
   readonly verifyInputClaimIds: readonly string[];
+  readonly structuralInventoryClaimId: string;
+  readonly catalogRevalidationClaimId: string;
+  readonly projectReconciliationClaimId: string;
+  readonly projectReconciliationInputClaimIds: readonly string[];
   readonly attestation: GovernedGraphTerminalReceipt['attestation'];
   readonly status: 'completed';
 }
@@ -146,76 +153,75 @@ function generationState(generation: NodeGenerationProjection | undefined): { ge
   return { generationId: generation.nodeGenerationId, status: 'nonterminal' };
 }
 
-function projectMultiComponentReceipt(input: GovernedReceiptProjectionInput, live: InstanceProjection, replay: InstanceProjection, sessionId: string, graphSemanticDigest: string, events: readonly any[]): GovernedGraphMultiTerminalReceiptDraft {
+function projectMultiComponentReceipt(input: GovernedReceiptProjectionInput, live: InstanceProjection, replay: InstanceProjection, sessionId: string, graphSemanticDigest: string): GovernedGraphMultiTerminalReceiptDraft {
+  const activeClaims = Object.values(live.claimsById).filter((claim: any) => claim.active);
   const instances = Object.values(live.instancesById).filter(instance => instance.status === 'active');
-  if (instances.length < 2) throw new Error('multi-component receipt requires at least two active components');
-  if (instances.some(instance => instance.sessionId !== sessionId || instance.parentSubgraphInstanceId !== undefined || instance.scope.length !== 1 || instance.scope[0].kind !== 'keyed')) throw new Error('receipt topology contains a foreign or non-root component');
-  const sortedInstances = [...instances].sort((left, right) => left.scope[0].key.localeCompare(right.scope[0].key));
-  const keys = sortedInstances.map(instance => instance.scope[0].key);
+  const componentInstances = instances.filter(instance => activeClaims.some((claim: any) => claim.claim === COMPONENT_WORK_ITEM_CLAIM && claim.subgraphInstanceId === instance.subgraphInstanceId && claim.claimId === instance.activeItemClaimId));
+  if (componentInstances.length < 2) throw new Error('multi-component receipt requires at least two active component WorkItems');
+  if (componentInstances.some(instance => instance.sessionId !== sessionId || instance.scope.length < 1 || instance.scope[instance.scope.length - 1].kind !== 'keyed')) throw new Error('receipt topology contains a foreign component');
+  const componentKey = (instance: typeof componentInstances[number]) => instance.scope[instance.scope.length - 1].key;
+  const sortedInstances = [...componentInstances].sort((left, right) => componentKey(left).localeCompare(componentKey(right)));
+  const keys = sortedInstances.map(componentKey);
   if (new Set(keys).size !== keys.length) throw new Error('receipt has duplicate component keys');
 
   const generations = Object.values(live.generationsById);
-  const activationEvents: any[] = events.filter(event => event.type === 'NodeGenerationActivated');
+  const componentIds = new Set(componentInstances.map(instance => instance.subgraphInstanceId));
+  const componentGenerations = generations.filter(generation => componentIds.has(generation.subgraphInstanceId));
   const reserved = new Set(['inspect', 'proof_admit', 'verify']);
-  for (const generation of generations.filter(generation => generation.status !== 'inactive')) {
+  for (const generation of componentGenerations.filter(generation => generation.status !== 'inactive')) {
     if (!reserved.has(generation.templateNodeKey) || generation.templateNodeKey !== generation.checkId) throw new Error('receipt graph generation key is not exact');
   }
-  for (const event of activationEvents) {
-    if (reserved.has(event.templateNodeKey) || reserved.has(event.checkId)) {
-      if (event.templateNodeKey !== event.checkId || !reserved.has(event.templateNodeKey)) throw new Error('receipt graph activation key is not exact');
-    }
-  }
 
-  const claimProjection = input.journal.getClaimProjection();
-  const rootClaims = Object.values(claimProjection.claims).filter((claim: any) => claim.active && Array.isArray(claim.scope) && claim.scope.length === 0);
-  const discoveryReceipts = rootClaims.filter((claim: any) => claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+  const discoveryCandidates = activeClaims.filter((claim: any) => claim.claim === PROOF_DISCOVERY_CATALOG_CANDIDATE_CLAIM);
+  if (discoveryCandidates.length !== 1) throw new Error('receipt requires exactly one discovery catalog candidate');
+  const discoveryCandidate: any = discoveryCandidates[0];
+  const discoveryScope = canonicalJson(discoveryCandidate.scope);
+  const discoveryReceipts = activeClaims.filter((claim: any) => claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM && canonicalJson(claim.scope) === discoveryScope && claim.parentClaimIds.includes(discoveryCandidate.claimId));
   if (discoveryReceipts.length !== 1) throw new Error('receipt requires exactly one admitted discovery entry');
   const discoveryReceipt: any = discoveryReceipts[0];
   if (!Array.isArray(discoveryReceipt.parentClaimIds) || discoveryReceipt.parentClaimIds.length < 1 || new Set(discoveryReceipt.parentClaimIds).size !== discoveryReceipt.parentClaimIds.length) throw new Error('discovery admission inputs are not exact');
-  const discoveryCandidates = rootClaims.filter((claim: any) => discoveryReceipt.parentClaimIds.includes(claim.claimId) && claim.claim !== 'proof.discovery_role_authority@1');
-  if (discoveryCandidates.length !== 1) throw new Error('receipt discovery candidate is missing or cross-scope');
-  const discoveryCandidate: any = discoveryCandidates[0];
-  const discovery = {
-    candidateClaimId: discoveryCandidate.claimId,
-    admittedReceiptClaimId: discoveryReceipt.claimId,
-    verifyInputClaimIds: [...discoveryReceipt.parentClaimIds].sort(),
-    attestation: attestationForClaim(discoveryCandidate),
-    status: 'completed' as const,
-  };
+  const inventories = activeClaims.filter((claim: any) => claim.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM && canonicalJson(claim.scope) === discoveryScope);
+  if (inventories.length !== 1) throw new Error('receipt requires exactly one current structural inventory');
+  const revalidations = activeClaims.filter((claim: any) => claim.claim === PROOF_CATALOG_REVALIDATION_CLAIM && canonicalJson(claim.scope) === discoveryScope);
+  if (revalidations.length !== 1) throw new Error('receipt requires exactly one current catalog revalidation');
+  const revalidation: any = revalidations[0];
+  const requiredRevalidationInputs = [inventories[0].claimId, discoveryCandidate.claimId, discoveryReceipt.claimId].sort();
+  if (canonicalJson([...revalidation.parentClaimIds].sort()) !== canonicalJson(requiredRevalidationInputs)) throw new Error('catalog revalidation inputs are missing, foreign, or stale');
 
   const componentEntries = sortedInstances.map(instance => {
+    const key = componentKey(instance);
     const scope = instance.scope;
     const scopeJson = canonicalJson(scope);
     const inScope = (claim: any) => claim.active && claim.subgraphInstanceId === instance.subgraphInstanceId && canonicalJson(claim.scope) === scopeJson;
     const componentClaims = Object.values(live.claimsById).filter(inScope);
     const workItems = componentClaims.filter((claim: any) => claim.claim === COMPONENT_WORK_ITEM_CLAIM);
-    if (workItems.length !== 1) throw new Error(`receipt work item claim is missing or duplicated for ${instance.scope[0].key}`);
+    if (workItems.length !== 1 || workItems[0].claimId !== instance.activeItemClaimId) throw new Error(`receipt work item claim is missing, duplicated, or stale for ${key}`);
     const candidates = componentClaims.filter((claim: any) => claim.claim === PROOF_CANDIDATE_CLAIM);
-    if (candidates.length !== 1) throw new Error(`receipt candidate claim is missing or duplicated for ${instance.scope[0].key}`);
+    if (candidates.length !== 1) throw new Error(`receipt candidate claim is missing or duplicated for ${key}`);
     const admitted = componentClaims.filter((claim: any) => claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
-    if (admitted.length > 1) throw new Error(`receipt admitted claim is duplicated for ${instance.scope[0].key}`);
+    if (admitted.length !== 1 || !admitted[0].parentClaimIds.includes(candidates[0].claimId)) throw new Error(`receipt admitted claim is missing, duplicated, or detached for ${key}`);
     const currentGenerations = (key: string) => generations.filter(generation => generation.status !== 'inactive' && generation.subgraphInstanceId === instance.subgraphInstanceId && generation.templateNodeKey === key && generation.checkId === key);
     const byKey = (key: string): NodeGenerationProjection | undefined => {
       const values = currentGenerations(key);
-      if (values.length > 1) throw new Error(`receipt has duplicate active ${key} generations for ${instance.scope[0].key}`);
+      if (values.length > 1) throw new Error(`receipt has duplicate active ${key} generations for ${componentKey(instance)}`);
       return values[0];
     };
     const inspect = byKey('inspect');
     const proofAdmit = byKey('proof_admit');
     const verify = byKey('verify');
-    if (!inspect || !proofAdmit) throw new Error(`receipt component ${instance.scope[0].key} is missing an onboarding generation`);
+    if (!inspect || !proofAdmit || !verify) throw new Error(`receipt component ${key} is missing a terminal onboarding generation`);
     const inspectState = generationState(inspect);
     const proofState = generationState(proofAdmit);
     const verifyState = generationState(verify);
-    const verifyInputs = verify ? [...verify.activeInputClaimIds] : [];
-    if (verify && (!admitted[0] || verifyInputs.length !== 2 || canonicalJson([...verifyInputs].sort()) !== canonicalJson([candidates[0].claimId, admitted[0].claimId].sort()))) throw new Error(`receipt verify inputs are not exact for ${instance.scope[0].key}`);
-    if (!verify && verifyInputs.length !== 0) throw new Error(`receipt verify inputs are not exact for ${instance.scope[0].key}`);
+    if ([inspectState.status, proofState.status, verifyState.status].some(status => status === 'absent' || status === 'nonterminal')) throw new Error(`receipt component ${key} is nonterminal`);
+    const verifyInputs = [...verify.activeInputClaimIds];
+    if (verifyInputs.length !== 2 || canonicalJson([...verifyInputs].sort()) !== canonicalJson([candidates[0].claimId, admitted[0].claimId].sort())) throw new Error(`receipt verify inputs are not exact for ${key}`);
     const componentManaged = Object.values(live.managedRunsByAttemptId).filter((run: any) => run.binding.scope && canonicalJson(run.binding.scope) === scopeJson);
-    if (componentManaged.some((run: any) => run.binding.sessionId !== sessionId || run.binding.scope.length !== 1 || run.binding.scope[0].key !== instance.scope[0].key || !generations.some(generation => generation.nodeGenerationId === run.binding.nodeGenerationId && generation.subgraphInstanceId === instance.subgraphInstanceId))) throw new Error(`receipt managed run is outside component ${instance.scope[0].key}`);
-    if (componentManaged.some((run: any) => run.status !== 'terminated' || run.cleanupStatus !== 'clean')) throw new Error(`receipt component ${instance.scope[0].key} is not cleanup-quiescent`);
-    const status = inspectState.status === 'completed' && proofState.status === 'completed' && verifyState.status === 'completed' && admitted.length === 1 ? 'passed' as const : 'failed' as const;
+    if (componentManaged.some((run: any) => run.binding.sessionId !== sessionId || canonicalJson(run.binding.scope) !== scopeJson || !generations.some(generation => generation.nodeGenerationId === run.binding.nodeGenerationId && generation.subgraphInstanceId === instance.subgraphInstanceId))) throw new Error(`receipt managed run is outside component ${key}`);
+    if (componentManaged.some((run: any) => run.status !== 'terminated' || run.cleanupStatus !== 'clean')) throw new Error(`receipt component ${key} is not cleanup-quiescent`);
+    const status = inspectState.status === 'completed' && proofState.status === 'completed' && verifyState.status === 'completed' ? 'passed' as const : 'failed' as const;
     return {
-      componentKey: instance.scope[0].key,
+      componentKey: key,
       scope,
       workItemClaimId: (workItems[0] as any).claimId,
       candidateClaimId: (candidates[0] as any).claimId,
@@ -227,6 +233,22 @@ function projectMultiComponentReceipt(input: GovernedReceiptProjectionInput, liv
       cleanupStatus: 'clean' as const,
     };
   });
+  const reconciliations = activeClaims.filter((claim: any) => claim.claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM && canonicalJson(claim.scope) === discoveryScope);
+  if (reconciliations.length !== 1) throw new Error('receipt requires exactly one final whole-project reconciliation');
+  const reconciliation: any = reconciliations[0];
+  const requiredReconciliationInputs = [revalidation.claimId, ...componentEntries.map(component => component.admittedReceiptClaimId!)].sort();
+  if (!requiredReconciliationInputs.every(claimId => reconciliation.parentClaimIds.includes(claimId)) || new Set(reconciliation.parentClaimIds).size !== reconciliation.parentClaimIds.length) throw new Error('whole-project reconciliation inputs are incomplete or duplicated');
+  const discovery = {
+    candidateClaimId: discoveryCandidate.claimId,
+    admittedReceiptClaimId: discoveryReceipt.claimId,
+    verifyInputClaimIds: [...discoveryReceipt.parentClaimIds].sort(),
+    structuralInventoryClaimId: (inventories[0] as any).claimId,
+    catalogRevalidationClaimId: revalidation.claimId,
+    projectReconciliationClaimId: reconciliation.claimId,
+    projectReconciliationInputClaimIds: [...reconciliation.parentClaimIds].sort(),
+    attestation: attestationForClaim(discoveryCandidate),
+    status: 'completed' as const,
+  };
   const managed = Object.values(live.managedRunsByAttemptId);
   const managedUncleanTerminalCount = managed.filter(run => run.status === 'terminated' && run.cleanupStatus !== 'clean').length;
   if (managed.some(run => run.status !== 'terminated')) throw new Error('receipt managed cleanup is not quiescent');
@@ -234,9 +256,9 @@ function projectMultiComponentReceipt(input: GovernedReceiptProjectionInput, liv
   const failureCode = failedRun?.failureCode ?? null;
   if (failureCode !== null && !FAILURE_CODES.has(failureCode)) throw new Error('receipt failure code is not allowlisted');
   const nodes = {
-    inspect: nodeSummary(generations, 'inspect'),
-    proof_admit: nodeSummary(generations, 'proof_admit'),
-    verify: nodeSummary(generations, 'verify'),
+    inspect: nodeSummary(componentGenerations, 'inspect'),
+    proof_admit: nodeSummary(componentGenerations, 'proof_admit'),
+    verify: nodeSummary(componentGenerations, 'verify'),
   };
   const projectionReplayEqual = canonicalJson(live) === canonicalJson(replay);
   return Object.freeze({
@@ -271,7 +293,8 @@ export function projectGovernedGraphTerminalReceipt(input: GovernedReceiptProjec
   if (Buffer.byteLength(sessionId, 'utf8') > 256) throw new Error('receipt session identity is oversized');
   const instances = Object.values(live.instancesById);
   const activeInstances = instances.filter(instance => instance.status === 'active');
-  if (activeInstances.length > 1) return projectMultiComponentReceipt(input, live, replay, sessionId, graphSemanticDigest, events);
+  const activeComponentWorkItems = Object.values(live.claimsById).filter((claim: any) => claim.active && claim.claim === COMPONENT_WORK_ITEM_CLAIM);
+  if (activeComponentWorkItems.length > 1) return projectMultiComponentReceipt(input, live, replay, sessionId, graphSemanticDigest);
   if (instances.length !== 1 || activeInstances.length !== 1) throw new Error('receipt topology is not one active component');
   const component = activeInstances[0];
   if (component.sessionId !== sessionId || component.parentSubgraphInstanceId !== undefined || component.scope.length !== 1 || component.scope[0].kind !== 'keyed') throw new Error('receipt topology is not one deterministic root component');
@@ -373,9 +396,9 @@ function validateMultiTerminalReceipt(value: any): asserts value is GovernedGrap
     if (!Number.isSafeInteger(n.terminalCount) || n.terminalCount < 0 || n.terminalCount > 1024 || !['completed','failed','nonterminal','absent'].includes(n.status)) throw new Error('invalid governed node summary');
   }
   const discovery: any = r.discovery as any;
-  if (!plain(discovery) || !exact(discovery, ['candidateClaimId','admittedReceiptClaimId','verifyInputClaimIds','attestation','status'])) throw new Error('invalid governed discovery receipt');
+  if (!plain(discovery) || !exact(discovery, ['candidateClaimId','admittedReceiptClaimId','verifyInputClaimIds','structuralInventoryClaimId','catalogRevalidationClaimId','projectReconciliationClaimId','projectReconciliationInputClaimIds','attestation','status'])) throw new Error('invalid governed discovery receipt');
   const d: any = discovery;
-  if (!SHA.test(d.candidateClaimId) || !SHA.test(d.admittedReceiptClaimId) || !Array.isArray(d.verifyInputClaimIds) || d.verifyInputClaimIds.length < 1 || d.verifyInputClaimIds.some((id: unknown) => typeof id !== 'string' || !SHA.test(id)) || !d.verifyInputClaimIds.includes(d.candidateClaimId) || canonicalJson([...d.verifyInputClaimIds].sort()) !== canonicalJson(d.verifyInputClaimIds) || d.status !== 'completed') throw new Error('invalid governed discovery receipt');
+  if (!SHA.test(d.candidateClaimId) || !SHA.test(d.admittedReceiptClaimId) || !SHA.test(d.structuralInventoryClaimId) || !SHA.test(d.catalogRevalidationClaimId) || !SHA.test(d.projectReconciliationClaimId) || !Array.isArray(d.verifyInputClaimIds) || d.verifyInputClaimIds.length < 1 || d.verifyInputClaimIds.some((id: unknown) => typeof id !== 'string' || !SHA.test(id)) || !d.verifyInputClaimIds.includes(d.candidateClaimId) || canonicalJson([...d.verifyInputClaimIds].sort()) !== canonicalJson(d.verifyInputClaimIds) || !Array.isArray(d.projectReconciliationInputClaimIds) || d.projectReconciliationInputClaimIds.some((id: unknown) => typeof id !== 'string' || !SHA.test(id)) || canonicalJson([...d.projectReconciliationInputClaimIds].sort()) !== canonicalJson(d.projectReconciliationInputClaimIds) || !d.projectReconciliationInputClaimIds.includes(d.catalogRevalidationClaimId) || d.status !== 'completed') throw new Error('invalid governed discovery receipt');
   validateAttestation(d.attestation);
   let previousKey: string | undefined;
   const componentKeys = new Set<string>();
@@ -383,7 +406,9 @@ function validateMultiTerminalReceipt(value: any): asserts value is GovernedGrap
     const component: any = componentValue as any;
     if (!plain(component) || !exact(component, ['componentKey','scope','workItemClaimId','candidateClaimId','admittedReceiptClaimId','generation','verifyInputClaimIds','attestation','status','cleanupStatus'])) throw new Error('invalid governed component receipt');
     const c: any = component;
-    if (!boundedString(c.componentKey, 256) || !Array.isArray(c.scope) || c.scope.length !== 1 || !SHA.test(c.workItemClaimId) || !SHA.test(c.candidateClaimId) || (c.admittedReceiptClaimId !== null && !SHA.test(c.admittedReceiptClaimId)) || !Array.isArray(c.verifyInputClaimIds) || (c.status !== 'passed' && c.status !== 'failed') || c.cleanupStatus !== 'clean') throw new Error('invalid governed component receipt');
+    let validatedScope;
+    try { validatedScope = requireKeyedScopePath(c.scope); } catch { throw new Error('invalid governed component receipt'); }
+    if (!boundedString(c.componentKey, 256) || validatedScope[validatedScope.length - 1].key !== c.componentKey || !SHA.test(c.workItemClaimId) || !SHA.test(c.candidateClaimId) || (c.admittedReceiptClaimId !== null && !SHA.test(c.admittedReceiptClaimId)) || !Array.isArray(c.verifyInputClaimIds) || (c.status !== 'passed' && c.status !== 'failed') || c.cleanupStatus !== 'clean') throw new Error('invalid governed component receipt');
     if (previousKey !== undefined && previousKey >= c.componentKey) throw new Error('governed components are not sorted');
     previousKey = c.componentKey;
     if (componentKeys.has(c.componentKey)) throw new Error('duplicate governed component receipt');
@@ -397,8 +422,8 @@ function validateMultiTerminalReceipt(value: any): asserts value is GovernedGrap
       if ((n.generationId !== null && !SHA.test(n.generationId)) || !['completed','failed','nonterminal','absent'].includes(n.status) || (n.status === 'absent' && n.generationId !== null) || (n.status !== 'absent' && n.generationId === null)) throw new Error('invalid governed component generation');
     }
     validateAttestation(c.attestation);
+    if (!c.attestation || c.admittedReceiptClaimId === null || ['inspect','proof_admit','verify'].some(key => !['completed','failed'].includes((generation as any)[key].status)) || c.verifyInputClaimIds.length !== 2 || canonicalJson([...c.verifyInputClaimIds].sort()) !== canonicalJson([c.candidateClaimId, c.admittedReceiptClaimId].sort())) throw new Error('invalid incomplete governed component');
     if (c.status === 'passed' && (!c.attestation || (generation as any).inspect.status !== 'completed' || (generation as any).proof_admit.status !== 'completed' || (generation as any).verify.status !== 'completed' || c.admittedReceiptClaimId === null || c.candidateClaimId === c.admittedReceiptClaimId || c.workItemClaimId === c.candidateClaimId || c.verifyInputClaimIds.length !== 2 || canonicalJson([...c.verifyInputClaimIds].sort()) !== canonicalJson([c.candidateClaimId, c.admittedReceiptClaimId].sort()))) throw new Error('invalid passed governed component');
-    if (c.status === 'failed' && c.verifyInputClaimIds.length > 2) throw new Error('invalid failed governed component');
   }
   if (r.status === 'passed' && (r.exitStatus !== 0 || r.memoryStatus !== 'clean' || r.failureCode !== null || r.discovery.status !== 'completed' || r.nodes.inspect.status !== 'completed' || r.nodes.inspect.terminalCount !== r.componentCount || r.nodes.proof_admit.status !== 'completed' || r.nodes.proof_admit.terminalCount !== r.componentCount || r.nodes.verify.status !== 'completed' || r.nodes.verify.terminalCount !== r.componentCount || r.components.some((component: any) => component.status !== 'passed'))) throw new Error('invalid passed multi-component governed receipt');
   const canonical = canonicalJson(value); if (!canonical.endsWith('}') || Buffer.byteLength(canonical + '\n', 'utf8') > 262144) throw new Error('governed receipt is oversized or noncanonical');

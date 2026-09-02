@@ -573,6 +573,15 @@ export class ExecutionJournal {
 
   constructor(private readonly claimPlan?: ClaimPlan) {}
 
+  /**
+   * Validate the self-authenticating checkpoint envelope before any external
+   * authority or provider is consulted. Graph-plan authority is checked later
+   * by restoreGraphCheckpoint once the trusted configuration is available.
+   */
+  static validateGraphCheckpointIntegrity(input: unknown): GraphJournalCheckpointV1 {
+    return immutableCanonicalValue(parseGraphCheckpoint(input));
+  }
+
   /** Export the immutable Graph-v2 runtime prefix and its canonical integrity digest. */
   exportGraphCheckpoint(sessionId: string): GraphJournalCheckpointV1 {
     checkpointString(sessionId, 'sessionId');
