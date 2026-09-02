@@ -1,0 +1,420 @@
+import { describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import * as yaml from 'js-yaml';
+import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapshot-store';
+import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
+import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
+
+const PROOF_AUTHORITY = '/Users/buger/go/src/reqforge-exp-0207a-proof-cli-admission';
+const EXP0209_PROFILE = '/Users/buger/go/src/visor-exp-0208-product-native-demo-pack/examples/agent-governance/exp-0209-discovery-egress/visor.yaml';
+const PROFILE = 'luna-xhigh-readonly-v1';
+const SCHEMA = Buffer.from('{"type":"object","additionalProperties":false}', 'utf8').toString('base64');
+type ExecFileSync = typeof import('node:child_process').execFileSync;
+
+function proofJSON(value: unknown): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') return Object.is(value, -0) ? '-0' : JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(proofJSON).join(',')}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort((left, right) => Buffer.from(left).compare(Buffer.from(right))).map(key => `${JSON.stringify(key)}:${proofJSON(object[key])}`).join(',')}}`;
+}
+
+function domainDigest(domain: string, value: string): string {
+  const bytes = Buffer.from(value, 'utf8');
+  const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+
+function bare(seed: string): string { return createHash('sha256').update(seed).digest('hex'); }
+
+function pinnedProofBinary(execFileSync: ExecFileSync): string {
+  const configured = process.env.VISOR_PROOF_ADMISSION_BIN;
+  if (configured) return configured;
+  const binary = join(tmpdir(), `visor-runtime-c0-proof-${process.pid}`);
+  if (existsSync(binary)) return binary;
+  const source = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-proof-source-'));
+  const archive = execFileSync('git', ['-C', PROOF_AUTHORITY, 'archive', 'HEAD'], { maxBuffer: 256 * 1024 * 1024 });
+  execFileSync('tar', ['-xf', '-', '-C', source], { input: archive, stdio: ['pipe', 'pipe', 'pipe'] });
+  execFileSync('go', ['build', '-o', binary, './cmd/proof'], {
+    cwd: source,
+    env: { ...process.env, GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+    stdio: 'pipe',
+  });
+  rmSync(source, { recursive: true, force: true });
+  return binary;
+}
+
+function makeAuthority(execFileSync: ExecFileSync, binary: string, root: string): Record<string, unknown> {
+  const invoke = (args: string[], input: string): any => JSON.parse(execFileSync(binary, args, {
+    cwd: root,
+    input,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+  }));
+  const inventory = invoke(['onboarding', 'inventory'], '');
+  const subject = { kind: 'project', id: inventory.authority.project_id, fingerprint: inventory.authority.subject_fingerprint };
+  const projectInvocation = { role_id: 'onboard', stance: 'owner', subject, output_schema_id: 'proof.component-catalog-candidate@1', output_schema: SCHEMA };
+  const resolved = invoke(['resolve-role-invocation'], JSON.stringify(projectInvocation));
+  const candidatePayload = {
+    version: 'proof.component-catalog-candidate/v1', project_id: inventory.authority.project_id,
+    components: [
+      { id: 'alpha', responsibility: 'alpha component', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'] },
+      { id: 'beta', responsibility: 'beta component', owned_paths: ['beta.go'], dependency_closure: ['beta.go'] },
+      { id: 'gamma', responsibility: 'gamma component', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'] },
+    ],
+  };
+  const candidateText = proofJSON(candidatePayload);
+  const candidateBytes = Buffer.from(candidateText, 'utf8');
+  const scope = [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: inventory.authority.project_id, SubgraphInstanceID: bare('scope') }];
+  const binding = { ManagedRunID: bare('managed'), SessionID: 'runtime-c0', CheckID: 'inspect', Scope: scope, NodeInstanceID: bare('node'), NodeGenerationID: bare('generation'), AttemptID: bare('attempt'), Fence: 1 };
+  const publication = { Version: 1, Type: 'ClaimPublished', SessionID: binding.SessionID, CheckID: binding.CheckID, Scope: scope, NodeInstanceID: binding.NodeInstanceID, NodeGenerationID: binding.NodeGenerationID, AttemptID: binding.AttemptID, Fence: 1, ClaimID: bare('claim'), Claim: 'proof.candidate@1', PayloadFingerprint: createHash('sha256').update(candidateBytes).digest('hex'), ProducerCheckID: 'inspect', Payload: candidateBytes.toString('base64'), ParentClaimIDs: [bare('parent-a'), bare('parent-b')].sort() };
+  const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: binding.SessionID, Scope: scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
+  const candidate = {
+    Version: 'proof.role-result-candidate-envelope/v1', Invocation: projectInvocation, InvocationDigest: resolved.invocation_digest, RoleID: resolved.role_id, Stance: resolved.stance, Subject: resolved.subject,
+    AttestationVersion: 'probe.governed-codex-attestation/v2', ExecutionSource: 'caller', ProbeInvocationDigest: resolved.invocation_digest,
+    IdentityVersion: 'probe.governed-result-identity/v1', IdentitySource: 'probe-host-schema-valid-json', ResultDigest: domainDigest('probe.governed-result-identity/data/v1', candidateText), CanonicalBytes: candidateBytes.length,
+    ProbeResultBytes: candidateBytes.toString('base64'), VisorPayloadBytes: candidateBytes.toString('base64'), Publication: publication, Binding: binding, Termination: termination,
+  };
+  const admissionWire = execFileSync(binary, ['admit-candidate'], {
+    cwd: root,
+    input: JSON.stringify({ version: 'proof.role-result-candidate-cli-request/v1', candidate }),
+    encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+    env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+  }).trimEnd();
+  const admission = JSON.parse(admissionWire);
+  expect(admission.status).toBe('ADMITTED');
+  const revalidationInput = proofJSON({ version: 'proof.catalog-revalidation-request/v2', candidate: candidatePayload, admission });
+  const revalidation = invoke(['onboarding', 'revalidate'], revalidationInput);
+  const item = revalidation.work_items.find((value: any) => value.component_id === 'alpha');
+  const row = revalidation.receipt.component_authorities.find((value: any) => value.component_id === 'alpha');
+  if (!item || !row) throw new Error('real Proof revalidation omitted alpha authority');
+  return {
+    work_item_digest: row.work_item_digest,
+    subject: row.subject,
+    candidate: JSON.parse(candidateText),
+    admission,
+    work_item: item,
+    catalog_revalidation_receipt: revalidation.receipt,
+  };
+}
+
+function binding(): any {
+  return {
+    managedRunId: 'a'.repeat(64), sessionId: 'runtime-c0', checkId: 'inspect',
+    scope: [{ kind: 'keyed', expansionOwnerCheck: 'project', key: 'journalservice', subgraphInstanceId: 'b'.repeat(64) }],
+    nodeInstanceId: 'c'.repeat(64), nodeGenerationId: 'd'.repeat(64), attemptId: 'e'.repeat(64), fence: 1,
+  };
+}
+
+describe('runtime component C0 authority seam', () => {
+  it('runs real pinned Proof C0 before a fake Probe and fails closed before Probe on malformed authority', async () => {
+    jest.resetModules();
+    jest.doMock('child_process', () => jest.requireActual('child_process'));
+    jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
+    const [{ execFileSync }, child, governed] = await Promise.all([
+      import('node:child_process'),
+      import('../../src/providers/proof-admission-cli-child'),
+      import('../../src/providers/governed-proof-inspect-check-provider'),
+    ]);
+    expect(existsSync(PROOF_AUTHORITY)).toBe(true);
+    const repository = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-'));
+    const root = join(repository, 'project'); mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: journalservice\n', 'utf8');
+    for (const name of ['alpha.go', 'beta.go', 'gamma.go']) writeFileSync(join(root, name), `package journal\n// ${name}\n`, 'utf8');
+    execFileSync('git', ['init', '-q'], { cwd: repository });
+    execFileSync('git', ['config', 'user.email', 'runtime-c0@example.invalid'], { cwd: repository });
+    execFileSync('git', ['config', 'user.name', 'Runtime C0'], { cwd: repository });
+    execFileSync('git', ['add', '.'], { cwd: repository });
+    execFileSync('git', ['commit', '-qm', 'fixture'], { cwd: repository });
+    let calls = 0;
+    try {
+      const binary = pinnedProofBinary(execFileSync);
+      const authority = makeAuthority(execFileSync, binary, root);
+      const capability = child.createProofAdmissionCapability(binary);
+      const selector = {
+        type: 'governed-proof-inspect', profile: PROFILE,
+        invocation: { role_id: 'onboard', stance: 'owner', subject: { kind: 'component' }, output_schema_id: 'proof.findings/v1', output_schema: SCHEMA },
+        consumes: [{ claim: 'component.work_item@1', as: 'component' }],
+      };
+      const fakeResult = (request: any) => {
+        calls++;
+        const data = { component_id: request.invocation.subject.id, status: 'ok' };
+        const canonical = JSON.stringify(data);
+        const digest = governed.governedResultDigest(data);
+        return {
+          data,
+          runtimeAttestation: {
+            version: 'probe.governed-codex-attestation/v2', profileId: PROFILE,
+            requested: { profileDigest: 'a'.repeat(64), cwdDigest: 'a'.repeat(64), probeToolsDigest: 'a'.repeat(64), model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+            observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: 'a'.repeat(64), permissionProfileDigest: 'a'.repeat(64), filesystem: 'restricted-read-root', network: 'restricted' },
+            executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+            dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'c'.repeat(64)}`, promptBytes: 0 },
+            evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+          },
+          resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonical, 'utf8') },
+        };
+      };
+      const provider = governed.createGovernedProofInspectProviderForFocusedTest((request: any) => ({ answer: () => fakeResult(request), cancel: () => undefined, close: () => undefined }), capability);
+      const componentClaim = { claimId: 'f'.repeat(64), claim: 'component.work_item@1', payload: { component_id: 'alpha', authority: { component_id: 'alpha', work_item_digest: authority.work_item_digest, subject: authority.subject } } };
+      const run = provider.startManaged({ prInfo: {} as any, checkConfig: selector, dependencyResults: new Map(), executionContext: { claims: { component: componentClaim as any }, proofComponentAuthority: authority as any }, binding: binding(), executionConfigDigest: '1'.repeat(64), workingDirectory: root });
+      await expect(run.started).resolves.toMatchObject({ kind: 'started' });
+      const outcome: any = await run.outcome;
+      expect(outcome.kind).toBe('succeeded-proof-candidate');
+      expect(outcome.summary.output).toEqual({ component_id: 'alpha', status: 'ok' });
+      expect(outcome.proofCandidateEvidence.role.invocation.component_authority).toEqual(authority);
+      expect(governed.validateProofCandidateEvidence(outcome.proofCandidateEvidence)).toBeDefined();
+      expect(calls).toBe(1);
+      await run.close();
+
+      const malformed = { ...authority, subject: { ...authority.subject, component_id: 'foreign' } };
+      const rejected = provider.startManaged({ prInfo: {} as any, checkConfig: selector, dependencyResults: new Map(), executionContext: { claims: {}, proofComponentAuthority: malformed as any }, binding: binding(), executionConfigDigest: '1'.repeat(64), workingDirectory: root });
+      await expect(rejected.outcome).rejects.toThrow(/PROOF_ADMISSION_UNAVAILABLE|GOVERNED_PROOF_INVALID|component authority/i);
+      expect(calls).toBe(1);
+      await rejected.close();
+
+      const delayed = join(repository, 'delayed-proof');
+      const delayedPid = join(repository, 'delayed-proof.pid');
+      writeFileSync(delayed, `#!/usr/bin/env node
+const fs = require('node:fs');
+const { spawn } = require('node:child_process');
+fs.writeFileSync(${JSON.stringify(delayedPid)}, String(process.pid));
+setTimeout(() => {
+  const child = spawn(${JSON.stringify(binary)}, process.argv.slice(2), { stdio: 'inherit' });
+  child.once('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
+}, 300);
+`, 'utf8');
+      chmodSync(delayed, 0o755);
+      const delayedProvider = governed.createGovernedProofInspectProviderForFocusedTest((request: any) => ({ answer: () => fakeResult(request), cancel: () => undefined, close: () => undefined }), child.createProofAdmissionCapability(delayed));
+      const delayedRun = delayedProvider.startManaged({ prInfo: {} as any, checkConfig: selector, dependencyResults: new Map(), executionContext: { claims: { component: componentClaim as any }, proofComponentAuthority: authority as any }, binding: binding(), executionConfigDigest: '1'.repeat(64), workingDirectory: root });
+      const deadline = Date.now() + 2000;
+      while (!existsSync(delayedPid) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(existsSync(delayedPid)).toBe(true);
+      await expect(delayedRun.cancel('deadline', 1)).resolves.toMatchObject({ kind: 'cancelled' });
+      await expect(delayedRun.outcome).rejects.toThrow();
+      expect(calls).toBe(1);
+      const pid = Number(readFileSync(delayedPid, 'utf8'));
+      expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+      await delayedRun.close();
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  }, 180000);
+
+  it('assembles a materialized EXP-0209 component authority from the journal before real Proof C0', async () => {
+    jest.resetModules();
+    jest.doMock('child_process', () => jest.requireActual('child_process'));
+    jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
+    const [child, providers, admitModule, admittedModule, governed] = await Promise.all([
+      import('../../src/providers/proof-admission-cli-child'),
+      import('../../src/providers/proof-catalog-check-providers'),
+      import('../../src/providers/proof-admit-check-provider'),
+      import('../../src/providers/proof-admitted-catalog-check-provider'),
+      import('../../src/providers/governed-proof-inspect-check-provider'),
+    ]);
+    expect(existsSync(PROOF_AUTHORITY)).toBe(true);
+    const runSync = jest.requireActual<typeof import('node:child_process')>('node:child_process').execFileSync;
+    const binary = pinnedProofBinary(runSync);
+    const capability = child.createProofAdmissionCapability(binary);
+    const repository = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-journal-'));
+    const root = join(repository, 'nested-project');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: journalservice\n', 'utf8');
+    for (const name of ['alpha.go', 'beta.go', 'gamma.go']) writeFileSync(join(root, name), `package journal\n// ${name}\n`, 'utf8');
+    runSync('git', ['init', '-q'], { cwd: repository });
+    runSync('git', ['config', 'user.email', 'runtime-journal@example.invalid'], { cwd: repository });
+    runSync('git', ['config', 'user.name', 'Runtime Journal'], { cwd: repository });
+    runSync('git', ['add', '.'], { cwd: repository });
+    runSync('git', ['commit', '-qm', 'fixture'], { cwd: repository });
+    try {
+      const config: any = yaml.load(readFileSync(EXP0209_PROFILE, 'utf8'));
+      config.checks.project.value.projects[0].root = root;
+      const directInventory = JSON.parse(runSync(binary, ['onboarding', 'inventory'], {
+        cwd: root, encoding: 'utf8', env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+      }));
+      expect(directInventory.version).toBe('proof.structural-inventory/v1');
+      const rootCheck = config.subgraphs['discover-project'].checks.inspect;
+      const rootInvocation = {
+        role_id: 'onboard', stance: 'owner',
+        subject: { kind: 'project', id: directInventory.authority.project_id, fingerprint: directInventory.authority.subject_fingerprint },
+        output_schema_id: rootCheck.invocation.output_schema_id, output_schema: rootCheck.invocation.output_schema,
+      };
+      const resolvedRoot = await child.resolveProofRoleInvocation(capability, rootInvocation, root);
+      rootCheck.invocation = rootInvocation;
+      rootCheck.instructions = resolvedRoot.instructions;
+      rootCheck.invocation_digest = resolvedRoot.invocation_digest;
+      rootCheck.result_schema = Buffer.from(rootInvocation.output_schema, 'base64').toString('utf8');
+      const c0Schema = Buffer.from(JSON.stringify({ type: 'object', additionalProperties: false, required: ['component_id', 'status'], properties: { component_id: { type: 'string' }, status: { const: 'ok' } } }), 'utf8').toString('base64');
+      config.subgraphs['onboard-component'].checks.inspect = {
+        type: 'governed-proof-inspect', profile: PROFILE,
+        invocation: { role_id: 'onboard', stance: 'owner', subject: { kind: 'component' }, output_schema_id: 'proof.findings/v1', output_schema: c0Schema },
+        consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }],
+      };
+      config.subgraphs['onboard-component'].checks.proof_admit = {
+        type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }],
+      };
+      config.subgraphs['onboard-component'].checks.verify = {
+        type: 'noop', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }],
+      };
+      const plan = compileClaimPlan(config);
+      const journal = new ExecutionJournal(plan);
+      const sessionId = 'runtime-c0-journal-session';
+      const completeManaged = async (nodeGenerationId: string, provider: any, dependencyResults = new Map<string, unknown>(), extra: Record<string, unknown> = {}) => {
+        const execution = journal.getGeneratedExecution(nodeGenerationId);
+        const attempt = journal.startGeneratedAttempt(nodeGenerationId);
+        journal.scheduleGeneratedAttempt(attempt);
+        const binding = journal.deriveManagedRunBinding(attempt);
+        journal.recordManagedRunAcquired(binding);
+        journal.recordManagedRunStarted(binding);
+        const run = provider.startManaged({
+          prInfo: {} as any, checkConfig: execution.node.check, dependencyResults, executionContext: { claims: execution.claims }, binding,
+          executionConfigDigest: execution.node.executionConfigDigest, workingDirectory: root, ...extra,
+        });
+        await expect(run.started).resolves.toMatchObject({ kind: 'started' });
+        const outcome: any = await run.outcome;
+        expect(outcome.kind).toMatch(/^succeeded/);
+        await expect(run.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+        journal.completeManagedGeneratedAttempt({
+          attempt, binding, payload: outcome.summary.output, executionConfigDigest: execution.node.executionConfigDigest,
+          ...(outcome.proofCandidateEvidence ? { proofCandidateEvidence: outcome.proofCandidateEvidence, wireMode: outcome.wireMode } : {}),
+        });
+        return { execution, outcome };
+      };
+      const request = journal.requestCatalogReconciliation({ sessionId, ownerCheck: 'project' });
+      const catalogAttempt = journal.startCatalogRequestAttempt(request.requestId);
+      journal.scheduleCatalogRequestAttempt({ requestId: request.requestId, attemptId: catalogAttempt.attemptId, fence: catalogAttempt.fence });
+      journal.completeAttempt({ sessionId, checkId: 'project', scope: [], attemptId: catalogAttempt.attemptId, fence: catalogAttempt.fence, payload: { projects: [{ project_id: directInventory.authority.project_id, root }] } });
+      const inventoryGeneration = journal.queryReadyWork().find(value => value.checkId === 'structural_inventory')!;
+      const structural = providers.createProofStructuralInventoryProviderFromCapability(capability);
+      await completeManaged(inventoryGeneration.nodeGenerationId, structural);
+      const inspectGeneration = journal.queryReadyWork().find(value => value.checkId === 'inspect')!;
+      const candidateData = {
+        version: 'proof.component-catalog-candidate/v1', project_id: directInventory.authority.project_id,
+        components: [
+          { id: 'alpha', responsibility: 'alpha component', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'] },
+          { id: 'beta', responsibility: 'beta component', owned_paths: ['beta.go'], dependency_closure: ['beta.go'] },
+          { id: 'gamma', responsibility: 'gamma component', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'] },
+        ],
+      };
+      const discovery = governed.createGovernedProofInspectProviderForFocusedTest(() => ({
+        answer: (request: GovernedProbeRunnerRequest) => {
+          const candidateText = proofJSON(candidateData);
+          const candidateBytes = Buffer.from(candidateText, 'utf8');
+          const digest = domainDigest('probe.governed-result-identity/data/v1', candidateText);
+          const d = 'a'.repeat(64);
+          return {
+            data: candidateData,
+            runtimeAttestation: {
+              version: 'probe.governed-codex-attestation/v2', profileId: PROFILE,
+              requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+              observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' },
+              executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+              dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 17 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+            },
+            resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: candidateBytes.length },
+          };
+        }, cancel: () => undefined, close: () => undefined,
+      }));
+      const inspectResult = await completeManaged(inspectGeneration.nodeGenerationId, discovery);
+      const candidateOutput = inspectResult.outcome.summary.output;
+      const admissionGeneration = journal.queryReadyWork().find(value => value.checkId === 'proof_admit')!;
+      const admissionExecution = journal.getGeneratedExecution(admissionGeneration.nodeGenerationId);
+      const admissionAttempt = journal.startGeneratedAttempt(admissionGeneration.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(admissionAttempt);
+      const admissionBinding = journal.deriveManagedRunBinding(admissionAttempt);
+      journal.recordManagedRunAcquired(admissionBinding);
+      journal.recordManagedRunStarted(admissionBinding);
+      const admissionRequest = journal.getProofAdmissionRequest(admissionGeneration.nodeGenerationId);
+      const admissionProvider = admitModule.createProofAdmitProviderFromCapability(capability);
+      const admissionRun = admissionProvider.startManaged({
+        prInfo: {} as any, checkConfig: admissionExecution.node.check, dependencyResults: new Map([['inspect', { issues: [], output: candidateOutput }]]), executionContext: { claims: admissionExecution.claims }, binding: admissionBinding,
+        executionConfigDigest: admissionExecution.node.executionConfigDigest, workingDirectory: root, proofAdmissionRequest: admissionRequest,
+      });
+      await expect(admissionRun.started).resolves.toMatchObject({ kind: 'started' });
+      const admissionOutcome: any = await admissionRun.outcome;
+      expect(admissionOutcome.kind).toBe('succeeded');
+      await expect(admissionRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+      journal.completeManagedGeneratedAttempt({ attempt: admissionAttempt, binding: admissionBinding, payload: admissionOutcome.summary.output, executionConfigDigest: admissionExecution.node.executionConfigDigest });
+      const verifyGeneration = journal.queryReadyWork().find(value => value.checkId === 'verify')!;
+      const verifyAttempt = journal.startGeneratedAttempt(verifyGeneration.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(verifyAttempt);
+      journal.completeGeneratedAttempt({ attempt: verifyAttempt, payload: {} });
+      const revalidationGeneration = journal.queryReadyWork().find(value => value.checkId === 'revalidate_catalog')!;
+      const revalidator = providers.createProofCatalogRevalidationProviderFromCapability(capability);
+      await completeManaged(revalidationGeneration.nodeGenerationId, revalidator);
+      const materializeGeneration = journal.queryReadyWork().find(value => value.checkId === 'materialize_catalog')!;
+      const materializer = admittedModule.createProofAdmittedCatalogProviderFromCapability(capability);
+      await completeManaged(materializeGeneration.nodeGenerationId, materializer);
+      const componentGeneration: any = journal.queryReadyWork().find(value => value.templateNodeKey === 'inspect' && value.scope.length === 2 && journal.getGeneratedExecution(value.nodeGenerationId).claims.component?.payload.component_id === 'alpha');
+      expect(componentGeneration).toBeDefined();
+      const authority = journal.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId);
+      expect(authority.candidate).toEqual(expect.objectContaining({ version: 'proof.component-catalog-candidate/v1', project_id: directInventory.authority.project_id }));
+      expect(authority.admission).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: expect.objectContaining({ Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED' }), reject_code: null }));
+      expect(authority.work_item).toEqual(expect.objectContaining({ version: 'reqproof.onboarding-component-work-item/v1', component_id: 'alpha' }));
+      expect(authority.catalog_revalidation_receipt).toEqual(expect.objectContaining({ version: 'proof.catalog-revalidation-receipt/v2' }));
+
+      // Pass A checkpoint harness: component proof_admit is Pass B, so terminalize
+      // the ready inspect generation without activating any component descendants.
+      // This leaves a quiescent journal while preserving the exact claims and
+      // binding used below for the real Proof C0 invocation.
+      let c0Attempt: ReturnType<ExecutionJournal['startGeneratedAttempt']> | undefined;
+      let c0Binding: ReturnType<ExecutionJournal['deriveManagedRunBinding']> | undefined;
+      // The compiled component template also has proof_admit/verify generations.
+      // Keep Pass B unexecuted, but fail every ready component generation so the
+      // checkpoint harness reaches the journal's required quiescent state.
+      for (const readyComponent of journal.queryReadyWork().filter(value => value.scope.length === 2)) {
+        const attempt = journal.startGeneratedAttempt(readyComponent.nodeGenerationId);
+        journal.scheduleGeneratedAttempt(attempt);
+        const binding = journal.deriveManagedRunBinding(attempt);
+        if (readyComponent.nodeGenerationId === componentGeneration.nodeGenerationId) {
+          c0Attempt = attempt;
+          c0Binding = binding;
+        }
+        journal.failGeneratedAttempt(attempt, 'pass-a-checkpoint-harness');
+      }
+      expect(c0Attempt).toBeDefined();
+      expect(c0Binding).toBeDefined();
+      const checkpoint = journal.exportGraphCheckpoint(sessionId);
+      const restored = ExecutionJournal.restoreGraphCheckpoint(plan, JSON.parse(JSON.stringify(checkpoint)));
+      const restoredAuthority = restored.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId);
+      expect(restoredAuthority).toEqual(authority);
+      const restoredComponentExecution = restored.getGeneratedExecution(componentGeneration.nodeGenerationId);
+      const tampered: any = JSON.parse(JSON.stringify(checkpoint));
+      const workItemEvent = tampered.events.find((value: any) => value.type === 'ControllerItemClaimPublished' && value.claim === 'component.work_item@1' && value.payload.component_id === 'alpha');
+      expect(workItemEvent).toBeDefined();
+      workItemEvent.payload.authority.work_item_digest = `sha256:${'0'.repeat(64)}`;
+      const checkpointBody = { kind: tampered.kind, version: tampered.version, sessionId: tampered.sessionId, graphSemanticDigest: tampered.graphSemanticDigest, frontier: tampered.frontier, events: tampered.events };
+      tampered.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(checkpointBody), 'utf8').digest('hex');
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tampered)).toThrow();
+      let c0Request: GovernedProbeRunnerRequest | undefined;
+      const c0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => ({
+        answer: () => {
+          c0Request = request;
+          const data = { component_id: (request.invocation.subject as any).id, status: 'ok' };
+          const bytes = canonicalJson(data);
+          return {
+            data,
+            runtimeAttestation: {
+              version: 'probe.governed-codex-attestation/v2', profileId: PROFILE,
+              requested: { profileDigest: 'a'.repeat(64), cwdDigest: 'a'.repeat(64), probeToolsDigest: 'a'.repeat(64), model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+              observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: 'a'.repeat(64), permissionProfileDigest: 'a'.repeat(64), filesystem: 'restricted-read-root', network: 'restricted' },
+              executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+              dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'c'.repeat(64)}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+            },
+            resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: governed.governedResultDigest(data), canonicalBytes: Buffer.byteLength(bytes, 'utf8') },
+          };
+        }, cancel: () => undefined, close: () => undefined,
+      }), capability);
+      const c0Run = c0Provider.startManaged({ prInfo: {} as any, checkConfig: restoredComponentExecution.node.check, dependencyResults: new Map(), executionContext: { claims: restoredComponentExecution.claims, proofComponentAuthority: restoredAuthority }, binding: c0Binding!, executionConfigDigest: restoredComponentExecution.node.executionConfigDigest, workingDirectory: root });
+      await expect(c0Run.started).resolves.toMatchObject({ kind: 'started' });
+      await expect(c0Run.outcome).resolves.toMatchObject({ kind: 'succeeded-proof-candidate' });
+      expect(c0Request?.invocation).toEqual(expect.objectContaining({ subject: { kind: 'component', id: restoredAuthority.subject.component_id, fingerprint: restoredAuthority.subject.fingerprint }, component_authority: restoredAuthority }));
+      await expect(c0Run.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  }, 180000);
+});

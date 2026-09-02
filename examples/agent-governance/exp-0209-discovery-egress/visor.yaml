@@ -349,15 +349,7 @@ claim_types:
           items:
             type: object
             additionalProperties: false
-            required:
-              - version
-              - project_id
-              - component_id
-              - sorted_owned_paths
-              - sorted_dependency_closure
-              - proof_path_mapping
-              - proof_input_state
-              - proof_component_subject
+            required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, authority]
             properties:
               version: { const: reqproof.onboarding-component-work-item/v1 }
               project_id: { type: string, minLength: 1 }
@@ -398,19 +390,29 @@ claim_types:
                   sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
                   sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
                   fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              authority:
+                type: object
+                additionalProperties: false
+                required: [component_id, work_item_digest, subject]
+                properties:
+                  component_id: { type: string, minLength: 1 }
+                  work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                  subject:
+                    type: object
+                    additionalProperties: false
+                    required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                    properties:
+                      version: { const: proof.component-subject/v1 }
+                      project_id: { type: string, minLength: 1 }
+                      component_id: { type: string, minLength: 1 }
+                      sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
   component.work_item@1:
     schema:
       type: object
       additionalProperties: false
-      required:
-        - version
-        - project_id
-        - component_id
-        - sorted_owned_paths
-        - sorted_dependency_closure
-        - proof_path_mapping
-        - proof_input_state
-        - proof_component_subject
+      required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, authority]
       properties:
         version: { const: reqproof.onboarding-component-work-item/v1 }
         project_id: { type: string, minLength: 1 }
@@ -451,6 +453,24 @@ claim_types:
             sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
             sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
             fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        authority:
+          type: object
+          additionalProperties: false
+          required: [component_id, work_item_digest, subject]
+          properties:
+            component_id: { type: string, minLength: 1 }
+            work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            subject:
+              type: object
+              additionalProperties: false
+              required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+              properties:
+                version: { const: proof.component-subject/v1 }
+                project_id: { type: string, minLength: 1 }
+                component_id: { type: string, minLength: 1 }
+                sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
   component.onboarded@1:
     schema:
       type: object

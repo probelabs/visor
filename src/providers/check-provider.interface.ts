@@ -108,6 +108,9 @@ export interface ExecutionContext {
   nodeGenerationId?: string;
   /** Exact immutable keyed scope for generated C2 work. */
   scope?: Readonly<ScopePath> | KeyedScopePath;
+  /** Controller-owned, activation-time Proof component authority. It is never
+   * read from authored config or a caller-provided provider option. */
+  proofComponentAuthority?: import('./governed-proof-inspect-check-provider').ProofComponentInvocationAuthorityV1;
   /** SDK hooks for human input and check completion */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;

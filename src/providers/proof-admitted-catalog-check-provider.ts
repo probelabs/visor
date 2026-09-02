@@ -176,7 +176,16 @@ export class ProofAdmittedCatalogCheckProvider extends CheckProvider {
       outputCanonical: false,
       projectOutput: value => {
         const workItems = validateProofWorkItemsProjection(value, revalidation.payload as PlainRecord, inventory.payload as PlainRecord, candidate, admission, projectID);
-        return { components: (workItems.work_items as PlainRecord[]) };
+        const receipt = revalidation.payload && plain(revalidation.payload) ? revalidation.payload.receipt : undefined;
+        const authorities = receipt && plain(receipt) && Array.isArray(receipt.component_authorities) ? receipt.component_authorities as PlainRecord[] : [];
+        return { components: (workItems.work_items as PlainRecord[]).map(item => {
+          const authority = authorities.find(row => row.component_id === item.component_id);
+          if (!authority) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+          // The compact authority is the stable catalog item's only runtime
+          // binding. Aggregate receipt/admission lineage is recovered from
+          // controller journal claims at activation time.
+          return { ...item, authority: { component_id: authority.component_id, work_item_digest: authority.work_item_digest, subject: authority.subject } };
+        }) };
       },
     }, this.capability);
   }

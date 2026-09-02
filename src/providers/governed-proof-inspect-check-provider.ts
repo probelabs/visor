@@ -15,8 +15,20 @@ import {
   immutableGovernedValue,
 } from './proof-wire';
 
+type ProofAdmissionCliChildModule = typeof import('./proof-admission-cli-child');
+let proofAdmissionCliChildModule: ProofAdmissionCliChildModule | undefined;
+/**
+ * Keep the child-process boundary lazy.  Besides avoiding any process work at
+ * module load, this lets callers install the trusted capability before the
+ * module's child_process dependency is resolved.
+ */
+function proofAdmissionChild(): ProofAdmissionCliChildModule {
+  return proofAdmissionCliChildModule ??= require('./proof-admission-cli-child') as ProofAdmissionCliChildModule;
+}
+
 export const GOVERNED_PROOF_INSPECT_PROVIDER_NAME = 'governed-proof-inspect';
 export const GOVERNED_PROBE_UNAVAILABLE = 'GOVERNED_PROBE_UNAVAILABLE';
+const PROOF_ADMISSION_UNAVAILABLE = 'PROOF_ADMISSION_UNAVAILABLE';
 export const GOVERNED_PROOF_INSPECT_MESSAGE = GOVERNED_PROOF_ROLE_MESSAGE;
 const GOVERNED_RESULT_IDENTITY_DOMAIN = 'probe.governed-result-identity/data/v1';
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -87,6 +99,42 @@ function visible(v: unknown, max: number, nonempty = true): v is string { return
 function wire(v: unknown): v is string { return typeof v === 'string' && DIGEST.test(v); }
 function bare(v: unknown): v is string { return typeof v === 'string' && /^[0-9a-f]{64}$/.test(v); }
 function fail(detail: string): never { throw new Error(`GOVERNED_PROOF_INVALID: ${detail}`); }
+export interface ProofComponentInvocationAuthorityV1 {
+  readonly work_item_digest: string;
+  readonly subject: Readonly<Record<string, unknown>>;
+  readonly candidate: unknown;
+  readonly admission: unknown;
+  readonly work_item: unknown;
+  readonly catalog_revalidation_receipt: unknown;
+}
+
+/** Authored component checks are selectors; all component identity and Proof
+ * lineage is supplied by the controller at activation time. */
+export function isGovernedProofComponentSelector(value: unknown): boolean {
+  if (!plain(value) || !exact(value, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'])) return false;
+  const subject = value.subject;
+  return value.role_id === 'onboard' && value.stance === 'owner' &&
+    plain(subject) && exact(subject, ['kind']) && subject.kind === 'component' &&
+    visible(value.output_schema_id, 128) && typeof value.output_schema === 'string';
+}
+export function validateProofComponentInvocationAuthority(value: unknown): ProofComponentInvocationAuthorityV1 {
+  if (!plain(value) || !exact(value, ['work_item_digest', 'subject', 'candidate', 'admission', 'work_item', 'catalog_revalidation_receipt']) || !validMaterialized(value)) fail('component authority is not closed');
+  if (!wire(value.work_item_digest) || !plain(value.subject) || !exact(value.subject, ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure', 'fingerprint']) || value.subject.version !== 'proof.component-subject/v1' || typeof value.subject.project_id !== 'string' || typeof value.subject.component_id !== 'string' || !wire(value.subject.fingerprint) || !Array.isArray(value.subject.sorted_owned_paths) || !Array.isArray(value.subject.sorted_dependency_closure)) fail('component authority subject is invalid');
+  if (!plain(value.candidate) || !plain(value.admission) || !plain(value.work_item) || !plain(value.catalog_revalidation_receipt)) fail('component authority lineage is invalid');
+  return cloneAndFreezeAuthority(value as unknown as ProofComponentInvocationAuthorityV1);
+}
+function cloneAndFreezeAuthority<T>(value: T): T {
+  if (Array.isArray(value)) {
+    const copy = value.map(item => cloneAndFreezeAuthority(item)) as unknown as T;
+    return Object.freeze(copy);
+  }
+  if (value && typeof value === 'object') {
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>)) copy[key] = cloneAndFreezeAuthority((value as Record<string, unknown>)[key]);
+    return Object.freeze(copy) as T;
+  }
+  return value;
+}
 /** Proof's domain-separated identity digest: domain || NUL || uint64BE(len) || canonical UTF-8 bytes. */
 export function governedResultDigest(value: unknown): string {
   const bytes = Buffer.from(canonicalJson(value), 'utf8');
@@ -106,11 +154,19 @@ function decodeSchema(value: unknown): string {
   } catch { fail('output_schema is not UTF-8'); }
 }
 function validateInvocation(value: unknown): asserts value is Record<string, unknown> {
-  if (!plain(value) || !exact(value, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'])) fail('invocation keys are not closed');
+  const hasAuthority = plain(value) && own(value, 'component_authority');
+  const keys = hasAuthority ? ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema'] : ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'];
+  if (!plain(value) || !exact(value, keys)) fail('invocation keys are not closed');
   if (!validMaterialized(value)) fail('invocation contains non-materialized data');
   if (!visible(value.role_id, 128) || (value.stance !== 'owner' && value.stance !== 'external-review') || !visible(value.output_schema_id, 128)) fail('invocation strings are invalid');
   const subject = value.subject;
-  if (!plain(subject) || !exact(subject, ['kind', 'id', 'fingerprint']) || (subject.kind !== 'project' && subject.kind !== 'requirement' && subject.kind !== 'component') || !visible(subject.id, 128) || !wire(subject.fingerprint)) fail('invocation subject is invalid');
+  // Component invocations are controller-authored selectors only.  A fully
+  // resolved authored invocation must never be able to smuggle a component
+  // identity (the selector branch above is the sole authoring form).
+  if (!plain(subject) || !exact(subject, ['kind', 'id', 'fingerprint']) ||
+      ((subject.kind !== 'project' && subject.kind !== 'requirement') && !(hasAuthority && subject.kind === 'component')) ||
+      !visible(subject.id, 128) || !wire(subject.fingerprint)) fail('invocation subject is invalid');
+  if (hasAuthority) validateProofComponentInvocationAuthority(value.component_authority);
   const schema = decodeSchema(value.output_schema); const parsed = jsonObject(schema, 'output_schema'); if (!validMaterialized(parsed)) fail('output_schema contains non-materialized data');
 }
 export function projectGovernedProofInspectConfig(value: unknown): CheckProviderConfig {
@@ -118,7 +174,15 @@ export function projectGovernedProofInspectConfig(value: unknown): CheckProvider
   if (Reflect.ownKeys(value).some(key => typeof key !== 'string')) fail('config contains a symbol key');
   for (const key of Reflect.ownKeys(value)) if (!dataDescriptor(value, key)) fail(`config key ${String(key)} is not an enumerable data property`);
   for (const key of Object.keys(value)) { if (!(AUTHORED as readonly string[]).includes(key) && !CONTROLLER.has(key) && !GRAPH.has(key)) fail(`unknown config key ${key}`); if (GRAPH.has(key) && !validMaterialized(value[key])) fail(`graph config key ${key} is not materialized`); }
-  if (value.type !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || !text(value.message, 32768) || !text(value.instructions, 131072) || !wire(value.invocation_digest) || value.profile !== PROFILE) fail('config fields are invalid');
+  if (value.type !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || value.profile !== PROFILE) fail('config fields are invalid');
+  if (isGovernedProofComponentSelector(value.invocation)) {
+    if (own(value, 'message') || own(value, 'instructions') || own(value, 'invocation_digest') || own(value, 'result_schema')) fail('component selector cannot author resolved Proof fields');
+    const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
+    const parsed = jsonObject(decoded, 'output_schema');
+    if (!validMaterialized(parsed)) fail('output_schema contains non-materialized data');
+    return immutableCanonicalValue({ type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, invocation: value.invocation, profile: PROFILE }) as CheckProviderConfig;
+  }
+  if (!text(value.message, 32768) || !text(value.instructions, 131072) || !wire(value.invocation_digest)) fail('config fields are invalid');
   validateInvocation(value.invocation);
   if (!text(value.result_schema, 131072)) fail('result_schema is invalid');
   const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
@@ -339,6 +403,20 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   binding: ManagedRunBindingV1
 ): void {
   const contextClaims = parentClaims.filter(claim => claim.claim === COMPONENT_WORK_ITEM_CLAIM);
+  const invocation = evidence.role.invocation;
+  if (plain(invocation) && own(invocation, 'component_authority')) {
+    if (contextClaims.length !== 1) fail('component invocation authority requires exactly one WorkItem parent');
+    const authority = validateProofComponentInvocationAuthority(invocation.component_authority);
+    const invocationSubject = invocation.subject as Record<string, unknown>;
+    if (!plain(invocationSubject) || invocationSubject.id !== authority.subject.component_id || invocationSubject.fingerprint !== authority.subject.fingerprint) fail('component invocation subject is detached from authority');
+    const payload = contextClaims[0].payload;
+    if (!plain(payload) || !plain(payload.authority) || canonicalJson(payload.authority) !== canonicalJson({
+      component_id: authority.subject.component_id,
+      work_item_digest: authority.work_item_digest,
+      subject: authority.subject,
+    })) fail('component invocation authority is detached from WorkItem');
+    return;
+  }
   if (contextClaims.length === 0) {
     if (evidence.context !== undefined || evidence.contextDigest !== undefined) fail('unexpected runtime context for legacy inspect');
     return;
@@ -353,6 +431,10 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
 }
 
 function requiresRuntimeContext(config: CheckProviderConfig): boolean {
+  // The component selector uses the controller-owned Proof authority and C0
+  // itself as the runtime binding. The legacy envelope context remains for
+  // already-resolved EXP-0209 checks.
+  if (isGovernedProofComponentSelector(config.invocation)) return false;
   const consumes = config.consumes;
   if (consumes === undefined) return false;
   if (!Array.isArray(consumes)) fail('config consumes is not an array');
@@ -425,10 +507,15 @@ export function validateProofCandidateEvidence(value: unknown): ProofCandidateEv
   return immutableCanonicalValue(evidence);
 }
 const INTERNAL = Symbol('governed-proof-inspect-test-factory');
-export function createGovernedProofInspectProviderForFocusedTest(factory: GovernedProbeRunnerFactory): GovernedProofInspectCheckProvider { return new GovernedProofInspectCheckProvider(factory, INTERNAL); }
+export function createGovernedProofInspectProviderForFocusedTest(factory: GovernedProbeRunnerFactory, capability?: object): GovernedProofInspectCheckProvider { return new GovernedProofInspectCheckProvider(factory, INTERNAL, capability); }
+export function createGovernedProofInspectProviderFromCapability(capability: object): GovernedProofInspectCheckProvider {
+  if (!proofAdmissionChild().proofAdmissionCapabilityValid(capability)) fail(PROOF_ADMISSION_UNAVAILABLE);
+  return new GovernedProofInspectCheckProvider(undefined, INTERNAL, capability);
+}
 export class GovernedProofInspectCheckProvider extends CheckProvider {
   private readonly factory: GovernedProbeRunnerFactory;
-  constructor(factory?: GovernedProbeRunnerFactory, token?: typeof INTERNAL) { super(); if (factory && token !== INTERNAL) fail('runner factory is test-only'); this.factory = factory || createGovernedProbeRunner; }
+  private readonly capability?: object;
+  constructor(factory?: GovernedProbeRunnerFactory, token?: typeof INTERNAL, capability?: object) { super(); if (factory && token !== INTERNAL) fail('runner factory is test-only'); this.factory = factory || createGovernedProbeRunner; this.capability = capability; }
   getName(): string { return GOVERNED_PROOF_INSPECT_PROVIDER_NAME; }
   getDescription(): string { return 'Sealed built-in governed Proof inspection provider'; }
   async validateConfig(config: unknown): Promise<boolean> { try { projectGovernedProofInspectConfig(config); return true; } catch { return false; } }
@@ -445,20 +532,60 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       ? projectGovernedProofRuntimeContext(request.executionContext?.claims, binding)
       : undefined;
     const contextDigest = context ? governedProofRuntimeContextDigest(context) : undefined;
-    const invocation = config.invocation as Record<string, unknown>; const frozen = immutableCanonicalValue({ message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: config.instructions, invocation, invocationDigest: config.invocation_digest, resultSchema: config.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) }) as GovernedProbeRunnerRequest;
-    const runner = this.factory(frozen); if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
-    if (runtimeContextRequired && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');
+    const selector = isGovernedProofComponentSelector(request.checkConfig.invocation);
+    if (selector && !this.capability) fail(PROOF_ADMISSION_UNAVAILABLE);
     let cancelled = false, closed = false;
+    const c0Cancellation = new AbortController();
+    let runner: GovernedProbeRunner | undefined;
+    let runnerRequest: GovernedProbeRunnerRequest | undefined;
+    let acquisition: Promise<{ config: CheckProviderConfig; runner: GovernedProbeRunner; request: GovernedProbeRunnerRequest }> | undefined;
+    const acquire = async (): Promise<{ config: CheckProviderConfig; runner: GovernedProbeRunner; request: GovernedProbeRunnerRequest }> => {
+      if (cancelled || closed) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+      let effective = config;
+      if (selector) {
+        const authority = validateProofComponentInvocationAuthority(request.executionContext.proofComponentAuthority);
+        const subject = authority.subject;
+        const componentClaim = request.executionContext.claims && (request.executionContext.claims as Record<string, unknown>).component;
+        if (!plain(componentClaim) || !plain(componentClaim.payload) || !plain(componentClaim.payload.authority)) fail('activated WorkItem authority is missing');
+        const expectedCompact = { component_id: subject.component_id, work_item_digest: authority.work_item_digest, subject };
+        if (canonicalJson((componentClaim.payload as Record<string, unknown>).authority) !== canonicalJson(expectedCompact)) fail('component authority is detached from activated WorkItem');
+        const authored = config.invocation as Record<string, unknown>;
+        const c0Request = {
+          role_id: authored.role_id,
+          stance: authored.stance,
+          subject: { kind: 'component', id: subject.component_id, fingerprint: subject.fingerprint },
+          component_authority: authority,
+          output_schema_id: authored.output_schema_id,
+          output_schema: authored.output_schema,
+        };
+        const resolved = await proofAdmissionChild().resolveProofRoleInvocation(this.capability, c0Request, request.workingDirectory as string, c0Cancellation.signal);
+        // C0 owns the process boundary.  A cancellation racing its final
+        // response must be observed before any Probe runner is constructed.
+        if (cancelled || closed || c0Cancellation.signal.aborted) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+        const outputSchema = decodeSchema(resolved.output_schema);
+        effective = immutableCanonicalValue({ type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: resolved.instructions, invocation: c0Request, invocation_digest: resolved.invocation_digest, result_schema: outputSchema, profile: PROFILE }) as CheckProviderConfig;
+      }
+      const invocation = effective.invocation as Record<string, unknown>;
+      runnerRequest = immutableCanonicalValue({ message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) }) as GovernedProbeRunnerRequest;
+      runner = this.factory(runnerRequest);
+      if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
+      if (runtimeContextRequired && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');
+      return { config: effective, runner, request: runnerRequest };
+    };
     const answer = Promise.resolve()
-      .then(() => runtimeContextRequired ? runner.preview!(frozen) : undefined)
-      .then(preview => Promise.resolve(runner.answer(frozen)).then(value => ({ value, preview })))
-      .then(({ value, preview }) => {
+      .then(() => {
+        acquisition = acquire();
+        return acquisition;
+      })
+      .then(({ config: effective, runner: acquired, request: effectiveRequest }) => Promise.resolve(runtimeContextRequired ? acquired.preview!(effectiveRequest) : undefined)
+        .then(preview => Promise.resolve(acquired.answer(effectiveRequest)).then(value => ({ value, preview, effective }))))
+      .then(({ value, preview, effective }) => {
         const validated = validateRunnerResult(value);
-        const evidence = evidenceFromResult(config, validated, context, preview);
+        const evidence = evidenceFromResult(effective, validated, context, preview);
         const wireMode = governedWireModeFromEvidence(evidence);
         const output = immutableGovernedValue(validated.data, wireMode);
         return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: Object.freeze({ issues: [], output }), proofCandidateEvidence: evidence, wireMode });
       });
-    return { binding, started: Promise.resolve({ version: 1, kind: 'started', binding }), outcome: answer, cancel: async (reason, fence) => { if (fence !== binding.fence) throw new Error('GOVERNED_PROOF_INVALID: cancellation fence is stale'); if (!cancelled) { cancelled = true; await runner.cancel(reason); } return { version: 1, kind: 'cancelled', binding, reason }; }, close: async () => { if (!closed) { closed = true; await runner.close(); } return { version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }; } };
+    return { binding, started: Promise.resolve({ version: 1, kind: 'started', binding }), outcome: answer, cancel: async (reason, fence) => { if (fence !== binding.fence) throw new Error('GOVERNED_PROOF_INVALID: cancellation fence is stale'); if (!cancelled) { cancelled = true; c0Cancellation.abort(); if (acquisition) await acquisition.catch(() => undefined); if (runner) await runner.cancel(reason); } return { version: 1, kind: 'cancelled', binding, reason }; }, close: async () => { if (!closed) { closed = true; c0Cancellation.abort(); if (acquisition) await acquisition.catch(() => undefined); if (runner) await runner.close(); } return { version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }; } };
   }
 }

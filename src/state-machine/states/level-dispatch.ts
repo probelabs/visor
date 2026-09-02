@@ -31,7 +31,7 @@ import type {
   ManagedRunOutcomeV1,
   ManagedRunStartedReceiptV1,
 } from '../../providers/check-provider.interface';
-import { GOVERNED_PROOF_INSPECT_PROVIDER_NAME } from '../../providers/governed-proof-inspect-check-provider';
+import { GOVERNED_PROOF_INSPECT_PROVIDER_NAME, isGovernedProofComponentSelector } from '../../providers/governed-proof-inspect-check-provider';
 import type { GovernedWireMode } from '../../providers/proof-wire';
 import type { CheckConfig } from '../../types/config';
 import type {
@@ -3132,6 +3132,9 @@ async function executeSingleCheck(
         nodeInstanceId: dynamic.attempt.nodeInstanceId,
         nodeGenerationId: dynamic.attempt.nodeGenerationId,
         scope: Object.freeze(scope.map((part: any) => Object.freeze({ ...part }))),
+        ...(providerType === GOVERNED_PROOF_INSPECT_PROVIDER_NAME && isGovernedProofComponentSelector(checkConfig.invocation)
+          ? { proofComponentAuthority: context.journal.getProofComponentInvocationAuthority(dynamic.attempt.nodeGenerationId) }
+          : {}),
       } : {}),
       // Inject args from on_success.run with directives (merged with existing args)
       args: renderedArgs

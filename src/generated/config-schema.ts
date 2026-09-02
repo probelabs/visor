@@ -1049,7 +1049,7 @@ export const configSchema = {
           description: 'Message template for log checks',
         },
         instructions: { type: 'string' },
-        invocation: { type: 'object', additionalProperties: false, required: ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'], properties: { role_id: { type: 'string' }, stance: { type: 'string', enum: ['owner', 'external-review'] }, subject: { type: 'object', additionalProperties: false, required: ['kind', 'id', 'fingerprint'], properties: { kind: { type: 'string', enum: ['project', 'requirement'] }, id: { type: 'string' }, fingerprint: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' } } }, output_schema_id: { type: 'string' }, output_schema: { type: 'string' } } },
+        invocation: { type: 'object', additionalProperties: false, required: ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'], properties: { role_id: { type: 'string' }, stance: { type: 'string', enum: ['owner', 'external-review'] }, subject: { anyOf: [{ type: 'object', additionalProperties: false, required: ['kind', 'id', 'fingerprint'], properties: { kind: { type: 'string', enum: ['project', 'requirement'] }, id: { type: 'string' }, fingerprint: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' } } }, { type: 'object', additionalProperties: false, required: ['kind'], properties: { kind: { const: 'component' } } }] }, output_schema_id: { type: 'string' }, output_schema: { type: 'string' } } },
         invocation_digest: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' },
         result_schema: { type: 'string' },
         profile: { type: 'string', const: 'luna-xhigh-readonly-v1' },

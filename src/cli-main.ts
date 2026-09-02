@@ -39,6 +39,7 @@ import {
   resolveProofRoleInvocation,
 } from './providers/proof-admission-cli-child';
 import type { VisorConfig } from './types/config';
+import { isGovernedProofComponentSelector } from './providers/governed-proof-inspect-check-provider';
 import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 import { publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
 import { compileClaimPlan } from './state-machine/graph/claim-plan';
@@ -48,13 +49,15 @@ const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id
 
 async function projectProofAuthority(config: VisorConfig, capability: object, cwd: string): Promise<void> {
   const seen = new Set<object>();
-  let projected = 0;
+  let governedNodes = 0;
   const visit = async (value: unknown): Promise<void> => {
     if (!value || typeof value !== 'object' || seen.has(value as object)) return;
     seen.add(value as object);
     if (!Array.isArray(value) && (value as any).type === 'governed-proof-inspect') {
+      governedNodes++;
       const node = value as any;
       const invocation = node.invocation;
+      if (isGovernedProofComponentSelector(invocation)) return;
       if (!invocation || typeof invocation !== 'object' || Reflect.ownKeys(invocation).length !== PROOF_INVOCATION_KEYS.length || !PROOF_INVOCATION_KEYS.every(key => Object.prototype.hasOwnProperty.call(invocation, key))) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed invocation is not closed');
       const request = Object.fromEntries(PROOF_INVOCATION_KEYS.map(key => [key, invocation[key]]));
       const authority = await resolveProofRoleInvocation(capability, request, cwd) as any;
@@ -62,12 +65,11 @@ async function projectProofAuthority(config: VisorConfig, capability: object, cw
       node.instructions = authority.instructions;
       node.invocation_digest = authority.invocation_digest;
       node.result_schema = Buffer.from(authority.output_schema, 'base64').toString('utf8');
-      projected++;
     }
     for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) await visit(child);
   };
   await visit(config);
-  if (projected === 0) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: no governed-proof-inspect node');
+  if (governedNodes === 0) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: no governed-proof-inspect node');
 }
 
 function containsGovernedProofNode(value: unknown, seen = new Set<object>()): boolean {

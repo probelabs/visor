@@ -13,7 +13,7 @@ import {
   sha256Canonical,
   type ClaimSchemaValidator,
 } from './claim-kernel';
-import { PROOF_ROLE_AUTHORITY_CLAIM } from '../../providers/governed-proof-inspect-check-provider';
+import { PROOF_ROLE_AUTHORITY_CLAIM, isGovernedProofComponentSelector } from '../../providers/governed-proof-inspect-check-provider';
 
 const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -130,18 +130,41 @@ function validateControllerAi(name: string, value: unknown): void {
   if (keys.length !== 1 || keys[0] !== 'timeout' || !descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'number' || !Number.isSafeInteger(descriptor.value) || descriptor.value < CONTROLLER_TIMEOUT_MIN || descriptor.value > CONTROLLER_TIMEOUT_MAX) rejectReservedProfile(name, 'inspect ai.timeout must be one finite integer from 1 through 2147483647');
 }
 
-function validateGovernedInspectConfig(name: string, check: CheckConfig): void {
+function componentSelectorTemplateBindingAllowed(inputName: string | undefined, inputClaim: string | undefined, check: CheckConfig): boolean {
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1') return false;
+  const consumes = check.consumes;
+  if (!Array.isArray(consumes) || consumes.length !== 1) return false;
+  const consumption = consumes[0] as unknown as Record<string, unknown>;
+  const keys = Reflect.ownKeys(consumption);
+  return Object.getPrototypeOf(consumption) === Object.prototype &&
+    (keys.length === 2 || (keys.length === 3 && consumption.cardinality === 'one')) &&
+    keys.every(key => typeof key === 'string' && (key === 'claim' || key === 'as' || key === 'cardinality')) &&
+    consumption.claim === 'component.work_item@1' && consumption.as === 'component';
+}
+
+function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false): void {
   const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
   if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
   if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
   validateControllerAi(name, record.ai);
-  if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || record.profile !== 'luna-xhigh-readonly-v1' || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
+  if (record.profile !== 'luna-xhigh-readonly-v1') rejectReservedProfile(name, 'inspect governed config is invalid');
+  if (isGovernedProofComponentSelector(record.invocation)) {
+    if (!componentSelectorAllowed) rejectReservedProfile(name, 'component selector is only valid for a component.work_item@1 template input bound as component');
+    if (['message', 'instructions', 'invocation_digest', 'result_schema'].some(key => hasOwn(record, key))) rejectReservedProfile(name, 'component selector cannot author resolved Proof fields');
+    const selectorInvocation = record.invocation as Record<string, unknown>;
+    const decodedSelectorSchema = decodeGovernedSchema(selectorInvocation.output_schema);
+    let selectorSchema: unknown;
+    try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'component selector output schema is not JSON'); }
+    if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'component selector output schema is invalid');
+    return;
+  }
+  if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
   const invocation = record.invocation;
   if (!invocation || typeof invocation !== 'object' || Array.isArray(invocation) || !hasExactKeys(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !validMaterialized(invocation)) rejectReservedProfile(name, 'inspect invocation is not closed');
   const invocationRecord = invocation as Record<string, unknown>, subject = invocationRecord.subject;
   if (!validVisible(invocationRecord.role_id, 128) || (invocationRecord.stance !== 'owner' && invocationRecord.stance !== 'external-review') || !validVisible(invocationRecord.output_schema_id, 128) || !subject || typeof subject !== 'object' || Array.isArray(subject) || !hasExactKeys(subject, ['kind', 'id', 'fingerprint']) || !validMaterialized(subject)) rejectReservedProfile(name, 'inspect invocation fields are invalid');
   const subjectRecord = subject as Record<string, unknown>;
-  if ((subjectRecord.kind !== 'project' && subjectRecord.kind !== 'requirement' && subjectRecord.kind !== 'component') || !validVisible(subjectRecord.id, 128) || !validDigest(subjectRecord.fingerprint)) rejectReservedProfile(name, 'inspect invocation subject is invalid');
+  if ((subjectRecord.kind !== 'project' && subjectRecord.kind !== 'requirement') || !validVisible(subjectRecord.id, 128) || !validDigest(subjectRecord.fingerprint)) rejectReservedProfile(name, 'inspect invocation subject is invalid');
   const decoded = decodeGovernedSchema(invocationRecord.output_schema); if (!decoded || record.result_schema !== decoded) rejectReservedProfile(name, 'inspect result schema is not bound to invocation');
   let parsed: unknown; try { parsed = JSON.parse(decoded); } catch { rejectReservedProfile(name, 'inspect output schema is not JSON'); }
   if (!validMaterialized(parsed) || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) rejectReservedProfile(name, 'inspect output schema must be a JSON object');
@@ -298,6 +321,7 @@ function rejectReservedProfile(templateName: string, detail: string): never {
  */
 function validateReservedProofAdmissionTemplate(
   name: string,
+  inputName: string,
   inputClaim: string,
   nodeKeys: readonly string[],
   resolvedChecks: Readonly<Record<string, CheckConfig>>,
@@ -359,7 +383,7 @@ function validateReservedProofAdmissionTemplate(
   if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
     rejectReservedProfile(name, `inspect must have type ${GOVERNED_PROOF_INSPECT_PROVIDER_TYPE}`);
   }
-  validateGovernedInspectConfig(name, inspect);
+  validateGovernedInspectConfig(name, inspect, componentSelectorTemplateBindingAllowed(inputName, inputClaim, inspect));
   if (claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
     rejectReservedProfile(name, `inspect must emit only ${PROOF_CANDIDATE_CLAIM}`);
   }
@@ -550,7 +574,7 @@ function compileTemplate(
       );
     }
     if (check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
-      validateGovernedInspectConfig(name, check);
+      validateGovernedInspectConfig(name, check, componentSelectorTemplateBindingAllowed(inputName, inputClaim, check));
     }
     for (const field of ['emits', 'consumes'] as const) {
       if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {
@@ -679,6 +703,7 @@ function compileTemplate(
   const topology = topologicalOrder(name, dependencies);
   validateReservedProofAdmissionTemplate(
     name,
+    inputName,
     inputClaim,
     nodeKeys,
     resolvedChecks,
@@ -708,7 +733,7 @@ function compileTemplate(
       templateDigest,
       templateNodeKey: nodeKey,
       ...(check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE
-        ? { authoredProviderConfig: Object.fromEntries(['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', ...(check.ai ? ['ai'] : [])].map(key => [key, (check as Record<string, unknown>)[key]])) }
+        ? { authoredProviderConfig: Object.fromEntries(['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', ...(check.ai ? ['ai'] : [])].filter(key => (check as Record<string, unknown>)[key] !== undefined).map(key => [key, (check as Record<string, unknown>)[key]])) }
         : { resolvedCheck: check }),
     });
     nodesByKey[nodeKey] = Object.freeze({

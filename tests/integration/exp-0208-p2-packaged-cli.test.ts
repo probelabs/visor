@@ -6,10 +6,10 @@ import { readFileSync, realpathSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
-import { createGovernedProofInspectProviderForFocusedTest, governedResultDigest } from '../../src/providers/governed-proof-inspect-check-provider';
 import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import type { CheckProvider } from '../../src/providers/check-provider.interface';
 import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
+type FocusedFactory = Parameters<typeof import('../../src/providers/governed-proof-inspect-check-provider').createGovernedProofInspectProviderForFocusedTest>[0];
 
 const NODE = '/usr/local/bin/node';
 const DIST = process.env.VISOR_EXP0208_PACKAGED_DIST || resolve(process.cwd(), 'dist/index.js');
@@ -17,6 +17,29 @@ const PROJECT = resolve(__dirname, '../../examples/agent-governance/one-componen
 const CONFIG = resolve(PROJECT, 'visor.yaml');
 const REQUIREMENT = resolve(PROJECT, 'specs/system/requirements/SYS-REQ-001.req.yaml');
 const REAL_PROOF_SHA = '43a0cbc36b0bdf640bc4c712fa00b180208b395bac34a6ee2957528cd43f8272';
+function governedResultDigest(value: unknown): string {
+  const bytes = Buffer.from(canonicalJson(value), 'utf8'); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update('probe.governed-result-identity/data/v1', 'utf8').update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+function prepareRealChildProcessModules(): void {
+  jest.resetModules();
+  jest.doMock('child_process', () => jest.requireActual('child_process'));
+  jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
+}
+async function createFocusedProvider(factory: FocusedFactory, capability: object): Promise<CheckProvider> {
+  const { createGovernedProofInspectProviderForFocusedTest } = await import('../../src/providers/governed-proof-inspect-check-provider');
+  return createGovernedProofInspectProviderForFocusedTest(factory, capability);
+}
+function bootstrapProofForFixture(registry: CheckProviderRegistry, capability: object): jest.SpyInstance<void, [object]> {
+  const realBootstrap = registry.bootstrapProofAdmission.bind(registry);
+  let first = true;
+  const bootstrap = jest.spyOn(registry, 'bootstrapProofAdmission').mockImplementation(value => {
+    if (first) { first = false; realBootstrap(value); }
+  });
+  bootstrap(capability);
+  return bootstrap;
+}
+beforeEach(() => { prepareRealChildProcessModules(); });
 const fixtureConfig = (root: string) => { const config = join(root, 'visor.yaml'); writeFileSync(config, 'version: "1.0"\nchecks:\n  discover:\n    type: memory\n    operation: set\n    key: x\n    value: x\n', 'utf8'); return config; };
 const run = (cwd: string, args: string[]) => { const cp = jest.requireActual('child_process') as typeof import('child_process'); const childEnv = { ...process.env, VISOR_NO_REMOTE_EXTENDS: 'true', NO_COLOR: '1' }; delete childEnv.NODE_ENV; delete childEnv.JEST_WORKER_ID; try { const stdout = cp.execFileSync(NODE, [DIST, ...args], { cwd, encoding: 'utf8', env: childEnv, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }); return { status: 0, stdout, stderr: '' }; } catch (error: any) { return { status: typeof error.status === 'number' ? error.status : 1, stdout: error.stdout?.toString() || '', stderr: error.stderr?.toString() || '' }; } };
 const proofSha = (value: string) => createHash('sha256').update(readFileSync(realpathSync(value))).digest('hex');
@@ -28,10 +51,10 @@ function fakeAnswer(request: GovernedProbeRunnerRequest): any {
   return { data, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(data)) } };
 }
 async function runInProcess(proof: string, target: string, answer: (request: GovernedProbeRunnerRequest) => unknown, close: () => void = () => {}, failMemoryCleanup = false): Promise<any> {
-  const { CheckProviderRegistry } = await import('../../src/providers/check-provider-registry'); const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; let answers = 0; let clearSpy: { mockRestore: () => void } | undefined;
+  const [child, { CheckProviderRegistry }] = await Promise.all([import('../../src/providers/proof-admission-cli-child'), import('../../src/providers/check-provider-registry')]); const registry = CheckProviderRegistry.getInstance(); const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability); const map = providerMap(registry); const original = [...map.entries()]; let answers = 0; let clearSpy: { mockRestore: () => void } | undefined;
   if (failMemoryCleanup) { const { MemoryStore } = await import('../../src/memory-store'); const memory = MemoryStore.getInstance(); const realClear = memory.clear.bind(memory); let calls = 0; clearSpy = jest.spyOn(memory, 'clear').mockImplementation(async namespace => { if (++calls === 1) throw new Error('cleanup sentinel'); return realClear(namespace); }); }
-  map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: request => { answers++; return answer(request); }, cancel: () => {}, close }))); const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const exit = jest.fn(); process.exit = exit as any;
-  try { process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', CONFIG, '--check', 'discover', '--event', 'manual', '--disable-code-context', '--output', 'json', '--proof-bin', resolve(proof), '--governed-receipt', target]; const { main } = await import('../../src/cli-main'); await main(); return { exit, answers }; } finally { clearSpy?.mockRestore(); process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+  map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: request => { answers++; return answer(request); }, cancel: () => {}, close } as any), capability)); const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const exit = jest.fn(); process.exit = exit as any;
+  try { process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', CONFIG, '--check', 'discover', '--event', 'manual', '--disable-code-context', '--output', 'json', '--proof-bin', resolve(proof), '--governed-receipt', target]; const { main } = await import('../../src/cli-main'); await main(); return { exit, answers }; } finally { clearSpy?.mockRestore(); bootstrap.mockRestore(); process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
 }
 
 describe('EXP-0208 packaged CLI receipt surface', () => {

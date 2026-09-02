@@ -1,9 +1,11 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { chmodSync, mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 jest.unmock('child_process');
+import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
 import {
   goCompatibleProofJson,
   PROOF_ADMISSION_UNAVAILABLE,
@@ -41,6 +43,29 @@ async function withIsolatedChild<T>(
 ): Promise<T> {
   let result: Promise<T> | undefined;
   try {
+    jest.isolateModules(() => {
+      const spawn = jest.fn();
+      jest.doMock('child_process', () => ({
+        ...jest.requireActual<typeof import('child_process')>('child_process'),
+        spawn,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const module = require('../../../src/providers/proof-admission-cli-child') as ChildModule;
+      result = fn(module, spawn);
+    });
+    return await result!;
+  } finally {
+    jest.dontMock('child_process');
+    jest.resetModules();
+  }
+}
+
+async function withFreshIsolatedChild<T>(
+  fn: (module: ChildModule, spawn: jest.Mock) => Promise<T>
+): Promise<T> {
+  let result: Promise<T> | undefined;
+  try {
+    jest.resetModules();
     jest.isolateModules(() => {
       const spawn = jest.fn();
       jest.doMock('child_process', () => ({
@@ -160,6 +185,44 @@ function candidate(): Record<string, unknown> {
   };
 }
 
+function wireDigest(domain: string, value: string): string {
+  const bytes = Buffer.from(value, 'utf8'); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+
+function admissionDecision(order: 'legacy' | 'canonical' | 'permuted'): string {
+  const value = candidate(); const publication = value.Publication as Record<string, unknown>;
+  const candidateBytes = goCompatibleProofJson(value);
+  const subject = value.Subject as Record<string, unknown>;
+  const bindingValue = value.Binding as Record<string, unknown>;
+  const terminationValue = value.Termination as Record<string, unknown>;
+  const binding = {
+    ManagedRunID: bindingValue.ManagedRunID, SessionID: bindingValue.SessionID, CheckID: bindingValue.CheckID,
+    Scope: bindingValue.Scope, NodeInstanceID: bindingValue.NodeInstanceID, NodeGenerationID: bindingValue.NodeGenerationID,
+    AttemptID: bindingValue.AttemptID, Fence: bindingValue.Fence,
+  };
+  const termination = {
+    Version: terminationValue.Version, Type: terminationValue.Type, SessionID: terminationValue.SessionID,
+    Scope: terminationValue.Scope, Binding: terminationValue.Binding, CleanupStatus: terminationValue.CleanupStatus,
+    ControllerDecision: terminationValue.ControllerDecision, FailureCode: terminationValue.FailureCode,
+  };
+  const unsigned = {
+    Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED',
+    CandidateID: wireDigest('proof.role-result-candidate-envelope/id/v1', candidateBytes), ProbeResultDigest: value.ResultDigest,
+    ProbeCanonicalBytes: value.CanonicalBytes, ClaimID: publication.ClaimID, Claim: publication.Claim,
+    PayloadFingerprint: publication.PayloadFingerprint, InvocationDigest: value.InvocationDigest, RoleID: value.RoleID,
+    Stance: value.Stance, Subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
+    ProducerCheckID: publication.ProducerCheckID, ParentClaimIDs: publication.ParentClaimIDs, Binding: binding, Termination: termination,
+  };
+  const receipt = { ...unsigned, receipt_id: wireDigest('proof.role-result-candidate-receipt/id/v1', JSON.stringify(unsigned)) };
+  const decision = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt, reject_code: null };
+  if (order === 'canonical') return canonicalJson(decision);
+  if (order === 'legacy') return JSON.stringify(decision);
+  const permutedReceipt = { ...receipt } as Record<string, unknown>;
+  const first = permutedReceipt.Version; permutedReceipt.Version = permutedReceipt.Status; permutedReceipt.Status = first;
+  return JSON.stringify({ version: decision.version, status: decision.status, receipt: permutedReceipt, reject_code: decision.reject_code });
+}
+
 describe('Proof admission CLI child', () => {
   it('does not expose a product executable when bootstrap is absent', () => {
     expect(proofExecutableAvailable(undefined)).toBe(false);
@@ -172,6 +235,34 @@ describe('Proof admission CLI child', () => {
     const outcome: any = await run.outcome;
     expect(outcome).toMatchObject({ version: 1, kind: 'failed', binding });
     await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean', activeChildren: 0, activeResources: 0 });
+  });
+
+  it('accepts the exact historical Go-ordered v1 decision and retains its wire', async () => {
+    await withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+      const child = fakeChild(42004); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+      try {
+        const run = module.startProofAdmissionCliChild(request(candidate()), module.createProofAdmissionCliChildForFocusedTest(path));
+        child.emit('spawn'); await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        (child.stdin.end.mock.calls[0][2] as () => void)();
+        const output = admissionDecision('legacy'); child.stdout.emit('data', Buffer.from(`${output}\n`, 'utf8')); group.setAlive(false); completeFakeChild(child);
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded', summary: { output: expect.objectContaining({ __proof_admission_wire: output }) } });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
+      } finally { group.kill.mockRestore(); }
+    }));
+  });
+
+  it('rejects a semantically valid v1 decision with a permuted legacy field order', async () => {
+    await withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+      const child = fakeChild(42005); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+      try {
+        const run = module.startProofAdmissionCliChild(request(candidate()), module.createProofAdmissionCliChildForFocusedTest(path));
+        child.emit('spawn'); await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        (child.stdin.end.mock.calls[0][2] as () => void)();
+        child.stdout.emit('data', Buffer.from(`${admissionDecision('permuted')}\n`, 'utf8')); group.setAlive(false); completeFakeChild(child);
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'failed', binding });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
+      } finally { group.kill.mockRestore(); }
+    }));
   });
 
   it('fails malformed wire before acquiring a child', () => {

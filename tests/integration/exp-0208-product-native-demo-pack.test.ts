@@ -5,11 +5,11 @@ import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
-import { createGovernedProofInspectProviderForFocusedTest, governedResultDigest, GOVERNED_PROOF_INSPECT_MESSAGE } from '../../src/providers/governed-proof-inspect-check-provider';
 import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import type { CheckProvider } from '../../src/providers/check-provider.interface';
 import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
 import type { PRInfo } from '../../src/pr-analyzer';
+type FocusedFactory = Parameters<typeof import('../../src/providers/governed-proof-inspect-check-provider').createGovernedProofInspectProviderForFocusedTest>[0];
 
 const PROJECT = resolve(__dirname, '../../examples/agent-governance/one-component');
 const CONFIG = resolve(PROJECT, 'visor.yaml');
@@ -18,7 +18,31 @@ const SCHEMA = 'eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJy
 const REAL_PROOF_SHA = '43a0cbc36b0bdf640bc4c712fa00b180208b395bac34a6ee2957528cd43f8272';
 const prInfo = { number: 1, title: 'EXP-0208', author: 'test', base: 'main', head: 'demo', files: [], totalAdditions: 0, totalDeletions: 0, eventType: 'manual' } as PRInfo;
 const oldC0Timeout = process.env.VISOR_PROOF_C0_TIMEOUT_MS;
+const GOVERNED_PROOF_INSPECT_MESSAGE = 'Execute the bound Proof role and return only the required JSON.';
+function governedResultDigest(value: unknown): string {
+  const bytes = Buffer.from(canonicalJson(value), 'utf8'); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update('probe.governed-result-identity/data/v1', 'utf8').update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+function prepareRealChildProcessModules(): void {
+  jest.resetModules();
+  jest.doMock('child_process', () => jest.requireActual('child_process'));
+  jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
+}
+async function createFocusedProvider(factory: FocusedFactory, capability: object): Promise<CheckProvider> {
+  const { createGovernedProofInspectProviderForFocusedTest } = await import('../../src/providers/governed-proof-inspect-check-provider');
+  return createGovernedProofInspectProviderForFocusedTest(factory, capability);
+}
+function bootstrapProofForFixture(registry: CheckProviderRegistry, capability: object): jest.SpyInstance<void, [object]> {
+  const realBootstrap = registry.bootstrapProofAdmission.bind(registry);
+  let first = true;
+  const bootstrap = jest.spyOn(registry, 'bootstrapProofAdmission').mockImplementation(value => {
+    if (first) { first = false; realBootstrap(value); }
+  });
+  bootstrap(capability);
+  return bootstrap;
+}
 beforeAll(() => { process.env.VISOR_PROOF_C0_TIMEOUT_MS = '3000'; });
+beforeEach(() => { prepareRealChildProcessModules(); });
 afterAll(() => { if (oldC0Timeout === undefined) delete process.env.VISOR_PROOF_C0_TIMEOUT_MS; else process.env.VISOR_PROOF_C0_TIMEOUT_MS = oldC0Timeout; });
 
 function invocation() { return { role_id: 'spec-review', stance: 'owner', subject: { kind: 'requirement', id: 'SYS-REQ-001', fingerprint: FINGERPRINT }, output_schema_id: 'proof.findings/v1', output_schema: SCHEMA }; }
@@ -105,16 +129,16 @@ function providerMap(registry: CheckProviderRegistry): Map<string, CheckProvider
 describe('EXP-0208 product-native demo pack', () => {
   it('uses normal cli-main argv and reaches a successful governed run', async () => {
     await withProtocolFixture(async proof => {
-      const { CheckProviderRegistry } = await import('../../src/providers/check-provider-registry'); const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; let runnerCalls = 0;
+      const [child, { CheckProviderRegistry }] = await Promise.all([import('../../src/providers/proof-admission-cli-child'), import('../../src/providers/check-provider-registry')]); const registry = CheckProviderRegistry.getInstance(); const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability); const map = providerMap(registry); const original = [...map.entries()]; let runnerCalls = 0;
       const { MemoryStore } = await import('../../src/memory-store'); const memory = MemoryStore.getInstance(); await memory.set('sentinel', { stable: true }, 'unrelated');
-      map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: (request: GovernedProbeRunnerRequest) => { runnerCalls++; return fakeAnswer(request); }, cancel: () => {}, close: () => {} })));
+      map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: (request: GovernedProbeRunnerRequest) => { runnerCalls++; return fakeAnswer(request); }, cancel: () => {}, close: () => {} }), capability));
       const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const oldLog = console.log; const oldError = console.error; const exit = jest.fn();
       process.exit = exit as any; console.log = jest.fn(); console.error = jest.fn();
       try {
         process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', CONFIG, '--check', 'discover', '--event', 'manual', '--disable-code-context', '--proof-bin', proof];
         const { main } = await import('../../src/cli-main'); await main(); expect(exit).toHaveBeenCalledWith(0); expect(runnerCalls).toBe(1); expect(memory.get('sentinel', 'unrelated')).toEqual({ stable: true }); expect([...((memory as any).data as Map<string, unknown>).keys()].filter(key => key.startsWith('visor-cli-'))).toEqual([]);
       } finally {
-        process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance();
+        process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; bootstrap.mockRestore(); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance();
       }
     });
   });
@@ -123,9 +147,10 @@ describe('EXP-0208 product-native demo pack', () => {
     const proof = process.env.VISOR_EXP0208_REAL_PROOF_BIN;
     if (!proof) { if (process.env.VISOR_EXP0208_EVIDENCE === 'required') throw new Error('VISOR_EXP0208_REAL_PROOF_BIN is required for evidence'); return; }
     const baseline = proofIdentity(proof); expect(baseline.sha256).toBe(REAL_PROOF_SHA); const fixtureBefore = fixtureInventory(PROJECT); const assertProofStable = () => expect(proofIdentity(proof)).toEqual(baseline);
-    const [{ CheckProviderRegistry }, { StateMachineExecutionEngine }] = await Promise.all([import('../../src/providers/check-provider-registry'), import('../../src/state-machine-execution-engine')]);
+    const [{ CheckProviderRegistry }, { StateMachineExecutionEngine }, child] = await Promise.all([import('../../src/providers/check-provider-registry'), import('../../src/state-machine-execution-engine'), import('../../src/providers/proof-admission-cli-child')]);
     const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; let runnerCalls = 0; let engine: any; let executeSpy: any;
-    map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: (request: GovernedProbeRunnerRequest) => { runnerCalls++; assertProofStable(); return fakeAnswer(request); }, cancel: () => {}, close: () => {} })));
+    const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability);
+    map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: (request: GovernedProbeRunnerRequest) => { runnerCalls++; assertProofStable(); return fakeAnswer(request); }, cancel: () => {}, close: () => {} }), capability));
     const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const oldLog = console.log; const oldError = console.error; const exit = jest.fn();
     process.exit = exit as any; console.log = jest.fn(); console.error = jest.fn();
     try {
@@ -134,7 +159,7 @@ describe('EXP-0208 product-native demo pack', () => {
       assertProofStable(); expect(fixtureInventory(PROJECT)).toBe(fixtureBefore); expect(exit).toHaveBeenCalledWith(0); expect(runnerCalls).toBe(1);
       const journal = engine?._lastContext?.journal; expect(journal).toBeDefined(); const events = (journal.readRuntimeEvents() as any[]).filter(event => event.scope?.[0]?.key === 'A'); const candidate = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1'); const receipt = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1'); const verify = events.find(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify');
       expect(candidate).toHaveLength(1); expect(receipt).toHaveLength(1); expect([...verify.activeInputClaimIds].sort()).toEqual([candidate[0].claimId, receipt[0].claimId].sort()); expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection()); expect([...((await import('../../src/memory-store')).MemoryStore.getInstance() as any).data.keys()].filter((key: string) => key.startsWith('visor-cli-'))).toEqual([]);
-    } finally { executeSpy?.mockRestore(); process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+    } finally { executeSpy?.mockRestore(); bootstrap.mockRestore(); process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
   });
 
   it('proves candidate admission, exact verify inputs, replay, and C0 canonical projection', async () => {
@@ -143,11 +168,11 @@ describe('EXP-0208 product-native demo pack', () => {
       const manager = new ConfigManager(); const config: any = await manager.loadConfig(CONFIG, { validate: false, mergeDefaults: true }); const c0 = await child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), invocation(), PROJECT) as any;
       const inspect = config.subgraphs['one-component'].checks.inspect; inspect.message = GOVERNED_PROOF_INSPECT_MESSAGE; inspect.instructions = c0.instructions; inspect.invocation_digest = c0.invocation_digest; inspect.result_schema = Buffer.from(c0.output_schema, 'base64').toString(); manager.validateConfig(config);
       expect(Object.keys(c0)).toEqual(['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest']); expect(child.goCompatibleProofJson(c0)).toBe(child.goCompatibleProofJson(JSON.parse(child.goCompatibleProofJson(c0))));
-      const { CheckProviderRegistry } = await import('../../src/providers/check-provider-registry'); const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }))); registry.bootstrapProofAdmission(child.createProofAdmissionCapability(proof));
+      const { CheckProviderRegistry } = await import('../../src/providers/check-provider-registry'); const registry = CheckProviderRegistry.getInstance(); const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }), capability));
       try {
         const engine = new StateMachineExecutionEngine(PROJECT); const result = await engine.executeGroupedChecks(prInfo, ['discover'], undefined, config, 'json', false, 1); const journal = (engine as any)._lastContext.journal; const events = (journal.readRuntimeEvents() as any[]).filter(event => event.scope?.[0]?.key === 'A'); const candidate = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1'); const receipt = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1'); const verify = events.find(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify');
         expect(result.statistics.failedExecutions).toBe(0); expect(candidate).toHaveLength(1); expect(receipt).toHaveLength(1); expect(candidate[0].wireMode).toBe('generic'); expect((receipt[0].payload as any).Version).toBe('proof.role-result-candidate-admission/v1'); expect(Object.prototype.hasOwnProperty.call(receipt[0].payload, 'ProjectLineage')).toBe(false); expect(events.filter(event => event.type === 'NodeGenerationActivated').map(event => event.checkId)).toEqual(['inspect', 'proof_admit', 'verify']); expect([...verify.activeInputClaimIds].sort()).toEqual([candidate[0].claimId, receipt[0].claimId].sort()); expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection());
-      } finally { map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+      } finally { bootstrap.mockRestore(); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     });
   });
 
@@ -195,18 +220,18 @@ describe('EXP-0208 product-native demo pack', () => {
       const [{ ConfigManager }, child, { StateMachineExecutionEngine }, { CheckProviderRegistry }] = await Promise.all([import('../../src/config'), import('../../src/providers/proof-admission-cli-child'), import('../../src/state-machine-execution-engine'), import('../../src/providers/check-provider-registry')]);
       const manager = new ConfigManager(); const config: any = await manager.loadConfig(CONFIG, { validate: false, mergeDefaults: true }); const c0 = await child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), invocation(), PROJECT) as any; const inspect = config.subgraphs['one-component'].checks.inspect;
       inspect.message = GOVERNED_PROOF_INSPECT_MESSAGE; inspect.instructions = c0.instructions; inspect.invocation_digest = c0.invocation_digest; inspect.result_schema = Buffer.from(c0.output_schema, 'base64').toString(); manager.validateConfig(config);
-      const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }))); registry.bootstrapProofAdmission(child.createProofAdmissionCapability(proof));
-      try { const engine = new StateMachineExecutionEngine(PROJECT); const result = await engine.executeGroupedChecks(prInfo, ['discover'], undefined, config, 'json', false, 1); const events = ((engine as any)._lastContext.journal.readRuntimeEvents() as any[]).filter(event => event.scope?.[0]?.key === 'A'); expect(result.statistics.failedExecutions).toBeGreaterThan(0); expect(events.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false); expect(events.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false); } finally { map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+      const registry = CheckProviderRegistry.getInstance(); const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }), capability));
+      try { const engine = new StateMachineExecutionEngine(PROJECT); const result = await engine.executeGroupedChecks(prInfo, ['discover'], undefined, config, 'json', false, 1); const events = ((engine as any)._lastContext.journal.readRuntimeEvents() as any[]).filter(event => event.scope?.[0]?.key === 'A'); expect(result.statistics.failedExecutions).toBeGreaterThan(0); expect(events.some(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1')).toBe(false); expect(events.some(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify')).toBe(false); } finally { bootstrap.mockRestore(); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     }, 'reject');
   });
 
   it('fails closed when owned namespace cleanup fails', async () => {
     await withProtocolFixture(async proof => {
-      const [{ MemoryStore }, { CheckProviderRegistry }] = await Promise.all([import('../../src/memory-store'), import('../../src/providers/check-provider-registry')]); const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()];
-      map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} })));
+      const [{ MemoryStore }, child, { CheckProviderRegistry }] = await Promise.all([import('../../src/memory-store'), import('../../src/providers/proof-admission-cli-child'), import('../../src/providers/check-provider-registry')]); const registry = CheckProviderRegistry.getInstance(); const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability); const map = providerMap(registry); const original = [...map.entries()];
+      map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }), capability));
       const oldArgv = process.argv; const oldExit = process.exit; const oldCwd = process.cwd(); const oldLog = console.log; const oldError = console.error; const exit = jest.fn(); const memory = MemoryStore.getInstance(); await memory.set('sentinel', { stable: true }, 'cleanup-unrelated'); const dataSnapshot = (without?: string) => JSON.stringify([...((memory as any).data as Map<string, Map<string, unknown>>)].filter(([namespace]) => namespace !== without).map(([namespace, values]) => [namespace, [...values]])); const unrelatedBefore = dataSnapshot(); const clearCalls: Array<string | undefined> = []; let failedOwnedData: Record<string, unknown> | undefined; let failedUnrelated: string | undefined; const realClear = memory.clear.bind(memory); const clear = jest.spyOn(memory, 'clear').mockImplementation(async (namespace?: string) => { clearCalls.push(namespace); if (clearCalls.length === 1) { failedOwnedData = namespace ? memory.getAll(namespace) : undefined; failedUnrelated = dataSnapshot(namespace); throw new Error('cleanup sentinel'); } await realClear(namespace); });
       process.exit = exit as any; console.log = jest.fn(); console.error = jest.fn();
-      try { process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', CONFIG, '--check', 'discover', '--event', 'manual', '--disable-code-context', '--proof-bin', proof]; const { main } = await import('../../src/cli-main'); await main(); expect(exit).toHaveBeenCalledWith(1); expect(clearCalls).toHaveLength(2); expect(clearCalls[0]).toMatch(/^visor-cli-/); expect(clearCalls[1]).toBe(clearCalls[0]); expect(failedOwnedData).toBeDefined(); expect(Object.keys(failedOwnedData!)).not.toHaveLength(0); expect(failedUnrelated).toBe(unrelatedBefore); expect(memory.list(clearCalls[0])).toEqual([]); expect(dataSnapshot(clearCalls[0])).toBe(unrelatedBefore); } finally { clear.mockRestore(); process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+      try { process.chdir(PROJECT); process.argv = ['node', 'visor', '--config', CONFIG, '--check', 'discover', '--event', 'manual', '--disable-code-context', '--proof-bin', proof]; const { main } = await import('../../src/cli-main'); await main(); expect(exit).toHaveBeenCalledWith(1); expect(clearCalls).toHaveLength(2); expect(clearCalls[0]).toMatch(/^visor-cli-/); expect(clearCalls[1]).toBe(clearCalls[0]); expect(failedOwnedData).toBeDefined(); expect(Object.keys(failedOwnedData!)).not.toHaveLength(0); expect(failedUnrelated).toBe(unrelatedBefore); expect(memory.list(clearCalls[0])).toEqual([]); expect(dataSnapshot(clearCalls[0])).toBe(unrelatedBefore); } finally { clear.mockRestore(); bootstrap.mockRestore(); process.argv = oldArgv; process.exit = oldExit; process.chdir(oldCwd); console.log = oldLog; console.error = oldError; map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     });
   });
 
@@ -242,9 +267,9 @@ describe('EXP-0208 product-native demo pack', () => {
       const [{ ConfigManager }, child, { StateMachineExecutionEngine }, { CheckProviderRegistry }] = await Promise.all([import('../../src/config'), import('../../src/providers/proof-admission-cli-child'), import('../../src/state-machine-execution-engine'), import('../../src/providers/check-provider-registry')]);
       const manager = new ConfigManager(); const config: any = await manager.loadConfig(CONFIG, { validate: false, mergeDefaults: true }); const c0 = await child.resolveProofRoleInvocation(child.createProofAdmissionCapability(proof), invocation(), PROJECT) as any; const inspect = config.subgraphs['one-component'].checks.inspect;
       inspect.message = GOVERNED_PROOF_INSPECT_MESSAGE; inspect.instructions = c0.instructions; inspect.invocation_digest = c0.invocation_digest; inspect.result_schema = Buffer.from(c0.output_schema, 'base64').toString(); manager.validateConfig(config);
-      const registry = CheckProviderRegistry.getInstance(); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }))); registry.bootstrapProofAdmission(child.createProofAdmissionCapability(proof));
+      const registry = CheckProviderRegistry.getInstance(); const capability = child.createProofAdmissionCapability(proof); const bootstrap = bootstrapProofForFixture(registry, capability); const map = providerMap(registry); const original = [...map.entries()]; map.set('governed-proof-inspect', await createFocusedProvider(() => ({ answer: fakeAnswer, cancel: () => {}, close: () => {} }), capability));
       const observed = recordSignals();
-      try { const engine = new StateMachineExecutionEngine(PROJECT); const running = engine.executeGroupedChecks(prInfo, ['discover'], undefined, config, 'json', false, 1); await expect(waitForMarker(markers!.ready)).resolves.toBeDefined(); const result = await running; await expect(waitForMarker(markers!.term)).resolves.toBeDefined(); expect(result.statistics.failedExecutions).toBeGreaterThan(0); const pid = Number(readFileSync(pidFile!, 'utf8')); expect(observed.signals.map(signal => signal.signal)).toEqual(['SIGTERM', 'SIGKILL']); expect(observed.signals[1].at - observed.signals[0].at).toBeGreaterThanOrEqual(250); try { process.kill(-pid, 0); throw new Error('surviving Proof process group'); } catch (error) { expect((error as NodeJS.ErrnoException).code).toBe('ESRCH'); } } finally { observed.restore(); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
+      try { const engine = new StateMachineExecutionEngine(PROJECT); const running = engine.executeGroupedChecks(prInfo, ['discover'], undefined, config, 'json', false, 1); await expect(waitForMarker(markers!.ready)).resolves.toBeDefined(); const result = await running; await expect(waitForMarker(markers!.term)).resolves.toBeDefined(); expect(result.statistics.failedExecutions).toBeGreaterThan(0); const pid = Number(readFileSync(pidFile!, 'utf8')); expect(observed.signals.map(signal => signal.signal)).toEqual(['SIGTERM', 'SIGKILL']); expect(observed.signals[1].at - observed.signals[0].at).toBeGreaterThanOrEqual(250); try { process.kill(-pid, 0); throw new Error('surviving Proof process group'); } catch (error) { expect((error as NodeJS.ErrnoException).code).toBe('ESRCH'); } } finally { observed.restore(); bootstrap.mockRestore(); map.clear(); for (const entry of original) map.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     }, 'parent-exits-descendant');
   });
 });

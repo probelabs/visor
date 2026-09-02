@@ -31,7 +31,7 @@ const STDOUT_LIMIT = PROOF_ADMISSION_OUTPUT_MAX_BYTES;
 const STDERR_LIMIT = 65536;
 // The Proof child may invoke Git for project lineage. Keep this environment
 // deliberately small and identical for C0 and every managed onboarding call.
-const PROOF_CHILD_ENV = Object.freeze({ PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' });
+const PROOF_CHILD_ENV = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' });
 const COMMAND_TIMEOUT_MS = process.env.NODE_ENV === 'test' && Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) > 0 ? Number(process.env.VISOR_PROOF_C0_TIMEOUT_MS) : 120000;
 const DECISION_VERSION = 'proof.role-result-candidate-cli-decision/v1';
 const RECEIPT_VERSION_V1 = 'proof.role-result-candidate-admission/v1';
@@ -41,6 +41,7 @@ const RECEIPT_ID_DOMAIN_V1 = 'proof.role-result-candidate-receipt/id/v1';
 const RECEIPT_ID_DOMAIN_V2 = 'proof.role-result-candidate-receipt/id/v2';
 const C0_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] as const;
 const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
+const C0_COMPONENT_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema'] as const;
 const RECEIPT_COMMON_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
 const RECEIPT_V2_KEYS = [...RECEIPT_COMMON_KEYS.slice(0, 16), 'ProjectLineage', 'receipt_id'] as const;
 type ExecutableStat = Readonly<{
@@ -81,6 +82,105 @@ function json(value: unknown): string {
 }
 function proofStructJson(fields: Readonly<Record<string, string>>): string {
   return `{${Object.entries(fields).map(([key, value]) => `${json(key)}:${value}`).join(',')}}`;
+}
+
+/**
+ * The Proof role request is decoded into Go structs before its canonical-byte
+ * check.  Most requests already have Go's struct order from authored config,
+ * but journal projections intentionally use lexical graph JSON ordering. Keep
+ * raw candidate/admission/work-item bytes untouched while rebuilding the
+ * typed component-authority members in the order encoding/json emits them.
+ */
+function goComponentSubject(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    version: value.version,
+    project_id: value.project_id,
+    component_id: value.component_id,
+    sorted_owned_paths: value.sorted_owned_paths,
+    sorted_dependency_closure: value.sorted_dependency_closure,
+    fingerprint: value.fingerprint,
+  };
+}
+
+function goComponentReceipt(value: Record<string, unknown>): Record<string, unknown> {
+  const authorities = Array.isArray(value.component_authorities)
+    ? value.component_authorities.map(raw => {
+      const authority = raw as Record<string, unknown>;
+      return {
+        component_id: authority.component_id,
+        work_item_digest: authority.work_item_digest,
+        subject: goComponentSubject(authority.subject as Record<string, unknown>),
+      };
+    })
+    : value.component_authorities;
+  if (value.version !== 'proof.catalog-revalidation-receipt/v2') {
+    return {
+      version: value.version,
+      decision: value.decision,
+      project_id: value.project_id,
+      project_fingerprint: value.project_fingerprint,
+      boundary_fingerprint: value.boundary_fingerprint,
+      inventory_claim_id: value.inventory_claim_id,
+      catalog_claim_id: value.catalog_claim_id,
+      admission_candidate_id: value.admission_candidate_id,
+      admission_result_digest: value.admission_result_digest,
+      admission_receipt_id: value.admission_receipt_id,
+      component_authorities: authorities,
+      receipt_id: value.receipt_id,
+    };
+  }
+  const lineage = value.project_lineage && typeof value.project_lineage === 'object'
+    ? (() => {
+      const raw = value.project_lineage as Record<string, unknown>;
+      return {
+        version: raw.version,
+        fingerprint: raw.fingerprint,
+        object_format: raw.object_format,
+        baseline_revision: raw.baseline_revision,
+      };
+    })()
+    : null;
+  // CatalogRevalidationReceipt.MarshalJSON uses a map for v2, so Go sorts
+  // these outer keys lexically after encoding the typed nested values above.
+  return {
+    admission_candidate_id: value.admission_candidate_id,
+    admission_receipt_id: value.admission_receipt_id,
+    admission_result_digest: value.admission_result_digest,
+    boundary_fingerprint: value.boundary_fingerprint,
+    catalog_claim_id: value.catalog_claim_id,
+    component_authorities: authorities,
+    decision: value.decision,
+    inventory_claim_id: value.inventory_claim_id,
+    project_fingerprint: value.project_fingerprint,
+    project_id: value.project_id,
+    project_lineage: lineage,
+    receipt_id: value.receipt_id,
+    version: value.version,
+  };
+}
+
+function goComponentAuthority(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    work_item_digest: value.work_item_digest,
+    subject: goComponentSubject(value.subject as Record<string, unknown>),
+    candidate: value.candidate,
+    admission: value.admission,
+    work_item: value.work_item,
+    catalog_revalidation_receipt: goComponentReceipt(value.catalog_revalidation_receipt as Record<string, unknown>),
+  };
+}
+
+function componentRoleInvocationJson(value: Record<string, unknown>): string {
+  const subject = value.subject as Record<string, unknown>;
+  const authority = value.component_authority as Record<string, unknown>;
+  return json({
+    role_id: value.role_id,
+    stance: value.stance,
+    subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
+    component_authority: goComponentAuthority(authority),
+    output_schema_id: value.output_schema_id,
+    output_schema: value.output_schema,
+  });
 }
 
 function validUnicode(value: unknown): boolean {
@@ -126,7 +226,10 @@ function b64(value: unknown): Buffer {
 }
 function validateCandidateShape(candidate: Record<string, unknown>, wireMode: GovernedWireMode): void {
   const invocation = candidate.Invocation as Record<string, unknown>;
-  if (!exact(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || !exact(candidate.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(invocation.subject, candidate.Subject)) fail('invocation wire shape is invalid');
+  const invocationKeys = Object.prototype.hasOwnProperty.call(invocation, 'component_authority')
+    ? ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema']
+    : ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'];
+  if (!exact(invocation, invocationKeys) || !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || !exact(candidate.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(invocation.subject, candidate.Subject)) fail('invocation wire shape is invalid');
   const scope = (value: unknown): void => {
     if (!Array.isArray(value) || value.length < 1 || value.length > 2 || value.some(part => !exact(part, ['Kind', 'ExpansionOwnerCheck', 'Key', 'SubgraphInstanceID']))) fail('scope wire shape is invalid');
   };
@@ -194,6 +297,63 @@ function proofTermination(value: unknown): Record<string, unknown> {
     FailureCode: termination.FailureCode,
   };
 }
+
+/**
+ * Reconstruct the historical v1 admission decision wire emitted by Proof's
+ * Go structs.  The decision itself is a struct (rather than CanonicalJSON),
+ * and its receipt contains nested typed structs whose field order is part of
+ * the compatibility contract.  This is used only as an exact byte
+ * compatibility check; the original accepted bytes are retained by the
+ * caller.
+ */
+function proofV1DecisionJson(value: Record<string, unknown>): string {
+  const receipt = value.receipt;
+  const receiptJson = receipt === null ? 'null' : (() => {
+    if (!plain(receipt)) return '';
+    const typed = receipt as Record<string, unknown>;
+    const subject = typed.Subject;
+    if (!plain(subject) || !plain(typed.Binding) || !plain(typed.Termination)) return '';
+    return proofStructJson({
+      Version: json(typed.Version),
+      Status: json(typed.Status),
+      CandidateID: json(typed.CandidateID),
+      ProbeResultDigest: json(typed.ProbeResultDigest),
+      ProbeCanonicalBytes: json(typed.ProbeCanonicalBytes),
+      ClaimID: json(typed.ClaimID),
+      Claim: json(typed.Claim),
+      PayloadFingerprint: json(typed.PayloadFingerprint),
+      InvocationDigest: json(typed.InvocationDigest),
+      RoleID: json(typed.RoleID),
+      Stance: json(typed.Stance),
+      Subject: json({ kind: (subject as Record<string, unknown>).kind, id: (subject as Record<string, unknown>).id, fingerprint: (subject as Record<string, unknown>).fingerprint }),
+      ProducerCheckID: json(typed.ProducerCheckID),
+      ParentClaimIDs: json(typed.ParentClaimIDs),
+      Binding: json(proofBinding(typed.Binding)),
+      Termination: json(proofTermination(typed.Termination)),
+      receipt_id: json(typed.receipt_id),
+    });
+  })();
+  if (receipt !== null && receiptJson === '') return '';
+  return proofStructJson({
+    version: json(value.version),
+    status: json(value.status),
+    receipt: receiptJson,
+    reject_code: json(value.reject_code),
+  });
+}
+
+function acceptedAdmissionDecisionWire(value: unknown, decoded: string): boolean {
+  if (!plain(value)) return false;
+  const decision = value as Record<string, unknown>;
+  // v2 is the current graph-canonical wire only. A v1 receipt may be either
+  // that wire or the exact historical Go struct encoding above.
+  const receipt = decision.receipt;
+  const version = decision.status === 'ADMITTED' && plain(receipt) ? (receipt as Record<string, unknown>).Version : RECEIPT_VERSION_V1;
+  if (version === RECEIPT_VERSION_V2) return proofCanonicalJson(value) === decoded;
+  if (version !== RECEIPT_VERSION_V1) return false;
+  return proofCanonicalJson(value) === decoded || proofV1DecisionJson(decision) === decoded;
+}
+
 function validateReceipt(decision: unknown, candidate: Record<string, unknown>, rawCandidate: Buffer, wireMode: GovernedWireMode): void {
   if (!exactUnordered(decision, ['version', 'status', 'receipt', 'reject_code']) || decision.version !== DECISION_VERSION) fail('decision envelope is invalid');
   const publication = candidate.Publication as Record<string, unknown>;
@@ -292,6 +452,7 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
 }
 
 type ProofCommandResult = Readonly<{ status: number | null; signal: NodeJS.Signals | null; stdout: Buffer; stderr: Buffer }>;
+type ProofCommandHandle = Readonly<{ result: Promise<ProofCommandResult>; cancel: () => void }>;
 
 function runBoundedProofCommand(
   executable: ExecutableStat,
@@ -299,14 +460,15 @@ function runBoundedProofCommand(
   input: string,
   workingDirectory: string,
   stdoutLimit: number,
-): Promise<ProofCommandResult> {
-  return new Promise((resolve, reject) => {
+): ProofCommandHandle {
+  let cancelCommand: () => void = () => undefined;
+  const result = new Promise<ProofCommandResult>((resolve, reject) => {
     let child: ChildProcess | undefined, pid: number | undefined, status: number | null = null, signal: NodeJS.Signals | null = null, stdout: Buffer = Buffer.alloc(0), stderr: Buffer = Buffer.alloc(0), stdoutEnded = false, stderrEnded = false, closeSeen = false, settled = false, terminationRequested = false, termSent = false, killSent = false, inputWritten = false, timedOut = false;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined, killTimer: ReturnType<typeof setTimeout> | undefined, reapTimer: ReturnType<typeof setTimeout> | undefined, reapDeadline = 0;
 
     const clearTimers = () => { if (deadlineTimer) clearTimeout(deadlineTimer); if (killTimer) clearTimeout(killTimer); if (reapTimer) clearTimeout(reapTimer); deadlineTimer = undefined; killTimer = undefined; reapTimer = undefined; };
-    const closeStreams = () => { child?.stdin?.destroy(); child?.stdout?.destroy(); child?.stderr?.destroy(); stdoutEnded = true; stderrEnded = true; };
-    const clearListeners = () => { child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners(); };
+    const closeStreams = () => { if (typeof child?.stdin?.destroy === 'function') child.stdin.destroy(); if (typeof child?.stdout?.destroy === 'function') child.stdout.destroy(); if (typeof child?.stderr?.destroy === 'function') child.stderr.destroy(); stdoutEnded = true; stderrEnded = true; };
+    const clearListeners = () => { for (const value of [child, child?.stdin, child?.stdout, child?.stderr]) if (value && typeof (value as any).removeAllListeners === 'function') (value as any).removeAllListeners(); };
     const rejectUnavailable = (cleanupFailed = false) => {
       if (settled) return;
       settled = true;
@@ -358,6 +520,7 @@ function runBoundedProofCommand(
       }
       reapOrReject();
     };
+    cancelCommand = forceStop;
     const append = (current: Buffer, chunk: Buffer, limit: number): { value: Buffer; overflow: boolean } => {
       const remaining = limit - current.length;
       if (remaining <= 0) return { value: current, overflow: chunk.length > 0 };
@@ -414,6 +577,7 @@ function runBoundedProofCommand(
       rejectUnavailable();
     }
   });
+  return Object.freeze({ result, cancel: () => cancelCommand() });
 }
 
 export function goCompatibleProofJson(value: unknown): string { return json(value); }
@@ -433,14 +597,30 @@ export function createProofAdmissionCliChildForFocusedTest(path: string): object
 export async function resolveProofRoleInvocation(
   capability: unknown,
   request: Readonly<Record<string, unknown>>,
-  workingDirectory: string
+  workingDirectory: string,
+  signal?: AbortSignal
 ): Promise<Readonly<Record<string, unknown>>> {
   const executable = capabilityIdentity(capability);
-  if (process.platform === 'win32' || !executable || !workingDirectory.startsWith('/') || !exact(request, C0_REQUEST_KEYS)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const component = plain(request) && Object.prototype.hasOwnProperty.call(request, 'component_authority');
+  const requestKeys = component ? C0_COMPONENT_REQUEST_KEYS : C0_REQUEST_KEYS;
+  if (process.platform === 'win32' || !executable || !workingDirectory.startsWith('/') || !exact(request, requestKeys)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  const input = json(request);
+  const input = component ? componentRoleInvocationJson(request as Record<string, unknown>) : json(request);
   if (Buffer.byteLength(input, 'utf8') > PROOF_C0_REQUEST_MAX_BYTES || !validUnicode(request)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  const result = await runBoundedProofCommand(executable, ['resolve-role-invocation'], input, workingDirectory, PROOF_C0_RESPONSE_MAX_BYTES);
+  let normalizedInput: Record<string, unknown> | undefined;
+  if (component) {
+    try {
+      normalizedInput = JSON.parse(input) as Record<string, unknown>;
+    } catch {
+      throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+    }
+  }
+  if (signal?.aborted) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const command = runBoundedProofCommand(executable, ['resolve-role-invocation'], input, workingDirectory, PROOF_C0_RESPONSE_MAX_BYTES);
+  const cancel = () => command.cancel();
+  signal?.addEventListener('abort', cancel, { once: true });
+  let result: ProofCommandResult;
+  try { result = await command.result; } finally { signal?.removeEventListener('abort', cancel); }
   if (!sameExecutable(executable, executableStat(executable.realpath)) || result.status !== 0 || result.signal || result.stderr.length !== 0 || result.stdout.length === 0 || result.stdout[result.stdout.length - 1] !== 10) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   let stdout: string;
   try { stdout = new TextDecoder('utf-8', { fatal: true }).decode(result.stdout); } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
@@ -448,7 +628,14 @@ export async function resolveProofRoleInvocation(
   if (output.includes('\n') || output.includes('\r')) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   let value: Record<string, unknown>;
   try { value = JSON.parse(output) as Record<string, unknown>; } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
-  if (!exact(value, C0_KEYS) || json(value) !== output || value.version !== 'proof.role-invocation/v1' || value.role_id !== request.role_id || value.stance !== request.stance || !equalJson(value.subject, request.subject) || value.output_schema_id !== request.output_schema_id || value.output_schema !== request.output_schema || typeof value.instructions !== 'string' || value.instructions.length === 0) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const responseKeys = component ? ['version', 'role_id', 'role_source', 'stance', 'subject', 'component_authority', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] : C0_KEYS;
+  if (
+    !exact(value, responseKeys) || json(value) !== output || value.version !== 'proof.role-invocation/v1' ||
+    value.role_id !== request.role_id || value.stance !== request.stance || !equalJson(value.subject, request.subject) ||
+    (component && (!normalizedInput || proofCanonicalJson(value.component_authority) !== proofCanonicalJson(normalizedInput.component_authority))) ||
+    value.output_schema_id !== request.output_schema_id || value.output_schema !== request.output_schema ||
+    typeof value.instructions !== 'string' || value.instructions.length === 0
+  ) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   return Object.freeze(value);
 }
 
@@ -597,7 +784,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { failOnce('decision UTF-8 invalid'); return; }
     try {
       const parsedOutput = JSON.parse(decoded);
-      if (request.outputCanonical && proofCanonicalJson(parsedOutput) !== decoded) failOnce('decision is not canonical');
+      if (request.outputCanonical && !acceptedAdmissionDecisionWire(parsedOutput, decoded)) failOnce('decision is not canonical');
       else {
         output = freeze(request.projectOutput(parsedOutput, decoded));
         accepted = true;

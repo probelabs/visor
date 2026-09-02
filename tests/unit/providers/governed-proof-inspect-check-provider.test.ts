@@ -59,6 +59,17 @@ function request(): any {
   return { prInfo: {}, checkConfig: config(), dependencyResults: new Map(), executionContext: {}, binding, executionConfigDigest: 'd'.repeat(64), workingDirectory: process.cwd() };
 }
 
+function componentSelector(): any {
+  return {
+    type: 'governed-proof-inspect', profile: 'luna-xhigh-readonly-v1',
+    invocation: {
+      role_id: 'onboard', stance: 'owner', subject: { kind: 'component' },
+      output_schema_id: 'proof.findings/v1', output_schema: Buffer.from('{"type":"object"}', 'utf8').toString('base64'),
+    },
+    consumes: [{ claim: 'component.work_item@1', as: 'component' }],
+  };
+}
+
 describe('governed Proof inspect provider', () => {
   it('is sealed unavailable in the product registry shape', async () => {
     const provider = new GovernedProofInspectCheckProvider();
@@ -91,6 +102,26 @@ describe('governed Proof inspect provider', () => {
     const projected = projectGovernedProofInspectConfig({ ...config(), ai: { timeout: 600000 } });
     expect((projected as any).ai).toBeUndefined();
     expect(Object.keys(projected)).toEqual(['instructions', 'invocation', 'invocation_digest', 'message', 'profile', 'result_schema', 'type']);
+  });
+
+  it('accepts only the stable component selector and keeps its projected identity free of runtime authority', () => {
+    const selector = componentSelector();
+    const projected = projectGovernedProofInspectConfig(selector);
+    expect(projected).toEqual(expect.objectContaining({ type: selector.type, profile: selector.profile, invocation: selector.invocation }));
+    for (const field of ['instructions', 'invocation_digest', 'result_schema']) {
+      expect(() => projectGovernedProofInspectConfig({ ...selector, [field]: 'forged' })).toThrow('component selector');
+    }
+    expect(() => projectGovernedProofInspectConfig({ ...selector, invocation: { ...selector.invocation, subject: { kind: 'component', id: 'forged', fingerprint: `sha256:${'a'.repeat(64)}` } } })).toThrow();
+  });
+
+  it('rejects a fully resolved authored component subject outside the selector form', () => {
+    expect(() => projectGovernedProofInspectConfig({
+      ...config(),
+      invocation: {
+        ...config().invocation,
+        subject: { kind: 'component', id: 'forged', fingerprint: `sha256:${'a'.repeat(64)}` },
+      },
+    })).toThrow('invocation subject is invalid');
   });
 
   it('uses a focused-only runner seam and emits a frozen typed candidate outcome', async () => {

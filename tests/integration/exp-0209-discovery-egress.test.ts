@@ -1,6 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-jest.unmock('child_process');
-import { execFileSync } from 'node:child_process';
+const { execFileSync } = jest.requireActual<typeof import('node:child_process')>('node:child_process');
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,7 +9,7 @@ import type { PRInfo } from '../../src/pr-analyzer';
 import { CheckProvider, type CheckProviderConfig, type ExecutionContext } from '../../src/providers/check-provider.interface';
 import type { ReviewSummary } from '../../src/reviewer';
 import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
-import { createGovernedProofInspectProviderForFocusedTest, type GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
+import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
@@ -100,7 +99,11 @@ function goSort(a,b){return Buffer.from(a).compare(Buffer.from(b))}
 function catalog(candidate){return {version:candidate.version,project_id:candidate.project_id,components:[...candidate.components].sort((a,b)=>goSort(a.id,b.id)).map(component=>{const out={id:component.id,responsibility:component.responsibility,owned_paths:[...component.owned_paths].sort(goSort)};if(component.dependency_closure!==undefined)out.dependency_closure=[...component.dependency_closure].sort(goSort);for(const key of ['entry_points','state_effects','interfaces','uncertainty'])if(component[key]&&component[key].length)out[key]=key==='interfaces'?component[key]:[...component[key]].sort(goSort);return out})}}
 function receipt(projection, candidate, admission){const items=projection.work_items;const authorities=items.map(value=>({component_id:value.component_id,work_item_digest:sha(Buffer.from(JSON.stringify(value))),subject:value.proof_component_subject})).sort((a,b)=>goSort(a.component_id,b.component_id));const inv=projection.inventory;const r={version:'proof.catalog-revalidation-receipt/v2',decision:'accepted',project_id:'journalservice',project_fingerprint:inv.authority.subject_fingerprint,boundary_fingerprint:inv.boundary_fingerprint,inventory_claim_id:digest('proof.structural-inventory/claim/v1',Buffer.from(JSON.stringify(inv))),catalog_claim_id:digest('proof.component-catalog-candidate/claim/v1',Buffer.from(canon(candidate))),admission_candidate_id:admission.receipt.CandidateID,admission_result_digest:admission.receipt.ProbeResultDigest,admission_receipt_id:admission.receipt.receipt_id,component_authorities:authorities,project_lineage:null,receipt_id:''};r.receipt_id=digest('proof.catalog-revalidation-receipt/id/v2',Buffer.from(top(r,true)));return r}
 process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{try{const args=process.argv.slice(2).join(' ');if(args==='onboarding inventory'){if(input!=='')throw new Error('inventory accepts no stdin');const o=inventory();process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='admit-candidate'){const req=JSON.parse(input),c=req.candidate,p=c&&c.Publication;if(!c||!p||c.Version!=='proof.role-result-candidate-envelope/v1'||!hasKeys(c,['Version','Invocation','InvocationDigest','RoleID','Stance','Subject','AttestationVersion','ExecutionSource','ProbeInvocationDigest','IdentityVersion','IdentitySource','ResultDigest','CanonicalBytes','ProbeResultBytes','VisorPayloadBytes','Publication','Binding','Termination'])||!hasKeys(p,['Version','Type','SessionID','CheckID','Scope','NodeInstanceID','NodeGenerationID','AttemptID','Fence','ClaimID','Claim','PayloadFingerprint','ProducerCheckID','Payload','ParentClaimIDs'])||!hasKeys(c.Binding,['ManagedRunID','SessionID','CheckID','Scope','NodeInstanceID','NodeGenerationID','AttemptID','Fence'])||!hasKeys(c.Termination,['Version','Type','SessionID','Scope','Binding','CleanupStatus','ControllerDecision','FailureCode']))throw new Error('candidate is truncated');const unsigned={Version:'proof.role-result-candidate-admission/v2',Status:'ADMITTED',CandidateID:digest('proof.role-result-candidate-envelope/id/v1',Buffer.from(JSON.stringify(c))),ProbeResultDigest:c.ResultDigest,ProbeCanonicalBytes:c.CanonicalBytes,ClaimID:p.ClaimID,Claim:p.Claim,PayloadFingerprint:p.PayloadFingerprint,InvocationDigest:c.InvocationDigest,RoleID:c.RoleID,Stance:c.Stance,Subject:c.Subject,ProducerCheckID:p.ProducerCheckID,ParentClaimIDs:p.ParentClaimIDs,Binding:c.Binding,Termination:c.Termination,ProjectLineage:null};const receipt={...unsigned,receipt_id:digest('proof.role-result-candidate-receipt/id/v2',Buffer.from(top(unsigned)))};const o={version:'proof.role-result-candidate-cli-decision/v1',status:'ADMITTED',receipt,reject_code:null};process.stdout.write(canon(o)+'\\n');return}if(args==='onboarding revalidate'){const req=JSON.parse(input),candidate=req&&req.candidate,admission=req&&req.admission,admissionKeys=['version','status','receipt','reject_code'],receiptKeys=['Version','Status','CandidateID','ProbeResultDigest','ProbeCanonicalBytes','ClaimID','Claim','PayloadFingerprint','InvocationDigest','RoleID','Stance','Subject','ProducerCheckID','ParentClaimIDs','Binding','Termination','ProjectLineage','receipt_id'];if(!req||canon(req)!==input||req.version!=='proof.catalog-revalidation-request/v2'||!candidate||!admission||JSON.stringify(Object.keys(admission).sort())!==JSON.stringify(admissionKeys.slice().sort())||admission.status!=='ADMITTED'||admission.reject_code!==null||!admission.receipt||JSON.stringify(Object.keys(admission.receipt).sort())!==JSON.stringify(receiptKeys.slice().sort()))throw new Error('admission is truncated');if(candidate.version!=='proof.component-catalog-candidate/v1'||!Array.isArray(candidate.components)||candidate.components.length<2||candidate.components.length>4)throw new Error('candidate is truncated');const inv=inventory(),items=candidate.components.map(item),o={version:'proof.catalog-revalidation/v2',inventory:inv,catalog:catalog(candidate),work_items:items,receipt:null};o.receipt=receipt(o,candidate,admission);process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='onboarding work-items'){const req=JSON.parse(input),keys=['version','candidate','admission','revalidation_receipt'];if(!req||JSON.stringify(Object.keys(req))!==JSON.stringify(keys)||req.version!=='proof.onboarding-work-items-request/v1'||!req.candidate||!req.admission||!req.revalidation_receipt)throw new Error('work-items request is truncated');const candidate=req.candidate,inv=inventory(),o={version:'proof.onboarding-work-item-projection/v1',authority:inv.authority,catalog:catalog(candidate),work_items:candidate.components.map(item)};process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}throw new Error('unsupported command '+args)}catch(e){process.stderr.write(String(e));process.exitCode=1}});`;
-  writeFileSync(proof, script, 'utf8'); chmodSync(proof, 0o755);
+  const scriptWithC0 = script.replace(
+    "try{const args=process.argv.slice(2).join(' ');",
+    "try{const args=process.argv.slice(2).join(' ');if(args==='resolve-role-invocation'){const req=JSON.parse(input),component=Object.prototype.hasOwnProperty.call(req,'component_authority'),o={version:'proof.role-invocation/v1',role_id:req.role_id,role_source:'fixture',stance:req.stance,subject:req.subject,...(component?{component_authority:req.component_authority}:{}),authority:{},output_schema_id:req.output_schema_id,output_schema:req.output_schema,output_schema_digest:sha(Buffer.from(req.output_schema,'base64')),instructions:'fixture component inspection instructions',role_text_digest:sha(Buffer.from('fixture component inspection instructions')),invocation_digest:'sha256:'+'4'.repeat(64)};process.stdout.write(JSON.stringify(o)+'\\n');return}"
+  );
+  writeFileSync(proof, scriptWithC0, 'utf8'); chmodSync(proof, 0o755);
   return Promise.resolve(fn(proof, root)).finally(() => rmSync(root, { recursive: true, force: true }));
 }
 
@@ -134,6 +137,9 @@ it('accepts the committed Proof inventory wire through the real pinned binary', 
   writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: wire-fidelity\n', 'utf8');
   writeFileSync(join(root, 'a.go'), 'package wirefidelity\n\nfunc A() {}\n', 'utf8');
   try {
+    jest.resetModules();
+    jest.doMock('child_process', () => jest.requireActual('child_process'));
+    jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
     const [{ createProofAdmissionCapability }, { createProofStructuralInventoryProviderFromCapability }] = await Promise.all([
       import('../../src/providers/proof-admission-cli-child'),
       import('../../src/providers/proof-catalog-check-providers'),
@@ -231,6 +237,9 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
   execFileSync('git', ['add', '.'], { cwd: repository });
   execFileSync('git', ['commit', '-qm', 'fixture'], { cwd: repository });
   try {
+    jest.resetModules();
+    jest.doMock('child_process', () => jest.requireActual('child_process'));
+    jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
     const [child, providers, admitModule, admittedModule] = await Promise.all([
       import('../../src/providers/proof-admission-cli-child'),
       import('../../src/providers/proof-catalog-check-providers'),
@@ -389,6 +398,9 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
 describe('EXP-0209 admitted discovery egress', () => {
   it('settles both new managed Proof providers and reaps their process groups', async () => {
     await withProofFixture(async (proof, root) => {
+      jest.resetModules();
+      jest.doMock('child_process', () => jest.requireActual('child_process'));
+      jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
       const [{ createProofAdmissionCapability }, providers, admittedProviders] = await Promise.all([
         import('../../src/providers/proof-admission-cli-child'),
         import('../../src/providers/proof-catalog-check-providers'),
@@ -496,11 +508,15 @@ describe('EXP-0209 admitted discovery egress', () => {
 
   it('executes authored providers through the native scheduler and replays independent keyed fanout', async () => {
     await withProofFixture(async (proof, root) => {
+      jest.resetModules();
+      jest.doMock('child_process', () => jest.requireActual('child_process'));
+      jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
       const config: any = yaml.load(readFileSync(PROFILE, 'utf8'));
-      const [{ CheckProviderRegistry }, { createProofAdmissionCapability }, { StateMachineExecutionEngine }] = await Promise.all([
+      const [{ CheckProviderRegistry }, { createProofAdmissionCapability }, { StateMachineExecutionEngine }, { createGovernedProofInspectProviderForFocusedTest: createFocusedProvider }] = await Promise.all([
         import('../../src/providers/check-provider-registry'),
         import('../../src/providers/proof-admission-cli-child'),
         import('../../src/state-machine-execution-engine'),
+        import('../../src/providers/governed-proof-inspect-check-provider'),
       ]);
       const registry = CheckProviderRegistry.getInstance(); const providers = providerMap(registry); const original = [...providers.entries()]; let discoveryCalls = 0;
       const timeline: ComponentTimelineEvent[] = [];
@@ -511,7 +527,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       delete componentChecks.inspect;
       providers.set('timed-component-stage1', new TimedComponentStage1Provider(timeline));
       providers.set('timed-component-stage2', new TimedComponentStage2Provider(timeline));
-      providers.set('governed-proof-inspect', createGovernedProofInspectProviderForFocusedTest(() => ({ answer: (request: GovernedProbeRunnerRequest) => { discoveryCalls++; return fakeDiscovery(request); }, cancel: () => {}, close: () => {} }))); registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
+      registry.bootstrapProofAdmission(createProofAdmissionCapability(proof)); providers.set('governed-proof-inspect', createFocusedProvider(() => ({ answer: (request: GovernedProbeRunnerRequest) => { discoveryCalls++; return fakeDiscovery(request); }, cancel: () => {}, close: () => {} })));
       let watchdog: ReturnType<typeof setTimeout> | undefined;
       try {
         const engine = new StateMachineExecutionEngine(root);
@@ -552,7 +568,8 @@ describe('EXP-0209 admitted discovery egress', () => {
         }
         expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
         const checkpoint = journal.exportGraphCheckpoint((engine as any)._lastContext.sessionId); const { publishGraphCheckpointFile, readGraphCheckpointFile } = await import('../../src/graph-checkpoint-file'); const checkpointPath = join(root, 'graph-checkpoint.json'); publishGraphCheckpointFile(checkpoint, checkpointPath); expect(readFileSync(checkpointPath, 'utf8')).toContain('-0'); const fileCheckpoint = readGraphCheckpointFile(checkpointPath); const restored = (await import('../../src/snapshot-store')).ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, fileCheckpoint); const restoredCandidate: any = Object.values(restored.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); const liveCandidate: any = Object.values(journal.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); expect(Object.is(restoredCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true); expect(restoredCandidate.payloadFingerprint).toBe(liveCandidate.payloadFingerprint); expect(restoredCandidate.proofCandidateEvidence).toEqual(liveCandidate.proofCandidateEvidence);
+
       } finally { if (watchdog) clearTimeout(watchdog); providers.clear(); for (const entry of original) providers.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
     });
-  });
+  }, 120000);
 });

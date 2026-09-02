@@ -118,20 +118,14 @@ subgraphs:
     checks:
       inspect:
         type: governed-proof-inspect
-        message: Execute the bound Proof role and return only the required JSON.
-        instructions: Inspect exactly the bound component WorkItem.
         profile: luna-xhigh-readonly-v1
         invocation:
           role_id: onboard
           stance: owner
           subject:
             kind: component
-            id: http-adapter
-            fingerprint: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
           output_schema_id: proof.onboarding@1
           output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlfQ==
-        invocation_digest: "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-        result_schema: '{"type":"object","additionalProperties":false}'
         consumes: [{ claim: component.work_item@1, as: component }]
         emits: [{ claim: proof.candidate@1, from: output }]
       proof_admit:

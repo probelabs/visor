@@ -118,6 +118,14 @@ describe('Graph v2 C2 expansion plan', () => {
     });
   });
 
+  it('rejects a fully resolved authored component subject outside the selector placement', () => {
+    const value = proofAdmissionConfig();
+    value.subgraphs['onboard-component'].checks.inspect.invocation.subject = {
+      kind: 'component', id: 'forged', fingerprint: `sha256:${'a'.repeat(64)}`,
+    };
+    expect(() => compileClaimPlan(value)).toThrow('inspect invocation subject is invalid');
+  });
+
   it('accepts closed controller ai.timeout, retains graph/digest semantics, and preserves absent compatibility', () => {
     const withoutAi = compileClaimPlan(proofAdmissionConfig()).expansionPlan;
     const withAiConfig = proofAdmissionConfig();
