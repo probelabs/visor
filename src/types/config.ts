@@ -221,6 +221,9 @@ export type ConfigCheckType =
   | 'a2a'
   | 'utcp'
   | 'proof-admit'
+  | 'proof-structural-inventory'
+  | 'proof-catalog-revalidate'
+  | 'proof-admitted-catalog'
   | 'governed-proof-inspect';
 
 /**

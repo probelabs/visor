@@ -6,7 +6,6 @@ import { ExecutionJournal } from '../../src/snapshot-store';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import {
   createGovernedProofInspectProviderForFocusedTest,
-  governedProofRuntimePrompt,
   governedResultDigest,
 } from '../../src/providers/governed-proof-inspect-check-provider';
 import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';

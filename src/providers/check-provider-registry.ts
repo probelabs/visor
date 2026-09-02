@@ -28,6 +28,16 @@ import {
 } from './governed-proof-inspect-check-provider';
 import { ProofAdmittedCatalogCheckProvider } from './proof-admitted-catalog-check-provider';
 import { PROOF_ADMITTED_CATALOG_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
+import {
+  ProofCatalogRevalidationCheckProvider,
+  ProofStructuralInventoryCheckProvider,
+  createProofCatalogRevalidationProviderFromCapability,
+  createProofStructuralInventoryProviderFromCapability,
+} from './proof-catalog-check-providers';
+import {
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE,
+} from '../state-machine/graph/instance-plan';
 
 /**
  * Registry for managing check providers
@@ -81,6 +91,8 @@ export class CheckProviderRegistry {
     // in the compiled admission suffix and cannot be replaced by a custom
     // provider through the public registry.
     this.registerBuiltIn(new ProofAdmittedCatalogCheckProvider());
+    this.registerBuiltIn(new ProofStructuralInventoryCheckProvider());
+    this.registerBuiltIn(new ProofCatalogRevalidationCheckProvider());
 
     // Try to register UtcpCheckProvider - it may fail if dependencies are missing
     try {
@@ -136,6 +148,8 @@ export class CheckProviderRegistry {
     const current = this.providers.get(PROOF_ADMIT_PROVIDER_NAME);
     if (!(current instanceof ProofAdmitCheckProvider)) throw new Error('Proof admission provider registry state is invalid');
     this.providers.set(PROOF_ADMIT_PROVIDER_NAME, createProofAdmitProviderFromCapability(capability));
+    this.providers.set(PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE, createProofStructuralInventoryProviderFromCapability(capability));
+    this.providers.set(PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE, createProofCatalogRevalidationProviderFromCapability(capability));
     this.proofAdmissionBootstrapped = true;
   }
 
@@ -144,7 +158,8 @@ export class CheckProviderRegistry {
    */
   register(provider: CheckProvider): void {
     const name = provider.getName();
-    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME || name === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE) {
+    if ([PROOF_ADMIT_PROVIDER_NAME, GOVERNED_PROOF_INSPECT_PROVIDER_NAME, PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
+      PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE, PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE].includes(name)) {
       throw new Error(`Provider '${name}' is reserved and cannot be registered publicly`);
     }
     if (this.providers.has(name)) {
@@ -161,7 +176,8 @@ export class CheckProviderRegistry {
    * Unregister a check provider
    */
   unregister(name: string): void {
-    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME || name === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE) {
+    if ([PROOF_ADMIT_PROVIDER_NAME, GOVERNED_PROOF_INSPECT_PROVIDER_NAME, PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
+      PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE, PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE].includes(name)) {
       throw new Error(`Provider '${name}' is reserved and cannot be unregistered`);
     }
     if (!this.providers.has(name)) {

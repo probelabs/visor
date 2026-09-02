@@ -25,8 +25,10 @@ export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
 export const PROOF_ADMITTED_RECEIPT_CLAIM = 'proof.admitted_receipt@1';
 /** Reserved only for the opt-in discovery-admission egress suffix. */
 export const PROOF_CATALOG_REVALIDATION_CLAIM = 'proof.catalog_revalidation@1';
+export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
 export const PROOF_ADMITTED_CATALOG_PROVIDER_TYPE = 'proof-admitted-catalog';
 export const PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE = 'proof-catalog-revalidate';
+export const PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE = 'proof-structural-inventory';
 export const PROOF_ADMIT_PROVIDER_TYPE = 'proof-admit';
 export const GOVERNED_PROOF_INSPECT_PROVIDER_TYPE = 'governed-proof-inspect';
 export const PROOF_ADMIT_NODE_KEY = 'proof_admit';
@@ -309,11 +311,12 @@ function validateReservedProofAdmissionTemplate(
       check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
       check.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
       check.type === PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
+      check.type === PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE ||
       claimList(check, 'emits').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM
       ) ||
       claimList(check, 'consumes').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM
       )
     );
   });
@@ -334,7 +337,7 @@ function validateReservedProofAdmissionTemplate(
 
   const hasCatalogEgress = nodeKeys.includes('revalidate_catalog') || nodeKeys.includes('materialize_catalog');
   const expectedNodes = hasCatalogEgress
-    ? ['inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'revalidate_catalog', 'materialize_catalog']
+    ? ['structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'revalidate_catalog', 'materialize_catalog']
     : ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
   const expectedNodeKeys = [...expectedNodes].sort();
   if (nodeKeys.length !== expectedNodeKeys.length || nodeKeys.some((key, index) => key !== expectedNodeKeys[index])) {
@@ -361,7 +364,9 @@ function validateReservedProofAdmissionTemplate(
     rejectReservedProfile(name, `inspect must emit only ${PROOF_CANDIDATE_CLAIM}`);
   }
   const inspectInputs = claimList(inspect, 'consumes');
-  const expectedInspectInputs = inspectInputs.includes(PROOF_ROLE_AUTHORITY_CLAIM)
+  const expectedInspectInputs = hasCatalogEgress
+    ? [inputClaim, PROOF_STRUCTURAL_INVENTORY_CLAIM].sort()
+    : inspectInputs.includes(PROOF_ROLE_AUTHORITY_CLAIM)
     ? [inputClaim, PROOF_ROLE_AUTHORITY_CLAIM].sort()
     : [inputClaim];
   if (
@@ -401,11 +406,23 @@ function validateReservedProofAdmissionTemplate(
   }
 
   if (hasCatalogEgress) {
+    if (!hasOwn(authority.claimTypes, PROOF_STRUCTURAL_INVENTORY_CLAIM)) {
+      rejectReservedProfile(name, `missing ${PROOF_STRUCTURAL_INVENTORY_CLAIM} declaration`);
+    }
     if (
       !hasOwn(resolvedChecks, 'revalidate_catalog') ||
       !hasOwn(resolvedChecks, 'materialize_catalog')
     ) {
       rejectReservedProfile(name, 'catalog egress requires both revalidate_catalog and materialize_catalog');
+    }
+    const structuralInventory = resolvedChecks.structural_inventory;
+    if (structuralInventory.type !== PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `structural_inventory must have type ${PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE}`);
+    }
+    validateCatalogEgressConfig(name, 'structural_inventory', structuralInventory, ['type', 'consumes', 'emits']);
+    if (claimList(structuralInventory, 'consumes').join('\0') !== inputClaim ||
+        claimList(structuralInventory, 'emits').join('\0') !== PROOF_STRUCTURAL_INVENTORY_CLAIM) {
+      rejectReservedProfile(name, 'structural_inventory must consume the template input and emit only the current Proof inventory');
     }
     if (resolvedChecks.revalidate_catalog.type !== PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE) {
       rejectReservedProfile(name, `revalidate_catalog must have type ${PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE}`);
@@ -418,7 +435,7 @@ function validateReservedProofAdmissionTemplate(
     }
     if (
       claimList(resolvedChecks.revalidate_catalog, 'consumes').join('\0') !==
-      [inputClaim, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')
+      [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')
     ) {
       rejectReservedProfile(name, 'revalidate_catalog must consume the template input, candidate, and admission receipt');
     }
@@ -437,7 +454,7 @@ function validateReservedProofAdmissionTemplate(
     }
     if (
       claimList(materialize, 'consumes').join('\0') !==
-      [inputClaim, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM].sort().join('\0')
+      [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM].sort().join('\0')
     ) {
       rejectReservedProfile(name, 'materialize_catalog must consume the template input, candidate, admission receipt, and current revalidation');
     }

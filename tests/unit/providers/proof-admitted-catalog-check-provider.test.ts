@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import {
+  ADMITTED_CATALOG_MAX_BYTES,
   materializeAdmittedCatalog,
   ProofAdmittedCatalogError,
 } from '../../../src/providers/proof-admitted-catalog-check-provider';
@@ -51,6 +52,14 @@ function workItem(id: string) {
 }
 
 function fixture() {
+  const inventory = makeClaim('proof.structural_inventory@1', {
+    version: 'proof.structural-inventory/v1',
+    project_id: 'journalservice',
+    revision_fingerprint: `sha256:${'9'.repeat(64)}`,
+    boundary_fingerprint: `sha256:${'8'.repeat(64)}`,
+    source_paths: ['alpha.go', 'beta.go', 'gamma.go'],
+    package_identities: ['journalservice'],
+  }, { producerCheckId: 'structural_inventory', parentClaimIds: ['d'.repeat(64)] });
   const candidatePayload = {
     components: [
       { component_id: 'alpha', responsibility: 'alpha' },
@@ -67,7 +76,7 @@ function fixture() {
     ClaimID: candidate.claimId,
     Claim: candidate.claim,
     PayloadFingerprint: candidate.payloadFingerprint,
-    ProducerCheckID: 'proof_admit',
+    ProducerCheckID: candidate.producerCheckId,
     ParentClaimIDs: candidate.parentClaimIds,
     receipt_id: 'e'.repeat(64),
   };
@@ -78,21 +87,19 @@ function fixture() {
   const revalidationPayload = {
     version: 'proof.catalog-revalidation/v1',
     status: 'ACCEPTED',
+    structural_inventory_claim_id: inventory.claimId,
     candidate_claim_id: candidate.claimId,
     admission_receipt_claim_id: admission.claimId,
     candidate_payload_fingerprint: candidate.payloadFingerprint,
-    revision_fingerprint: 'f'.repeat(64),
+    revision_fingerprint: (inventory.payload as any).revision_fingerprint,
+    boundary_fingerprint: (inventory.payload as any).boundary_fingerprint,
     work_items: ['alpha', 'beta', 'gamma'].map(workItem),
   };
   const revalidation = makeClaim('proof.catalog_revalidation@1', revalidationPayload, {
     producerCheckId: 'revalidate_catalog',
-    parentClaimIds: [candidate.claimId, admission.claimId, 'd'.repeat(64)].sort(),
+    parentClaimIds: [inventory.claimId, candidate.claimId, admission.claimId].sort(),
   });
-  const input = makeClaim('project.discovery_item@1', { project_id: 'journalservice', root: '.' }, {
-    producerCheckId: 'project',
-    parentClaimIds: [],
-  });
-  return { input, candidate, admission, revalidation };
+  return { inventory, candidate, admission, revalidation };
 }
 
 describe('proof-admitted catalog egress', () => {
@@ -126,6 +133,44 @@ describe('proof-admitted catalog egress', () => {
       producerCheckId: 'inspect',
       parentClaimIds: ['d'.repeat(64)],
     });
+    expect(() => materializeAdmittedCatalog(value)).toThrow(ProofAdmittedCatalogError);
+  });
+
+  it('rejects a stale current revision even when the receipt claim is recomputed', () => {
+    const value: any = fixture();
+    value.revalidation = makeClaim('proof.catalog_revalidation@1', {
+      ...value.revalidation.payload,
+      revision_fingerprint: `sha256:${'7'.repeat(64)}`,
+    }, { producerCheckId: 'revalidate_catalog', parentClaimIds: value.revalidation.parentClaimIds });
+    expect(() => materializeAdmittedCatalog(value)).toThrow(ProofAdmittedCatalogError);
+  });
+
+  it.each([
+    ['duplicate WorkItem', (value: any) => { value.revalidation = makeClaim('proof.catalog_revalidation@1', { ...value.revalidation.payload, work_items: [workItem('alpha'), workItem('alpha'), workItem('gamma')] }, { producerCheckId: 'revalidate_catalog', parentClaimIds: value.revalidation.parentClaimIds }); }],
+    ['incomplete WorkItem catalog', (value: any) => { value.revalidation = makeClaim('proof.catalog_revalidation@1', { ...value.revalidation.payload, work_items: [workItem('alpha'), workItem('beta')] }, { producerCheckId: 'revalidate_catalog', parentClaimIds: value.revalidation.parentClaimIds }); }],
+    ['oversized catalog', (value: any) => { const item = workItem('alpha') as any; item.authority = { padding: 'x'.repeat(ADMITTED_CATALOG_MAX_BYTES) }; value.revalidation = makeClaim('proof.catalog_revalidation@1', { ...value.revalidation.payload, work_items: [item, workItem('beta'), workItem('gamma')] }, { producerCheckId: 'revalidate_catalog', parentClaimIds: value.revalidation.parentClaimIds }); }],
+  ])('rejects %s', (_name, mutate) => {
+    const value: any = fixture(); mutate(value);
+    expect(() => materializeAdmittedCatalog(value)).toThrow(ProofAdmittedCatalogError);
+  });
+
+  it('rejects noncanonical WorkItem/catalog bytes', () => {
+    const value: any = fixture();
+    const payload = { work_items: value.revalidation.payload.work_items, version: value.revalidation.payload.version,
+      status: value.revalidation.payload.status, structural_inventory_claim_id: value.revalidation.payload.structural_inventory_claim_id,
+      revision_fingerprint: value.revalidation.payload.revision_fingerprint, boundary_fingerprint: value.revalidation.payload.boundary_fingerprint,
+      candidate_claim_id: value.revalidation.payload.candidate_claim_id, admission_receipt_claim_id: value.revalidation.payload.admission_receipt_claim_id,
+      candidate_payload_fingerprint: value.revalidation.payload.candidate_payload_fingerprint };
+    value.revalidation = { ...value.revalidation, payload, payloadFingerprint: sha256Canonical(payload) };
+    expect(() => materializeAdmittedCatalog(value)).toThrow(ProofAdmittedCatalogError);
+  });
+
+  it('bounds candidate bytes before component inspection', () => {
+    const value: any = fixture();
+    value.candidate = makeClaim('proof.candidate@1', { components: [
+      { component_id: 'alpha', responsibility: 'x'.repeat(ADMITTED_CATALOG_MAX_BYTES) },
+      { component_id: 'beta', responsibility: 'beta' },
+    ] }, { producerCheckId: 'inspect', parentClaimIds: value.candidate.parentClaimIds });
     expect(() => materializeAdmittedCatalog(value)).toThrow(ProofAdmittedCatalogError);
   });
 });

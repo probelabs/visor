@@ -21,4 +21,8 @@ export {
   materializeAdmittedCatalog,
   createProofAdmittedCatalogProviderForFocusedTest,
 } from './proof-admitted-catalog-check-provider';
+export {
+  ProofStructuralInventoryCheckProvider,
+  ProofCatalogRevalidationCheckProvider,
+} from './proof-catalog-check-providers';
 export { VisorMcpTools, McpServerManager, DEFAULT_MCP_TOOLS_CONFIG } from './mcp-tools';

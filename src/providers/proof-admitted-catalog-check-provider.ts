@@ -10,6 +10,7 @@ import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_CANDIDATE_CLAIM,
+  PROOF_STRUCTURAL_INVENTORY_CLAIM,
 } from '../state-machine/graph/instance-plan';
 import type { CandidateClaimInput, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 import { CheckProvider } from './check-provider.interface';
@@ -62,17 +63,34 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
       !/^[0-9a-f]{64}$/.test(value.claimId) || typeof value.payloadFingerprint !== 'string' ||
       !/^[0-9a-f]{64}$/.test(value.payloadFingerprint) || !Array.isArray(value.parentClaimIds) ||
       value.parentClaimIds.some(parent => typeof parent !== 'string' || !/^[0-9a-f]{64}$/.test(parent)) ||
-      !Array.isArray(value.scope)) {
+      !Array.isArray(value.scope) || typeof value.producerCheckId !== 'string') {
     fail('INVALID_CLAIM', `${label} is not the expected authoritative claim`);
   }
   try {
-    if (JSON.stringify(value.payload) !== canonicalJson(value.payload) || digest(value.payload) !== value.payloadFingerprint) fail('DETACHED_CLAIM', `${label} payload is detached`);
+    const payloadJson = JSON.stringify(value.payload);
+    if (payloadJson === undefined || Buffer.byteLength(payloadJson, 'utf8') > ADMITTED_CATALOG_MAX_BYTES) fail('CATALOG_TOO_LARGE', `${label} payload exceeds ${ADMITTED_CATALOG_MAX_BYTES} bytes`);
+    if (payloadJson !== canonicalJson(value.payload) || digest(value.payload) !== value.payloadFingerprint) fail('DETACHED_CLAIM', `${label} payload is detached`);
     if (JSON.stringify(value.scope) !== canonicalJson(value.scope) || canonicalJson([...value.parentClaimIds].sort()) !== canonicalJson(value.parentClaimIds)) fail('NONCANONICAL_CLAIM', `${label} scope or parents are not canonical`);
   } catch (error) {
     if (error instanceof ProofAdmittedCatalogError) throw error;
     fail('INVALID_CLAIM', `${label} is not canonical JSON`);
   }
-  return value as CandidateClaimInput;
+  const base = {
+    claimId: value.claimId,
+    claim: value.claim,
+    payload: immutableCanonicalValue(value.payload),
+    payloadFingerprint: value.payloadFingerprint,
+    producerCheckId: value.producerCheckId as string,
+    scope: immutableCanonicalValue(value.scope),
+    parentClaimIds: immutableCanonicalValue(value.parentClaimIds),
+  };
+  if (value.provenance === 'controller' && typeof value.catalogClaimId === 'string' && Number.isSafeInteger(value.incarnation)) {
+    return immutableCanonicalValue({ ...base, provenance: 'controller' as const, catalogClaimId: value.catalogClaimId, incarnation: value.incarnation as number });
+  }
+  if ((value.provenance === undefined || value.provenance === 'attempt') && typeof value.attemptId === 'string' && Number.isSafeInteger(value.fence)) {
+    return immutableCanonicalValue({ ...base, provenance: 'attempt' as const, attemptId: value.attemptId, fence: value.fence as number });
+  }
+  fail('INVALID_CLAIM', `${label} provenance is invalid`);
 }
 
 function sameScope(left: unknown, right: unknown): boolean {
@@ -121,7 +139,7 @@ function validateAdmission(candidate: CandidateClaimInput, admission: CandidateC
       admission.payload.ClaimID !== candidate.claimId ||
       admission.payload.Claim !== candidate.claim ||
       admission.payload.PayloadFingerprint !== candidate.payloadFingerprint ||
-      admission.payload.ProducerCheckID !== admission.producerCheckId ||
+      admission.payload.ProducerCheckID !== candidate.producerCheckId ||
       !Array.isArray(admission.payload.ParentClaimIDs) ||
       canonicalJson(admission.payload.ParentClaimIDs) !== canonicalJson(candidate.parentClaimIds) ||
       typeof admission.payload.receipt_id !== 'string' || admission.payload.receipt_id.length === 0) {
@@ -134,36 +152,54 @@ interface RevalidatedWorkItem extends PlainRecord {
 }
 
 function revalidatedItems(
+  inventory: CandidateClaimInput,
   candidate: CandidateClaimInput,
   admission: CandidateClaimInput,
   revalidation: CandidateClaimInput,
 ): readonly RevalidatedWorkItem[] {
   if (revalidation.producerCheckId !== 'revalidate_catalog' ||
       revalidation.parentClaimIds.length !== 3 ||
-      !revalidation.parentClaimIds.includes(candidate.claimId) ||
-      !revalidation.parentClaimIds.includes(admission.claimId) ||
+      canonicalJson(revalidation.parentClaimIds) !== canonicalJson([inventory.claimId, candidate.claimId, admission.claimId].sort()) ||
       !sameScope(candidate.scope, revalidation.scope)) {
     fail('REVALIDATION_LINEAGE_MISMATCH', 'catalog revalidation is not bound to this candidate and admission');
   }
   const payload = revalidation.payload;
   const expectedKeys = [
-    'version', 'status', 'candidate_claim_id', 'admission_receipt_claim_id',
-    'candidate_payload_fingerprint', 'revision_fingerprint', 'work_items',
+    'version', 'status', 'structural_inventory_claim_id', 'revision_fingerprint',
+    'boundary_fingerprint', 'candidate_claim_id', 'admission_receipt_claim_id',
+    'candidate_payload_fingerprint', 'work_items',
   ];
   if (!exact(payload, expectedKeys) || payload.version !== CATALOG_REVALIDATION_VERSION ||
       payload.status !== 'ACCEPTED' || payload.candidate_claim_id !== candidate.claimId ||
       payload.admission_receipt_claim_id !== admission.claimId ||
       payload.candidate_payload_fingerprint !== candidate.payloadFingerprint ||
-      typeof payload.revision_fingerprint !== 'string' ||
-      !/^[0-9a-f]{64}$/.test(payload.revision_fingerprint) ||
+      payload.structural_inventory_claim_id !== inventory.claimId || !plain(inventory.payload) ||
+      payload.revision_fingerprint !== inventory.payload.revision_fingerprint ||
+      payload.boundary_fingerprint !== inventory.payload.boundary_fingerprint ||
       !Array.isArray(payload.work_items)) {
     fail('INVALID_REVALIDATION_RECEIPT', 'catalog revalidation receipt is not the current accepted receipt');
   }
   const candidateIds = new Set(candidateComponents(candidate).map(item => item.component_id as string));
+  const inventoryPayload = inventory.payload;
+  if (!plain(inventoryPayload)) fail('INVALID_REVALIDATION_RECEIPT', 'current inventory payload is invalid');
   const seen = new Set<string>();
   const items = payload.work_items.map((item, index) => {
-    if (!plain(item)) fail('INVALID_WORK_ITEM', `revalidated WorkItem ${index} is not an object`);
+    const workItemKeys = ['project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure',
+      'proof_path_mapping', 'proof_input_state', 'proof_component_subject', 'authority'];
+    if (!exact(item, workItemKeys)) fail('INVALID_WORK_ITEM', `revalidated WorkItem ${index} is not closed`);
     const id = requireString(item.component_id, `revalidated WorkItem ${index}.component_id`);
+    if (item.project_id !== inventoryPayload.project_id) fail('WORK_ITEM_SCOPE_MISMATCH', `WorkItem ${id} is for another project`);
+    for (const field of ['sorted_owned_paths', 'sorted_dependency_closure'] as const) {
+      const paths = item[field];
+      if (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== 'string' || path.length === 0) ||
+          new Set(paths).size !== paths.length || canonicalJson(paths) !== canonicalJson([...paths].sort())) {
+        fail('INVALID_WORK_ITEM', `WorkItem ${id} ${field} must be nonempty, unique, and sorted`);
+      }
+    }
+    if (!Array.isArray(item.proof_path_mapping) || !Array.isArray(item.proof_input_state) ||
+        !plain(item.proof_component_subject) || !plain(item.authority)) {
+      fail('INVALID_WORK_ITEM', `WorkItem ${id} Proof authority fields are invalid`);
+    }
     if (!candidateIds.has(id)) fail('WORK_ITEM_SCOPE_MISMATCH', `WorkItem ${id} was not discovered by candidate`);
     if (seen.has(id)) fail('DUPLICATE_COMPONENT', `revalidation contains duplicate WorkItem ${id}`);
     seen.add(id);
@@ -180,7 +216,7 @@ function revalidatedItems(
 }
 
 export interface AdmittedCatalogMaterializationInput {
-  readonly input?: CandidateClaimInput;
+  readonly inventory: CandidateClaimInput;
   readonly candidate: CandidateClaimInput;
   readonly admission: CandidateClaimInput;
   readonly revalidation: CandidateClaimInput;
@@ -194,14 +230,13 @@ export interface AdmittedCatalogMaterializationInput {
 export function materializeAdmittedCatalog(
   input: AdmittedCatalogMaterializationInput
 ): Readonly<{ components: readonly RevalidatedWorkItem[] }> {
+  const inventory = claim(input.inventory, PROOF_STRUCTURAL_INVENTORY_CLAIM, 'current inventory');
   const candidate = claim(input.candidate, PROOF_CANDIDATE_CLAIM, 'candidate');
   const admission = claim(input.admission, PROOF_ADMITTED_RECEIPT_CLAIM, 'admission');
   const revalidation = claim(input.revalidation, PROOF_CATALOG_REVALIDATION_CLAIM, 'revalidation');
-  if (input.input && !sameScope(input.input.scope, candidate.scope)) {
-    fail('INPUT_SCOPE_MISMATCH', 'project input and discovery claims are not co-scoped');
-  }
+  if (!sameScope(inventory.scope, candidate.scope)) fail('INPUT_SCOPE_MISMATCH', 'inventory and discovery claims are not co-scoped');
   validateAdmission(candidate, admission);
-  const items = revalidatedItems(candidate, admission, revalidation);
+  const items = revalidatedItems(inventory, candidate, admission, revalidation);
   const output = immutableCanonicalValue({ components: items });
   boundedCanonical(output, 'materialized catalog');
   return output;
@@ -229,11 +264,11 @@ export class ProofAdmittedCatalogCheckProvider extends CheckProvider {
     const candidate = values.find(value => value.claim === PROOF_CANDIDATE_CLAIM);
     const admission = values.find(value => value.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
     const revalidation = values.find(value => value.claim === PROOF_CATALOG_REVALIDATION_CLAIM);
-    const input = values.find(value => value !== candidate && value !== admission && value !== revalidation);
-    if (!candidate || !admission || !revalidation || values.length !== 4) {
-      fail('MISSING_ADMISSION_INPUT', 'materializer requires exactly project, candidate, admission, and revalidation claims');
+    const inventory = values.find(value => value.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
+    if (!inventory || !candidate || !admission || !revalidation || values.length !== 4) {
+      fail('MISSING_ADMISSION_INPUT', 'materializer requires exactly inventory, candidate, admission, and revalidation claims');
     }
-    return { issues: [], output: materializeAdmittedCatalog({ input, candidate, admission, revalidation }) };
+    return { issues: [], output: materializeAdmittedCatalog({ inventory, candidate, admission, revalidation }) };
   }
 }
 

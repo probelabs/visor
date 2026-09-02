@@ -336,12 +336,23 @@ export async function resolveProofRoleInvocation(
   return Object.freeze(value);
 }
 
-export function startProofAdmissionCliChild(request: ProofAdmissionCliChildRequest, executablePath: unknown): ManagedAgentRun {
-  if (process.platform === 'win32' || !request.workingDirectory || !request.proofAdmissionRequest) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+type ProofManagedCommand = 'admit-candidate' | 'structural-inventory' | 'catalog-revalidate';
+
+interface ProofManagedCliRequest {
+  readonly binding: ManagedRunBindingV1;
+  readonly workingDirectory: string;
+  readonly command: ProofManagedCommand;
+  readonly input: string;
+  readonly projectOutput: (value: unknown) => unknown;
+}
+
+/** Shared bounded, cancellable Proof process boundary for governed graph providers. */
+export function startProofManagedCliChild(request: ProofManagedCliRequest, executablePath: unknown): ManagedAgentRun {
+  if (process.platform === 'win32' || !request.workingDirectory || !request.input) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  if (Buffer.byteLength(request.input, 'utf8') > REQUEST_LIMIT) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   const binding = request.binding;
   const executable = capabilityIdentity(executablePath);
   if (!executable) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  const parsed = parseRequest(request.proofAdmissionRequest);
   let child: ChildProcess | undefined;
   let pid: number | undefined;
   let exitCode: number | null | undefined;
@@ -350,8 +361,8 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
   let stdoutEnd = false, stderrEnd = false, closeSeen = false, writeDone = false;
   let cleaned = false;
   let failed: string | undefined;
-  let decision: unknown;
-  let admitted = false;
+  let output: unknown;
+  let accepted = false;
   let terminationRequested = false;
   let termSent = false, killSent = false, timer: ReturnType<typeof setTimeout> | undefined, reapTimer: ReturnType<typeof setTimeout> | undefined;
   let cleanupFailed = false;
@@ -429,8 +440,8 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
       rejectCleanup(new Error(PROOF_ADMISSION_CLEANUP_FAILED));
       return;
     }
-    if (!failed && admitted && writeDone && exitCode === 0 && signal === null && stderr.length === 0 && decision !== undefined) {
-      resolveOutcome(Object.freeze({ version: 1, kind: 'succeeded', binding, summary: Object.freeze({ issues: [], output: decision }) }));
+    if (!failed && accepted && writeDone && exitCode === 0 && signal === null && stderr.length === 0 && output !== undefined) {
+      resolveOutcome(Object.freeze({ version: 1, kind: 'succeeded', binding, summary: Object.freeze({ issues: [], output }) }));
     } else {
       resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
     }
@@ -443,12 +454,11 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     let decoded: string;
     try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { failOnce('decision UTF-8 invalid'); return; }
     try {
-      const parsedDecision = JSON.parse(decoded);
-      validateReceipt(parsedDecision, parsed.candidate, parsed.candidateRaw);
-      if (json(parsedDecision) !== decoded) failOnce('decision is not canonical');
+      const parsedOutput = JSON.parse(decoded);
+      if (json(parsedOutput) !== decoded) failOnce('decision is not canonical');
       else {
-        admitted = (parsedDecision as Record<string, unknown>).status === 'ADMITTED';
-        decision = freeze((parsedDecision as Record<string, unknown>).receipt || parsedDecision);
+        output = freeze(request.projectOutput(parsedOutput));
+        accepted = true;
       }
     } catch { failOnce('decision protocol invalid'); }
   };
@@ -476,7 +486,7 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
   };
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   try {
-    child = spawn(executable.realpath, ['admit-candidate'], { cwd: request.workingDirectory, env: {}, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(executable.realpath, [request.command], { cwd: request.workingDirectory, env: {}, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     attach(child);
     child.once('spawn', () => {
       pid = child?.pid;
@@ -485,7 +495,7 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
       if (terminationRequested) { killIfNeeded(); return; }
       if (!sameExecutable(executable, executableStat(executable.realpath))) { failOnce('executable changed before write'); killIfNeeded(); return; }
       child?.stdin?.once('error', () => { failOnce('request write failed'); killIfNeeded(); });
-      child?.stdin?.end(request.proofAdmissionRequest, 'utf8', () => { writeDone = true; settle(); });
+      child?.stdin?.end(request.input, 'utf8', () => { writeDone = true; settle(); });
     });
   } catch {
     failOnce('child acquisition failed'); rejectStarted(new Error(PROOF_ADMISSION_UNAVAILABLE));
@@ -499,4 +509,20 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
     cancel: async (reason: 'deadline', fence: number) => { if (fence !== binding.fence) throw new Error('stale cancellation fence'); return terminate(); },
     close: async () => { terminationRequested = true; if (pid) killIfNeeded(); return cleanup; },
   });
+}
+
+export function startProofAdmissionCliChild(request: ProofAdmissionCliChildRequest, executablePath: unknown): ManagedAgentRun {
+  const parsed = parseRequest(request.proofAdmissionRequest);
+  return startProofManagedCliChild({
+    binding: request.binding,
+    workingDirectory: request.workingDirectory,
+    command: 'admit-candidate',
+    input: request.proofAdmissionRequest,
+    projectOutput: value => {
+      validateReceipt(value, parsed.candidate, parsed.candidateRaw);
+      const decision = value as Record<string, unknown>;
+      if (decision.status !== 'ADMITTED' || !plain(decision.receipt)) fail('candidate was not admitted');
+      return decision.receipt;
+    },
+  }, executablePath);
 }

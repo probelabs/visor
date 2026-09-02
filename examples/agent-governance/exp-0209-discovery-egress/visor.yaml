@@ -53,6 +53,18 @@ claim_types:
               responsibility: { type: string }
   proof.admitted_receipt@1:
     schema: { type: object }
+  proof.structural_inventory@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [version, project_id, revision_fingerprint, boundary_fingerprint, source_paths, package_identities]
+      properties:
+        version: { const: proof.structural-inventory/v1 }
+        project_id: { type: string, minLength: 1 }
+        revision_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        source_paths: { type: array, minItems: 1, items: { type: string } }
+        package_identities: { type: array, minItems: 1, items: { type: string } }
   proof.catalog_revalidation@1:
     schema:
       type: object
@@ -60,18 +72,22 @@ claim_types:
       required:
         - version
         - status
+        - structural_inventory_claim_id
         - candidate_claim_id
         - admission_receipt_claim_id
         - candidate_payload_fingerprint
         - revision_fingerprint
+        - boundary_fingerprint
         - work_items
       properties:
         version: { const: proof.catalog-revalidation/v1 }
         status: { const: ACCEPTED }
+        structural_inventory_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
         candidate_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
         admission_receipt_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
         candidate_payload_fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
-        revision_fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        revision_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         work_items: { type: array, minItems: 2, maxItems: 4 }
   component.catalog@1:
     schema:
@@ -130,9 +146,9 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [component_id]
+      required: [status]
       properties:
-        component_id: { type: string, minLength: 1 }
+        status: { const: onboarded }
 
 checks:
   project:
@@ -157,6 +173,12 @@ subgraphs:
   discover-project:
     input: { name: project, claim: project.discovery_item@1 }
     checks:
+      structural_inventory:
+        type: proof-structural-inventory
+        consumes:
+          - { claim: project.discovery_item@1, as: project }
+        emits:
+          - { claim: proof.structural_inventory@1, from: output }
       inspect:
         type: governed-proof-inspect
         message: Execute the bound Proof discovery role and return only canonical JSON.
@@ -170,11 +192,12 @@ subgraphs:
             id: journalservice
             fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           output_schema_id: proof.component-catalog-candidate@1
-          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJjb21wb25lbnRzIl19
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJjb21wb25lbnRzIl0sInByb3BlcnRpZXMiOnsiY29tcG9uZW50cyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MiwibWF4SXRlbXMiOjQsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImNvbXBvbmVudF9pZCIsInJlc3BvbnNpYmlsaXR5Il0sInByb3BlcnRpZXMiOnsiY29tcG9uZW50X2lkIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9LCJyZXNwb25zaWJpbGl0eSI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX19fX19
         invocation_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        result_schema: '{"type":"object","additionalProperties":false,"required":["components"]}'
+        result_schema: '{"type":"object","additionalProperties":false,"required":["components"],"properties":{"components":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"object","additionalProperties":false,"required":["component_id","responsibility"],"properties":{"component_id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1}}}}}}'
         consumes:
           - { claim: project.discovery_item@1, as: project }
+          - { claim: proof.structural_inventory@1, as: current_inventory }
         emits:
           - { claim: proof.candidate@1, from: output }
       proof_admit:
@@ -192,7 +215,7 @@ subgraphs:
         type: proof-catalog-revalidate
         depends_on: [verify]
         consumes:
-          - { claim: project.discovery_item@1, as: project }
+          - { claim: proof.structural_inventory@1, as: current_inventory }
           - { claim: proof.candidate@1, as: candidate }
           - { claim: proof.admitted_receipt@1, as: receipt }
         emits:
@@ -200,7 +223,7 @@ subgraphs:
       materialize_catalog:
         type: proof-admitted-catalog
         consumes:
-          - { claim: project.discovery_item@1, as: project }
+          - { claim: proof.structural_inventory@1, as: current_inventory }
           - { claim: proof.candidate@1, as: candidate }
           - { claim: proof.admitted_receipt@1, as: receipt }
           - { claim: proof.catalog_revalidation@1, as: current_revalidation }
@@ -217,7 +240,10 @@ subgraphs:
     input: { name: component, claim: component.work_item@1 }
     checks:
       inspect:
-        type: noop
+        type: memory
+        operation: set
+        key: component-onboarded
+        value: { status: onboarded }
         consumes:
           - { claim: component.work_item@1, as: component }
         emits:
