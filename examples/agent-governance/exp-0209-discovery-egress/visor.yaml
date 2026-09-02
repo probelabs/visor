@@ -1,8 +1,8 @@
 # EXP-0209 discovery egress.  This is the operational graph source of truth.
 # The project catalog is one manually selected project.  Its discovery
 # subgraph is allowed to fan out only after Proof candidate admission and a
-# current Proof catalog-revalidation receipt.  Component boundaries are model
-# output and are intentionally absent from this authored file.
+# current Proof catalog-revalidation projection. Component boundaries are
+# model output and are intentionally absent from this authored file.
 version: "1.0"
 max_parallelism: 3
 workspace:
@@ -38,8 +38,10 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [components]
+      required: [version, project_id, components]
       properties:
+        version: { const: proof.component-catalog-candidate/v1 }
+        project_id: { type: string, minLength: 1 }
         components:
           type: array
           minItems: 2
@@ -47,48 +49,50 @@ claim_types:
           items:
             type: object
             additionalProperties: false
-            required: [component_id]
+            required: [id, responsibility, owned_paths, dependency_closure, entry_points, state_effects, interfaces, uncertainty]
             properties:
-              component_id: { type: string, minLength: 1 }
-              responsibility: { type: string }
+              id: { type: string, minLength: 1 }
+              responsibility: { type: string, minLength: 1 }
+              owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+              dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+              entry_points: { type: array, items: { type: string, minLength: 1 } }
+              state_effects: { type: array, items: { type: string, minLength: 1 } }
+              interfaces: { type: array, items: {} }
+              uncertainty: { type: array, items: { type: string, minLength: 1 } }
   proof.admitted_receipt@1:
     schema: { type: object }
   proof.structural_inventory@1:
     schema:
       type: object
       additionalProperties: false
-      required: [version, project_id, revision_fingerprint, boundary_fingerprint, source_paths, package_identities]
+      required: [version, authority, sorted_paths, sorted_module_paths, boundary_fingerprint, input_state]
       properties:
         version: { const: proof.structural-inventory/v1 }
-        project_id: { type: string, minLength: 1 }
-        revision_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        authority:
+          type: object
+          additionalProperties: false
+          required: [version, project_id, subject_fingerprint, code_fingerprint, tests_fingerprint]
+          properties:
+            version: { const: proof.project-authority/v1 }
+            project_id: { type: string, minLength: 1 }
+            subject_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            code_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            tests_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        sorted_paths: { type: array, items: { type: string } }
+        sorted_module_paths: { type: array, items: { type: string } }
         boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
-        source_paths: { type: array, minItems: 1, items: { type: string } }
-        package_identities: { type: array, minItems: 1, items: { type: string } }
+        input_state: { type: array, items: { type: object } }
   proof.catalog_revalidation@1:
     schema:
       type: object
       additionalProperties: false
-      required:
-        - version
-        - status
-        - structural_inventory_claim_id
-        - candidate_claim_id
-        - admission_receipt_claim_id
-        - candidate_payload_fingerprint
-        - revision_fingerprint
-        - boundary_fingerprint
-        - work_items
+      required: [version, inventory, catalog, work_items, receipt]
       properties:
         version: { const: proof.catalog-revalidation/v1 }
-        status: { const: ACCEPTED }
-        structural_inventory_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
-        candidate_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
-        admission_receipt_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
-        candidate_payload_fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
-        revision_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
-        boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
-        work_items: { type: array, minItems: 2, maxItems: 4 }
+        inventory: { type: object }
+        catalog: { type: object }
+        work_items: { type: array, minItems: 2, maxItems: 4, items: { type: object } }
+        receipt: { type: object }
   component.catalog@1:
     schema:
       type: object
@@ -103,6 +107,7 @@ claim_types:
             type: object
             additionalProperties: false
             required:
+              - version
               - project_id
               - component_id
               - sorted_owned_paths
@@ -110,21 +115,21 @@ claim_types:
               - proof_path_mapping
               - proof_input_state
               - proof_component_subject
-              - authority
             properties:
+              version: { const: reqproof.onboarding-component-work-item/v1 }
               project_id: { type: string, minLength: 1 }
               component_id: { type: string, minLength: 1 }
               sorted_owned_paths: { type: array, items: { type: string } }
               sorted_dependency_closure: { type: array, items: { type: string } }
-              proof_path_mapping: { type: array }
+              proof_path_mapping: { type: object }
               proof_input_state: { type: array }
               proof_component_subject: { type: object }
-              authority: { type: object }
   component.work_item@1:
     schema:
       type: object
       additionalProperties: false
       required:
+        - version
         - project_id
         - component_id
         - sorted_owned_paths
@@ -132,16 +137,15 @@ claim_types:
         - proof_path_mapping
         - proof_input_state
         - proof_component_subject
-        - authority
       properties:
+        version: { const: reqproof.onboarding-component-work-item/v1 }
         project_id: { type: string, minLength: 1 }
         component_id: { type: string, minLength: 1 }
         sorted_owned_paths: { type: array, items: { type: string } }
         sorted_dependency_closure: { type: array, items: { type: string } }
-        proof_path_mapping: { type: array }
+        proof_path_mapping: { type: object }
         proof_input_state: { type: array }
         proof_component_subject: { type: object }
-        authority: { type: object }
   component.onboarded@1:
     schema:
       type: object
@@ -181,8 +185,8 @@ subgraphs:
           - { claim: proof.structural_inventory@1, from: output }
       inspect:
         type: governed-proof-inspect
-        message: Execute the bound Proof discovery role and return only canonical JSON.
-        instructions: Discover the project's independently onboardable components; do not invent files.
+        message: Execute the bound Proof discovery role and return only the closed canonical catalog JSON.
+        instructions: Discover the project's independently onboardable components; every path must be observed in the supplied Proof inventory. Do not invent files.
         profile: luna-xhigh-readonly-v1
         invocation:
           role_id: onboard
@@ -192,9 +196,9 @@ subgraphs:
             id: journalservice
             fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           output_schema_id: proof.component-catalog-candidate@1
-          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJjb21wb25lbnRzIl0sInByb3BlcnRpZXMiOnsiY29tcG9uZW50cyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MiwibWF4SXRlbXMiOjQsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImNvbXBvbmVudF9pZCIsInJlc3BvbnNpYmlsaXR5Il0sInByb3BlcnRpZXMiOnsiY29tcG9uZW50X2lkIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9LCJyZXNwb25zaWJpbGl0eSI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX19fX19
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJ2ZXJzaW9uIiwicHJvamVjdF9pZCIsImNvbXBvbmVudHMiXSwicHJvcGVydGllcyI6eyJ2ZXJzaW9uIjp7ImNvbnN0IjoicHJvb2YuY29tcG9uZW50LWNhdGFsb2ctY2FuZGlkYXRlL3YxIn0sInByb2plY3RfaWQiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sImNvbXBvbmVudHMiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjIsIm1heEl0ZW1zIjo0LCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJpZCIsInJlc3BvbnNpYmlsaXR5Iiwib3duZWRfcGF0aHMiLCJkZXBlbmRlbmN5X2Nsb3N1cmUiLCJlbnRyeV9wb2ludHMiLCJzdGF0ZV9lZmZlY3RzIiwiaW50ZXJmYWNlcyIsInVuY2VydGFpbnR5Il0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sInJlc3BvbnNpYmlsaXR5Ijp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9LCJvd25lZF9wYXRocyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MSwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX19LCJkZXBlbmRlbmN5X2Nsb3N1cmUiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjEsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9fSwiZW50cnlfcG9pbnRzIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9fSwic3RhdGVfZWZmZWN0cyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX0sImludGVyZmFjZXMiOnsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnt9fSwidW5jZXJ0YWludHkiOnsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX19fX19fX0=
         invocation_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        result_schema: '{"type":"object","additionalProperties":false,"required":["components"],"properties":{"components":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"object","additionalProperties":false,"required":["component_id","responsibility"],"properties":{"component_id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1}}}}}}'
+        result_schema: '{"type":"object","additionalProperties":false,"required":["version","project_id","components"],"properties":{"version":{"const":"proof.component-catalog-candidate/v1"},"project_id":{"type":"string","minLength":1},"components":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"object","additionalProperties":false,"required":["id","responsibility","owned_paths","dependency_closure","entry_points","state_effects","interfaces","uncertainty"],"properties":{"id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1},"owned_paths":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"dependency_closure":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"entry_points":{"type":"array","items":{"type":"string","minLength":1}},"state_effects":{"type":"array","items":{"type":"string","minLength":1}},"interfaces":{"type":"array","items":{}},"uncertainty":{"type":"array","items":{"type":"string","minLength":1}}}}}}}'
         consumes:
           - { claim: project.discovery_item@1, as: project }
           - { claim: proof.structural_inventory@1, as: current_inventory }

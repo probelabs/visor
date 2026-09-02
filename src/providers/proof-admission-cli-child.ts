@@ -336,20 +336,42 @@ export async function resolveProofRoleInvocation(
   return Object.freeze(value);
 }
 
-type ProofManagedCommand = 'admit-candidate' | 'structural-inventory' | 'catalog-revalidate';
+type ProofManagedCommand =
+  | readonly ['admit-candidate']
+  | readonly ['onboarding', 'inventory']
+  | readonly ['onboarding', 'revalidate'];
 
 interface ProofManagedCliRequest {
   readonly binding: ManagedRunBindingV1;
   readonly workingDirectory: string;
   readonly command: ProofManagedCommand;
   readonly input: string;
+  readonly inputLimit: number;
+  readonly outputLimit: number;
+  /** Proof onboarding projections are emitted by its human-readable CLI as
+   * indented JSON. Candidate admission remains byte-canonical. */
+  readonly outputCanonical: boolean;
   readonly projectOutput: (value: unknown) => unknown;
+}
+
+function validProofManagedCommand(value: unknown): value is ProofManagedCommand {
+  return Array.isArray(value) && (
+    (value.length === 1 && value[0] === 'admit-candidate') ||
+    (value.length === 2 && value[0] === 'onboarding' &&
+      (value[1] === 'inventory' || value[1] === 'revalidate'))
+  );
 }
 
 /** Shared bounded, cancellable Proof process boundary for governed graph providers. */
 export function startProofManagedCliChild(request: ProofManagedCliRequest, executablePath: unknown): ManagedAgentRun {
-  if (process.platform === 'win32' || !request.workingDirectory || !request.input) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
-  if (Buffer.byteLength(request.input, 'utf8') > REQUEST_LIMIT) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  if (process.platform === 'win32' || !request.workingDirectory ||
+      !validProofManagedCommand(request.command) || typeof request.input !== 'string' ||
+      !Number.isSafeInteger(request.inputLimit) || request.inputLimit < 0 ||
+      !Number.isSafeInteger(request.outputLimit) || request.outputLimit < 2 ||
+      typeof request.outputCanonical !== 'boolean') {
+    throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  }
+  if (Buffer.byteLength(request.input, 'utf8') > request.inputLimit) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   const binding = request.binding;
   const executable = capabilityIdentity(executablePath);
   if (!executable) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
@@ -448,14 +470,17 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     resolveCleanup(Object.freeze({ version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }));
   };
   const inspectStdout = () => {
-    if (failed || stdout.length > STDOUT_LIMIT || stdout.length < 2 || stdout[stdout.length - 1] !== 10) return;
+    if (failed || stdout.length > request.outputLimit || stdout.length < 2 || stdout[stdout.length - 1] !== 10) return;
     const raw = stdout.subarray(0, stdout.length - 1);
-    if (raw.includes(10)) { failOnce('decision framing invalid'); return; }
+    // Candidate admission remains a one-line canonical JSON decision. The
+    // onboarding commands use Proof's human-readable JSON projection, which
+    // is intentionally indented and therefore contains embedded newlines.
+    if (request.outputCanonical && raw.includes(10)) { failOnce('decision framing invalid'); return; }
     let decoded: string;
     try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { failOnce('decision UTF-8 invalid'); return; }
     try {
       const parsedOutput = JSON.parse(decoded);
-      if (json(parsedOutput) !== decoded) failOnce('decision is not canonical');
+      if (request.outputCanonical && json(parsedOutput) !== decoded) failOnce('decision is not canonical');
       else {
         output = freeze(request.projectOutput(parsedOutput));
         accepted = true;
@@ -463,7 +488,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     } catch { failOnce('decision protocol invalid'); }
   };
   const attach = (proc: ChildProcess) => {
-    proc.stdout?.on('data', (chunk: Buffer) => { const remaining = STDOUT_LIMIT - stdout.length; const append = Math.min(chunk.length, remaining); if (append > 0) stdout = Buffer.concat([stdout, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stdout limit exceeded'); killIfNeeded(); } });
+    proc.stdout?.on('data', (chunk: Buffer) => { const remaining = request.outputLimit - stdout.length; const append = Math.min(chunk.length, remaining); if (append > 0) stdout = Buffer.concat([stdout, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stdout limit exceeded'); killIfNeeded(); } });
     proc.stderr?.on('data', (chunk: Buffer) => { const remaining = STDERR_LIMIT - stderr.length; const append = Math.min(chunk.length, remaining); if (append > 0) stderr = Buffer.concat([stderr, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stderr limit exceeded'); killIfNeeded(); } });
     proc.stdout?.on('end', () => { stdoutEnd = true; inspectStdout(); settle(); });
     proc.stderr?.on('end', () => { stderrEnd = true; settle(); });
@@ -486,7 +511,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
   };
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   try {
-    child = spawn(executable.realpath, [request.command], { cwd: request.workingDirectory, env: {}, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(executable.realpath, [...request.command], { cwd: request.workingDirectory, env: {}, shell: false, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     attach(child);
     child.once('spawn', () => {
       pid = child?.pid;
@@ -516,8 +541,11 @@ export function startProofAdmissionCliChild(request: ProofAdmissionCliChildReque
   return startProofManagedCliChild({
     binding: request.binding,
     workingDirectory: request.workingDirectory,
-    command: 'admit-candidate',
+    command: ['admit-candidate'],
     input: request.proofAdmissionRequest,
+    inputLimit: REQUEST_LIMIT,
+    outputLimit: STDOUT_LIMIT,
+    outputCanonical: true,
     projectOutput: value => {
       validateReceipt(value, parsed.candidate, parsed.candidateRaw);
       const decision = value as Record<string, unknown>;

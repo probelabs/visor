@@ -123,7 +123,10 @@ function candidateComponents(candidate: CandidateClaimInput): readonly PlainReco
   const ids = new Set<string>();
   return components.map((item, index) => {
     if (!plain(item)) fail('INVALID_DISCOVERY_CANDIDATE', `candidate component ${index} is not an object`);
-    const id = requireString(item.component_id, `candidate component ${index}.component_id`);
+    // Proof's closed onboarding wire calls this field `id`.  Retain the
+    // component_id spelling for the pre-wire experiment fixtures only; no
+    // path is derived from either form.
+    const id = requireString(item.id ?? item.component_id, `candidate component ${index}.id`);
     if (ids.has(id)) fail('DUPLICATE_COMPONENT', `candidate contains duplicate component ${id}`);
     ids.add(id);
     return item;
@@ -164,6 +167,60 @@ function revalidatedItems(
     fail('REVALIDATION_LINEAGE_MISMATCH', 'catalog revalidation is not bound to this candidate and admission');
   }
   const payload = revalidation.payload;
+  // Current Proof emits the complete CatalogRevalidationProjection.  Keep the
+  // projection intact at this boundary and project only its authoritative
+  // WorkItems; in particular, do not infer paths from the model catalog.
+  if (plain(payload) && exact(payload, ['version', 'inventory', 'catalog', 'work_items', 'receipt']) &&
+      payload.version === CATALOG_REVALIDATION_VERSION) {
+    const projection = payload;
+    const projectionInventory = projection.inventory;
+    if (!plain(inventory.payload) || !plain(projectionInventory) ||
+        canonicalJson(projectionInventory) !== canonicalJson(inventory.payload)) {
+      fail('INVALID_REVALIDATION_RECEIPT', 'catalog revalidation inventory is stale');
+    }
+    const candidateIds = new Set(candidateComponents(candidate).map(item => (item.id ?? item.component_id) as string));
+    if (!plain(payload.catalog) || !Array.isArray(payload.catalog.components)) {
+      fail('INVALID_REVALIDATION_RECEIPT', 'catalog revalidation catalog is invalid');
+    }
+    const catalogIds = new Set(payload.catalog.components.map((item: any, index: number) => requireString(item?.id ?? item?.component_id, `catalog component ${index}.id`)));
+    if (catalogIds.size !== candidateIds.size || [...candidateIds].some(id => !catalogIds.has(id))) {
+      fail('WORK_ITEM_SCOPE_MISMATCH', 'catalog revalidation is detached from the admitted candidate');
+    }
+    if (!Array.isArray(payload.work_items) || payload.work_items.length !== candidateIds.size) {
+      fail('INCOMPLETE_WORK_ITEM_CATALOG', 'catalog revalidation does not materialize every WorkItem');
+    }
+    const seen = new Set<string>();
+    const items = payload.work_items.map((item: any, index: number) => {
+      const workItemKeys = ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure',
+        'proof_path_mapping', 'proof_input_state', 'proof_component_subject'];
+      if (!exact(item, workItemKeys)) fail('INVALID_WORK_ITEM', `revalidated WorkItem ${index} is not the actual Proof projection`);
+      const id = requireString(item.component_id, `revalidated WorkItem ${index}.component_id`);
+      const projectID = plain(projectionInventory.authority) ? projectionInventory.authority.project_id : undefined;
+      if (typeof projectID !== 'string' || item.project_id !== projectID || !candidateIds.has(id) || seen.has(id)) {
+        fail('WORK_ITEM_SCOPE_MISMATCH', `revalidated WorkItem ${id} is foreign or duplicated`);
+      }
+      for (const field of ['sorted_owned_paths', 'sorted_dependency_closure'] as const) {
+        const paths = item[field];
+        if (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== 'string' || path.length === 0) ||
+            new Set(paths).size !== paths.length || canonicalJson(paths) !== canonicalJson([...paths].sort())) {
+          fail('INVALID_WORK_ITEM', `WorkItem ${id} ${field} must be nonempty, unique, and sorted`);
+        }
+      }
+      if (!plain(item.proof_path_mapping) || !Array.isArray(item.proof_input_state) || !plain(item.proof_component_subject)) {
+        fail('INVALID_WORK_ITEM', `WorkItem ${id} Proof fields are invalid`);
+      }
+      seen.add(id);
+      return item as RevalidatedWorkItem;
+    });
+    if (seen.size !== candidateIds.size) fail('INCOMPLETE_WORK_ITEM_CATALOG', 'revalidation omits a discovered component');
+    const receipt = payload.receipt;
+    if (!plain(receipt) || receipt.version !== 'proof.catalog-revalidation-receipt/v1' || receipt.decision !== 'accepted' ||
+        !Array.isArray(receipt.component_authorities) || receipt.component_authorities.length !== candidateIds.size) {
+      fail('INVALID_REVALIDATION_RECEIPT', 'catalog revalidation receipt is invalid');
+    }
+    boundedCanonical(payload, 'catalog revalidation projection');
+    return items;
+  }
   const expectedKeys = [
     'version', 'status', 'structural_inventory_claim_id', 'revision_fingerprint',
     'boundary_fingerprint', 'candidate_claim_id', 'admission_receipt_claim_id',
