@@ -23,6 +23,10 @@ const CONTROLLER_TIMEOUT_MAX = 2147483647;
 /** Reserved EXP-0205 admission profile identifiers. */
 export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
 export const PROOF_ADMITTED_RECEIPT_CLAIM = 'proof.admitted_receipt@1';
+/** Reserved only for the opt-in discovery-admission egress suffix. */
+export const PROOF_CATALOG_REVALIDATION_CLAIM = 'proof.catalog_revalidation@1';
+export const PROOF_ADMITTED_CATALOG_PROVIDER_TYPE = 'proof-admitted-catalog';
+export const PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE = 'proof-catalog-revalidate';
 export const PROOF_ADMIT_PROVIDER_TYPE = 'proof-admit';
 export const GOVERNED_PROOF_INSPECT_PROVIDER_TYPE = 'governed-proof-inspect';
 export const PROOF_ADMIT_NODE_KEY = 'proof_admit';
@@ -262,6 +266,22 @@ function claimList(check: CheckConfig, field: 'emits' | 'consumes'): string[] {
   return (check[field] || []).map(declaration => declaration.claim).sort();
 }
 
+function validateCatalogEgressConfig(
+  templateName: string,
+  nodeKey: string,
+  check: CheckConfig,
+  allowed: readonly string[],
+): void {
+  const record = check as Record<string, unknown>;
+  if (Reflect.ownKeys(record).some(key =>
+    typeof key !== 'string' || !allowed.includes(key) ||
+    !Object.getOwnPropertyDescriptor(record, key)?.enumerable ||
+    !('value' in (Object.getOwnPropertyDescriptor(record, key) || {}))
+  )) {
+    rejectReservedProfile(templateName, `${nodeKey} contains an unknown or non-materialized key`);
+  }
+}
+
 function rejectReservedProfile(templateName: string, detail: string): never {
   throw new InstancePlanError(
     'RESERVED_PROOF_ADMISSION_PROFILE',
@@ -287,11 +307,13 @@ function validateReservedProofAdmissionTemplate(
     const check = resolvedChecks[nodeKey];
     return (
       check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
+      check.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
+      check.type === PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
       claimList(check, 'emits').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM
       ) ||
       claimList(check, 'consumes').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM
       )
     );
   });
@@ -310,8 +332,12 @@ function validateReservedProofAdmissionTemplate(
     rejectReservedProfile(name, 'a reserved claim cannot be the template input');
   }
 
-  const expectedNodes = ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
-  if (nodeKeys.length !== expectedNodes.length || nodeKeys.some((key, index) => key !== expectedNodes[index])) {
+  const hasCatalogEgress = nodeKeys.includes('revalidate_catalog') || nodeKeys.includes('materialize_catalog');
+  const expectedNodes = hasCatalogEgress
+    ? ['inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'revalidate_catalog', 'materialize_catalog']
+    : ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
+  const expectedNodeKeys = [...expectedNodes].sort();
+  if (nodeKeys.length !== expectedNodeKeys.length || nodeKeys.some((key, index) => key !== expectedNodeKeys[index])) {
     rejectReservedProfile(name, `expected exactly the nodes ${expectedNodes.join(', ')}`);
   }
   if (topology.join('\0') !== expectedNodes.join('\0')) {
@@ -320,7 +346,7 @@ function validateReservedProofAdmissionTemplate(
 
   for (const nodeKey of nodeKeys) {
     const check = resolvedChecks[nodeKey];
-    if (hasOwn(check, 'expand')) rejectReservedProfile(name, `${nodeKey} cannot use check.expand`);
+    if (hasOwn(check, 'expand') && nodeKey !== 'materialize_catalog') rejectReservedProfile(name, `${nodeKey} cannot use check.expand`);
     if (nodeKey !== PROOF_ADMIT_NODE_KEY && check.type === PROOF_ADMIT_PROVIDER_TYPE) {
       rejectReservedProfile(name, `provider type ${PROOF_ADMIT_PROVIDER_TYPE} is only valid at ${PROOF_ADMIT_NODE_KEY}`);
     }
@@ -372,6 +398,49 @@ function validateReservedProofAdmissionTemplate(
   // the candidate-consumer exemption implicit or broaden it accidentally.
   if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1) {
     rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must have exactly one candidate consumer`);
+  }
+
+  if (hasCatalogEgress) {
+    if (
+      !hasOwn(resolvedChecks, 'revalidate_catalog') ||
+      !hasOwn(resolvedChecks, 'materialize_catalog')
+    ) {
+      rejectReservedProfile(name, 'catalog egress requires both revalidate_catalog and materialize_catalog');
+    }
+    if (resolvedChecks.revalidate_catalog.type !== PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `revalidate_catalog must have type ${PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE}`);
+    }
+    validateCatalogEgressConfig(name, 'revalidate_catalog', resolvedChecks.revalidate_catalog, [
+      'type', 'depends_on', 'consumes', 'emits',
+    ]);
+    if (claimList(resolvedChecks.revalidate_catalog, 'emits').join('\0') !== PROOF_CATALOG_REVALIDATION_CLAIM) {
+      rejectReservedProfile(name, `revalidate_catalog must emit only ${PROOF_CATALOG_REVALIDATION_CLAIM}`);
+    }
+    if (
+      claimList(resolvedChecks.revalidate_catalog, 'consumes').join('\0') !==
+      [inputClaim, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')
+    ) {
+      rejectReservedProfile(name, 'revalidate_catalog must consume the template input, candidate, and admission receipt');
+    }
+    const materialize = resolvedChecks.materialize_catalog;
+    if (materialize.type !== PROOF_ADMITTED_CATALOG_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `materialize_catalog must have type ${PROOF_ADMITTED_CATALOG_PROVIDER_TYPE}`);
+    }
+    validateCatalogEgressConfig(name, 'materialize_catalog', materialize, [
+      'type', 'consumes', 'emits', 'expand',
+    ]);
+    if (!materialize.expand || typeof materialize.expand !== 'object' || Array.isArray(materialize.expand)) {
+      rejectReservedProfile(name, 'materialize_catalog must own a downstream expansion');
+    }
+    if (claimList(materialize, 'emits').length !== 1 || claimList(materialize, 'emits')[0] === PROOF_CANDIDATE_CLAIM || claimList(materialize, 'emits')[0] === PROOF_ADMITTED_RECEIPT_CLAIM || claimList(materialize, 'emits')[0] === PROOF_CATALOG_REVALIDATION_CLAIM) {
+      rejectReservedProfile(name, 'materialize_catalog must emit exactly one non-reserved catalog claim');
+    }
+    if (
+      claimList(materialize, 'consumes').join('\0') !==
+      [inputClaim, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM].sort().join('\0')
+    ) {
+      rejectReservedProfile(name, 'materialize_catalog must consume the template input, candidate, admission receipt, and current revalidation');
+    }
   }
 }
 

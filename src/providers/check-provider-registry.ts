@@ -26,6 +26,8 @@ import {
   GovernedProofInspectCheckProvider,
   GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
 } from './governed-proof-inspect-check-provider';
+import { ProofAdmittedCatalogCheckProvider } from './proof-admitted-catalog-check-provider';
+import { PROOF_ADMITTED_CATALOG_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
 
 /**
  * Registry for managing check providers
@@ -75,6 +77,10 @@ export class CheckProviderRegistry {
     // cannot be replaced through the public register/unregister API.
     this.registerBuiltIn(new ProofAdmitCheckProvider());
     this.registerBuiltIn(new GovernedProofInspectCheckProvider());
+    // Discovery egress is a reserved deterministic provider. It may only run
+    // in the compiled admission suffix and cannot be replaced by a custom
+    // provider through the public registry.
+    this.registerBuiltIn(new ProofAdmittedCatalogCheckProvider());
 
     // Try to register UtcpCheckProvider - it may fail if dependencies are missing
     try {
@@ -138,7 +144,7 @@ export class CheckProviderRegistry {
    */
   register(provider: CheckProvider): void {
     const name = provider.getName();
-    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME) {
+    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME || name === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE) {
       throw new Error(`Provider '${name}' is reserved and cannot be registered publicly`);
     }
     if (this.providers.has(name)) {
@@ -155,7 +161,7 @@ export class CheckProviderRegistry {
    * Unregister a check provider
    */
   unregister(name: string): void {
-    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME) {
+    if (name === PROOF_ADMIT_PROVIDER_NAME || name === GOVERNED_PROOF_INSPECT_PROVIDER_NAME || name === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE) {
       throw new Error(`Provider '${name}' is reserved and cannot be unregistered`);
     }
     if (!this.providers.has(name)) {

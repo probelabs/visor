@@ -1,0 +1,224 @@
+# EXP-0209 discovery egress.  This is the operational graph source of truth.
+# The project catalog is one manually selected project.  Its discovery
+# subgraph is allowed to fan out only after Proof candidate admission and a
+# current Proof catalog-revalidation receipt.  Component boundaries are model
+# output and are intentionally absent from this authored file.
+version: "1.0"
+max_parallelism: 3
+workspace:
+  enabled: false
+
+claim_types:
+  project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [project_id, root]
+            properties:
+              project_id: { type: string, minLength: 1 }
+              root: { type: string, minLength: 1 }
+  project.discovery_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [project_id, root]
+      properties:
+        project_id: { type: string, minLength: 1 }
+        root: { type: string, minLength: 1 }
+  proof.candidate@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            type: object
+            additionalProperties: false
+            required: [component_id]
+            properties:
+              component_id: { type: string, minLength: 1 }
+              responsibility: { type: string }
+  proof.admitted_receipt@1:
+    schema: { type: object }
+  proof.catalog_revalidation@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - status
+        - candidate_claim_id
+        - admission_receipt_claim_id
+        - candidate_payload_fingerprint
+        - revision_fingerprint
+        - work_items
+      properties:
+        version: { const: proof.catalog-revalidation/v1 }
+        status: { const: ACCEPTED }
+        candidate_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
+        admission_receipt_claim_id: { type: string, pattern: "^[0-9a-f]{64}$" }
+        candidate_payload_fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        revision_fingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        work_items: { type: array, minItems: 2, maxItems: 4 }
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - project_id
+              - component_id
+              - sorted_owned_paths
+              - sorted_dependency_closure
+              - proof_path_mapping
+              - proof_input_state
+              - proof_component_subject
+              - authority
+            properties:
+              project_id: { type: string, minLength: 1 }
+              component_id: { type: string, minLength: 1 }
+              sorted_owned_paths: { type: array, items: { type: string } }
+              sorted_dependency_closure: { type: array, items: { type: string } }
+              proof_path_mapping: { type: array }
+              proof_input_state: { type: array }
+              proof_component_subject: { type: object }
+              authority: { type: object }
+  component.work_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - project_id
+        - component_id
+        - sorted_owned_paths
+        - sorted_dependency_closure
+        - proof_path_mapping
+        - proof_input_state
+        - proof_component_subject
+        - authority
+      properties:
+        project_id: { type: string, minLength: 1 }
+        component_id: { type: string, minLength: 1 }
+        sorted_owned_paths: { type: array, items: { type: string } }
+        sorted_dependency_closure: { type: array, items: { type: string } }
+        proof_path_mapping: { type: array }
+        proof_input_state: { type: array }
+        proof_component_subject: { type: object }
+        authority: { type: object }
+  component.onboarded@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [component_id]
+      properties:
+        component_id: { type: string, minLength: 1 }
+
+checks:
+  project:
+    type: memory
+    operation: set
+    key: project-catalog
+    value:
+      projects:
+        - project_id: journalservice
+          root: .
+    emits:
+      - claim: project.catalog@1
+        from: output
+    expand:
+      claim: project.catalog@1
+      template: discover-project
+      items_pointer: /projects
+      key_pointer: /project_id
+      item_claim: project.discovery_item@1
+
+subgraphs:
+  discover-project:
+    input: { name: project, claim: project.discovery_item@1 }
+    checks:
+      inspect:
+        type: governed-proof-inspect
+        message: Execute the bound Proof discovery role and return only canonical JSON.
+        instructions: Discover the project's independently onboardable components; do not invent files.
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject:
+            kind: project
+            id: journalservice
+            fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          output_schema_id: proof.component-catalog-candidate@1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJjb21wb25lbnRzIl19
+        invocation_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        result_schema: '{"type":"object","additionalProperties":false,"required":["components"]}'
+        consumes:
+          - { claim: project.discovery_item@1, as: project }
+        emits:
+          - { claim: proof.candidate@1, from: output }
+      proof_admit:
+        type: proof-admit
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+        emits:
+          - { claim: proof.admitted_receipt@1, from: output }
+      verify:
+        type: noop
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }
+      revalidate_catalog:
+        type: proof-catalog-revalidate
+        depends_on: [verify]
+        consumes:
+          - { claim: project.discovery_item@1, as: project }
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }
+        emits:
+          - { claim: proof.catalog_revalidation@1, from: output }
+      materialize_catalog:
+        type: proof-admitted-catalog
+        consumes:
+          - { claim: project.discovery_item@1, as: project }
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }
+          - { claim: proof.catalog_revalidation@1, as: current_revalidation }
+        emits:
+          - { claim: component.catalog@1, from: output }
+        expand:
+          claim: component.catalog@1
+          template: onboard-component
+          items_pointer: /components
+          key_pointer: /component_id
+          item_claim: component.work_item@1
+
+  onboard-component:
+    input: { name: component, claim: component.work_item@1 }
+    checks:
+      inspect:
+        type: noop
+        consumes:
+          - { claim: component.work_item@1, as: component }
+        emits:
+          - { claim: component.onboarded@1, from: output }

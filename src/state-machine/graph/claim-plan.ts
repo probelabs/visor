@@ -12,9 +12,12 @@ import {
 } from './claim-kernel';
 import {
   compileExpansionPlan,
+  PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
   GOVERNED_PROOF_INSPECT_PROVIDER_TYPE,
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
   PROOF_ADMIT_PROVIDER_TYPE,
   PROOF_ADMITTED_RECEIPT_CLAIM,
+  PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_CANDIDATE_CLAIM,
   type ExpansionPlan,
 } from './instance-plan';
@@ -119,19 +122,25 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
   // omitting claim_types (and so reserved root claims cannot become controller
   // inputs or root emissions).
   for (const [checkId, check] of Object.entries(checks)) {
-    if (check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
+    if (
+      check.type === PROOF_ADMIT_PROVIDER_TYPE ||
+      check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
+      check.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
+      check.type === PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE
+    ) {
       throw new ClaimPlanError(
-        `Root check "${checkId}" cannot use reserved provider type ${PROOF_ADMIT_PROVIDER_TYPE}`,
+        `Root check "${checkId}" cannot use a reserved Proof admission provider`,
         'RESERVED_PROOF_ADMISSION_ROOT'
       );
     }
     for (const field of ['emits', 'consumes'] as const) {
       if ((check[field] || []).some(declaration =>
         declaration.claim === PROOF_CANDIDATE_CLAIM ||
-        declaration.claim === PROOF_ADMITTED_RECEIPT_CLAIM
+        declaration.claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
+        declaration.claim === PROOF_CATALOG_REVALIDATION_CLAIM
       )) {
         throw new ClaimPlanError(
-          `Root check "${checkId}" cannot declare reserved claim ${PROOF_CANDIDATE_CLAIM} or ${PROOF_ADMITTED_RECEIPT_CLAIM}`,
+          `Root check "${checkId}" cannot declare reserved Proof admission claim`,
           'RESERVED_PROOF_ADMISSION_ROOT'
         );
       }
@@ -141,8 +150,10 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
       expansion &&
       (expansion.claim === PROOF_CANDIDATE_CLAIM ||
         expansion.claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
+        expansion.claim === PROOF_CATALOG_REVALIDATION_CLAIM ||
         expansion.item_claim === PROOF_CANDIDATE_CLAIM ||
-        expansion.item_claim === PROOF_ADMITTED_RECEIPT_CLAIM)
+        expansion.item_claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
+        expansion.item_claim === PROOF_CATALOG_REVALIDATION_CLAIM)
     ) {
       throw new ClaimPlanError(
         `Root check "${checkId}" cannot route a reserved proof admission claim through expansion`,
