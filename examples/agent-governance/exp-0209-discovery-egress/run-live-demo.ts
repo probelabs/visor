@@ -1437,15 +1437,22 @@ function baselineArtifact(outputDirectory: string): { preflight: JsonRecord; con
 
 export function gitStatusWithoutProofCache(workspace: string): string[] {
   const proofDirectory = path.join(workspace, '.proof');
-  const proofStat = fs.lstatSync(proofDirectory);
-  assertInvariant('workspace .proof is a regular non-symlink directory', proofStat.isDirectory() && !proofStat.isSymbolicLink());
-  for (const relative of PROOF_RUNTIME_CACHE_FILES) {
-    try {
-      const stat = fs.lstatSync(path.join(workspace, relative));
-      assertInvariant(`workspace ${relative} is a regular non-symlink file`, stat.isFile() && !stat.isSymbolicLink());
-    } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') continue;
-      throw error;
+  let proofStat: fs.Stats | undefined;
+  try {
+    proofStat = fs.lstatSync(proofDirectory);
+  } catch (error) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  if (proofStat) {
+    assertInvariant('workspace .proof is a regular non-symlink directory', proofStat.isDirectory() && !proofStat.isSymbolicLink());
+    for (const relative of PROOF_RUNTIME_CACHE_FILES) {
+      try {
+        const stat = fs.lstatSync(path.join(workspace, relative));
+        assertInvariant(`workspace ${relative} is a regular non-symlink file`, stat.isFile() && !stat.isSymbolicLink());
+      } catch (error) {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') continue;
+        throw error;
+      }
     }
   }
   const excluded = PROOF_RUNTIME_CACHE_FILES.map(relative => `:(exclude)${relative}`);

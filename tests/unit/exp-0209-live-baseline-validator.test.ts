@@ -38,6 +38,8 @@ describe('EXP-0209 live baseline checkpoint validator', () => {
       git(['-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fixture']);
       fs.writeFileSync(path.join(directory, 'tracked.txt'), 'changed\n');
       fs.writeFileSync(path.join(directory, 'root-untracked.txt'), 'visible\n');
+      const absentProofStatus = gitStatusWithoutProofCache(directory);
+      expect(absentProofStatus).toContain('?? root-untracked.txt');
       fs.mkdirSync(path.join(directory, '.proof'));
       fs.writeFileSync(path.join(directory, '.proof', 'index.db'), 'cache\n');
       fs.writeFileSync(path.join(directory, '.proof', 'unexpected'), 'visible\n');
