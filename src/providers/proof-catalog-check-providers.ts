@@ -25,6 +25,8 @@ import {
   goCompatibleProofJson,
   proofCanonicalJson,
   proofTopLevelJson,
+  proofV1AdmissionReceiptID,
+  proofV1DecisionJson,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
 import {
@@ -33,9 +35,10 @@ import {
   governedResultDigest,
   governedWireModeFromEvidence,
   immutableGovernedValue,
+  proofCandidateEvidenceFingerprint,
   type GovernedWireMode,
 } from './proof-wire';
-import { validateProofCandidateEvidence, type ProofCandidateEvidenceV1 } from './governed-proof-inspect-check-provider';
+import { validateProofCandidateEvidence, validateProofComponentInvocationAuthority, type ProofCandidateEvidenceV1 } from './governed-proof-inspect-check-provider';
 
 const INTERNAL = Symbol('proof-catalog-provider');
 const REVALIDATION_REQUEST_VERSION = 'proof.catalog-revalidation-request/v2';
@@ -214,9 +217,9 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
  * exact onboarding invocation. Caller-supplied wireMode is never the source
  * of this authority.
  */
-export function validateGovernedProofCandidateClaim(value: unknown, label = 'candidate'): {
+function validateCandidateCore(value: unknown, label: string): {
   readonly evidence: ProofCandidateEvidenceV1;
-  readonly wireMode: 'proof';
+  readonly wireMode: GovernedWireMode;
   readonly snapshot: PlainRecord;
 } {
   const candidate = snapshotData(value, label);
@@ -230,7 +233,6 @@ export function validateGovernedProofCandidateClaim(value: unknown, label = 'can
     invalid(`${label} proof admission evidence is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
   const derivedMode = governedWireModeFromEvidence(evidence);
-  if (derivedMode !== 'proof') invalid(`${label} invocation is not the governed onboarding schema`);
   if (candidate.wireMode !== undefined && candidate.wireMode !== derivedMode) {
     invalid(`${label} wire mode is detached from governed invocation`);
   }
@@ -259,7 +261,7 @@ export function validateGovernedProofCandidateClaim(value: unknown, label = 'can
       attemptId: candidate.attemptId,
       fence: candidate.fence,
       parentClaimIds: [...candidate.parentClaimIds].sort(),
-      proofCandidateEvidenceFingerprint: sha256Canonical(evidence),
+      proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(evidence),
     });
   } catch (error) {
     invalid(`${label} generated claim identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
@@ -278,7 +280,48 @@ export function validateGovernedProofCandidateClaim(value: unknown, label = 'can
     invalid(`${label} payload is not valid governed JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   const snapshot = Object.freeze({ ...candidate, proofAdmission: evidence });
-  return { evidence, wireMode: 'proof', snapshot };
+  return { evidence, wireMode: derivedMode, snapshot };
+}
+
+/** The catalog lane is the only caller allowed to consume Proof's project
+ * catalog candidate.  Its schema/role/subject are authority, not caller
+ * supplied labels, and component candidates deliberately fail this wrapper. */
+export function validateGovernedProofCandidateClaim(value: unknown, label = 'candidate'): {
+  readonly evidence: ProofCandidateEvidenceV1;
+  readonly wireMode: 'proof';
+  readonly snapshot: PlainRecord;
+} {
+  const result = validateCandidateCore(value, label);
+  const invocation = result.evidence.role.invocation;
+  if (result.wireMode !== 'proof' || !exact(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) ||
+      invocation.role_id !== 'onboard' || invocation.stance !== 'owner' || !plain(invocation.subject) ||
+      !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || invocation.subject.kind !== 'project' ||
+      invocation.output_schema_id !== 'proof.component-catalog-candidate@1') {
+    invalid(`${label} invocation is not the governed catalog schema`);
+  }
+  return { ...result, wireMode: 'proof' };
+}
+
+/** Component onboarding uses the generic candidate wire and Proof's v1
+ * receipt, but remains governed by the exact component selector and runtime
+ * authority.  This wrapper is intentionally separate from the catalog lane. */
+export function validateProofComponentCandidateClaim(value: unknown, label = 'component candidate'): {
+  readonly evidence: ProofCandidateEvidenceV1;
+  readonly wireMode: 'generic';
+  readonly snapshot: PlainRecord;
+} {
+  const result = validateCandidateCore(value, label);
+  const invocation = result.evidence.role.invocation;
+  if (result.wireMode !== 'generic' || !exact(invocation, ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema']) ||
+      invocation.role_id !== 'onboard' || invocation.stance !== 'owner' || !plain(invocation.subject) ||
+      !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || invocation.subject.kind !== 'component' ||
+      invocation.output_schema_id !== 'reqproof.component-onboarding/v1' ||
+      !('component_authority' in invocation)) {
+    invalid(`${label} invocation is not the governed component schema`);
+  }
+  try { validateProofComponentInvocationAuthority(invocation.component_authority); }
+  catch (error) { invalid(`${label} component authority is invalid: ${error instanceof Error ? error.message : String(error)}`); }
+  return { ...result, wireMode: 'generic' };
 }
 function onlyClaims(value: unknown, aliases: readonly string[]): PlainRecord {
   if (!exact(value, aliases)) invalid(`expected claim aliases ${aliases.join(', ')}`);
@@ -290,6 +333,7 @@ function sameScope(values: readonly CandidateClaimInput[]): boolean {
 
 const ADMISSION_DECISION_KEYS = ['version', 'status', 'receipt', 'reject_code'] as const;
 const ADMISSION_RECEIPT_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'ProjectLineage', 'receipt_id'] as const;
+const ADMISSION_RECEIPT_COMMON_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
 
 function admissionScope(value: unknown): boolean {
   return Array.isArray(value) && value.length >= 1 && value.length <= 2 && value.every(part => plain(part) && exact(part, ['Kind', 'ExpansionOwnerCheck', 'Key', 'SubgraphInstanceID']) && part.Kind === 'keyed' && typeof part.ExpansionOwnerCheck === 'string' && part.ExpansionOwnerCheck.length > 0 && typeof part.Key === 'string' && part.Key.length > 0 && typeof part.SubgraphInstanceID === 'string' && /^[0-9a-f]{64}$/.test(part.SubgraphInstanceID));
@@ -398,6 +442,72 @@ function admissionTransport(value: unknown): { receipt: PlainRecord; wire: strin
     invalid('admission decision wire is incomplete or detached');
   }
   return { receipt, wire };
+}
+
+/** Component admissions are the historical Proof v1 receipt domain. Keep
+ * this transport validator separate from the catalog v2 validator: a
+ * ProjectLineage field or a v2 receipt is never accepted on this lane. */
+function componentAdmissionTransport(value: unknown): { receipt: PlainRecord; wire: string } {
+  if (!plain(value) || typeof value[PROOF_ADMISSION_WIRE_FIELD] !== 'string') {
+    invalid('component admission does not carry the complete Proof decision wire');
+  }
+  const wire = value[PROOF_ADMISSION_WIRE_FIELD] as string;
+  let decision: unknown;
+  try { decision = JSON.parse(wire); } catch { invalid('component admission decision wire is not JSON'); }
+  const receipt = plain(decision) && plain(decision.receipt) ? decision.receipt : undefined;
+  if (!exact(decision, ADMISSION_DECISION_KEYS) || decision.version !== 'proof.role-result-candidate-cli-decision/v1' ||
+      decision.status !== 'ADMITTED' || decision.reject_code !== null || !receipt ||
+      (proofCanonicalJson(decision) !== wire && proofV1DecisionJson(decision) !== wire) ||
+      !exact(receipt, ADMISSION_RECEIPT_COMMON_KEYS) || receipt.Version !== 'proof.role-result-candidate-admission/v1' ||
+      receipt.Status !== 'ADMITTED' || !fingerprint(receipt.CandidateID) || !fingerprint(receipt.ProbeResultDigest) ||
+      !Number.isSafeInteger(receipt.ProbeCanonicalBytes) || (receipt.ProbeCanonicalBytes as number) <= 0 ||
+      typeof receipt.ClaimID !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.ClaimID) || receipt.Claim !== PROOF_CANDIDATE_CLAIM ||
+      typeof receipt.PayloadFingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.PayloadFingerprint) ||
+      !fingerprint(receipt.InvocationDigest) || receipt.RoleID !== 'onboard' || receipt.Stance !== 'owner' ||
+      !plain(receipt.Subject) || !exact(receipt.Subject, ['kind', 'id', 'fingerprint']) || receipt.Subject.kind !== 'component' ||
+      typeof receipt.Subject.id !== 'string' || receipt.Subject.id.length === 0 || !fingerprint(receipt.Subject.fingerprint) ||
+      receipt.ProducerCheckID !== 'inspect' || !Array.isArray(receipt.ParentClaimIDs) ||
+      receipt.ParentClaimIDs.some(parent => typeof parent !== 'string' || !/^[0-9a-f]{64}$/.test(parent)) ||
+      !admissionBinding(receipt.Binding) || !plain(receipt.Termination) ||
+      !exact(receipt.Termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) ||
+      receipt.Termination.Version !== 1 || receipt.Termination.Type !== 'ManagedRunTerminated' ||
+      receipt.Termination.SessionID !== (receipt.Binding as PlainRecord).SessionID || !admissionScope(receipt.Termination.Scope) ||
+      !admissionBinding(receipt.Termination.Binding) || canonicalJson(receipt.Termination.Binding) !== canonicalJson(receipt.Binding) ||
+      receipt.Termination.CleanupStatus !== 'clean' || receipt.Termination.ControllerDecision !== 'completed' || receipt.Termination.FailureCode !== null ||
+      !fingerprint(receipt.receipt_id) || receipt.receipt_id !== proofV1AdmissionReceiptID(receipt) ||
+      proofCanonicalJson(receipt) !== proofCanonicalJson(Object.fromEntries(Object.entries(value).filter(([key]) => key !== PROOF_ADMISSION_WIRE_FIELD)))) {
+    invalid('component admission decision wire is incomplete or detached');
+  }
+  return { receipt, wire };
+}
+
+/** Bind a generic component candidate to its exact Proof v1 admission. This
+ * is used only by component lineage assembly; catalog/admitted-catalog stay
+ * on validateProofCandidateAdmissionBinding and v2 project receipts. */
+export function validateProofComponentCandidateAdmissionBinding(
+  candidate: CandidateClaimInput,
+  admission: CandidateClaimInput,
+): { receipt: PlainRecord; wire: string; candidate: CandidateClaimInput } {
+  const authority = validateProofComponentCandidateClaim(candidate, 'component candidate');
+  const candidateSnapshot = authority.snapshot as unknown as CandidateClaimInput;
+  if (admission.claim !== PROOF_ADMITTED_RECEIPT_CLAIM || admission.producerCheckId !== 'proof_admit' ||
+      admission.parentClaimIds.length !== 1 || admission.parentClaimIds[0] !== candidateSnapshot.claimId ||
+      canonicalJson(admission.scope) !== canonicalJson(candidateSnapshot.scope)) {
+    invalid('component admission lineage is detached from the candidate');
+  }
+  const admitted = componentAdmissionTransport(admission.payload);
+  const receipt = admitted.receipt;
+  const invocation = authority.evidence.role.invocation;
+  if (receipt.ClaimID !== candidateSnapshot.claimId || receipt.Claim !== candidateSnapshot.claim ||
+      receipt.PayloadFingerprint !== candidateSnapshot.payloadFingerprint || receipt.ProducerCheckID !== candidateSnapshot.producerCheckId ||
+      canonicalJson(receipt.ParentClaimIDs) !== canonicalJson(candidateSnapshot.parentClaimIds) ||
+      receipt.InvocationDigest !== authority.evidence.role.invocationDigest || receipt.RoleID !== invocation.role_id ||
+      receipt.Stance !== invocation.stance || canonicalJson(receipt.Subject) !== canonicalJson(invocation.subject) ||
+      receipt.ProbeResultDigest !== authority.evidence.probe.resultIdentity.resultDigest ||
+      receipt.ProbeCanonicalBytes !== authority.evidence.probe.resultIdentity.canonicalBytes) {
+    invalid('component admission receipt is detached from the candidate invocation or result');
+  }
+  return { ...admitted, candidate: candidateSnapshot };
 }
 
 /** Bind the admission receipt to the candidate's attested invocation/result. */

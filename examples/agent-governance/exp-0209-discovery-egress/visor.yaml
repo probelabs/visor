@@ -36,36 +36,130 @@ claim_types:
         root: { type: string, minLength: 1 }
   proof.candidate@1:
     schema:
-      type: object
-      additionalProperties: false
-      required: [version, project_id, components]
-      properties:
-        version: { const: proof.component-catalog-candidate/v1 }
-        project_id: { type: string, minLength: 1 }
-        components:
-          type: array
-          minItems: 2
-          maxItems: 4
-          items:
-            type: object
-            additionalProperties: false
-            required: [id, responsibility, owned_paths]
-            properties:
-              id: { type: string, minLength: 1 }
-              responsibility: { type: string, minLength: 1 }
-              owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-              dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-              entry_points: { type: array, items: { type: string, minLength: 1 } }
-              state_effects: { type: array, items: { type: string, minLength: 1 } }
-              interfaces: { type: array, items: {} }
-              uncertainty: { type: array, items: { type: string, minLength: 1 } }
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [version, project_id, components]
+          properties:
+            version: { const: proof.component-catalog-candidate/v1 }
+            project_id: { type: string, minLength: 1 }
+            components:
+              type: array
+              minItems: 2
+              maxItems: 4
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, responsibility, owned_paths]
+                properties:
+                  id: { type: string, minLength: 1 }
+                  responsibility: { type: string, minLength: 1 }
+                  owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  entry_points: { type: array, items: { type: string, minLength: 1 } }
+                  state_effects: { type: array, items: { type: string, minLength: 1 } }
+                  interfaces: { type: array, items: {} }
+                  uncertainty: { type: array, items: { type: string, minLength: 1 } }
+        - type: object
+          additionalProperties: false
+          required: [schema, project, shard, reviewedFiles, requirements, interfaces, findings, unknowns, repositoryMutated, commandsExecuted, checklistCompleted]
+          properties:
+            schema: { const: reqproof.component-onboarding/v1 }
+            project: { type: string }
+            shard: { type: string }
+            reviewedFiles:
+              type: array
+              minItems: 1
+              maxItems: 64
+              items:
+                type: object
+                additionalProperties: false
+                required: [path, coordinates]
+                properties:
+                  path: { type: string }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            requirements:
+              type: array
+              minItems: 4
+              maxItems: 12
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, text, coordinates]
+                properties:
+                  id: { type: string, pattern: "^(STK|SYS|SW|INT)-" }
+                  text: { type: string }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            interfaces:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [name, coordinates]
+                properties:
+                  name: { type: string }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            findings:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, severity, title, calibration, confidence, coordinates]
+                properties:
+                  id: { type: string }
+                  severity: { enum: [info, low, medium, high, critical] }
+                  title: { type: string }
+                  calibration: { enum: [confirmed, likely, possible] }
+                  confidence: { type: number, minimum: 0, maximum: 1 }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            unknowns:
+              type: array
+              maxItems: 32
+              items: { type: string }
+            repositoryMutated: { const: false }
+            commandsExecuted: { const: false }
+            checklistCompleted: { const: false }
   proof.admitted_receipt@1:
     schema:
       type: object
       additionalProperties: false
-      required: [Version, Status, CandidateID, ProbeResultDigest, ProbeCanonicalBytes, ClaimID, Claim, PayloadFingerprint, InvocationDigest, RoleID, Stance, Subject, ProducerCheckID, ParentClaimIDs, Binding, Termination, ProjectLineage, receipt_id, __proof_admission_wire]
+      required: [Version, Status, CandidateID, ProbeResultDigest, ProbeCanonicalBytes, ClaimID, Claim, PayloadFingerprint, InvocationDigest, RoleID, Stance, Subject, ProducerCheckID, ParentClaimIDs, Binding, Termination, receipt_id, __proof_admission_wire]
       properties:
-        Version: { const: proof.role-result-candidate-admission/v2 }
+        Version: { enum: [proof.role-result-candidate-admission/v1, proof.role-result-candidate-admission/v2] }
         Status: { const: ADMITTED }
         CandidateID: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         ProbeResultDigest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
@@ -81,7 +175,7 @@ claim_types:
           additionalProperties: false
           required: [kind, id, fingerprint]
           properties:
-            kind: { const: project }
+            kind: { enum: [project, component] }
             id: { type: string, minLength: 1 }
             fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         ProducerCheckID: { const: inspect }
@@ -147,6 +241,29 @@ claim_types:
             baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
         receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         __proof_admission_wire: { type: string, minLength: 1 }
+      allOf:
+        - if:
+            properties:
+              Version: { const: proof.role-result-candidate-admission/v1 }
+          then:
+            not:
+              properties: { ProjectLineage: {} }
+              required: [ProjectLineage]
+            properties:
+              Subject:
+                type: object
+                properties:
+                  kind: { const: component }
+        - if:
+            properties:
+              Version: { const: proof.role-result-candidate-admission/v2 }
+          then:
+            required: [ProjectLineage]
+            properties:
+              Subject:
+                type: object
+                properties:
+                  kind: { const: project }
   proof.structural_inventory@1:
     schema:
       type: object
@@ -471,14 +588,6 @@ claim_types:
                 sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
                 sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
                 fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
-  component.onboarded@1:
-    schema:
-      type: object
-      additionalProperties: false
-      required: [status]
-      properties:
-        status: { const: onboarded }
-
 checks:
   project:
     type: memory
@@ -569,11 +678,26 @@ subgraphs:
     input: { name: component, claim: component.work_item@1 }
     checks:
       inspect:
-        type: memory
-        operation: set
-        key: component-onboarded
-        value: { status: onboarded }
+        type: governed-proof-inspect
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject: { kind: component }
+          output_schema_id: reqproof.component-onboarding/v1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJzY2hlbWEiLCJwcm9qZWN0Iiwic2hhcmQiLCJyZXZpZXdlZEZpbGVzIiwicmVxdWlyZW1lbnRzIiwiaW50ZXJmYWNlcyIsImZpbmRpbmdzIiwidW5rbm93bnMiLCJyZXBvc2l0b3J5TXV0YXRlZCIsImNvbW1hbmRzRXhlY3V0ZWQiLCJjaGVja2xpc3RDb21wbGV0ZWQiXSwicHJvcGVydGllcyI6eyJzY2hlbWEiOnsiY29uc3QiOiJyZXFwcm9vZi5jb21wb25lbnQtb25ib2FyZGluZy92MSJ9LCJwcm9qZWN0Ijp7InR5cGUiOiJzdHJpbmcifSwic2hhcmQiOnsidHlwZSI6InN0cmluZyJ9LCJyZXZpZXdlZEZpbGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJtYXhJdGVtcyI6NjQsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbInBhdGgiLCJjb29yZGluYXRlcyJdLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9LCJjb29yZGluYXRlcyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MSwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsInJlcXVpcmVkIjpbInBhdGgiLCJsaW5lIl0sInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn0sImxpbmUiOnsidHlwZSI6ImludGVnZXIiLCJtaW5pbXVtIjoxfX19fX19fSwicmVxdWlyZW1lbnRzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjo0LCJtYXhJdGVtcyI6MTIsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwidGV4dCIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyIsInBhdHRlcm4iOiJeKFNUS3xTWVN8U1d8SU5UKS0ifSwidGV4dCI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJpbnRlcmZhY2VzIjp7InR5cGUiOiJhcnJheSIsIm1heEl0ZW1zIjozMiwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicmVxdWlyZWQiOlsibmFtZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsibmFtZSI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJmaW5kaW5ncyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwic2V2ZXJpdHkiLCJ0aXRsZSIsImNhbGlicmF0aW9uIiwiY29uZmlkZW5jZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyJ9LCJzZXZlcml0eSI6eyJlbnVtIjpbImluZm8iLCJsb3ciLCJtZWRpdW0iLCJoaWdoIiwiY3JpdGljYWwiXX0sInRpdGxlIjp7InR5cGUiOiJzdHJpbmcifSwiY2FsaWJyYXRpb24iOnsiZW51bSI6WyJjb25maXJtZWQiLCJsaWtlbHkiLCJwb3NzaWJsZSJdfSwiY29uZmlkZW5jZSI6eyJ0eXBlIjoibnVtYmVyIiwibWluaW11bSI6MCwibWF4aW11bSI6MX0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJ1bmtub3ducyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcG9zaXRvcnlNdXRhdGVkIjp7ImNvbnN0IjpmYWxzZX0sImNvbW1hbmRzRXhlY3V0ZWQiOnsiY29uc3QiOmZhbHNlfSwiY2hlY2tsaXN0Q29tcGxldGVkIjp7ImNvbnN0IjpmYWxzZX19fQ==
         consumes:
           - { claim: component.work_item@1, as: component }
         emits:
-          - { claim: component.onboarded@1, from: output }
+          - { claim: proof.candidate@1, from: output }
+      proof_admit:
+        type: proof-admit
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+        emits:
+          - { claim: proof.admitted_receipt@1, from: output }
+      verify:
+        type: noop
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }

@@ -69,17 +69,20 @@ import {
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
 } from './state-machine/graph/instance-plan';
-import { goCompatibleProofJson } from './providers/proof-admission-cli-child';
+import { goCompatibleProofJson, proofCandidateAdmissionRequestJson, proofComponentCandidateEnvelopeJson } from './providers/proof-admission-cli-child';
 import {
   governedCanonicalJson,
   governedPayloadFingerprint,
   governedResultDigest,
   governedWireModeFromEvidence,
+  governedProofCandidateEvidenceJson,
+  proofCandidateEvidenceFingerprint,
   immutableGovernedValue,
+  immutableProofCandidateEvidence,
   type GovernedWireMode,
 } from './providers/proof-wire';
 import { validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
-import { validateProofCandidateAdmissionBinding, validateProofCatalogRevalidationProjection } from './providers/proof-catalog-check-providers';
+import { validateProofCandidateAdmissionBinding, validateProofCatalogRevalidationProjection, validateProofComponentCandidateAdmissionBinding } from './providers/proof-catalog-check-providers';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -326,7 +329,7 @@ function assembleProofComponentInvocationAuthority(
       canonicalJson((publication as Record<string, unknown>).ParentClaimIDs) !== canonicalJson(candidate.parentClaimIds)) {
     componentAuthorityFailure('admission candidate envelope is detached from the candidate claim');
   }
-  const candidateID = proofDomainDigest('proof.role-result-candidate-envelope/id/v1', goCompatibleProofJson(candidateEnvelope));
+  const candidateID = proofDomainDigest('proof.role-result-candidate-envelope/id/v1', proofComponentCandidateEnvelopeJson(candidateEnvelope));
   if (admitted.receipt.CandidateID !== candidateID) {
     componentAuthorityFailure('admission receipt CandidateID is detached from the authenticated candidate envelope');
   }
@@ -422,7 +425,7 @@ function validateComponentChildAdmission(
   const admissionClaims = admissionGeneration.completedOutputClaimIds.map(claimId => projection.claimsById[claimId]).filter(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
   if (admissionClaims.length !== 1) componentAuthorityFailure('component admission has no unique receipt output');
   try {
-    validateProofCandidateAdmissionBinding(generatedClaimView(candidate, 'component candidate'), generatedClaimView(admissionClaims[0], 'component admission'));
+    validateProofComponentCandidateAdmissionBinding(generatedClaimView(candidate, 'component candidate'), generatedClaimView(admissionClaims[0], 'component admission'));
   } catch (error) {
     componentAuthorityFailure(`component admission is detached from its resolved C0 invocation: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -702,7 +705,7 @@ function validateCheckpointPlanAuthority(
     if (event.wireMode !== 'generic' && event.wireMode !== 'proof') checkpointAuthorityFailure('Generated claim wire mode is invalid');
     if (event.claim !== PROOF_CANDIDATE_CLAIM && event.wireMode !== 'generic') checkpointAuthorityFailure('Proof wire mode is reserved for governed evidence');
     if (sidecar) {
-      if (generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== sha256Canonical(event.proofCandidateEvidence)) {
+      if (generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
         checkpointAuthorityFailure('Generated proof candidate evidence is not bound to the compiled inspect authority');
       }
       try {
@@ -763,7 +766,9 @@ export function canonicalGraphCheckpointJson(value: unknown): string {
       return `{${Object.keys(record).sort().map(key => {
         const encoded = generated && key === 'payload'
           ? governedCanonicalJson(record[key], record.wireMode === 'proof' ? 'proof' : 'generic')
-          : encode(record[key]);
+          : generated && key === 'proofCandidateEvidence'
+            ? governedProofCandidateEvidenceJson(record[key])
+            : encode(record[key]);
         return `${JSON.stringify(key)}:${encoded}`;
       }).join(',')}}`;
     } finally { active.delete(current as object); }
@@ -1444,7 +1449,7 @@ export class ExecutionJournal {
         FailureCode: null,
       },
     };
-    return goCompatibleProofJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate });
+    return proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate });
   }
 
   deriveManagedRunBinding(attempt: GeneratedAttemptStartedEvent): ManagedRunBindingV1 {
@@ -1670,7 +1675,7 @@ export class ExecutionJournal {
         }
       } catch (error) {
         if (error instanceof ClaimKernelError) throw error;
-        throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate evidence is invalid or detached');
+        throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', `Proof candidate evidence is invalid or detached: ${error instanceof Error ? error.message : String(error)}`);
       }
     } else if (input.proofCandidateEvidence !== undefined) {
       throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
@@ -1708,10 +1713,10 @@ export class ExecutionJournal {
           producerCheckId: attempt.checkId, scope: attempt.scope, attemptId: attempt.attemptId,
           fence: attempt.fence, parentClaimIds,
           ...(emission.claim === PROOF_CANDIDATE_CLAIM
-            ? { proofCandidateEvidenceFingerprint: sha256Canonical(input.proofCandidateEvidence) }
+            ? { proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(input.proofCandidateEvidence) }
             : {}) }),
         ...(emission.claim === PROOF_CANDIDATE_CLAIM
-          ? { proofCandidateEvidence: input.proofCandidateEvidence, proofCandidateEvidenceFingerprint: sha256Canonical(input.proofCandidateEvidence) }
+          ? { proofCandidateEvidence: immutableProofCandidateEvidence(input.proofCandidateEvidence), proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(input.proofCandidateEvidence) }
           : {}),
       };
       publications.push(published);
@@ -1728,12 +1733,6 @@ export class ExecutionJournal {
       );
     }
     for (const publication of publications) stage(publication);
-    if (generation.templateNodeKey === PROOF_ADMIT_NODE_KEY) {
-      const inspectNode = expansion.template.nodesByKey.inspect;
-      if (inspectNode && inspectNode.check.type === 'governed-proof-inspect' && isGovernedProofComponentSelector(inspectNode.check.invocation)) {
-        validateComponentChildAdmission(staged, instance.subgraphInstanceId, true);
-      }
-    }
     if (nestedExpansion) {
       const catalogPublication = nestedCatalogPublications[0];
       const reconciled = this.reconcileCatalog({
@@ -1817,9 +1816,16 @@ export class ExecutionJournal {
     }
     stage({ ...attempt, type: 'AttemptCompleted',
       eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1 });
+    const completedProjection = reduceInstanceEventBatch(before, events);
+    if (generation.templateNodeKey === PROOF_ADMIT_NODE_KEY) {
+      const inspectNode = expansion.template.nodesByKey.inspect;
+      if (inspectNode && inspectNode.check.type === 'governed-proof-inspect' && isGovernedProofComponentSelector(inspectNode.check.invocation)) {
+        validateComponentChildAdmission(completedProjection, instance.subgraphInstanceId, true);
+      }
+    }
     return {
       events,
-      projection: reduceInstanceEventBatch(before, events),
+      projection: completedProjection,
     };
   }
 

@@ -44,6 +44,7 @@ const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'ou
 const C0_COMPONENT_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema'] as const;
 const RECEIPT_COMMON_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
 const RECEIPT_V2_KEYS = [...RECEIPT_COMMON_KEYS.slice(0, 16), 'ProjectLineage', 'receipt_id'] as const;
+const CANDIDATE_ENVELOPE_KEYS = ['Version', 'Invocation', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'AttestationVersion', 'ExecutionSource', 'ProbeInvocationDigest', 'IdentityVersion', 'IdentitySource', 'ResultDigest', 'CanonicalBytes', 'ProbeResultBytes', 'VisorPayloadBytes', 'Publication', 'Binding', 'Termination'] as const;
 type ExecutableStat = Readonly<{
   realpath: string; dev: number; ino: number; mode: number; uid: number; gid: number; size: number;
   mtimeMs: number; ctimeMs: number; digest: string;
@@ -91,95 +92,199 @@ function proofStructJson(fields: Readonly<Record<string, string>>): string {
  * raw candidate/admission/work-item bytes untouched while rebuilding the
  * typed component-authority members in the order encoding/json emits them.
  */
-function goComponentSubject(value: Record<string, unknown>): Record<string, unknown> {
-  return {
-    version: value.version,
-    project_id: value.project_id,
-    component_id: value.component_id,
-    sorted_owned_paths: value.sorted_owned_paths,
-    sorted_dependency_closure: value.sorted_dependency_closure,
-    fingerprint: value.fingerprint,
-  };
+function goComponentSubjectJson(value: Record<string, unknown>): string {
+  return proofStructJson({
+    version: json(value.version),
+    project_id: json(value.project_id),
+    component_id: json(value.component_id),
+    sorted_owned_paths: json(value.sorted_owned_paths),
+    sorted_dependency_closure: json(value.sorted_dependency_closure),
+    fingerprint: json(value.fingerprint),
+  });
 }
 
-function goComponentReceipt(value: Record<string, unknown>): Record<string, unknown> {
-  const authorities = Array.isArray(value.component_authorities)
-    ? value.component_authorities.map(raw => {
-      const authority = raw as Record<string, unknown>;
-      return {
-        component_id: authority.component_id,
-        work_item_digest: authority.work_item_digest,
-        subject: goComponentSubject(authority.subject as Record<string, unknown>),
-      };
-    })
-    : value.component_authorities;
-  if (value.version !== 'proof.catalog-revalidation-receipt/v2') {
-    return {
-      version: value.version,
-      decision: value.decision,
-      project_id: value.project_id,
-      project_fingerprint: value.project_fingerprint,
-      boundary_fingerprint: value.boundary_fingerprint,
-      inventory_claim_id: value.inventory_claim_id,
-      catalog_claim_id: value.catalog_claim_id,
-      admission_candidate_id: value.admission_candidate_id,
-      admission_result_digest: value.admission_result_digest,
-      admission_receipt_id: value.admission_receipt_id,
-      component_authorities: authorities,
-      receipt_id: value.receipt_id,
-    };
+function goComponentAuthorityComponentJson(value: Record<string, unknown>): string {
+  const subject = value.subject;
+  if (!plain(subject)) return '';
+  return proofStructJson({
+    component_id: json(value.component_id),
+    work_item_digest: json(value.work_item_digest),
+    subject: goComponentSubjectJson(subject),
+  });
+}
+
+/** Go's ComponentWorkItem is a struct, so its raw JSON uses declaration order
+ * (and PathMapping's omitempty fields are omitted).  This is a RawMessage in
+ * the component authority: JSON.stringify would be order-dependent and would
+ * also erase any Proof-owned numeric identity in future nested fields. */
+function goComponentPathMappingJson(value: unknown): string {
+  if (!plain(value)) return '';
+  const fields: Record<string, string> = {
+    paths: json(value.paths),
+    risk_tier: json(value.risk_tier),
+    enforcement: json(value.enforcement),
+  };
+  if (value.repo !== undefined && value.repo !== '') fields.repo = json(value.repo);
+  if (Array.isArray(value.components) && value.components.length > 0) fields.components = json(value.components);
+  if (Array.isArray(value.interfaces) && value.interfaces.length > 0) fields.interfaces = json(value.interfaces);
+  if (Array.isArray(value.requirements) && value.requirements.length > 0) fields.requirements = json(value.requirements);
+  if (Array.isArray(value.required_tests) && value.required_tests.length > 0) fields.required_tests = json(value.required_tests);
+  const ordered: Record<string, string> = {};
+  for (const key of ['repo', 'paths', 'components', 'interfaces', 'requirements', 'required_tests', 'owner', 'risk_tier', 'enforcement']) {
+    if (key === 'owner' && value.owner !== undefined && value.owner !== '') ordered[key] = json(value.owner);
+    else if (fields[key] !== undefined) ordered[key] = fields[key];
   }
-  const lineage = value.project_lineage && typeof value.project_lineage === 'object'
-    ? (() => {
-      const raw = value.project_lineage as Record<string, unknown>;
-      return {
-        version: raw.version,
-        fingerprint: raw.fingerprint,
-        object_format: raw.object_format,
-        baseline_revision: raw.baseline_revision,
-      };
-    })()
-    : null;
+  return proofStructJson(ordered);
+}
+
+function goComponentInputStateJson(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  const rows = value.map(row => {
+    if (!plain(row)) return '';
+    return proofStructJson({
+      owner_kind: json(row.owner_kind),
+      owner_id: json(row.owner_id),
+      input_kind: json(row.input_kind),
+      path: json(row.path),
+      file_hash: json(row.file_hash),
+    });
+  });
+  return rows.some(row => row === '') ? '' : `[${rows.join(',')}]`;
+}
+
+function goComponentWorkItemJson(value: unknown): string {
+  if (!plain(value) || !plain(value.proof_path_mapping) || !plain(value.proof_component_subject)) return '';
+  const mapping = goComponentPathMappingJson(value.proof_path_mapping);
+  const inputState = goComponentInputStateJson(value.proof_input_state);
+  if (mapping === '' || inputState === '') return '';
+  return proofStructJson({
+    version: json(value.version),
+    project_id: json(value.project_id),
+    component_id: json(value.component_id),
+    sorted_owned_paths: json(value.sorted_owned_paths),
+    sorted_dependency_closure: json(value.sorted_dependency_closure),
+    proof_path_mapping: mapping,
+    proof_input_state: inputState,
+    proof_component_subject: goComponentSubjectJson(value.proof_component_subject),
+  });
+}
+
+function goComponentReceiptJson(value: Record<string, unknown>): string {
+  const rawAuthorities = value.component_authorities;
+  if (!Array.isArray(rawAuthorities)) return '';
+  const authorities = `[${rawAuthorities.map(raw => plain(raw) ? goComponentAuthorityComponentJson(raw) : '').join(',')}]`;
+  if (rawAuthorities.some(raw => !plain(raw) || goComponentAuthorityComponentJson(raw) === '')) return '';
+  const fields: Record<string, string> = {
+    version: json(value.version),
+    decision: json(value.decision),
+    project_id: json(value.project_id),
+    project_fingerprint: json(value.project_fingerprint),
+    boundary_fingerprint: json(value.boundary_fingerprint),
+    inventory_claim_id: json(value.inventory_claim_id),
+    catalog_claim_id: json(value.catalog_claim_id),
+    admission_candidate_id: json(value.admission_candidate_id),
+    admission_result_digest: json(value.admission_result_digest),
+    admission_receipt_id: json(value.admission_receipt_id),
+    component_authorities: authorities,
+    receipt_id: json(value.receipt_id),
+  };
+  if (value.version !== 'proof.catalog-revalidation-receipt/v2') return proofStructJson(fields);
+  const lineage = value.project_lineage;
+  fields.project_lineage = json(lineage === null ? null : (() => {
+    if (!plain(lineage)) return lineage;
+    return {
+      version: lineage.version,
+      fingerprint: lineage.fingerprint,
+      object_format: lineage.object_format,
+      baseline_revision: lineage.baseline_revision,
+    };
+  })());
   // CatalogRevalidationReceipt.MarshalJSON uses a map for v2, so Go sorts
   // these outer keys lexically after encoding the typed nested values above.
-  return {
-    admission_candidate_id: value.admission_candidate_id,
-    admission_receipt_id: value.admission_receipt_id,
-    admission_result_digest: value.admission_result_digest,
-    boundary_fingerprint: value.boundary_fingerprint,
-    catalog_claim_id: value.catalog_claim_id,
-    component_authorities: authorities,
-    decision: value.decision,
-    inventory_claim_id: value.inventory_claim_id,
-    project_fingerprint: value.project_fingerprint,
-    project_id: value.project_id,
-    project_lineage: lineage,
-    receipt_id: value.receipt_id,
-    version: value.version,
-  };
+  return proofTopLevelJson(fields);
 }
 
-function goComponentAuthority(value: Record<string, unknown>): Record<string, unknown> {
-  return {
-    work_item_digest: value.work_item_digest,
-    subject: goComponentSubject(value.subject as Record<string, unknown>),
-    candidate: value.candidate,
-    admission: value.admission,
-    work_item: value.work_item,
-    catalog_revalidation_receipt: goComponentReceipt(value.catalog_revalidation_receipt as Record<string, unknown>),
-  };
+function goComponentAuthorityJson(value: Record<string, unknown>): string {
+  const subject = value.subject;
+  const receipt = value.catalog_revalidation_receipt;
+  if (!plain(subject) || !plain(receipt)) return '';
+  const workItem = goComponentWorkItemJson(value.work_item);
+  if (workItem === '') return '';
+  return proofStructJson({
+    work_item_digest: json(value.work_item_digest),
+    subject: goComponentSubjectJson(subject),
+    // Candidate and admission are Proof-owned RawMessage bytes. Re-encode
+    // them with the Proof serializer so -0 and UTF-8 identity survive the
+    // JS object boundary exactly as they do in Go.
+    candidate: proofCanonicalJson(value.candidate),
+    admission: proofCanonicalJson(value.admission),
+    work_item: workItem,
+    catalog_revalidation_receipt: goComponentReceiptJson(receipt),
+  });
+}
+
+function goRoleSubjectJson(value: Record<string, unknown>): string {
+  return proofStructJson({ kind: json(value.kind), id: json(value.id), fingerprint: json(value.fingerprint) });
+}
+
+function componentResolvedRoleInvocationJson(value: Record<string, unknown>): string {
+  const subject = value.subject;
+  const authority = value.component_authority;
+  if (!plain(subject) || !plain(authority)) return '';
+  return proofStructJson({
+    version: json(value.version),
+    role_id: json(value.role_id),
+    role_source: json(value.role_source),
+    stance: json(value.stance),
+    subject: goRoleSubjectJson(subject),
+    component_authority: goComponentAuthorityJson(authority),
+    authority: json(value.authority),
+    output_schema_id: json(value.output_schema_id),
+    output_schema: json(value.output_schema),
+    output_schema_digest: json(value.output_schema_digest),
+    instructions: json(value.instructions),
+    role_text_digest: json(value.role_text_digest),
+    invocation_digest: json(value.invocation_digest),
+  });
 }
 
 function componentRoleInvocationJson(value: Record<string, unknown>): string {
   const subject = value.subject as Record<string, unknown>;
   const authority = value.component_authority as Record<string, unknown>;
-  return json({
-    role_id: value.role_id,
-    stance: value.stance,
-    subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
-    component_authority: goComponentAuthority(authority),
-    output_schema_id: value.output_schema_id,
-    output_schema: value.output_schema,
+  const authorityJson = goComponentAuthorityJson(authority);
+  if (authorityJson === '') return '';
+  return proofStructJson({
+    role_id: json(value.role_id),
+    stance: json(value.stance),
+    subject: goRoleSubjectJson(subject),
+    component_authority: authorityJson,
+    output_schema_id: json(value.output_schema_id),
+    output_schema: json(value.output_schema),
+  });
+}
+
+/** Serialize the candidate envelope exactly as the Proof child receives it.
+ * Component invocations carry Proof-owned RawMessage values inside their
+ * authority; the generic JSON serializer would turn nested -0 into 0. */
+export function proofComponentCandidateEnvelopeJson(value: Record<string, unknown>): string {
+  const invocation = value.Invocation;
+  if (!plain(invocation) || !Object.prototype.hasOwnProperty.call(invocation, 'component_authority')) return json(value);
+  const fields: Record<string, string> = {};
+  for (const key of CANDIDATE_ENVELOPE_KEYS) {
+    if (key === 'Invocation') fields[key] = componentRoleInvocationJson(invocation);
+    else fields[key] = json(value[key]);
+  }
+  return proofStructJson(fields);
+}
+
+/** Serialize the complete candidate-admission request without erasing
+ * Proof-owned nested numeric/UTF-8 identity in a component authority. */
+export function proofCandidateAdmissionRequestJson(value: Record<string, unknown>): string {
+  const candidate = value.candidate;
+  if (!plain(candidate)) return json(value);
+  return proofStructJson({
+    version: json(value.version),
+    candidate: proofComponentCandidateEnvelopeJson(candidate),
   });
 }
 
@@ -216,7 +321,7 @@ function parseRequest(request: string): { raw: Buffer; candidate: Record<string,
   validateCandidateShape(candidate, wireMode);
   const marker = request.indexOf('"candidate":');
   const start = marker + '"candidate":'.length;
-  const encoded = json(candidate);
+  const encoded = proofComponentCandidateEnvelopeJson(candidate);
   if (marker < 0 || request.slice(start, start + encoded.length) !== encoded || request.slice(start + encoded.length) !== '}') fail('candidate wire is not canonical');
   return { raw, candidate, candidateRaw: Buffer.from(encoded, 'utf8'), wireMode };
 }
@@ -306,7 +411,7 @@ function proofTermination(value: unknown): Record<string, unknown> {
  * compatibility check; the original accepted bytes are retained by the
  * caller.
  */
-function proofV1DecisionJson(value: Record<string, unknown>): string {
+export function proofV1DecisionJson(value: Record<string, unknown>): string {
   const receipt = value.receipt;
   const receiptJson = receipt === null ? 'null' : (() => {
     if (!plain(receipt)) return '';
@@ -340,6 +445,33 @@ function proofV1DecisionJson(value: Record<string, unknown>): string {
     receipt: receiptJson,
     reject_code: json(value.reject_code),
   });
+}
+
+/** Compute the v1 Go-struct receipt ID without reordering or canonicalizing
+ * its nested typed fields. The receipt_id field is omitted from this
+ * historical preimage (matching encoding/json's omitempty behavior). */
+export function proofV1AdmissionReceiptID(receipt: Record<string, unknown>): string {
+  const subject = receipt.Subject;
+  if (!plain(subject) || !plain(receipt.Binding) || !plain(receipt.Termination)) return '';
+  const unsigned = proofStructJson({
+    Version: json(receipt.Version),
+    Status: json(receipt.Status),
+    CandidateID: json(receipt.CandidateID),
+    ProbeResultDigest: json(receipt.ProbeResultDigest),
+    ProbeCanonicalBytes: json(receipt.ProbeCanonicalBytes),
+    ClaimID: json(receipt.ClaimID),
+    Claim: json(receipt.Claim),
+    PayloadFingerprint: json(receipt.PayloadFingerprint),
+    InvocationDigest: json(receipt.InvocationDigest),
+    RoleID: json(receipt.RoleID),
+    Stance: json(receipt.Stance),
+    Subject: json({ kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint }),
+    ProducerCheckID: json(receipt.ProducerCheckID),
+    ParentClaimIDs: json(receipt.ParentClaimIDs),
+    Binding: json(proofBinding(receipt.Binding)),
+    Termination: json(proofTermination(receipt.Termination)),
+  });
+  return digest(RECEIPT_ID_DOMAIN_V1, Buffer.from(unsigned, 'utf8'));
 }
 
 function acceptedAdmissionDecisionWire(value: unknown, decoded: string): boolean {
@@ -630,7 +762,7 @@ export async function resolveProofRoleInvocation(
   try { value = JSON.parse(output) as Record<string, unknown>; } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
   const responseKeys = component ? ['version', 'role_id', 'role_source', 'stance', 'subject', 'component_authority', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] : C0_KEYS;
   if (
-    !exact(value, responseKeys) || json(value) !== output || value.version !== 'proof.role-invocation/v1' ||
+    !exact(value, responseKeys) || (component ? componentResolvedRoleInvocationJson(value) !== output : json(value) !== output) || value.version !== 'proof.role-invocation/v1' ||
     value.role_id !== request.role_id || value.stance !== request.stance || !equalJson(value.subject, request.subject) ||
     (component && (!normalizedInput || proofCanonicalJson(value.component_authority) !== proofCanonicalJson(normalizedInput.component_authority))) ||
     value.output_schema_id !== request.output_schema_id || value.output_schema !== request.output_schema ||

@@ -18,6 +18,8 @@ import {
   governedResultDigest,
   governedWireModeFromEvidence,
   immutableGovernedValue,
+  immutableProofCandidateEvidence,
+  proofCandidateEvidenceFingerprint,
   type GovernedWireMode,
 } from '../../providers/proof-wire';
 
@@ -842,19 +844,28 @@ export function createInitialInstanceProjection(): InstanceProjection {
 export function immutableInstanceEvent<T extends InstanceRuntimeEvent>(event: T): T {
   const immutable = immutableCanonicalValue(event);
   if (event.type === 'ClaimPublished' && 'nodeGenerationId' in event) {
-    return Object.freeze({ ...immutable, payload: immutableGovernedValue(event.payload, event.wireMode) }) as T;
+    return Object.freeze({
+      ...immutable,
+      payload: immutableGovernedValue(event.payload, event.wireMode),
+      ...(event.proofCandidateEvidence !== undefined
+        ? {
+          proofCandidateEvidence: immutableProofCandidateEvidence(event.proofCandidateEvidence),
+          proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint,
+        }
+        : {}),
+    }) as T;
   }
   return immutable;
 }
 
 export function immutableInstanceProjection(projection: InstanceProjection): InstanceProjection {
   const immutable = immutableCanonicalValue(projection) as InstanceProjection;
-  const claimsById = Object.fromEntries(Object.entries(projection.claimsById).map(([claimId, source]) => [
-    claimId,
-    source.wireMode === 'proof'
-      ? Object.freeze({ ...immutable.claimsById[claimId], payload: immutableGovernedValue(source.payload, 'proof') })
-      : immutable.claimsById[claimId],
-  ]));
+  const claimsById = Object.fromEntries(Object.entries(projection.claimsById).map(([claimId, source]) => {
+    const claim = { ...immutable.claimsById[claimId] };
+    if (source.wireMode === 'proof') claim.payload = immutableGovernedValue(source.payload, 'proof');
+    if (source.proofCandidateEvidence !== undefined) claim.proofCandidateEvidence = immutableProofCandidateEvidence(source.proofCandidateEvidence);
+    return [claimId, Object.freeze(claim)];
+  }));
   return Object.freeze({ ...immutable, claimsById: Object.freeze(claimsById) }) as InstanceProjection;
 }
 
@@ -1542,7 +1553,7 @@ function reduceGeneratedLifecycle(
     }
     const hasEvidence = event.proofCandidateEvidence !== undefined || event.proofCandidateEvidenceFingerprint !== undefined;
     if (event.claim === PROOF_CANDIDATE_CLAIM) {
-      if (generation.templateNodeKey !== 'inspect' || event.checkId !== 'inspect' || event.proofCandidateEvidence === undefined || typeof event.proofCandidateEvidenceFingerprint !== 'string' || event.proofCandidateEvidenceFingerprint !== sha256Canonical(event.proofCandidateEvidence)) {
+      if (generation.templateNodeKey !== 'inspect' || event.checkId !== 'inspect' || event.proofCandidateEvidence === undefined || typeof event.proofCandidateEvidenceFingerprint !== 'string' || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
         throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate publication requires its exact evidence sidecar');
       }
       try {
@@ -1603,7 +1614,7 @@ function reduceGeneratedLifecycle(
       incarnation: generation.incarnation,
       nodeGenerationId: generation.nodeGenerationId,
       ...(event.claim === PROOF_CANDIDATE_CLAIM ? {
-        proofCandidateEvidence: immutableCanonicalValue(event.proofCandidateEvidence),
+        proofCandidateEvidence: immutableProofCandidateEvidence(event.proofCandidateEvidence),
         proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint,
       } : {}),
     };

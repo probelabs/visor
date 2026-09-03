@@ -13,6 +13,9 @@ import {
   governedWireModeFromEvidence,
   governedWireModeFromInvocation,
   immutableGovernedValue,
+  governedProofCandidateEvidenceJson,
+  immutableProofCandidateEvidence,
+  immutableProofCanonicalValue,
 } from './proof-wire';
 
 type ProofAdmissionCliChildModule = typeof import('./proof-admission-cli-child');
@@ -462,11 +465,15 @@ function evidenceFromResult(
   const digest = config.invocation_digest as string;
   const att = validateAttestation(result.runtimeAttestation, digest, context ? dispatchPreview : undefined);
   const invocation = config.invocation as Record<string, unknown>;
+  // A resolved component invocation carries Proof-owned RawMessage evidence
+  // even when its component result uses the generic candidate wire. Freeze
+  // that embedded authority with Proof numeric/UTF-8 fidelity; historical
+  // project/requirement evidence remains graph-canonical.
   if (context) {
     const projected = validateRuntimeContextShape(context);
-    return immutableCanonicalValue({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity }, context: projected, contextDigest: governedProofRuntimeContextDigest(projected) });
+    return immutableProofCandidateEvidence({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity }, context: projected, contextDigest: governedProofRuntimeContextDigest(projected) });
   }
-  return immutableCanonicalValue({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity } });
+  return immutableProofCandidateEvidence({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity } });
 }
 export function validateProofCandidateEvidence(value: unknown): ProofCandidateEvidenceV1 {
   if (!plain(value) || value.version !== 'visor.proof-candidate-evidence/v1') fail('evidence header is invalid');
@@ -490,7 +497,7 @@ export function validateProofCandidateEvidence(value: unknown): ProofCandidateEv
     if (value.contextDigest !== governedProofRuntimeContextDigest(context)) fail('evidence runtime context digest is detached');
   }
   let canonical: string;
-  try { canonical = canonicalJson(value); } catch { fail('evidence is not canonical JSON'); }
+  try { canonical = governedProofCandidateEvidenceJson(value); } catch { fail('evidence is not canonical JSON'); }
   if (Buffer.byteLength(canonical, 'utf8') > 262144) fail('evidence exceeds canonical byte limit');
   const evidence: ProofCandidateEvidenceV1 = {
     version: 'visor.proof-candidate-evidence/v1',
@@ -504,7 +511,7 @@ export function validateProofCandidateEvidence(value: unknown): ProofCandidateEv
     },
     ...(hasContext ? { context: validateRuntimeContextShape(value.context), contextDigest: value.contextDigest as string } : {}),
   };
-  return immutableCanonicalValue(evidence);
+  return immutableProofCandidateEvidence(evidence);
 }
 const INTERNAL = Symbol('governed-proof-inspect-test-factory');
 export function createGovernedProofInspectProviderForFocusedTest(factory: GovernedProbeRunnerFactory, capability?: object): GovernedProofInspectCheckProvider { return new GovernedProofInspectCheckProvider(factory, INTERNAL, capability); }
@@ -563,10 +570,15 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
         // response must be observed before any Probe runner is constructed.
         if (cancelled || closed || c0Cancellation.signal.aborted) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
         const outputSchema = decodeSchema(resolved.output_schema);
-        effective = immutableCanonicalValue({ type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: resolved.instructions, invocation: c0Request, invocation_digest: resolved.invocation_digest, result_schema: outputSchema, profile: PROFILE }) as CheckProviderConfig;
+        const resolvedConfig = { type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: resolved.instructions, invocation: c0Request, invocation_digest: resolved.invocation_digest, result_schema: outputSchema, profile: PROFILE };
+        // Component authorities retain Proof-owned RawMessage bytes (including
+        // signed zero). Preserve that identity while freezing the resolved
+        // selector; generic project/requirement startup remains graph-canonical.
+        effective = immutableProofCanonicalValue(resolvedConfig) as CheckProviderConfig;
       }
       const invocation = effective.invocation as Record<string, unknown>;
-      runnerRequest = immutableCanonicalValue({ message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) }) as GovernedProbeRunnerRequest;
+      const runnerConfig = { message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) };
+      runnerRequest = selector ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;
       runner = this.factory(runnerRequest);
       if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
       if (runtimeContextRequired && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');

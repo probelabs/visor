@@ -118,3 +118,29 @@ export function governedResultDigest(value: unknown, mode: GovernedWireMode): st
 export function immutableGovernedValue<T>(value: T, mode: GovernedWireMode): T {
   return mode === 'proof' ? immutableProofCanonicalValue(value) : immutableCanonicalValue(value);
 }
+
+/** Component C0 evidence embeds Proof-owned RawMessage authority. Its
+ * identity is selected by that exact runtime authority field, never by a
+ * claim name or caller-provided wire mode. Generic/project evidence retains
+ * the historical graph serializer and fingerprint byte-for-byte. */
+export function isProofComponentEvidence(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const role = (value as Record<string, unknown>).role;
+  if (!role || typeof role !== 'object' || Array.isArray(role)) return false;
+  const invocation = (role as Record<string, unknown>).invocation;
+  return !!invocation && typeof invocation === 'object' && !Array.isArray(invocation) &&
+    Object.prototype.hasOwnProperty.call(invocation, 'component_authority');
+}
+
+export function governedProofCandidateEvidenceJson(value: unknown): string {
+  return isProofComponentEvidence(value) ? proofCanonicalJson(value) : canonicalJson(value);
+}
+
+export function immutableProofCandidateEvidence<T>(value: T): T {
+  return isProofComponentEvidence(value) ? immutableProofCanonicalValue(value) : immutableCanonicalValue(value);
+}
+
+export function proofCandidateEvidenceFingerprint(value: unknown): string {
+  if (!isProofComponentEvidence(value)) return sha256Canonical(value);
+  return createHash('sha256').update(proofCanonicalJson(value), 'utf8').digest('hex');
+}

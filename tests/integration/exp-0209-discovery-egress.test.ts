@@ -1,14 +1,11 @@
 import { describe, expect, it, jest } from '@jest/globals';
 const { execFileSync } = jest.requireActual<typeof import('node:child_process')>('node:child_process');
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as yaml from 'js-yaml';
 import type { PRInfo } from '../../src/pr-analyzer';
-import { CheckProvider, type CheckProviderConfig, type ExecutionContext } from '../../src/providers/check-provider.interface';
-import type { ReviewSummary } from '../../src/reviewer';
-import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
 import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
@@ -31,44 +28,6 @@ function proofCanonicalForTest(value: unknown): string {
   return `{${Object.keys(object).sort((a, b) => Buffer.from(a).compare(Buffer.from(b))).map(key => `${JSON.stringify(key)}:${proofCanonicalForTest(object[key])}`).join(',')}}`;
 }
 
-function providerMap(registry: CheckProviderRegistry): Map<string, CheckProvider> { return Object.getOwnPropertyDescriptor(registry as any, 'providers')!.value as Map<string, CheckProvider>; }
-type ComponentTimelineEvent = { component: string; stage: 'stage1-start' | 'stage1-finish' | 'stage2-start' | 'stage2-finish'; at: number };
-abstract class TimedComponentProvider extends CheckProvider {
-  constructor(protected readonly timeline: ComponentTimelineEvent[]) { super(); }
-  async validateConfig(config: unknown): Promise<boolean> { return !!config && typeof config === 'object' && (config as any).type === this.getName(); }
-  async isAvailable(): Promise<boolean> { return true; }
-  getRequirements(): string[] { return []; }
-  getSupportedConfigKeys(): string[] { return ['type', 'consumes', 'emits', 'depends_on']; }
-  protected component(context?: ExecutionContext): string {
-    const payload = context?.claims?.component?.payload as Record<string, unknown> | undefined;
-    const component = typeof payload?.component_id === 'string' ? payload.component_id : '';
-    if (!component) throw new Error('missing component WorkItem');
-    return component;
-  }
-}
-class TimedComponentStage1Provider extends TimedComponentProvider {
-  getName(): string { return 'timed-component-stage1'; }
-  getDescription(): string { return 'Focused integration provider for parallel stage-one component work'; }
-  async execute(_pr: PRInfo, _config: CheckProviderConfig, _deps?: Map<string, ReviewSummary>, context?: ExecutionContext): Promise<ReviewSummary> {
-    const component = this.component(context);
-    const durations: Record<string, readonly [number, number]> = { alpha: [120, 30], beta: [15, 30], gamma: [15, 30] };
-    const [first] = durations[component] || [15, 15];
-    const mark = (stage: ComponentTimelineEvent['stage']) => this.timeline.push({ component, stage, at: Date.now() });
-    mark('stage1-start'); await new Promise(resolve => setTimeout(resolve, first)); mark('stage1-finish');
-    return { issues: [], output: { status: 'stage1-complete' } };
-  }
-}
-class TimedComponentStage2Provider extends TimedComponentProvider {
-  getName(): string { return 'timed-component-stage2'; }
-  getDescription(): string { return 'Focused integration provider for early stage-two component work'; }
-  async execute(_pr: PRInfo, _config: CheckProviderConfig, _deps?: Map<string, ReviewSummary>, context?: ExecutionContext): Promise<ReviewSummary> {
-    const component = this.component(context);
-    const second = ({ alpha: 30, beta: 30, gamma: 30 } as Record<string, number>)[component] || 15;
-    const mark = (stage: ComponentTimelineEvent['stage']) => this.timeline.push({ component, stage, at: Date.now() });
-    mark('stage2-start'); await new Promise(resolve => setTimeout(resolve, second)); mark('stage2-finish');
-    return { issues: [], output: { status: 'onboarded' } };
-  }
-}
 function fakeDiscovery(request: GovernedProbeRunnerRequest) {
   const data = { version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
     { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }, { n: -0 }], uncertainty: [] },
@@ -77,6 +36,43 @@ function fakeDiscovery(request: GovernedProbeRunnerRequest) {
   ] };
   const d = 'a'.repeat(64);
   return { data, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 17 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: proofGovernedResultDigest(data), canonicalBytes: Buffer.byteLength(proofCanonicalJson(data), 'utf8') } };
+}
+function fakeComponent(request: GovernedProbeRunnerRequest) {
+  const authority = request.invocation.component_authority as Record<string, any>;
+  const subject = authority.subject as Record<string, any>;
+  const coordinate = (path: string) => ({ path, line: 1 });
+  const reviewedFiles = subject.sorted_owned_paths.map((path: string) => ({ path, coordinates: [coordinate(path)] }));
+  const data = immutableCanonicalValue({
+    schema: 'reqproof.component-onboarding/v1',
+    project: subject.project_id,
+    shard: subject.component_id,
+    reviewedFiles,
+    requirements: ['STK', 'SYS', 'SW', 'INT'].map((kind, index) => ({
+      id: `${kind}-${subject.component_id}-${index + 1}`,
+      text: `${kind} evidence for ${subject.component_id}`,
+      coordinates: [coordinate(subject.sorted_owned_paths[0])],
+    })),
+    interfaces: [{ name: `${subject.component_id}-boundary`, coordinates: [coordinate(subject.sorted_owned_paths[0])] }],
+    findings: [{ id: `finding-${subject.component_id}`, severity: 'info', title: 'No blocking finding', calibration: 'confirmed', confidence: 1, coordinates: [coordinate(subject.sorted_owned_paths[0])] }],
+    unknowns: [],
+    repositoryMutated: false,
+    commandsExecuted: false,
+    checklistCompleted: false,
+  });
+  const bytes = canonicalJson(data);
+  const d = 'a'.repeat(64);
+  return {
+    data,
+    runtimeAttestation: {
+      version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+      requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+      observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' },
+      executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+      dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 0 },
+      evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+    },
+    resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: proofDomainDigest('probe.governed-result-identity/data/v1', bytes), canonicalBytes: Buffer.byteLength(bytes, 'utf8') },
+  };
 }
 function withProofFixture<T>(fn: (proof: string, root: string) => Promise<T>): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'visor-exp0209-')); const proof = join(root, 'proof');
@@ -506,70 +502,214 @@ describe('EXP-0209 admitted discovery egress', () => {
     });
   });
 
-  it('executes authored providers through the native scheduler and replays independent keyed fanout', async () => {
-    await withProofFixture(async (proof, root) => {
+  it('runs the checked-in component topology through real Proof C0, admission, replay, and checkpoint restore', async () => {
+    expect(existsSync(PROOF_AUTHORITY)).toBe(true);
+    const repository = mkdtempSync(join(tmpdir(), 'visor-exp0209-component-egress-'));
+    const root = join(repository, 'nested-project');
+    mkdirSync(root, { recursive: true });
+    chmodSync(root, 0o700);
+    writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: journalservice\n', 'utf8');
+    for (const name of ['alpha.go', 'beta.go', 'gamma.go']) writeFileSync(join(root, name), `package journal\n// ${name}\n`, 'utf8');
+    const runSync = jest.requireActual<typeof import('node:child_process')>('node:child_process').execFileSync;
+    runSync('git', ['init', '-q'], { cwd: repository });
+    runSync('git', ['config', 'user.email', 'visor-exp0209@example.invalid'], { cwd: repository });
+    runSync('git', ['config', 'user.name', 'Visor EXP-0209'], { cwd: repository });
+    runSync('git', ['add', '.'], { cwd: repository });
+    runSync('git', ['commit', '-qm', 'component egress fixture'], { cwd: repository });
+    try {
       jest.resetModules();
       jest.doMock('child_process', () => jest.requireActual('child_process'));
       jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
       const config: any = yaml.load(readFileSync(PROFILE, 'utf8'));
-      const [{ CheckProviderRegistry }, { createProofAdmissionCapability }, { StateMachineExecutionEngine }, { createGovernedProofInspectProviderForFocusedTest: createFocusedProvider }] = await Promise.all([
+      config.checks.project.value.projects[0].root = root;
+      const [{ CheckProviderRegistry }, child, engineModule, governed] = await Promise.all([
         import('../../src/providers/check-provider-registry'),
         import('../../src/providers/proof-admission-cli-child'),
         import('../../src/state-machine-execution-engine'),
         import('../../src/providers/governed-proof-inspect-check-provider'),
       ]);
-      const registry = CheckProviderRegistry.getInstance(); const providers = providerMap(registry); const original = [...providers.entries()]; let discoveryCalls = 0;
-      const timeline: ComponentTimelineEvent[] = [];
-      const componentChecks = config.subgraphs['onboard-component'].checks;
-      config.claim_types['component.stage1@1'] = { schema: { type: 'object', additionalProperties: false, required: ['status'], properties: { status: { const: 'stage1-complete' } } } };
-      componentChecks.stage1 = { ...componentChecks.inspect, type: 'timed-component-stage1', consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'component.stage1@1', from: 'output' }] };
-      componentChecks.stage2 = { type: 'timed-component-stage2', depends_on: ['stage1'], consumes: [{ claim: 'component.work_item@1', as: 'component' }, { claim: 'component.stage1@1', as: 'stage1' }], emits: [{ claim: 'component.onboarded@1', from: 'output' }] };
-      delete componentChecks.inspect;
-      providers.set('timed-component-stage1', new TimedComponentStage1Provider(timeline));
-      providers.set('timed-component-stage2', new TimedComponentStage2Provider(timeline));
-      registry.bootstrapProofAdmission(createProofAdmissionCapability(proof)); providers.set('governed-proof-inspect', createFocusedProvider(() => ({ answer: (request: GovernedProbeRunnerRequest) => { discoveryCalls++; return fakeDiscovery(request); }, cancel: () => {}, close: () => {} })));
+      const binary = pinnedProofBinary();
+      const capability = child.createProofAdmissionCapability(binary);
+      const directInventory = JSON.parse(runSync(binary, ['onboarding', 'inventory'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+      }));
+      expect(directInventory.version).toBe('proof.structural-inventory/v1');
+      const rootCheck = config.subgraphs['discover-project'].checks.inspect;
+      const rootInvocation = {
+        role_id: 'onboard',
+        stance: 'owner',
+        subject: { kind: 'project', id: directInventory.authority.project_id, fingerprint: directInventory.authority.subject_fingerprint },
+        output_schema_id: rootCheck.invocation.output_schema_id,
+        output_schema: rootCheck.invocation.output_schema,
+      };
+      const resolvedRoot = await child.resolveProofRoleInvocation(capability, rootInvocation, root);
+      rootCheck.invocation = rootInvocation;
+      rootCheck.instructions = resolvedRoot.instructions;
+      rootCheck.invocation_digest = resolvedRoot.invocation_digest;
+      rootCheck.result_schema = Buffer.from(rootInvocation.output_schema, 'base64').toString('utf8');
+      const registry = CheckProviderRegistry.getInstance();
+      registry.bootstrapProofAdmission(capability);
+      const providers = Object.getOwnPropertyDescriptor(registry as any, 'providers')!.value as Map<string, unknown>;
+      const originalGoverned = providers.get('governed-proof-inspect');
+      let discoveryCalls = 0;
+      const componentCalls: string[] = [];
+      let releaseComponents!: () => void;
+      const componentBarrier = new Promise<void>(resolve => { releaseComponents = resolve; });
+      const fakeProbe = governed.createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => ({
+        answer: async () => {
+          const subject = request.invocation.subject as Record<string, unknown>;
+          if (subject.kind === 'project') {
+            discoveryCalls++;
+            return fakeDiscovery(request);
+          }
+          const authority = request.invocation.component_authority as Record<string, any>;
+          const componentSubject = authority.subject as Record<string, any>;
+          const componentId = componentSubject.component_id as string;
+          componentCalls.push(componentId);
+          if (new Set(componentCalls).size === 3) releaseComponents();
+          await componentBarrier;
+          return fakeComponent(request);
+        },
+        cancel: () => undefined,
+        close: () => undefined,
+      }), capability);
+      providers.set('governed-proof-inspect', fakeProbe);
       let watchdog: ReturnType<typeof setTimeout> | undefined;
       try {
-        const engine = new StateMachineExecutionEngine(root);
+        const engine = new engineModule.StateMachineExecutionEngine(root);
         const running = engine.executeGroupedChecks(prInfo, ['project'], undefined, config, 'json', false, 3);
         const result = await Promise.race([
           running,
-          new Promise<never>((_resolve, reject) => { watchdog = setTimeout(() => {
-            const journal = (engine as any)._lastContext?.journal;
-            const events = journal?.readRuntimeEvents?.() || [];
-            reject(new Error(`AUTHORED_GRAPH_WATCHDOG ${canonicalJson(events.slice(-8))}`));
-          }, 5000); }),
+          new Promise<never>((_resolve, reject) => {
+            watchdog = setTimeout(() => reject(new Error(`COMPONENT_EGRESS_WATCHDOG ${canonicalJson((engine as any)._lastContext?.journal?.readRuntimeEvents?.().slice(-12) || [])}`)), 30000);
+          }),
         ]);
         if (watchdog) clearTimeout(watchdog);
-        const journal = (engine as any)._lastContext.journal; const events: any[] = journal.readRuntimeEvents();
-        expect(result.statistics.failedExecutions).toBe(0); expect(discoveryCalls).toBe(1);
-        const published = (claim: string) => events.findIndex(event => event.type === 'ClaimPublished' && event.claim === claim);
-        const inventory = published('proof.structural_inventory@1'), candidate = published('proof.candidate@1'), admission = published('proof.admitted_receipt@1'), revalidation = published('proof.catalog_revalidation@1'), catalog = published('component.catalog@1');
-        expect(inventory).toBeGreaterThan(-1); expect(candidate).toBeGreaterThan(inventory); expect(admission).toBeGreaterThan(candidate); expect(revalidation).toBeGreaterThan(admission); expect(catalog).toBeGreaterThan(revalidation);
-        const admissionEvent: any = events[admission];
-        expect(typeof admissionEvent.payload.__proof_admission_wire).toBe('string');
-        expect(JSON.parse(admissionEvent.payload.__proof_admission_wire)).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: expect.objectContaining({ Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED', ProjectLineage: null }), reject_code: null }));
-        const candidateEvent: any = events[candidate];
-        expect(Object.keys(candidateEvent.payload.components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']); expect(Object.is(candidateEvent.payload.components[0].interfaces[1].n, -0)).toBe(true);
-        const components = Object.values(journal.getInstanceProjection().instancesById).filter((value: any) => value.scope.length === 2) as any[];
-        expect(components.map(value => value.itemKey).sort()).toEqual(['alpha', 'beta', 'gamma']);
-        const event = (component: string, stage: ComponentTimelineEvent['stage']) => timeline.find(value => value.component === component && value.stage === stage)?.at;
-        const starts = ['alpha', 'beta', 'gamma'].map(component => event(component, 'stage1-start'));
-        expect(starts.every(value => value !== undefined)).toBe(true);
-        expect(Math.max(...starts as number[]) - Math.min(...starts as number[])).toBeLessThan(80);
-        expect(event('beta', 'stage2-start')).toBeLessThan(event('alpha', 'stage1-finish') as number);
-        expect(event('gamma', 'stage2-start')).toBeLessThan(event('alpha', 'stage1-finish') as number);
-        const stage1Claims = events.filter(value => value.type === 'ClaimPublished' && value.claim === 'component.stage1@1') as any[];
-        const stage2Activations = events.filter(value => value.type === 'NodeGenerationActivated' && value.checkId === 'stage2') as any[];
-        expect(stage1Claims).toHaveLength(3); expect(stage2Activations).toHaveLength(3);
-        for (const activation of stage2Activations) {
-          const stage1 = stage1Claims.find(value => value.scope[value.scope.length - 1]?.subgraphInstanceId === activation.subgraphInstanceId);
-          expect(stage1).toBeDefined(); expect(activation.activeInputClaimIds).toContain(stage1.claimId);
+        const journal = (engine as any)._lastContext.journal;
+        const events: any[] = journal.readRuntimeEvents();
+        expect(result.statistics.failedExecutions).toBe(0);
+        expect(discoveryCalls).toBe(1);
+        expect(componentCalls).toHaveLength(3);
+        expect(new Set(componentCalls)).toEqual(new Set(['alpha', 'beta', 'gamma']));
+        const published = (claim: string) => events.filter(event => event.type === 'ClaimPublished' && event.claim === claim);
+        const inventories = published('proof.structural_inventory@1');
+        const candidates = published('proof.candidate@1');
+        const admissions = published('proof.admitted_receipt@1');
+        const revalidations = published('proof.catalog_revalidation@1');
+        const catalogs = published('component.catalog@1');
+        expect(inventories).toHaveLength(1);
+        expect(candidates).toHaveLength(4);
+        expect(admissions).toHaveLength(4);
+        expect(revalidations).toHaveLength(1);
+        expect(catalogs).toHaveLength(1);
+        const componentCandidates = candidates.filter(event => event.scope.length === 2);
+        const componentAdmissions = admissions.filter(event => event.scope.length === 2);
+        const projectCandidates = candidates.filter(event => event.scope.length === 1);
+        const projectAdmissions = admissions.filter(event => event.scope.length === 1);
+        expect(new Set(componentCandidates.map(event => canonicalJson(event.scope))).size).toBe(3);
+        expect(new Set(componentAdmissions.map(event => canonicalJson(event.scope))).size).toBe(3);
+        expect(projectCandidates).toHaveLength(1);
+        expect(projectAdmissions).toHaveLength(1);
+        expect(projectCandidates[0].wireMode).toBe('proof');
+        expect(projectCandidates[0].proofCandidateEvidence.role.invocation.output_schema_id).toBe('proof.component-catalog-candidate@1');
+        expect(componentCandidates.every(event => event.wireMode === 'generic')).toBe(true);
+        expect(componentCandidates.map(event => event.proofCandidateEvidence.role.invocation.output_schema_id)).toEqual([
+          'reqproof.component-onboarding/v1',
+          'reqproof.component-onboarding/v1',
+          'reqproof.component-onboarding/v1',
+        ]);
+        const projectReceipt = JSON.parse(projectAdmissions[0].payload.__proof_admission_wire).receipt;
+        expect(projectReceipt.Version).toBe('proof.role-result-candidate-admission/v2');
+        expect(Object.prototype.hasOwnProperty.call(projectReceipt, 'ProjectLineage')).toBe(true);
+        for (const admission of componentAdmissions) {
+          const receipt = JSON.parse(admission.payload.__proof_admission_wire).receipt;
+          expect(receipt.Version).toBe('proof.role-result-candidate-admission/v1');
+          expect(Object.prototype.hasOwnProperty.call(receipt, 'ProjectLineage')).toBe(false);
         }
-        expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
-        const checkpoint = journal.exportGraphCheckpoint((engine as any)._lastContext.sessionId); const { publishGraphCheckpointFile, readGraphCheckpointFile } = await import('../../src/graph-checkpoint-file'); const checkpointPath = join(root, 'graph-checkpoint.json'); publishGraphCheckpointFile(checkpoint, checkpointPath); expect(readFileSync(checkpointPath, 'utf8')).toContain('-0'); const fileCheckpoint = readGraphCheckpointFile(checkpointPath); const restored = (await import('../../src/snapshot-store')).ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, fileCheckpoint); const restoredCandidate: any = Object.values(restored.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); const liveCandidate: any = Object.values(journal.getInstanceProjection().claimsById).find((value: any) => value.claim === 'proof.candidate@1'); expect(Object.is(restoredCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true); expect(restoredCandidate.payloadFingerprint).toBe(liveCandidate.payloadFingerprint); expect(restoredCandidate.proofCandidateEvidence).toEqual(liveCandidate.proofCandidateEvidence);
-
-      } finally { if (watchdog) clearTimeout(watchdog); providers.clear(); for (const entry of original) providers.set(entry[0], entry[1]); CheckProviderRegistry.clearInstance(); }
-    });
-  }, 120000);
+        const validateReceipt = (engine as any)._lastContext.claimPlan.validatorsByClaim['proof.admitted_receipt@1'] as (value: unknown) => void;
+        const componentReceipt = JSON.parse(componentAdmissions[0].payload.__proof_admission_wire).receipt;
+        const projectWithoutLineage = { ...projectReceipt };
+        delete projectWithoutLineage.ProjectLineage;
+        expect(() => validateReceipt(projectWithoutLineage)).toThrow();
+        expect(() => validateReceipt({ ...projectReceipt, Subject: { ...projectReceipt.Subject, kind: 'component' } })).toThrow();
+        expect(() => validateReceipt({ ...componentReceipt, ProjectLineage: null })).toThrow();
+        expect(() => validateReceipt({ ...componentReceipt, Subject: { ...componentReceipt.Subject, kind: 'project' } })).toThrow();
+        const signedZero = projectCandidates[0].payload.components[0].interfaces[1].n;
+        expect(Object.is(signedZero, -0)).toBe(true);
+        expect(projectCandidates[0].payload.components[0].interfaces[0]['\uE000']).toBe('private-use');
+        expect(projectCandidates[0].payload.components[0].interfaces[0]['\u{10000}']).toBe('astral');
+        for (const admission of admissions) {
+          const candidate = candidates.find(value => value.claimId === admission.parentClaimIds[0]);
+          expect(candidate).toBeDefined();
+          const wire = JSON.parse(admission.payload.__proof_admission_wire);
+          expect(wire).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', reject_code: null }));
+          expect(wire.receipt).toEqual(expect.objectContaining({ ClaimID: candidate.claimId, Claim: 'proof.candidate@1', Status: 'ADMITTED' }));
+        }
+        const inspectActivations = events.filter(event => event.type === 'NodeGenerationActivated' && event.checkId === 'inspect' && event.scope.length === 2);
+        const verifyActivations = events.filter(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify' && event.scope.length === 2);
+        expect(inspectActivations).toHaveLength(3);
+        expect(verifyActivations).toHaveLength(3);
+        for (const activation of inspectActivations) {
+          const execution = journal.getGeneratedExecution(activation.nodeGenerationId);
+          const authority = journal.getProofComponentInvocationAuthority(activation.nodeGenerationId);
+          const component = execution.claims.component;
+          const candidate = componentCandidates.find(value => canonicalJson(value.scope) === canonicalJson(activation.scope));
+          const admission = componentAdmissions.find(value => canonicalJson(value.scope) === canonicalJson(activation.scope));
+          expect(candidate).toBeDefined();
+          expect(admission).toBeDefined();
+          expect(authority.work_item.component_id).toBe(component.payload.component_id);
+          expect(authority.subject.component_id).toBe(component.payload.component_id);
+          expect(candidate.payload.project).toBe(authority.subject.project_id);
+          expect(candidate.payload.shard).toBe(authority.subject.component_id);
+          expect(candidate.payload.reviewedFiles.map((value: any) => value.path)).toEqual(authority.subject.sorted_owned_paths);
+          expect(candidate.parentClaimIds).toContain(component.claimId);
+          const verify = verifyActivations.find(value => canonicalJson(value.scope) === canonicalJson(activation.scope));
+          expect(verify?.activeInputClaimIds).toEqual(expect.arrayContaining([candidate!.claimId, admission!.claimId]));
+        }
+        const replay = journal.replayInstanceProjection();
+        expect(replay).toEqual(journal.getInstanceProjection());
+        const replayProjectCandidate: any = replay.claimsById[projectCandidates[0].claimId];
+        expect(Object.is(replayProjectCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true);
+        const sessionId = (engine as any)._lastContext.sessionId;
+        const checkpoint = journal.exportGraphCheckpoint(sessionId);
+        const { publishGraphCheckpointFile, readGraphCheckpointFile } = await import('../../src/graph-checkpoint-file');
+        const { canonicalGraphCheckpointJson, ExecutionJournal } = await import('../../src/snapshot-store');
+        const checkpointPath = join(root, 'component-egress-checkpoint.json');
+        expect(statSync(root).mode & 0o777).toBe(0o700);
+        publishGraphCheckpointFile(checkpoint, checkpointPath);
+        expect(readFileSync(checkpointPath, 'utf8')).toContain(':-0');
+        const restored = ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, readGraphCheckpointFile(checkpointPath));
+        expect(restored.replayInstanceProjection()).toEqual(restored.getInstanceProjection());
+        for (const activation of inspectActivations) {
+          expect(restored.getProofComponentInvocationAuthority(activation.nodeGenerationId)).toEqual(journal.getProofComponentInvocationAuthority(activation.nodeGenerationId));
+        }
+        const restoredProjectCandidate: any = restored.getInstanceProjection().claimsById[projectCandidates[0].claimId];
+        expect(Object.is(restoredProjectCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true);
+        const restoredAdmissions = Object.values(restored.getInstanceProjection().claimsById).filter((value: any) => value.claim === 'proof.admitted_receipt@1');
+        expect(restoredAdmissions).toHaveLength(4);
+        expect(restoredAdmissions.map((value: any) => value.payload)).toEqual(expect.arrayContaining(admissions.map(value => value.payload)));
+        const tampered = JSON.parse(JSON.stringify(checkpoint));
+        const tamperedCandidate = tampered.events.find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope.length === 1);
+        tamperedCandidate.payload.components[0].interfaces[1].n = 0;
+        const tamperedBody = {
+          kind: tampered.kind,
+          version: tampered.version,
+          sessionId: tampered.sessionId,
+          graphSemanticDigest: tampered.graphSemanticDigest,
+          frontier: tampered.frontier,
+          events: tampered.events,
+        };
+        tampered.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(tamperedBody), 'utf8').digest('hex');
+        expect(() => ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, tampered)).toThrow();
+      } finally {
+        if (watchdog) clearTimeout(watchdog);
+        providers.set('governed-proof-inspect', originalGoverned);
+        CheckProviderRegistry.clearInstance();
+      }
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  }, 180000);
 });
