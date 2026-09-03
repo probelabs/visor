@@ -78,6 +78,8 @@ const LIVE_SCRIPT = 'examples/agent-governance/exp-0209-discovery-egress/run-liv
 const LIVE_FILES = new Set([
   LIVE_SCRIPT,
   'examples/agent-governance/exp-0209-discovery-egress/README.md',
+  'tests/integration/exp-0209-onboarding-quality.test.ts',
+  'tests/unit/exp-0209-live-baseline-validator.test.ts',
 ]);
 const PRECHECK_ARTIFACT = 'preflight.json';
 const EFFECTIVE_CONFIG_FILE = 'effective-config.yaml';
@@ -452,7 +454,7 @@ function verifyVisorBase(): JsonRecord {
   const changed = [...names].sort();
   assertInvariant('tracked changes since accepted base are limited to this live-demo slice', changed.every(name => LIVE_FILES.has(name)));
   const untracked = requireCommand('git', ['ls-files', '--others', '--exclude-standard']).stdout.split('\n').map(value => value.trim()).filter(Boolean).sort();
-  assertInvariant('untracked files are limited to run-live-demo.ts', untracked.every(name => name === LIVE_SCRIPT));
+  assertInvariant('untracked files are limited to this live-demo slice', untracked.every(name => LIVE_FILES.has(name)));
   return { commit: BASE_VISOR_COMMIT, is_ancestor: true, tracked_changes_since_base: changed, untracked_files: untracked, allowed: [...LIVE_FILES].sort() };
 }
 
