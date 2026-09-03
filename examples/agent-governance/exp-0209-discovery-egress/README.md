@@ -86,10 +86,11 @@ then starts a fresh internal child with only the owned output directory and the
 controller PID. Evaluator information is absent from the child argv, the
 model-visible workspace/config/prompts; the retained preflight artifact is
 controller evidence, not evaluator context. It executes the real sealed Proof
-admission/provider path and may spend 3–5 live RoleRuns (one project discovery
-and 2–4 component inspections), depending on discovery. Only exactly four
-RoleRuns (three components) pass the baseline gate. The graph/profile ceiling
-is five RoleRuns; retries are zero and fallback is false.
+admission/provider path and may spend up to 4 live RoleRuns (one project
+discovery and up to 3 component inspections), depending on discovery. Only
+exactly four RoleRuns (three components) pass the baseline gate. The baseline
+runner's run-scoped factory budget ceiling is four RoleRuns; retries are zero
+and fallback is false.
 Invoke it only when that live spend is explicitly intended:
 
 ```sh

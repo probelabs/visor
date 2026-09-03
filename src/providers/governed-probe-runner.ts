@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isAbsolute, resolve } from 'node:path';
 import { realpathSync, statSync } from 'node:fs';
 import {
@@ -29,6 +30,14 @@ type ExactProbeAgentOptions = ProbeAgentOptions & {
   readonly searchDelegate: false;
   readonly enableExecutePlan: false;
 };
+
+type GovernedProbeRunnerBudget = { limit: number; consumed: number };
+const governedProbeRunnerBudget = new AsyncLocalStorage<GovernedProbeRunnerBudget>();
+
+export function withGovernedProbeRunnerBudget<T>(limit: number, callback: () => T): T {
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('GOVERNED_PROOF_INVALID: budget limit must be a positive safe integer');
+  return governedProbeRunnerBudget.run({ limit, consumed: 0 }, callback);
+}
 
 function controllerRoot(value: string): string {
   if (!isAbsolute(value) || value.includes('\0')) {
@@ -158,5 +167,10 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
 }
 
 export function createGovernedProbeRunner(request: GovernedProbeRunnerRequest): GovernedProbeRunner {
+  const budget = governedProbeRunnerBudget.getStore();
+  if (budget) {
+    if (budget.consumed >= budget.limit) throw new Error('GOVERNED_PROOF_BUDGET_EXCEEDED');
+    budget.consumed += 1;
+  }
   return new GovernedProbeAgentRunner(request);
 }

@@ -18,6 +18,7 @@ import { qualifiedNestedExpansionOwner } from '../../../src/state-machine/graph/
 import { StateMachineExecutionEngine } from '../../../src/state-machine-execution-engine';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 import { createProofAdmissionCapability } from '../../../src/providers/proof-admission-cli-child';
+import { withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
 import {
   validateProofCandidateEvidence,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
@@ -98,7 +99,7 @@ const BASELINE_REPORT_MARKDOWN_FILE = 'baseline-report.md';
 const BASELINE_CHILD_FLAG = '--baseline-child';
 const RESUME_CHILD_FLAG = '--resume-child';
 const CONTROLLER_PID_FLAG = '--controller-pid';
-const BASELINE_ROLE_RUN_LIMIT = 5;
+const BASELINE_ROLE_RUN_LIMIT = 4;
 const RESUME_STARTED_FILE = 'resume.started.json';
 const RESUME_REVALIDATION_FILE = 'resume.revalidation.json';
 const RESUME_WORK_ITEMS_FILE = 'resume.work-items.json';
@@ -1428,7 +1429,7 @@ function baselineArtifact(outputDirectory: string): { preflight: JsonRecord; con
   const graph = record(preflight.graph, 'preflight graph');
   assertInvariant('effective config graph digest matches preflight', graph.graph_semantic_digest === plan.expansionPlan.graphSemanticDigest);
   const contract = record(preflight.baseline_contract, 'baseline contract');
-  assertInvariant('baseline contract has the five-role ceiling', contract.maximum_role_runs === BASELINE_ROLE_RUN_LIMIT && contract.expected_inspect_attempts === 4 && contract.discovered_components === 3);
+  assertInvariant('baseline contract has the four-role ceiling', contract.maximum_role_runs === BASELINE_ROLE_RUN_LIMIT && contract.expected_inspect_attempts === 4 && contract.discovered_components === 3);
   assertInvariant('baseline contract disables retries and fallback', contract.retries === 0 && contract.fallback === false);
   return { preflight, config, workspace, proofBinary };
 }
@@ -1946,7 +1947,7 @@ async function runBaselineChild(outputDirectory: string, controllerPid: number):
     const registry = CheckProviderRegistry.getInstance();
     registry.bootstrapProofAdmission(capability);
     const engine = new StateMachineExecutionEngine(artifact.workspace);
-    const result = await engine.executeGroupedChecks(
+    const result = await withGovernedProbeRunnerBudget(BASELINE_ROLE_RUN_LIMIT, () => engine.executeGroupedChecks(
       baselinePrInfo,
       ['project'],
       undefined,
@@ -1955,7 +1956,7 @@ async function runBaselineChild(outputDirectory: string, controllerPid: number):
       false,
       3,
       true,
-    );
+    ));
     checkpoint = engine.exportGraphCheckpoint();
     // Keep this explicit restore adjacent to the public export. It is the
     // canonical checkpoint gate the baseline contract promises to callers.

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as ProbeModule from '@probelabs/probe';
-import { GovernedProbeAgentRunner } from '../../../src/providers/governed-probe-runner';
+import { createGovernedProbeRunner, GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
 import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GovernedProbeRunnerRequest } from '../../../src/providers/governed-proof-inspect-check-provider';
 
@@ -75,6 +75,25 @@ describe('private governed Probe runner', () => {
     expect(runner).toBeDefined();
     expect(initialize).not.toHaveBeenCalled();
     expect(answerGoverned).not.toHaveBeenCalled();
+  });
+
+  it('allows four concurrent scoped factories and denies the fifth before dispatch', async () => {
+    await withGovernedProbeRunnerBudget(4, async () => {
+      await Promise.all(Array.from({ length: 4 }, () => Promise.resolve().then(() => createGovernedProbeRunner(request()))));
+      expect(() => createGovernedProbeRunner(request({ workingDirectory: 'project' }))).toThrow('GOVERNED_PROOF_BUDGET_EXCEEDED');
+    });
+    expect(initialize).not.toHaveBeenCalled();
+    expect(answerGoverned).not.toHaveBeenCalled();
+  });
+
+  it('isolates overlapping scopes and leaves unscoped construction unchanged', async () => {
+    let release!: () => void;
+    const overlap = new Promise<void>(resolve => { release = resolve; });
+    const first = withGovernedProbeRunnerBudget(1, async () => { const runner = createGovernedProbeRunner(request()); await overlap; return runner; });
+    const second = withGovernedProbeRunnerBudget(1, async () => { const runner = createGovernedProbeRunner(request()); await overlap; return runner; });
+    release();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(() => createGovernedProbeRunner(request())).not.toThrow();
   });
 
   it('initializes once and sends the authored message with the bound C0 schema/digest', async () => {
