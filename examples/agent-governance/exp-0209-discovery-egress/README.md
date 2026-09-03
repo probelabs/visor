@@ -55,8 +55,8 @@ fetch is used.
 
 ## Live-demo preflight
 
-The live runner currently exposes only a zero-model preflight. Run it from the
-repository root:
+The live runner exposes a zero-model preflight and a separate explicit live
+baseline mode. Run the preflight from the repository root:
 
 ```sh
 TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register/transpile-only \
@@ -77,5 +77,37 @@ counts are zero, network dispatches are requested zero, and Go runs offline.
 The evaluator copy and patch copy are temporary directories
 outside the workspace.
 
-Live baseline/resume/evaluation mode is not implemented yet. Any mode other
-than `--preflight-only` is rejected.
+The preflight command remains zero-model and does not invoke a governed role.
+
+## Live baseline (explicit opt-in)
+
+`--baseline-only` first runs the accepted preflight, writes the effective config,
+then starts a fresh internal child with only the owned output directory and the
+controller PID. Evaluator information is absent from the child argv, the
+model-visible workspace/config/prompts; the retained preflight artifact is
+controller evidence, not evaluator context. It executes the real sealed Proof
+admission/provider path and may spend 3–5 live RoleRuns (one project discovery
+and 2–4 component inspections), depending on discovery. Only exactly four
+RoleRuns (three components) pass the baseline gate. The graph/profile ceiling
+is five RoleRuns; retries are zero and fallback is false.
+Invoke it only when that live spend is explicitly intended:
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register/transpile-only \
+  examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts \
+  --baseline-only \
+  --output /tmp/visor-exp-0209-live-baseline \
+  --subject /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/subject \
+  --evaluator /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/evaluator
+```
+
+On success the owned output contains `baseline.checkpoint.json` and
+`baseline-report.json`/`.md`, including controller and child PIDs, session,
+component IDs, exact counts, the project receipt ID, and the passed gate. A
+failed or incomplete run retains an honest `baseline-report.json` with partial
+or unknown counts and never retries/resumes; safely exported rejected evidence
+is written as `baseline-failure.checkpoint.json`.
+
+`--preflight-only` remains the zero-model command documented above. Internal
+`--baseline-child` is not a public invocation: it requires the controller PID
+and the output directory produced by an accepted preflight.
