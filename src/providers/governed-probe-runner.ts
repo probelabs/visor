@@ -17,8 +17,13 @@ import type {
 } from './governed-proof-inspect-check-provider';
 
 /** The runner owns the only user message sent to the governed Probe boundary. */
-export const GOVERNED_PROOF_ROLE_MESSAGE =
-  'Execute the bound Proof role and return only the required JSON.';
+export const GOVERNED_PROOF_ROLE_MESSAGE = [
+  'Execute the bound Proof role and return only the required JSON.',
+  '',
+  'For component reviews, treat the supplied dependency closure as the exclusive citation scope: do not cite files outside it, and review every owned path.',
+  'For each finding, state the causal chain from input and validation through control flow to the resulting effect, with precise file and line citations.',
+  'For reinspection, cite changed implementation lines and the relevant regression-test function names and line numbers.',
+].join('\n');
 
 const PROBE_TOOLS: ['search', 'extract', 'listFiles'] = [
   'search',

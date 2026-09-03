@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as ProbeModule from '@probelabs/probe';
-import { createGovernedProbeRunner, GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
+import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE, GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
 import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GovernedProbeRunnerRequest } from '../../../src/providers/governed-proof-inspect-check-provider';
 
@@ -112,6 +112,21 @@ describe('private governed Probe runner', () => {
       resultIdentity: 'probe.governed-result-identity/v1',
     });
     expect(answerGoverned).toHaveBeenNthCalledWith(2, request().message, {
+      schema: '{"type":"object"}',
+      invocationDigest,
+      resultIdentity: 'probe.governed-result-identity/v1',
+    });
+  });
+
+  it('uses generic governed review guidance without evaluator-specific oracle text', async () => {
+    const runner = new GovernedProbeAgentRunner(request({ message: GOVERNED_PROOF_ROLE_MESSAGE }));
+    await runner.answer(request());
+    expect(GOVERNED_PROOF_ROLE_MESSAGE).toContain('dependency closure as the exclusive citation scope');
+    expect(GOVERNED_PROOF_ROLE_MESSAGE).toContain('review every owned path');
+    expect(GOVERNED_PROOF_ROLE_MESSAGE).toContain('input and validation through control flow to the resulting effect');
+    expect(GOVERNED_PROOF_ROLE_MESSAGE).toContain('regression-test function names and line numbers');
+    expect(GOVERNED_PROOF_ROLE_MESSAGE).not.toMatch(/hidden oracle|TestMalformedWriteDoesNotPersist/i);
+    expect(answerGoverned).toHaveBeenCalledWith(GOVERNED_PROOF_ROLE_MESSAGE, {
       schema: '{"type":"object"}',
       invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',

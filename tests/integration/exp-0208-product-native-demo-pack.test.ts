@@ -5,6 +5,7 @@ import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
+import { GOVERNED_PROOF_INSPECT_MESSAGE } from '../../src/providers/governed-proof-inspect-check-provider';
 import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import type { CheckProvider } from '../../src/providers/check-provider.interface';
 import type { CheckProviderRegistry } from '../../src/providers/check-provider-registry';
@@ -18,7 +19,6 @@ const SCHEMA = 'eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJy
 const REAL_PROOF_SHA = '43a0cbc36b0bdf640bc4c712fa00b180208b395bac34a6ee2957528cd43f8272';
 const prInfo = { number: 1, title: 'EXP-0208', author: 'test', base: 'main', head: 'demo', files: [], totalAdditions: 0, totalDeletions: 0, eventType: 'manual' } as PRInfo;
 const oldC0Timeout = process.env.VISOR_PROOF_C0_TIMEOUT_MS;
-const GOVERNED_PROOF_INSPECT_MESSAGE = 'Execute the bound Proof role and return only the required JSON.';
 function governedResultDigest(value: unknown): string {
   const bytes = Buffer.from(canonicalJson(value), 'utf8'); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update('probe.governed-result-identity/data/v1', 'utf8').update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;

@@ -11,7 +11,7 @@ const DETERMINISTIC_FIXTURE = join(REPO_ROOT, 'tests/fixtures/proof-current-cata
 
 const files = ['http.go', 'http_test.go', 'service.go', 'service_test.go', 'entry.go', 'store.go', 'go.mod'];
 const sourceFiles = Object.fromEntries(files.map(file => [file, Array.from({ length: 80 }, () => '').join('\n')]));
-sourceFiles['http.go'] = Array.from({ length: 80 }, (_, index) => index === 45 ? 'decodeErr := json.NewDecoder(r.Body).Decode(&request)' : index === 46 ? 'if decodeErr != nil {' : index === 47 ? 'writeJSONError(w, 400, "invalid JSON")' : index === 48 ? 'return' : index === 49 ? '}' : '').join('\n');
+sourceFiles['http.go'] = Array.from({ length: 80 }, (_, index) => index === 42 ? 'decoder := json.NewDecoder(r.Body)' : index === 43 ? 'decodeErr := decoder.Decode(&request)' : index === 44 ? 'if decodeErr == nil && decoder.Decode(&struct{}{}) != io.EOF {' : index === 45 ? 'decodeErr = errors.New("extra JSON value")' : index === 46 ? '}' : index === 47 ? 'if decodeErr != nil {' : index === 48 ? 'writeJSONError(w, 400, "invalid JSON")' : index === 49 ? 'return' : index === 50 ? '}' : '').join('\n');
 sourceFiles['http_test.go'] = Array.from({ length: 80 }, (_, index) => index === 43 ? 'func TestMalformedWriteDoesNotPersist(t *testing.T) {' : index === 53 ? '}' : '').join('\n');
 const baselineSourceFiles = { ...sourceFiles, 'http.go': sourceFiles['http.go'].replace('\nreturn\n', '\n// missing return\n') };
 
@@ -65,6 +65,72 @@ describe('EXP-0209 onboarding quality gate', () => {
     expect(result.criterion_results.hidden_oracle.pass).toBe(true);
     expect(result.criterion_results.hidden_oracle.details.baseline_failed_expected_marker).toBe(true);
     expect(result.criterion_results.hidden_oracle.details.patched_passed).toBe(true);
+  });
+
+  it.each(['can', 'may', 'does'])('recognizes %s as control-flow evidence only with decode and effect evidence', (controlWord) => {
+    const value = fixture();
+    value.baselineComponentCandidates[0].findings[0].text = `Malformed JSON ${controlWord} still fall through to a persisted state effect.`;
+    expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(true);
+    value.baselineComponentCandidates[0].findings[0].text = `The request ${controlWord} fall through.`;
+    expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(false);
+  });
+
+  it('recognizes ordinary create verb forms only when the control wording includes still', () => {
+    const value = fixture();
+    value.baselineComponentCandidates[0].findings[0].text = 'Malformed JSON can still create an entry';
+    expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(true);
+    value.baselineComponentCandidates[0].findings[0].text = 'Malformed JSON can create an entry';
+    expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(false);
+  });
+
+  it('locates the invalid-JSON return with a one-based line while retaining citation tolerance', () => {
+    const result = evaluateOnboardingQuality(fixture());
+    expect(result.criterion_results.resume_http_resolution.details.scanned_spans).toEqual({ returnLine: 50, testStart: 44, testEnd: 54 });
+    expect(result.criterion_results.resume_http_resolution.details.return_citation).toBe(true);
+  });
+
+  it('does not borrow a return from an unrelated later branch', () => {
+    const value = fixture();
+    const lines = value.sourceFiles['http.go'].split('\n');
+    lines[49] = '}';
+    lines[52] = 'if otherErr != nil {';
+    lines[53] = 'return';
+    lines[54] = '}';
+    value.sourceFiles = { ...value.sourceFiles, 'http.go': lines.join('\n') };
+    value.patchedSourceFiles = value.sourceFiles;
+    const result = evaluateOnboardingQuality(value);
+    expect(result.criterion_results.resume_http_resolution.details.scanned_spans.returnLine).toBeUndefined();
+    expect(result.criterion_results.resume_http_resolution.pass).toBe(false);
+  });
+
+  it('rejects valid relative proof.yaml citations outside the component closure for baseline and resumed checks', () => {
+    const value = fixture();
+    const proofSource = Array.from({ length: 8 }, () => '').join('\n');
+    value.sourceFiles = { ...value.sourceFiles, 'proof.yaml': proofSource };
+    value.baselineSourceFiles = { ...value.baselineSourceFiles, 'proof.yaml': proofSource };
+    value.patchedSourceFiles = { ...value.patchedSourceFiles, 'proof.yaml': proofSource };
+    value.baselineComponentCandidates[0].reviewedFiles.push({ path: 'proof.yaml', coordinates: [coordinate('proof.yaml', 1)] });
+    value.resumeComponentCandidates[0].reviewedFiles.push({ path: 'proof.yaml', coordinates: [coordinate('proof.yaml', 1)] });
+    const result = evaluateOnboardingQuality(value);
+    expect(result.criterion_results.coordinates.details.baseline.errors).toContain('http reviewed path');
+    expect(result.criterion_results.coordinates.details.resumed_changed.errors).toContain('http reviewed path');
+    expect(result.criterion_results.coordinates.pass).toBe(false);
+  });
+
+  it('rejects an otherwise-correct resolution when the http_test coordinate is outside lines 44 through 55', () => {
+    const value = fixture();
+    value.resumeComponentCandidates[0].findings[0].coordinates = [coordinate('http.go', 50), coordinate('http_test.go', 56)];
+    const result = evaluateOnboardingQuality(value);
+    expect(result.criterion_results.resume_http_resolution.details.test_citation).toBe(false);
+    expect(result.criterion_results.resume_http_resolution.pass).toBe(false);
+  });
+
+  it('rejects an otherwise-correct resolution when the exact regression function name is absent', () => {
+    const value = fixture();
+    value.resumeComponentCandidates[0].findings[0].text = 'Resolved malformed decode rejection has no persistence or effect; added return; regression test covers it.';
+    const result = evaluateOnboardingQuality(value);
+    expect(result.criterion_results.resume_http_resolution.details.test_citation).toBe(false);
+    expect(result.criterion_results.resume_http_resolution.pass).toBe(false);
   });
 
   it.each([

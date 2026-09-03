@@ -2645,8 +2645,8 @@ function qualityBugConcepts(value: unknown): { decode: boolean; control: boolean
   const text = qualityText(value);
   return {
     decode: /malformed|decode|invalid json|extra json/i.test(text),
-    control: /fall(?:s|ing)?[-\s]*through|missing return|continues?|no return|unreturned/i.test(text),
-    effect: /persist|mutat|create\s*\(|state|effect|dispatch/i.test(text),
+    control: /fall(?:s|ing)?[-\s]*through|missing return|continues?|no return|unreturned|\b(?:can|may|does)\s+still\b/i.test(text),
+    effect: /persist|mutat|\bcreat(?:e|es|ed|ing)\b|state|effect|dispatch/i.test(text),
   };
 }
 
@@ -2667,18 +2667,14 @@ function qualityScanSpans(input: QualityInput): { returnLine?: number; testStart
   const http = sourceFiles?.['http.go'];
   const test = sourceFiles?.['http_test.go'];
   const lines = http?.split(/\r?\n/) || [];
-  const decodeIndex = lines.findIndex(line => /\b(?:decodeErr|decodeError|json\.NewDecoder)\b/.test(line) && /if|Decode|decode/i.test(line));
+  const invalidWriteIndex = lines.findIndex(line => /writeJSONError/.test(line) && /\b(?:invalid JSON|malformed|decode)\b/i.test(line));
   let returnIndex = -1;
-  if (decodeIndex >= 0) {
-    let depth = 0;
-    for (let index = decodeIndex; index < lines.length; index += 1) {
-      depth += (lines[index].match(/{/g) || []).length;
-      depth -= (lines[index].match(/}/g) || []).length;
-      if (/\b(?:invalid JSON|malformed|decode)\b/i.test(lines[index]) && /writeJSONError/.test(lines[index])) {
-        const candidate = lines.slice(index + 1, Math.min(lines.length, index + 6)).findIndex(next => /^\s*return\s*\}?\s*$/.test(next));
-        if (candidate >= 0) { returnIndex = index + 1 + candidate; break; }
-      }
-      if (index > decodeIndex && depth <= 0) break;
+  if (invalidWriteIndex >= 0) {
+    for (let index = invalidWriteIndex + 1; index < lines.length; index += 1) {
+      const statement = lines[index].trim();
+      if (!statement || statement.startsWith('//') || statement.startsWith('/*') || statement.startsWith('*') || statement.startsWith('*/')) continue;
+      if (/^return\b/.test(statement)) returnIndex = index;
+      break;
     }
   }
   const testLines = test?.split(/\r?\n/) || [];
@@ -2693,7 +2689,7 @@ function qualityScanSpans(input: QualityInput): { returnLine?: number; testStart
       if (index > testStartIndex && depth <= 0) { testEndIndex = index; break; }
     }
   }
-  return { returnLine: returnIndex >= 0 ? returnIndex + 2 : undefined, testStart: testStartIndex >= 0 ? testStartIndex + 1 : undefined, testEnd: testEndIndex >= 0 ? testEndIndex + 1 : undefined };
+  return { returnLine: returnIndex >= 0 ? returnIndex + 1 : undefined, testStart: testStartIndex >= 0 ? testStartIndex + 1 : undefined, testEnd: testEndIndex >= 0 ? testEndIndex + 1 : undefined };
 }
 
 function qualityResult(name: string, pass: boolean, details: JsonRecord): JsonRecord {
