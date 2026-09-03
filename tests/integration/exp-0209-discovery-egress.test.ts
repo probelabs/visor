@@ -28,9 +28,9 @@ function proofCanonicalForTest(value: unknown): string {
   return `{${Object.keys(object).sort((a, b) => Buffer.from(a).compare(Buffer.from(b))).map(key => `${JSON.stringify(key)}:${proofCanonicalForTest(object[key])}`).join(',')}}`;
 }
 
-function fakeDiscovery(request: GovernedProbeRunnerRequest) {
+function fakeDiscovery(request: GovernedProbeRunnerRequest, preserveSignedZero = true) {
   const data = { version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice', components: [
-    { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }, { n: -0 }], uncertainty: [] },
+    { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['alpha.go:Serve'], state_effects: ['request'], interfaces: preserveSignedZero ? [{ name: 'HTTP', '\uE000': 'private-use', '\u{10000}': 'astral' }, { n: -0 }] : [{ name: 'HTTP' }, { n: 0 }], uncertainty: [] },
     { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'], entry_points: ['beta.go:Apply'], state_effects: ['policy'], interfaces: [{ name: 'Policy' }], uncertainty: [] },
     { id: 'gamma', responsibility: 'storage domain', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'], entry_points: ['gamma.go:Store'], state_effects: ['storage'], interfaces: [{ name: 'Store' }], uncertainty: [] },
   ] };
@@ -95,7 +95,13 @@ function goSort(a,b){return Buffer.from(a).compare(Buffer.from(b))}
 function catalog(candidate){return {version:candidate.version,project_id:candidate.project_id,components:[...candidate.components].sort((a,b)=>goSort(a.id,b.id)).map(component=>{const out={id:component.id,responsibility:component.responsibility,owned_paths:[...component.owned_paths].sort(goSort)};if(component.dependency_closure!==undefined)out.dependency_closure=[...component.dependency_closure].sort(goSort);for(const key of ['entry_points','state_effects','interfaces','uncertainty'])if(component[key]&&component[key].length)out[key]=key==='interfaces'?component[key]:[...component[key]].sort(goSort);return out})}}
 function receipt(projection, candidate, admission){const items=projection.work_items;const authorities=items.map(value=>({component_id:value.component_id,work_item_digest:sha(Buffer.from(JSON.stringify(value))),subject:value.proof_component_subject})).sort((a,b)=>goSort(a.component_id,b.component_id));const inv=projection.inventory;const r={version:'proof.catalog-revalidation-receipt/v2',decision:'accepted',project_id:'journalservice',project_fingerprint:inv.authority.subject_fingerprint,boundary_fingerprint:inv.boundary_fingerprint,inventory_claim_id:digest('proof.structural-inventory/claim/v1',Buffer.from(JSON.stringify(inv))),catalog_claim_id:digest('proof.component-catalog-candidate/claim/v1',Buffer.from(canon(candidate))),admission_candidate_id:admission.receipt.CandidateID,admission_result_digest:admission.receipt.ProbeResultDigest,admission_receipt_id:admission.receipt.receipt_id,component_authorities:authorities,project_lineage:null,receipt_id:''};r.receipt_id=digest('proof.catalog-revalidation-receipt/id/v2',Buffer.from(top(r,true)));return r}
 process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{try{const args=process.argv.slice(2).join(' ');if(args==='onboarding inventory'){if(input!=='')throw new Error('inventory accepts no stdin');const o=inventory();process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='admit-candidate'){const req=JSON.parse(input),c=req.candidate,p=c&&c.Publication;if(!c||!p||c.Version!=='proof.role-result-candidate-envelope/v1'||!hasKeys(c,['Version','Invocation','InvocationDigest','RoleID','Stance','Subject','AttestationVersion','ExecutionSource','ProbeInvocationDigest','IdentityVersion','IdentitySource','ResultDigest','CanonicalBytes','ProbeResultBytes','VisorPayloadBytes','Publication','Binding','Termination'])||!hasKeys(p,['Version','Type','SessionID','CheckID','Scope','NodeInstanceID','NodeGenerationID','AttemptID','Fence','ClaimID','Claim','PayloadFingerprint','ProducerCheckID','Payload','ParentClaimIDs'])||!hasKeys(c.Binding,['ManagedRunID','SessionID','CheckID','Scope','NodeInstanceID','NodeGenerationID','AttemptID','Fence'])||!hasKeys(c.Termination,['Version','Type','SessionID','Scope','Binding','CleanupStatus','ControllerDecision','FailureCode']))throw new Error('candidate is truncated');const unsigned={Version:'proof.role-result-candidate-admission/v2',Status:'ADMITTED',CandidateID:digest('proof.role-result-candidate-envelope/id/v1',Buffer.from(JSON.stringify(c))),ProbeResultDigest:c.ResultDigest,ProbeCanonicalBytes:c.CanonicalBytes,ClaimID:p.ClaimID,Claim:p.Claim,PayloadFingerprint:p.PayloadFingerprint,InvocationDigest:c.InvocationDigest,RoleID:c.RoleID,Stance:c.Stance,Subject:c.Subject,ProducerCheckID:p.ProducerCheckID,ParentClaimIDs:p.ParentClaimIDs,Binding:c.Binding,Termination:c.Termination,ProjectLineage:null};const receipt={...unsigned,receipt_id:digest('proof.role-result-candidate-receipt/id/v2',Buffer.from(top(unsigned)))};const o={version:'proof.role-result-candidate-cli-decision/v1',status:'ADMITTED',receipt,reject_code:null};process.stdout.write(canon(o)+'\\n');return}if(args==='onboarding revalidate'){const req=JSON.parse(input),candidate=req&&req.candidate,admission=req&&req.admission,admissionKeys=['version','status','receipt','reject_code'],receiptKeys=['Version','Status','CandidateID','ProbeResultDigest','ProbeCanonicalBytes','ClaimID','Claim','PayloadFingerprint','InvocationDigest','RoleID','Stance','Subject','ProducerCheckID','ParentClaimIDs','Binding','Termination','ProjectLineage','receipt_id'];if(!req||canon(req)!==input||req.version!=='proof.catalog-revalidation-request/v2'||!candidate||!admission||JSON.stringify(Object.keys(admission).sort())!==JSON.stringify(admissionKeys.slice().sort())||admission.status!=='ADMITTED'||admission.reject_code!==null||!admission.receipt||JSON.stringify(Object.keys(admission.receipt).sort())!==JSON.stringify(receiptKeys.slice().sort()))throw new Error('admission is truncated');if(candidate.version!=='proof.component-catalog-candidate/v1'||!Array.isArray(candidate.components)||candidate.components.length<2||candidate.components.length>4)throw new Error('candidate is truncated');const inv=inventory(),items=candidate.components.map(item),o={version:'proof.catalog-revalidation/v2',inventory:inv,catalog:catalog(candidate),work_items:items,receipt:null};o.receipt=receipt(o,candidate,admission);process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='onboarding work-items'){const req=JSON.parse(input),keys=['version','candidate','admission','revalidation_receipt'];if(!req||JSON.stringify(Object.keys(req))!==JSON.stringify(keys)||req.version!=='proof.onboarding-work-items-request/v1'||!req.candidate||!req.admission||!req.revalidation_receipt)throw new Error('work-items request is truncated');const candidate=req.candidate,inv=inventory(),o={version:'proof.onboarding-work-item-projection/v1',authority:inv.authority,catalog:catalog(candidate),work_items:candidate.components.map(item)};process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}throw new Error('unsupported command '+args)}catch(e){process.stderr.write(String(e));process.exitCode=1}});`;
-  const scriptWithC0 = script.replace(
+  // Preserve Proof's signed-zero bytes in the synthetic revalidation
+  // projection; inventory remains the historical generic wire.
+  const proofWireScript = script.replace(
+    "process.stdout.write(JSON.stringify(o,null,2)+'\\n');return}if(args==='onboarding work-items'",
+    "process.stdout.write(canon(o)+'\\n');return}if(args==='onboarding work-items'",
+  );
+  const scriptWithC0 = proofWireScript.replace(
     "try{const args=process.argv.slice(2).join(' ');",
     "try{const args=process.argv.slice(2).join(' ');if(args==='resolve-role-invocation'){const req=JSON.parse(input),component=Object.prototype.hasOwnProperty.call(req,'component_authority'),o={version:'proof.role-invocation/v1',role_id:req.role_id,role_source:'fixture',stance:req.stance,subject:req.subject,...(component?{component_authority:req.component_authority}:{}),authority:{},output_schema_id:req.output_schema_id,output_schema:req.output_schema,output_schema_digest:sha(Buffer.from(req.output_schema,'base64')),instructions:'fixture component inspection instructions',role_text_digest:sha(Buffer.from('fixture component inspection instructions')),invocation_digest:'sha256:'+'4'.repeat(64)};process.stdout.write(JSON.stringify(o)+'\\n');return}"
   );
@@ -414,7 +420,13 @@ describe('EXP-0209 admitted discovery egress', () => {
       expect(structuralOutcome.kind).toBe('succeeded');
       await expect(structuralRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
       const inventory = makeClaim('proof.structural_inventory@1', structuralOutcome.summary.output, 'structural_inventory', [project.claimId]);
+      // This direct-provider lifecycle intentionally exercises the historical
+      // generic materializer surface. Keep its fixture free of Proof-owned
+      // signed-zero bytes; the managed graph path below is the authoritative
+      // Proof-wire fidelity regression.
       const candidatePayload = fakeDiscovery({} as GovernedProbeRunnerRequest).data;
+      const alphaFixture = candidatePayload.components.find(component => component.id === 'alpha');
+      if (alphaFixture) alphaFixture.interfaces = alphaFixture.interfaces.map(value => Object.prototype.hasOwnProperty.call(value, 'n') ? { ...value, n: 0 } : value);
       let candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
       const candidateBytes = Buffer.from(proofCanonicalJson(candidatePayload), 'utf8');
       const candidateBinding = {
@@ -553,6 +565,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       registry.bootstrapProofAdmission(capability);
       const providers = Object.getOwnPropertyDescriptor(registry as any, 'providers')!.value as Map<string, unknown>;
       const originalGoverned = providers.get('governed-proof-inspect');
+      let preserveSignedZero = true;
       let discoveryCalls = 0;
       const componentCalls: string[] = [];
       let releaseComponents!: () => void;
@@ -562,7 +575,7 @@ describe('EXP-0209 admitted discovery egress', () => {
           const subject = request.invocation.subject as Record<string, unknown>;
           if (subject.kind === 'project') {
             discoveryCalls++;
-            return fakeDiscovery(request);
+            return fakeDiscovery(request, preserveSignedZero);
           }
           const authority = request.invocation.component_authority as Record<string, any>;
           const componentSubject = authority.subject as Record<string, any>;
@@ -612,8 +625,14 @@ describe('EXP-0209 admitted discovery egress', () => {
         expect(new Set(componentAdmissions.map(event => canonicalJson(event.scope))).size).toBe(3);
         expect(projectCandidates).toHaveLength(1);
         expect(projectAdmissions).toHaveLength(1);
+        expect(inventories[0].wireMode).toBe('generic');
         expect(projectCandidates[0].wireMode).toBe('proof');
         expect(projectCandidates[0].proofCandidateEvidence.role.invocation.output_schema_id).toBe('proof.component-catalog-candidate@1');
+        expect(revalidations[0].wireMode).toBe('proof');
+        expect(Object.is(revalidations[0].payload.catalog.components[0].interfaces[1].n, -0)).toBe(true);
+        const revalidationClaim = journal.getInstanceProjection().claimsById[revalidations[0].claimId];
+        expect(revalidationClaim.payloadFingerprint).toBe(revalidations[0].payloadFingerprint);
+        expect(Object.is(revalidationClaim.payload.catalog.components[0].interfaces[1].n, -0)).toBe(true);
         expect(componentCandidates.every(event => event.wireMode === 'generic')).toBe(true);
         expect(componentCandidates.map(event => event.proofCandidateEvidence.role.invocation.output_schema_id)).toEqual([
           'reqproof.component-onboarding/v1',
@@ -670,6 +689,10 @@ describe('EXP-0209 admitted discovery egress', () => {
         }
         const replay = journal.replayInstanceProjection();
         expect(replay).toEqual(journal.getInstanceProjection());
+        const replayRevalidation: any = replay.claimsById[revalidations[0].claimId];
+        expect(replayRevalidation.claimId).toBe(revalidations[0].claimId);
+        expect(replayRevalidation.payloadFingerprint).toBe(revalidations[0].payloadFingerprint);
+        expect(Object.is(replayRevalidation.payload.catalog.components[0].interfaces[1].n, -0)).toBe(true);
         const replayProjectCandidate: any = replay.claimsById[projectCandidates[0].claimId];
         expect(Object.is(replayProjectCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true);
         const sessionId = (engine as any)._lastContext.sessionId;
@@ -687,6 +710,62 @@ describe('EXP-0209 admitted discovery egress', () => {
         }
         const restoredProjectCandidate: any = restored.getInstanceProjection().claimsById[projectCandidates[0].claimId];
         expect(Object.is(restoredProjectCandidate.payload.components[0].interfaces[1].n, -0)).toBe(true);
+        const restoredRevalidation: any = restored.getInstanceProjection().claimsById[revalidations[0].claimId];
+        expect(restoredRevalidation.claimId).toBe(revalidations[0].claimId);
+        expect(restoredRevalidation.payloadFingerprint).toBe(revalidations[0].payloadFingerprint);
+        expect(Object.is(restoredRevalidation.payload.catalog.components[0].interfaces[1].n, -0)).toBe(true);
+        // Pre-wire-mode v1 checkpoints omitted generated wireMode. This
+        // deliberately collapsed signed-zero payload is not accepted: strict
+        // Proof lineage catches the byte loss before replay can proceed.
+        const cloneCheckpoint = (value: any): any => Array.isArray(value)
+          ? value.map(cloneCheckpoint)
+          : value && typeof value === 'object'
+            ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneCheckpoint(child)]))
+            : value;
+        const legacy = cloneCheckpoint(checkpoint);
+        for (const event of legacy.events) {
+          if (event.type === 'ClaimPublished' && event.nodeGenerationId) delete event.wireMode;
+        }
+        const legacyBody = {
+          kind: legacy.kind,
+          version: legacy.version,
+          sessionId: legacy.sessionId,
+          graphSemanticDigest: legacy.graphSemanticDigest,
+          frontier: legacy.frontier,
+          events: legacy.events,
+        };
+        legacy.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(legacyBody), 'utf8').digest('hex');
+        expect(() => ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, legacy)).toThrow(/strict lineage|detached/i);
+
+        // Rehashing a Proof revalidation publication must not turn a changed
+        // catalog into an acceptable checkpoint. The outer integrity and the
+        // publication identity are both recomputed so this exercises strict
+        // candidate/admission/revalidation lineage, rather than only hashing.
+        const tamperedRevalidation = cloneCheckpoint(checkpoint);
+        const tamperedRevalidationEvent = tamperedRevalidation.events.find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.catalog_revalidation@1');
+        expect(tamperedRevalidationEvent).toBeDefined();
+        tamperedRevalidationEvent.payload.catalog.components[0].interfaces[1].n = 0;
+        tamperedRevalidationEvent.payloadFingerprint = proofPayloadFingerprint(tamperedRevalidationEvent.payload);
+        tamperedRevalidationEvent.claimId = sha256Canonical({
+          claim: tamperedRevalidationEvent.claim,
+          payloadFingerprint: tamperedRevalidationEvent.payloadFingerprint,
+          producerCheckId: tamperedRevalidationEvent.checkId,
+          scope: tamperedRevalidationEvent.scope,
+          attemptId: tamperedRevalidationEvent.attemptId,
+          fence: tamperedRevalidationEvent.fence,
+          parentClaimIds: [...tamperedRevalidationEvent.parentClaimIds].sort(),
+        });
+        const tamperedRevalidationBody = {
+          kind: tamperedRevalidation.kind,
+          version: tamperedRevalidation.version,
+          sessionId: tamperedRevalidation.sessionId,
+          graphSemanticDigest: tamperedRevalidation.graphSemanticDigest,
+          frontier: tamperedRevalidation.frontier,
+          events: tamperedRevalidation.events,
+        };
+        tamperedRevalidation.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(tamperedRevalidationBody), 'utf8').digest('hex');
+        expect(() => ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, tamperedRevalidation)).toThrow(/strict lineage|catalog|revalidation/i);
+
         const restoredAdmissions = Object.values(restored.getInstanceProjection().claimsById).filter((value: any) => value.claim === 'proof.admitted_receipt@1');
         expect(restoredAdmissions).toHaveLength(4);
         expect(restoredAdmissions.map((value: any) => value.payload)).toEqual(expect.arrayContaining(admissions.map(value => value.payload)));
@@ -703,6 +782,36 @@ describe('EXP-0209 admitted discovery egress', () => {
         };
         tampered.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(tamperedBody), 'utf8').digest('hex');
         expect(() => ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, tampered)).toThrow();
+
+        // A pre-wire-mode reserved revalidation may migrate with an explicit
+        // generic marker only when its historical Proof bytes have no semantic
+        // distinction from the generic canonical bytes. The live compiled lane
+        // above still publishes Proof mode; this is restore-only compatibility.
+        preserveSignedZero = false;
+        discoveryCalls = 0;
+        componentCalls.splice(0, componentCalls.length);
+        const safeEngine = new engineModule.StateMachineExecutionEngine(root);
+        const safeResult = await safeEngine.executeGroupedChecks(prInfo, ['project'], undefined, config, 'json', false, 3);
+        expect(safeResult.statistics.failedExecutions).toBe(0);
+        const safeJournal = (safeEngine as any)._lastContext.journal;
+        const safeRevalidation = safeJournal.readRuntimeEvents().find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.catalog_revalidation@1');
+        expect(safeRevalidation?.wireMode).toBe('proof');
+        const safeCheckpoint = cloneCheckpoint(safeJournal.exportGraphCheckpoint((safeEngine as any)._lastContext.sessionId));
+        const safeRevalidationWire = safeCheckpoint.events.find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.catalog_revalidation@1');
+        expect(safeRevalidationWire).toBeDefined();
+        safeRevalidationWire.wireMode = 'generic';
+        const safeBody = {
+          kind: safeCheckpoint.kind,
+          version: safeCheckpoint.version,
+          sessionId: safeCheckpoint.sessionId,
+          graphSemanticDigest: safeCheckpoint.graphSemanticDigest,
+          frontier: safeCheckpoint.frontier,
+          events: safeCheckpoint.events,
+        };
+        safeCheckpoint.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(safeBody), 'utf8').digest('hex');
+        const safeRestored = ExecutionJournal.restoreGraphCheckpoint((safeEngine as any)._lastContext.claimPlan, safeCheckpoint);
+        expect(safeRestored.readRuntimeEvents().find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.catalog_revalidation@1')?.wireMode).toBe('generic');
+        expect(safeRestored.getInstanceProjection().claimsById[safeRevalidation.claimId].payload).toEqual(safeJournal.getInstanceProjection().claimsById[safeRevalidation.claimId].payload);
       } finally {
         if (watchdog) clearTimeout(watchdog);
         providers.set('governed-proof-inspect', originalGoverned);

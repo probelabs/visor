@@ -68,6 +68,7 @@ import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
 } from './state-machine/graph/instance-plan';
 import { goCompatibleProofJson, proofCandidateAdmissionRequestJson, proofComponentCandidateEnvelopeJson } from './providers/proof-admission-cli-child';
 import {
@@ -87,6 +88,7 @@ import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
   type CompiledExpansion,
+  type CompiledTemplateNode,
 } from './state-machine/graph/instance-plan';
 
 export type ScopePath = Array<{ check: string; index: number }>;
@@ -631,7 +633,8 @@ function validateCheckpointPlanAuthority(
   event: InstanceRuntimeEvent,
   plan: ClaimPlan,
   claimProjection: ClaimProjection,
-  instanceProjection: InstanceProjection
+  instanceProjection: InstanceProjection,
+  legacyProofWireMode = false,
 ): void {
   const expansionPlan = plan.expansionPlan;
   if (!expansionPlan?.active) checkpointAuthorityFailure('Checkpoint requires an active expansion plan');
@@ -702,8 +705,27 @@ function validateCheckpointPlanAuthority(
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
     if (!node || !node.emissions.some(emission => emission.claim === event.claim)) checkpointAuthorityFailure('Generated claim is not declared by its compiled template node');
     const sidecar = event.claim === PROOF_CANDIDATE_CLAIM;
+    const compiledWireMode = compiledManagedProofWireMode(generation, node);
     if (event.wireMode !== 'generic' && event.wireMode !== 'proof') checkpointAuthorityFailure('Generated claim wire mode is invalid');
-    if (event.claim !== PROOF_CANDIDATE_CLAIM && event.wireMode !== 'generic') checkpointAuthorityFailure('Proof wire mode is reserved for governed evidence');
+    if (compiledWireMode === 'proof' && event.wireMode !== 'proof' &&
+        !(legacyProofWireMode && event.wireMode === 'generic' && event.claim === PROOF_CATALOG_REVALIDATION_CLAIM)) {
+      checkpointAuthorityFailure('Proof catalog publication is not using its compiled Proof wire mode');
+    }
+    if (compiledWireMode !== 'proof' && event.claim !== PROOF_CANDIDATE_CLAIM && event.wireMode !== 'generic') checkpointAuthorityFailure('Proof wire mode is reserved for governed evidence');
+    if (compiledWireMode === 'proof') {
+      const managed = generation.attemptId ? instanceProjection.managedRunsByAttemptId[generation.attemptId] : undefined;
+      if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
+        checkpointAuthorityFailure('Proof catalog publication lacks a clean managed terminal');
+      }
+      if (event.claim === PROOF_CATALOG_REVALIDATION_CLAIM &&
+          (event.wireMode === 'proof' || (legacyProofWireMode && event.wireMode === 'generic'))) {
+        // Validate the semantic Proof lineage for both modern Proof bytes and
+        // the narrowly supported pre-wire-mode migration. This must run before
+        // replaying descendants so a rehashed -0 -> 0 publication cannot hide
+        // behind a freshly recomputed outer checkpoint digest.
+        validateProofRevalidationLineage(event, generation, instanceProjection);
+      }
+    }
     if (sidecar) {
       if (generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
         checkpointAuthorityFailure('Generated proof candidate evidence is not bound to the compiled inspect authority');
@@ -903,6 +925,87 @@ export interface JournalEntry {
   result: ReviewSummary & { output?: unknown; content?: string };
 }
 
+/**
+ * Proof's revalidation output is byte-owned only for the sealed
+ * revalidate_catalog generated check. Keep the decision here, at the journal boundary,
+ * so direct completion and provider-returned metadata cannot relabel a
+ * generic publication.
+ */
+function compiledManagedProofWireMode(
+  generation: { readonly templateNodeKey: string; readonly checkId: string },
+  node: CompiledTemplateNode
+): GovernedWireMode {
+  const expectedClaim = generation.templateNodeKey === 'revalidate_catalog' && generation.checkId === 'revalidate_catalog'
+      ? PROOF_CATALOG_REVALIDATION_CLAIM
+      : undefined;
+  const expectedType = expectedClaim === PROOF_CATALOG_REVALIDATION_CLAIM
+      ? PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE
+      : undefined;
+  if (!expectedClaim || node.check.type !== expectedType || node.emissions.length !== 1) return 'generic';
+  const emission = node.emissions[0] as unknown as Record<string, unknown>;
+  const keys = Reflect.ownKeys(emission);
+  return Object.getPrototypeOf(emission) === Object.prototype && keys.length === 2 &&
+    keys.includes('claim') && keys.includes('from') && emission.claim === expectedClaim && emission.from === 'output'
+    ? 'proof'
+    : 'generic';
+}
+
+/**
+ * The pre-wire-mode v1 checkpoint format represented generated publications as
+ * generic values. A revalidation publication may retain that representation
+ * only when the complete historical candidate/admission/revalidation chain
+ * still validates. This is intentionally used at restore only; modern live
+ * completion always emits the compiled Proof mode.
+ */
+function validateProofRevalidationLineage(
+  event: GeneratedClaimPublishedEvent,
+  generation: NodeGenerationProjection,
+  instanceProjection: InstanceProjection,
+): void {
+  const parents = generation.activeInputClaimIds.map(claimId => instanceProjection.claimsById[claimId]);
+  const inventory = parents.find(claim => claim?.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
+  const candidate = parents.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+  const admission = parents.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+  if (!inventory || !candidate || !admission || !inventory.active || !candidate.active || !admission.active) {
+    checkpointAuthorityFailure('Proof revalidation lacks its complete candidate/admission lineage');
+  }
+  const candidateView = generatedClaimView(candidate, 'candidate');
+  const admissionView = generatedClaimView(admission, 'admission');
+  const candidatePayload = candidate.payload as Record<string, unknown>;
+  const projectID = candidatePayload && typeof candidatePayload.project_id === 'string'
+    ? candidatePayload.project_id
+    : undefined;
+  if (!projectID || !inventory.payload || typeof inventory.payload !== 'object') {
+    checkpointAuthorityFailure('Proof revalidation has no project-bound candidate/inventory');
+  }
+  const revalidationView = {
+    claimId: event.claimId,
+    claim: event.claim,
+    payload: event.payload,
+    payloadFingerprint: event.payloadFingerprint,
+    producerCheckId: event.producerCheckId,
+    scope: event.scope,
+    parentClaimIds: event.parentClaimIds,
+    wireMode: event.wireMode,
+    provenance: 'attempt' as const,
+    attemptId: event.attemptId,
+    fence: event.fence,
+  } as CandidateClaimInput;
+  try {
+    validateProofCatalogRevalidationProjection(
+      event.payload,
+      inventory.payload as Record<string, unknown>,
+      candidateView,
+      admissionView,
+      projectID,
+      revalidationView,
+      inventory.claimId,
+    );
+  } catch (error) {
+    checkpointAuthorityFailure(`Proof revalidation failed strict lineage validation: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export class ExecutionJournal {
   private commit = 0;
   private entries: JournalEntry[] = [];
@@ -977,7 +1080,11 @@ export class ExecutionJournal {
       }
       if (route.instance) {
         instanceEvents.push(event as InstanceRuntimeEvent);
-        validateCheckpointPlanAuthority(event as InstanceRuntimeEvent, claimPlan, claimPrefix, instancePrefix);
+        const rawEvent = checkpoint.events[event.eventId - 1] as unknown as Record<string, unknown> | undefined;
+        const legacyProofWireMode = event.type === 'ClaimPublished' && 'nodeGenerationId' in event &&
+          event.claim === PROOF_CATALOG_REVALIDATION_CLAIM && event.wireMode === 'generic' &&
+          !!rawEvent && (!hasOwn(rawEvent, 'wireMode') || rawEvent.wireMode === 'generic');
+        validateCheckpointPlanAuthority(event as InstanceRuntimeEvent, claimPlan, claimPrefix, instancePrefix, legacyProofWireMode);
         try {
           // Preview each event to make plan authority checks resolve against the exact
           // projection prefix; replayInstanceEvents below remains the final reducer.
@@ -1633,10 +1740,11 @@ export class ExecutionJournal {
     const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
     const candidateEmissions = node.emissions.filter(emission => emission.claim === PROOF_CANDIDATE_CLAIM);
-    if (candidateEmissions.length > 0) {
+    const compiledWireMode = compiledManagedProofWireMode(generation, node);
+    if (compiledWireMode === 'proof' || candidateEmissions.length > 0) {
       const terminal = prefix.filter(event => event.type === 'ManagedRunTerminated') as readonly any[];
       if (terminal.length !== 1 || terminal[0].cleanupStatus !== 'clean' || terminal[0].controllerDecision !== 'completed' || terminal[0].failureCode !== null) {
-        throw new ClaimKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
+        throw new ClaimKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof publication requires a clean managed terminal');
       }
     }
     if (input.executionConfigDigest !== undefined && input.executionConfigDigest !== generation.executionConfigDigest) throw new ClaimKernelError('STALE_EXECUTION_CONFIG', 'Managed completion does not match live generation authority');
@@ -1679,6 +1787,8 @@ export class ExecutionJournal {
       }
     } else if (input.proofCandidateEvidence !== undefined) {
       throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
+    } else if (input.wireMode !== undefined && input.wireMode !== compiledWireMode) {
+      throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Generated claim wire mode is detached from compiled check authority');
     }
     let staged = before;
     const events: InstanceRuntimeEvent[] = [];
@@ -1695,7 +1805,7 @@ export class ExecutionJournal {
     for (const emission of node.emissions) {
       this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
       const proofCandidateEmission = emission.claim === PROOF_CANDIDATE_CLAIM;
-      const wireMode: GovernedWireMode = proofCandidateEmission ? (candidateWireMode || 'generic') : 'generic';
+      const wireMode: GovernedWireMode = proofCandidateEmission ? (candidateWireMode || 'generic') : compiledWireMode;
       const immutablePayload = immutableGovernedValue(payload, wireMode);
       const payloadFingerprint = governedPayloadFingerprint(payload, wireMode);
       const parentClaimIds = [...generation.activeInputClaimIds].sort();

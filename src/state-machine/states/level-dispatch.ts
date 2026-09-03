@@ -34,6 +34,10 @@ import type {
 import { GOVERNED_PROOF_INSPECT_PROVIDER_NAME, isGovernedProofComponentSelector } from '../../providers/governed-proof-inspect-check-provider';
 import type { GovernedWireMode } from '../../providers/proof-wire';
 import type { CheckConfig } from '../../types/config';
+import {
+  PROOF_CATALOG_REVALIDATION_CLAIM,
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+} from '../graph/instance-plan';
 import type {
   CatalogRequestAttemptStartedEvent,
   CatalogRequestProjection,
@@ -110,6 +114,35 @@ type DynamicExecution =
 
 function isEngineerCheck(checkId: string): boolean {
   return checkId === 'engineer-task';
+}
+
+/**
+ * Select Proof's byte-preserving output representation only from the sealed
+ * compiled check pair. Provider output and claim names are deliberately not
+ * consulted here; this is the controller's trusted topology decision.
+ */
+function trustedManagedProofWireMode(
+  checkId: string,
+  providerType: string,
+  checkConfig: CheckConfig
+): GovernedWireMode {
+  const expectedClaim = checkId === 'revalidate_catalog'
+    ? PROOF_CATALOG_REVALIDATION_CLAIM
+    : undefined;
+  const expectedProvider = checkId === 'revalidate_catalog'
+    ? PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE
+    : undefined;
+  if (!expectedClaim || providerType !== expectedProvider || checkConfig.type !== expectedProvider ||
+      !Array.isArray(checkConfig.emits) || checkConfig.emits.length !== 1) {
+    return 'generic';
+  }
+  const emission = checkConfig.emits[0] as unknown as Record<string, unknown>;
+  const keys = Reflect.ownKeys(emission);
+  if (Object.getPrototypeOf(emission) !== Object.prototype || keys.length !== 2 ||
+      !keys.includes('claim') || !keys.includes('from') || emission.claim !== expectedClaim || emission.from !== 'output') {
+    return 'generic';
+  }
+  return 'proof';
 }
 
 function controllerWorkingDirectory(context: EngineContext): string {
@@ -244,6 +277,7 @@ async function runManagedProvider(input: {
   readonly snapshot: ManagedRunSnapshot;
   readonly timeoutMs: number;
   readonly providerType: string;
+  readonly trustedWireMode: GovernedWireMode;
   readonly onStarted: () => void;
   readonly onStartedObserved: () => void;
   readonly onCancelRequested: () => void;
@@ -366,7 +400,7 @@ async function runManagedProvider(input: {
       return finishOrdinary('MANAGED_OUTCOME_FAILED');
     }
     try {
-      const normalized = normalizeManagedRunOutcome(outcome.value.value, input.snapshot.binding);
+      const normalized = normalizeManagedRunOutcome(outcome.value.value, input.snapshot.binding, input.trustedWireMode);
       if (normalized.kind === 'failed') return finishOrdinary('MANAGED_OUTCOME_FAILED');
       if (normalized.kind === 'succeeded-proof-candidate' &&
           (input.providerType !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || input.snapshot.binding.checkId !== 'inspect')) {
@@ -3306,6 +3340,7 @@ async function executeSingleCheck(
         snapshot,
         timeoutMs: managedTimeoutMs,
         providerType,
+        trustedWireMode: trustedManagedProofWireMode(checkId, providerType, checkConfig),
         onStarted: () => {
           context.journal.recordManagedRunStarted(binding);
         },

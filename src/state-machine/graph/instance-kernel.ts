@@ -6,7 +6,10 @@ import {
   type ClaimProjection,
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
-import { PROOF_CANDIDATE_CLAIM } from './instance-plan';
+import {
+  PROOF_CANDIDATE_CLAIM,
+  PROOF_CATALOG_REVALIDATION_CLAIM,
+} from './instance-plan';
 import {
   validateGovernedProofRuntimeContextAgainstClaims,
   validateProofCandidateEvidence,
@@ -1552,6 +1555,15 @@ function reduceGeneratedLifecycle(
       throw new InstanceKernelError('INVALID_PAYLOAD_FINGERPRINT', 'Generated claim fingerprint is invalid');
     }
     const hasEvidence = event.proofCandidateEvidence !== undefined || event.proofCandidateEvidenceFingerprint !== undefined;
+    const proofRevalidationPublication = event.claim === PROOF_CATALOG_REVALIDATION_CLAIM &&
+      event.checkId === 'revalidate_catalog' && generation.templateNodeKey === 'revalidate_catalog';
+    if (proofRevalidationPublication) {
+      const managedRun = projection.managedRunsByAttemptId[event.attemptId];
+      if (!managedRun || managedRun.status !== 'terminated' || managedRun.cleanupStatus !== 'clean' ||
+          managedRun.controllerDecision !== 'completed' || managedRun.failureCode !== undefined) {
+        throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof catalog publications require a clean managed terminal');
+      }
+    }
     if (event.claim === PROOF_CANDIDATE_CLAIM) {
       if (generation.templateNodeKey !== 'inspect' || event.checkId !== 'inspect' || event.proofCandidateEvidence === undefined || typeof event.proofCandidateEvidenceFingerprint !== 'string' || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
         throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate publication requires its exact evidence sidecar');
@@ -1580,7 +1592,7 @@ function reduceGeneratedLifecycle(
       if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
         throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
       }
-    } else if (hasEvidence || event.wireMode !== 'generic') {
+    } else if (hasEvidence || (!proofRevalidationPublication && event.wireMode !== 'generic')) {
       throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
     }
     const claimIdentity = {

@@ -110,6 +110,15 @@ function binding(): any {
   };
 }
 
+function expectErrorCode(action: () => unknown, code: string): void {
+  try {
+    action();
+    throw new Error(`expected ${code}`);
+  } catch (error) {
+    expect((error as { code?: string }).code).toBe(code);
+  }
+}
+
 describe('runtime component C0 authority seam', () => {
   it('runs real pinned Proof C0 before a fake Probe and fails closed before Probe on malformed authority', async () => {
     jest.resetModules();
@@ -343,6 +352,38 @@ setTimeout(() => {
       journal.scheduleGeneratedAttempt(verifyAttempt);
       journal.completeGeneratedAttempt({ attempt: verifyAttempt, payload: {} });
       const revalidationGeneration = journal.queryReadyWork().find(value => value.checkId === 'revalidate_catalog')!;
+      // Journal-level guards: a reserved Proof revalidation cannot be
+      // completed directly before its managed terminal, and a caller cannot
+      // relabel a managed prefix as generic. Use isolated in-memory journal
+      // forks because this prefix is intentionally not quiescent yet.
+      const forkJournal = (source: any): any => {
+        const fork = Object.create(Object.getPrototypeOf(source));
+        for (const key of Object.keys(source)) {
+          if (key === 'claimPlan') fork[key] = source[key];
+          else if (key === 'attemptOrdinals' || key === 'requestOrdinals') fork[key] = new Map(source[key]);
+          else fork[key] = JSON.parse(JSON.stringify(source[key]));
+        }
+        return fork;
+      };
+      const directJournal = forkJournal(journal);
+      const directGeneration = directJournal.queryReadyWork().find(value => value.checkId === 'revalidate_catalog')!;
+      const directAttempt = directJournal.startGeneratedAttempt(directGeneration.nodeGenerationId);
+      directJournal.scheduleGeneratedAttempt(directAttempt);
+      expectErrorCode(() => directJournal.completeGeneratedAttempt({ attempt: directAttempt, payload: {} }), 'MANAGED_TERMINAL_REQUIRED');
+      const mismatchedJournal = forkJournal(journal);
+      const mismatchedGeneration = mismatchedJournal.queryReadyWork().find(value => value.checkId === 'revalidate_catalog')!;
+      const mismatchedAttempt = mismatchedJournal.startGeneratedAttempt(mismatchedGeneration.nodeGenerationId);
+      mismatchedJournal.scheduleGeneratedAttempt(mismatchedAttempt);
+      const mismatchedBinding = mismatchedJournal.deriveManagedRunBinding(mismatchedAttempt);
+      mismatchedJournal.recordManagedRunAcquired(mismatchedBinding);
+      mismatchedJournal.recordManagedRunStarted(mismatchedBinding);
+      expectErrorCode(() => mismatchedJournal.completeManagedGeneratedAttempt({
+        attempt: mismatchedAttempt,
+        binding: mismatchedBinding,
+        payload: {},
+        executionConfigDigest: mismatchedGeneration.executionConfigDigest,
+        wireMode: 'generic',
+      }), 'INVALID_PROOF_EVIDENCE');
       const revalidator = providers.createProofCatalogRevalidationProviderFromCapability(capability);
       await completeManaged(revalidationGeneration.nodeGenerationId, revalidator);
       const materializeGeneration = journal.queryReadyWork().find(value => value.checkId === 'materialize_catalog')!;

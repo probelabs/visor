@@ -39,7 +39,7 @@ import {
   type SubgraphExpandedEvent,
   type SubgraphTombstonedEvent,
 } from '../../../../src/state-machine/graph/instance-kernel';
-import { PROOF_CANDIDATE_CLAIM } from '../../../../src/state-machine/graph/instance-plan';
+import { PROOF_CANDIDATE_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM } from '../../../../src/state-machine/graph/instance-plan';
 
 const sessionId = 'session-1';
 const expansionOwnerCheck = 'discover-components';
@@ -477,6 +477,55 @@ describe('Graph v2 C2 instance kernel', () => {
     const tamperedPayload = { '10': 'ten', '2': 'two' };
     const tampered = { ...candidate, payload: tamperedPayload, payloadFingerprint: sha256Canonical(tamperedPayload), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(tamperedPayload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
     expectKernelError(() => reduceInstanceEventBatch(managed, [terminated, tampered, completed]), 'INVALID_PROOF_EVIDENCE');
+  });
+
+  it('requires a clean managed terminal before direct Proof revalidation publication', () => {
+    const item = itemPublished(2, { id: 'A', revision: 1 }, 1);
+    const baseActivation = activated(3, item);
+    const revalidationNode = deriveNodeInstanceId({
+      subgraphInstanceId: baseActivation.subgraphInstanceId,
+      templateNodeKey: 'revalidate_catalog',
+    });
+    const activation = {
+      ...baseActivation,
+      nodeInstanceId: revalidationNode,
+      nodeGenerationId: deriveNodeGenerationId({
+        nodeInstanceId: revalidationNode,
+        incarnation: baseActivation.incarnation,
+        itemFingerprint: baseActivation.itemFingerprint,
+        executionConfigDigest: baseActivation.executionConfigDigest,
+        activeInputClaimIds: baseActivation.activeInputClaimIds,
+      }),
+      templateNodeKey: 'revalidate_catalog' as const,
+      checkId: 'revalidate_catalog',
+    };
+    const expansion = expanded();
+    expansion.nodeInstanceIdsByTemplateNode = { inspect: expansion.nodeInstanceIdsByTemplateNode.inspect, revalidate_catalog: revalidationNode };
+    const [started, scheduled] = successfulGeneration(4, activation);
+    const payload = { version: 'proof.catalog-revalidation/v2' };
+    const payloadFingerprint = sha256Canonical(payload);
+    const publication: GeneratedClaimPublishedEvent = {
+      ...started,
+      type: 'ClaimPublished',
+      eventId: 6,
+      claimId: sha256Canonical({
+        claim: PROOF_CATALOG_REVALIDATION_CLAIM,
+        payloadFingerprint,
+        producerCheckId: started.checkId,
+        scope: started.scope,
+        attemptId: started.attemptId,
+        fence: started.fence,
+        parentClaimIds: [...activation.activeInputClaimIds].sort(),
+      }),
+      claim: PROOF_CATALOG_REVALIDATION_CLAIM,
+      payload,
+      payloadFingerprint,
+      producerCheckId: started.checkId,
+      parentClaimIds: activation.activeInputClaimIds,
+      wireMode: 'generic',
+    };
+    const prefix = replayInstanceEvents([expansion, item, activation, started, scheduled]);
+    expectKernelError(() => reduceInstanceEvent(prefix, publication), 'MANAGED_TERMINAL_REQUIRED');
   });
 
   it('inactivates one incarnation exactly and activates only its replacement', () => {

@@ -1191,6 +1191,45 @@ describe('snapshot-store (journal + context view)', () => {
     ).toBe(true);
   });
 
+  it('keeps generic managed output canonical while trusted reserved Proof output keeps signed zero', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    const generic = normalizeManagedRunOutcome(
+      { version: 1, kind: 'succeeded', binding, summary: { issues: [], output: { value: -0 } } },
+      binding
+    );
+    const trusted = normalizeManagedRunOutcome(
+      { version: 1, kind: 'succeeded', binding, summary: { issues: [], output: { value: -0 } } },
+      binding,
+      'proof'
+    );
+
+    expect(Object.is((generic.summary.output as { value: number }).value, -0)).toBe(false);
+    expect(Object.is((trusted.summary.output as { value: number }).value, -0)).toBe(true);
+  });
+
+  it('does not let a non-reserved provider receive Proof wire mode', () => {
+    const config = c2Config();
+    const plan = compileClaimPlan(config);
+    const journal = new ExecutionJournal(plan);
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(value => value.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    expectErrorCode(() => journal.completeManagedGeneratedAttempt({
+      attempt,
+      binding,
+      payload: { id: 'A', findings: [] },
+      executionConfigDigest: generation.executionConfigDigest,
+      wireMode: 'proof',
+    }), 'INVALID_PROOF_EVIDENCE');
+  });
+
   it('keeps clean cleanup separate from a controller failure and replays it exactly', () => {
     const journal = c2Journal();
     publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });

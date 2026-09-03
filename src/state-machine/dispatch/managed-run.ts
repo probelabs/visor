@@ -443,7 +443,8 @@ export function normalizeManagedRunStartedReceipt(
 
 export function normalizeManagedRunOutcome(
   value: unknown,
-  expectedBinding: ManagedRunBindingV1
+  expectedBinding: ManagedRunBindingV1,
+  trustedWireMode: GovernedWireMode = 'generic'
 ): ManagedRunOutcomeV1 {
   const code = 'MANAGED_OUTCOME_RECEIPT_INVALID';
   try {
@@ -484,6 +485,31 @@ export function normalizeManagedRunOutcome(
         summary: proofSummary,
         proofCandidateEvidence,
         wireMode: wireMode as GovernedWireMode,
+      });
+    }
+    // Ordinary managed outputs are historically graph-canonical.  The only
+    // caller allowed to opt one into Proof's byte-preserving representation is
+    // the controller, after it has matched the sealed compiled check pair.
+    // Never infer this from provider output (or from a claim name): an
+    // untrusted provider outcome has already been validated above and cannot
+    // change the representation selected by the controller.
+    if (trustedWireMode === 'proof' && Object.prototype.hasOwnProperty.call(summary, 'output')) {
+      const semanticSummary: Record<string, unknown> = {};
+      for (const key of Object.keys(summary)) {
+        if (key !== 'output') semanticSummary[key] = Reflect.get(summary, key, summary);
+      }
+      const normalized = immutableCanonicalValue<ReviewSummary>(semanticSummary as ReviewSummary);
+      return Object.freeze({
+        version: 1,
+        kind,
+        binding,
+        summary: Object.freeze({
+          ...normalized,
+          output: immutableGovernedValue(
+            Reflect.get(summary, 'output', summary),
+            'proof'
+          ),
+        }) as ReviewSummary,
       });
     }
     return Object.freeze({

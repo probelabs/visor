@@ -133,11 +133,16 @@ function domainDigest(domain: string, value: unknown): string {
 function plainDigest(value: unknown): string {
   return `sha256:${createHash('sha256').update(goCompatibleProofJson(value), 'utf8').digest('hex')}`;
 }
-function bounded(value: unknown, label: string, limit = PROOF_REVALIDATION_OUTPUT_MAX_BYTES): unknown {
+function bounded(
+  value: unknown,
+  label: string,
+  limit = PROOF_REVALIDATION_OUTPUT_MAX_BYTES,
+  wireMode: GovernedWireMode = 'generic',
+): unknown {
   let encoded: string;
-  try { encoded = canonicalJson(value); } catch { invalid(`${label} is not canonical JSON`); }
+  try { encoded = governedCanonicalJson(value, wireMode); } catch { invalid(`${label} is not canonical JSON`); }
   if (Buffer.byteLength(encoded, 'utf8') > limit) invalid(`${label} exceeds ${limit} bytes`);
-  return immutableCanonicalValue(value);
+  return immutableGovernedValue(value, wireMode);
 }
 function claimPayloadLimit(claimName: string): number {
   if (claimName === PROOF_STRUCTURAL_INVENTORY_CLAIM) return PROOF_INVENTORY_OUTPUT_MAX_BYTES;
@@ -799,7 +804,7 @@ export function validateProofWorkItemsProjection(
   if (!plain(expectedAuthority) || canonicalJson(authority) !== canonicalJson(expectedAuthority)) invalid('work-items authority is detached from current inventory');
   const expected = expectedCatalog(candidate, projectID);
   const catalog = projectedCatalog(value.catalog, projectID);
-  if (canonicalJson(catalog) !== canonicalJson(expected)) invalid('work-items catalog is detached from candidate');
+  if (proofCanonicalJson(catalog) !== proofCanonicalJson(expected)) invalid('work-items catalog is detached from candidate');
   if (!Array.isArray(value.work_items) || value.work_items.length !== (expected.components as PlainRecord[]).length) invalid('work-items projection is incomplete');
   const items = value.work_items.map((item, index) => validateWorkItem(item, projectID, `work-items[${index}]`));
   const sortedItems = [...items].sort((left, right) => compareProofStrings(left.component_id as string, right.component_id as string));
@@ -964,7 +969,7 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   const ids = new Set(components.map(component => component.id as string));
   const catalog = projectedCatalog(value.catalog, projectID);
   const expected = expectedCatalog(candidate, projectID);
-  if (canonicalJson(catalog) !== canonicalJson(expected)) invalid('catalog revalidation catalog is detached from candidate');
+  if (proofCanonicalJson(catalog) !== proofCanonicalJson(expected)) invalid('catalog revalidation catalog is detached from candidate');
   const catalogComponents = (catalog.components as PlainRecord[]);
   if (new Set(catalogComponents.map(component => component.id as string)).size !== ids.size || catalogComponents.some(component => !ids.has(component.id as string))) invalid('catalog revalidation catalog is detached from candidate');
   const inventoryPaths = value.inventory && plain(value.inventory) && Array.isArray(value.inventory.sorted_paths)
@@ -1002,7 +1007,7 @@ export function validateProofCatalogRevalidationProjection(value: unknown, inven
   const expectedInventoryID = domainDigest('proof.structural-inventory/claim/v1', inventoryWire(currentInventory));
   const expectedCatalogID = domainDigestBytes('proof.component-catalog-candidate/claim/v1', governedCanonicalJson(candidate.payload, candidateWireMode));
   if (receipt.inventory_claim_id !== expectedInventoryID || receipt.catalog_claim_id !== expectedCatalogID || receipt.admission_candidate_id !== admitted.receipt.CandidateID || receipt.admission_result_digest !== admitted.receipt.ProbeResultDigest || receipt.admission_receipt_id !== admitted.receipt.receipt_id) invalid('catalog revalidation receipt lineage is detached');
-  return bounded(value, 'catalog revalidation projection') as PlainRecord;
+  return bounded(value, 'catalog revalidation projection', PROOF_REVALIDATION_OUTPUT_MAX_BYTES, 'proof') as PlainRecord;
 }
 
 abstract class ProofCatalogCliProvider extends CheckProvider {
