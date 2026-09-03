@@ -52,3 +52,30 @@ with `git cat-file`, archives that commit, and builds with `GOPROXY=off`,
 `GOSUMDB=off`, and `GOTOOLCHAIN=local`, so the pinned source and dependencies
 must already be available locally. No Proof binary path override or network
 fetch is used.
+
+## Live-demo preflight
+
+The live runner currently exposes only a zero-model preflight. Run it from the
+repository root:
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register/transpile-only \
+  examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts \
+  --preflight-only \
+  --output /tmp/visor-exp-0209-live-preflight \
+  --subject /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/subject \
+  --evaluator /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/evaluator
+```
+
+`--subject` and `--evaluator` default to the paths shown above. The preflight
+creates a private `workspace/`, copies only the seven subject source files and
+a minimal `proof.yaml`, builds the pinned Proof CLI offline, runs the public Go
+tests and the separate hidden baseline oracle, checks the evaluator patch,
+resolves the shipped `onboard` role, and compiles the graph. It writes
+`preflight.json` with the exact pins and evidence; governed/model dispatch
+counts are zero, network dispatches are requested zero, and Go runs offline.
+The evaluator copy and patch copy are temporary directories
+outside the workspace.
+
+Live baseline/resume/evaluation mode is not implemented yet. Any mode other
+than `--preflight-only` is rejected.
