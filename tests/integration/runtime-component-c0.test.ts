@@ -17,6 +17,7 @@ import {
   deriveProofCurrentCatalogAuthorityMutationDigest,
   immutableInstanceProjection,
   reduceInstanceEvent,
+  reduceInstanceEventBatch,
 } from '../../src/state-machine/graph/instance-kernel';
 
 const PROOF_AUTHORITY = '/Users/buger/go/src/reqforge-exp-0207a-proof-cli-admission';
@@ -323,6 +324,10 @@ setTimeout(() => {
     try {
       const config: any = yaml.load(readFileSync(EXP0209_PROFILE, 'utf8'));
       config.checks.project.value.projects[0].root = root;
+      // This authority seam intentionally exercises the legacy six-node
+      // component lifecycle. The dedicated reconciliation topology tests
+      // cover the seven-node project receipt invalidation path.
+      delete config.subgraphs['discover-project'].checks.project_reconcile;
       const directInventory = JSON.parse(runSync(binary, ['onboarding', 'inventory'], {
         cwd: root, encoding: 'utf8', env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
       }));
@@ -668,9 +673,74 @@ setTimeout(() => {
       expect(appliedIndex).toBeGreaterThanOrEqual(0);
       const appliedMarker: any = appliedEvents[appliedIndex];
       const appliedGroup = appliedEvents.slice(appliedIndex, appliedIndex + appliedMarker.mutationEventCount + 1);
+      expect(appliedGroup.filter((event: any) => event.type === 'NodeGenerationInactivated' && event.scope.length === 1)).toHaveLength(0);
       const appliedController = appliedGroup.find((event: any) => event.type === 'ControllerItemClaimPublished');
       expect(appliedController).toBeDefined();
       expect(() => reduceInstanceEvent(beforeApply, appliedController as any)).toThrow();
+      // A reserved project_reconcile generation is private to the exact
+      // application batch as well. Build the smallest rooted seven-node
+      // projection around this otherwise legacy fixture and ensure a generic
+      // retirement cannot downgrade it to an ordinary lifecycle event.
+      const rootProject = beforeApply.instancesById[projectSubgraphInstanceId];
+      const reservedRootNodeId = bare('reserved-project-reconcile-node');
+      const reservedRootGenerationId = bare('reserved-project-reconcile-generation');
+      const reservedRootProjection = immutableInstanceProjection({
+        ...beforeApply,
+        instancesById: {
+          ...beforeApply.instancesById,
+          [projectSubgraphInstanceId]: {
+            ...rootProject,
+            nodeInstanceIdsByTemplateNode: {
+              ...rootProject.nodeInstanceIdsByTemplateNode,
+              project_reconcile: reservedRootNodeId,
+            },
+          },
+        },
+        nodesById: {
+          ...beforeApply.nodesById,
+          [reservedRootNodeId]: {
+            nodeInstanceId: reservedRootNodeId,
+            subgraphInstanceId: projectSubgraphInstanceId,
+            templateNodeKey: 'project_reconcile',
+            scope: rootProject.scope,
+          },
+        },
+        generationsById: {
+          ...beforeApply.generationsById,
+          [reservedRootGenerationId]: {
+            nodeGenerationId: reservedRootGenerationId,
+            nodeInstanceId: reservedRootNodeId,
+            subgraphInstanceId: projectSubgraphInstanceId,
+            templateNodeKey: 'project_reconcile',
+            checkId: 'project_reconcile',
+            scope: rootProject.scope,
+            incarnation: rootProject.incarnation,
+            itemFingerprint: bare('reserved-project-reconcile-item'),
+            executionConfigDigest: bare('reserved-project-reconcile-config'),
+            activeInputClaimIds: [],
+            status: 'completed',
+            scheduled: true,
+            completedOutputClaimIds: [],
+          },
+        },
+        activeGenerationIdByNode: {
+          ...beforeApply.activeGenerationIdByNode,
+          [reservedRootNodeId]: reservedRootGenerationId,
+        },
+      } as any);
+      expectErrorCode(() => reduceInstanceEvent(reservedRootProjection, {
+        version: 1,
+        type: 'NodeGenerationInactivated',
+        eventId: reservedRootProjection.lastEventId + 1,
+        sessionId: rootProject.sessionId,
+        scope: rootProject.scope,
+        subgraphInstanceId: projectSubgraphInstanceId,
+        nodeInstanceId: reservedRootNodeId,
+        nodeGenerationId: reservedRootGenerationId,
+        incarnation: rootProject.incarnation,
+        outputClaimIds: [],
+        reason: 'superseded',
+      }), 'INVALID_PROOF_CURRENT_APPLICATION');
       // Even if an attacker first gets one old generation inactivated, the
       // controller claim cannot be spliced in without the private validated
       // batch context. Model that already-reduced prefix with the authority
@@ -849,6 +919,58 @@ setTimeout(() => {
           mutations,
         });
       };
+      // A semantically different revalidation receipt may still authorize the
+      // exact historical WorkItems, so all authority rows compare unchanged.
+      // The live journal rejects this authority-only change; the reducer and
+      // checkpoint paths must reject a forged zero-mutation marker as well.
+      const authorityOnlyDrift = JSON.parse(historicalRevalidationBytes);
+      const lineage = authorityOnlyDrift.receipt.project_lineage;
+      if (lineage === null) {
+        authorityOnlyDrift.receipt.project_lineage = {
+          version: 'proof.git-project-lineage-binding/v1',
+          fingerprint: `sha256:${'a'.repeat(64)}`,
+          object_format: 'sha256',
+          baseline_revision: `sha256:${'1'.repeat(64)}`,
+        };
+      } else {
+        const replacementRevision = lineage.object_format === 'sha1'
+          ? `sha1:${'1'.repeat(40)}`
+          : `sha256:${'1'.repeat(64)}`;
+        lineage.baseline_revision = lineage.baseline_revision === replacementRevision
+          ? lineage.object_format === 'sha1' ? `sha1:${'2'.repeat(40)}` : `sha256:${'2'.repeat(64)}`
+          : replacementRevision;
+      }
+      rederiveCatalogRevalidationReceiptID(authorityOnlyDrift.receipt);
+      const authorityOnlyDriftBytes = proofCanonicalJson(authorityOnlyDrift);
+      const driftJournal = ExecutionJournal.restoreGraphCheckpoint(plan, cloneValue(checkpointBeforeAuthority));
+      const driftAuthorityEvent = driftJournal.recordProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        revalidationBytes: authorityOnlyDriftBytes,
+        workItemsBytes: historicalWorkItemsBytes,
+      });
+      const driftAuthorityProjection: any = driftJournal.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId];
+      expect(driftAuthorityProjection.components.map((row: any) => row.comparison)).toEqual(['unchanged', 'unchanged', 'unchanged']);
+      const driftProjection = driftJournal.getInstanceProjection();
+      const forgedZeroMutationMarker: any = {
+        version: 1,
+        type: 'ProofCurrentCatalogAuthorityApplied',
+        eventId: driftAuthorityEvent.eventId + 1,
+        sessionId,
+        scope: driftAuthorityEvent.scope,
+        projectSubgraphInstanceId,
+        authorityId: driftAuthorityEvent.authorityId,
+        mutationEventCount: 0,
+        mutationEventsDigest: deriveProofCurrentCatalogAuthorityMutationDigest({
+          authorityId: driftAuthorityEvent.authorityId,
+          mutations: [],
+        }),
+      };
+      expectErrorCode(() => reduceInstanceEventBatch(driftProjection, [forgedZeroMutationMarker]), 'INVALID_PROOF_CURRENT_APPLICATION');
+      const forgedZeroMutationCheckpoint = cloneValue(driftJournal.exportGraphCheckpoint(sessionId)) as any;
+      forgedZeroMutationCheckpoint.events.push(forgedZeroMutationMarker);
+      renumberCheckpointEvents(forgedZeroMutationCheckpoint);
+      rehashCheckpoint(forgedZeroMutationCheckpoint);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, forgedZeroMutationCheckpoint)).toThrow(/authority|application|revalidation|checkpoint/i);
       // A separate pre-authority journal proves the no-op path independently
       // of the changed-alpha replacement above.  It must emit only the
       // aggregate marker (zero mutations), persist the exact Proof bytes, and
