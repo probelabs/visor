@@ -111,3 +111,32 @@ is written as `baseline-failure.checkpoint.json`.
 `--preflight-only` remains the zero-model command documented above. Internal
 `--baseline-child` is not a public invocation: it requires the controller PID
 and the output directory produced by an accepted preflight.
+
+## Live selective resume (explicit opt-in)
+
+`--resume-only` requires an accepted baseline-only output directory and the
+same pinned subject/evaluator inputs. The controller creates the exclusive
+private `resume.started.json` marker before touching the workspace, checks the
+exact evaluator patch, applies it, and requires that only `http.go` and
+`http_test.go` differ. It runs the public Go tests offline, asks the pinned
+Proof CLI for canonical revalidation and WorkItems bytes, and records hashes,
+the changed component, and the diff digest without retaining evaluator or
+patch paths in the child hand-off.
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register/transpile-only \
+  examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts \
+  --resume-only \
+  --output /tmp/visor-exp-0209-live-baseline \
+  --subject /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/subject \
+  --evaluator /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/evaluator
+```
+
+The private `--resume-child` receives only the owned output and controller PID.
+It validates the marker, canonical Proof bytes, hashes, modes, and workspace
+diff before bootstrapping the sealed Proof admission provider and making one
+continuation call. A successful run writes `continued.checkpoint.json`,
+`resume-report.json`/`.md`, and `resume.completed.json`; failures report honest
+partial or unknown counts and never overwrite baseline or prior resume
+evidence. Resume is one-shot: a marker or any resume evidence rejects a later
+invocation.

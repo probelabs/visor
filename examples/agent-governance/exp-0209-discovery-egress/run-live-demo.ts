@@ -1,10 +1,10 @@
 /*
- * EXP-0209 live-demo preflight and explicitly-invoked baseline child.
+ * EXP-0209 live-demo preflight, baseline child, and selective-resume child.
  *
  * The preflight proves the subject/evaluator boundary, the pinned local tool
  * chain, the Proof oracle, and the graph contract before baseline-only is
- * allowed to dispatch any governed/model work. Baseline-only's live work is
- * confined to its fresh internal child process.
+ * allowed to dispatch any governed/model work. Baseline-only and resume-only
+ * live work is confined to their fresh internal child processes.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -31,6 +31,7 @@ import {
   proofCandidateEvidenceFingerprint,
   governedCanonicalJson,
   governedPayloadFingerprint,
+  proofCanonicalJson,
 } from '../../../src/providers/proof-wire';
 import {
   canonicalGraphCheckpointJson,
@@ -82,8 +83,18 @@ const BASELINE_CHECKPOINT_FILE = 'baseline.checkpoint.json';
 const BASELINE_REPORT_FILE = 'baseline-report.json';
 const BASELINE_REPORT_MARKDOWN_FILE = 'baseline-report.md';
 const BASELINE_CHILD_FLAG = '--baseline-child';
+const RESUME_CHILD_FLAG = '--resume-child';
 const CONTROLLER_PID_FLAG = '--controller-pid';
 const BASELINE_ROLE_RUN_LIMIT = 5;
+const RESUME_STARTED_FILE = 'resume.started.json';
+const RESUME_REVALIDATION_FILE = 'resume.revalidation.json';
+const RESUME_WORK_ITEMS_FILE = 'resume.work-items.json';
+const RESUME_INPUT_METADATA_FILE = 'resume-inputs.json';
+const RESUME_CHECKPOINT_FILE = 'continued.checkpoint.json';
+const RESUME_REPORT_FILE = 'resume-report.json';
+const RESUME_REPORT_MARKDOWN_FILE = 'resume-report.md';
+const RESUME_FAILURE_CHECKPOINT_FILE = 'resume-failure.checkpoint.json';
+const RESUME_COMPLETED_FILE = 'resume.completed.json';
 const OFFLINE_GO_ENV = {
   GOPROXY: 'off',
   GOSUMDB: 'off',
@@ -201,7 +212,7 @@ function verifyLocalModules(): JsonRecord {
   return modules;
 }
 
-type LiveMode = 'preflight-only' | 'baseline-only' | 'baseline-child';
+type LiveMode = 'preflight-only' | 'baseline-only' | 'baseline-child' | 'resume-only' | 'resume-child';
 
 function parseArgs(argv: readonly string[]): {
   mode: LiveMode;
@@ -213,6 +224,8 @@ function parseArgs(argv: readonly string[]): {
   let preflightOnly = false;
   let baselineOnly = false;
   let baselineChild = false;
+  let resumeOnly = false;
+  let resumeChild = false;
   let outputValue: string | undefined;
   let subjectValue: string | undefined;
   let evaluatorValue: string | undefined;
@@ -227,8 +240,16 @@ function parseArgs(argv: readonly string[]): {
       baselineOnly = true;
       continue;
     }
+    if (flag === '--resume-only') {
+      resumeOnly = true;
+      continue;
+    }
     if (flag === BASELINE_CHILD_FLAG) {
       baselineChild = true;
+      continue;
+    }
+    if (flag === RESUME_CHILD_FLAG) {
+      resumeChild = true;
       continue;
     }
     if (flag === '--output' || flag === '--subject' || flag === '--evaluator') {
@@ -251,16 +272,16 @@ function parseArgs(argv: readonly string[]): {
     }
     throw new Error(`unsupported option ${flag}`);
   }
-  const selected = [preflightOnly, baselineOnly, baselineChild].filter(Boolean).length;
+  const selected = [preflightOnly, baselineOnly, baselineChild, resumeOnly, resumeChild].filter(Boolean).length;
   assertInvariant('exactly one live mode is selected', selected === 1);
-  if (baselineChild) {
-    assertInvariant(`${CONTROLLER_PID_FLAG} is required for the baseline child`, controllerPid !== undefined);
-    assertInvariant('baseline child does not accept subject/evaluator paths', subjectValue === undefined && evaluatorValue === undefined);
+  if (baselineChild || resumeChild) {
+    assertInvariant(`${CONTROLLER_PID_FLAG} is required for the child`, controllerPid !== undefined);
+    assertInvariant('child does not accept subject/evaluator paths', subjectValue === undefined && evaluatorValue === undefined);
   }
   const defaultSubject = '/Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/subject';
   const defaultEvaluator = '/Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/evaluator';
   return {
-    mode: baselineChild ? 'baseline-child' : baselineOnly ? 'baseline-only' : 'preflight-only',
+    mode: resumeChild ? 'resume-child' : baselineChild ? 'baseline-child' : resumeOnly ? 'resume-only' : baselineOnly ? 'baseline-only' : 'preflight-only',
     outputDirectory: path.resolve(outputValue || path.join(os.tmpdir(), `visor-exp-0209-preflight-${process.pid}`)),
     subjectDirectory: path.resolve(subjectValue || defaultSubject),
     evaluatorDirectory: path.resolve(evaluatorValue || defaultEvaluator),
@@ -868,6 +889,96 @@ function generatedClaimView(claim: JsonRecord, label: string): JsonRecord {
 }
 
 /**
+ * Shared candidate-side contract for baseline and continuation evidence. Keep
+ * the full Probe attestation/result-identity checks in one place: a resume
+ * candidate must be indistinguishable from a baseline governed inspection.
+ */
+function validateCandidateExecutionContract(
+  candidate: JsonRecord,
+  attempts: readonly JsonRecord[],
+  label: string,
+): { evidence: JsonRecord; attempt: JsonRecord; invocation: JsonRecord } {
+  assertInvariant(`${label} is emitted by inspect`, candidate.producerCheckId === 'inspect' && candidate.checkId === 'inspect');
+  assertInvariant(`${label} has its evidence sidecar`, candidate.proofCandidateEvidence !== undefined && typeof candidate.proofCandidateEvidenceFingerprint === 'string');
+  const evidence = validateProofCandidateEvidence(candidate.proofCandidateEvidence) as JsonRecord;
+  assertInvariant(`${label} evidence fingerprint is bound`, candidate.proofCandidateEvidenceFingerprint === proofCandidateEvidenceFingerprint(evidence));
+  assertInvariant(`${label} evidence wire mode matches publication`, governedWireModeFromEvidence(evidence) === candidate.wireMode);
+  const mode = governedWireModeFromEvidence(evidence);
+  assertInvariant(`${label} wire mode matches its scope`, mode === (array(candidate.scope, `${label} scope`).length === 1 ? 'proof' : 'generic') && candidate.wireMode === mode);
+  const payloadBytes = governedCanonicalJson(candidate.payload, mode);
+  assertInvariant(`${label} payload fingerprint is bound`, candidate.payloadFingerprint === governedPayloadFingerprint(candidate.payload, mode));
+  assertInvariant(`${label} identity digest matches payload`, evidence.probe.resultIdentity.resultDigest === governedResultDigest(candidate.payload, mode));
+  assertInvariant(`${label} identity byte count matches payload`, evidence.probe.resultIdentity.canonicalBytes === Buffer.byteLength(payloadBytes, 'utf8'));
+  const invocation = record(evidence.role.invocation, `${label} invocation`);
+  assertInvariant(`${label} invocation is onboard owner`, invocation.role_id === 'onboard' && invocation.stance === 'owner');
+  const attestation = record(evidence.probe.attestation, `${label} Probe attestation`);
+  const requested = record(attestation.requested, `${label} requested attestation`);
+  const observed = record(attestation.observed, `${label} observed attestation`);
+  const dispatch = record(attestation.dispatch, `${label} Probe dispatch attestation`);
+  assertInvariant(`${label} attestation uses Luna xhigh readonly never`, attestation.profileId === 'luna-xhigh-readonly-v1' && requested.model === 'gpt-5.6-luna' && requested.reasoningEffort === 'xhigh' && requested.sandbox === 'read-only' && requested.approvalPolicy === 'never' && observed.model === 'gpt-5.6-luna' && observed.modelProviderId === 'openai' && observed.reasoningEffort === 'xhigh' && observed.approvalPolicy === 'never' && observed.filesystem === 'restricted-read-root' && observed.network === 'restricted');
+  assertInvariant(`${label} attestation binds the Probe dispatch`, dispatch.source === 'probe-host-tools-call' && dispatch.tool === 'codex' && typeof dispatch.promptDigest === 'string' && /^sha256:[0-9a-f]{64}$/.test(dispatch.promptDigest));
+  const matchingAttempts = attempts.filter(value => value.nodeGenerationId === candidate.nodeGenerationId && value.attemptId === candidate.attemptId && value.fence === candidate.fence);
+  assertInvariant(`${label} is bound to exactly one inspect attempt`, matchingAttempts.length === 1 && sameBinding(matchingAttempts[0].scope, candidate.scope));
+  return { evidence, attempt: matchingAttempts[0], invocation };
+}
+
+/**
+ * Shared admission-side contract. In addition to checking the exact Proof
+ * decision wire and managed termination binding, this validates the projected
+ * candidate/admission pair with the same catalog validator used by baseline.
+ */
+function validateAdmissionExecutionContract(
+  admission: JsonRecord,
+  candidate: JsonRecord,
+  inspectTerminals: readonly JsonRecord[],
+  projection: JsonRecord,
+  label: string,
+): JsonRecord {
+  const parents = Array.isArray(admission.parentClaimIds) ? admission.parentClaimIds : [];
+  assertInvariant(`${label} has exactly one candidate parent`, parents.length === 1 && parents[0] === candidate.claimId && sameBinding(candidate.scope, admission.scope));
+  const payload = record(admission.payload, `${label} payload`);
+  assertInvariant(`${label} retains Proof decision wire`, typeof payload.__proof_admission_wire === 'string' && payload.__proof_admission_wire.length > 0);
+  const wire = record(JSON.parse(payload.__proof_admission_wire), `${label} decision wire`);
+  const receipt = record(wire.receipt, `${label} receipt`);
+  const depth = array(admission.scope, `${label} scope`).length;
+  assertInvariant(`${label} decision is admitted`, wire.status === 'ADMITTED' && wire.reject_code === null && receipt.Status === 'ADMITTED' && receipt.Claim === 'proof.candidate@1' && receipt.ClaimID === candidate.claimId);
+  const inspectTerminal = inspectTerminals.filter(value => {
+    const binding = record(value.binding, `${label} inspect terminal binding`);
+    return binding.nodeGenerationId === candidate.nodeGenerationId && binding.attemptId === candidate.attemptId && binding.fence === candidate.fence;
+  });
+  assertInvariant(`${label} has exactly one candidate managed termination`, inspectTerminal.length === 1);
+  const terminal = inspectTerminal[0];
+  const terminalBinding = record(terminal.binding, `${label} terminal binding`);
+  assertInvariant(`${label} termination is clean/completed`, terminal.cleanupStatus === 'clean' && terminal.controllerDecision === 'completed' && terminal.failureCode === null && terminal.sessionId === candidate.sessionId);
+  assertInvariant(`${label} termination binding is exact`, sameBinding(terminalBinding, {
+    managedRunId: terminalBinding.managedRunId,
+    sessionId: candidate.sessionId,
+    checkId: candidate.checkId,
+    scope: candidate.scope,
+    nodeInstanceId: candidate.nodeInstanceId,
+    nodeGenerationId: candidate.nodeGenerationId,
+    attemptId: candidate.attemptId,
+    fence: candidate.fence,
+  }));
+  const candidateBinding = proofBindingForEvent({ ...candidate, managedRunId: terminalBinding.managedRunId });
+  assertInvariant(`${label} receipt binding matches inspect termination`, sameBinding(receipt.Binding, candidateBinding) && record(receipt.Termination, `${label} termination`).Type === 'ManagedRunTerminated' && sameBinding(record(receipt.Termination, `${label} termination`).Binding, candidateBinding));
+  assertInvariant(`${label} receipt identity is present`, typeof receipt.receipt_id === 'string' && /^sha256:[0-9a-f]{64}$/.test(receipt.receipt_id));
+  assertInvariant(`${label} version and subject kind match scope`, depth === 1 ? receipt.Version === 'proof.role-result-candidate-admission/v2' && record(receipt.Subject, `${label} project subject`).kind === 'project' : depth === 2 ? receipt.Version === 'proof.role-result-candidate-admission/v1' && record(receipt.Subject, `${label} component subject`).kind === 'component' : false);
+  const candidateClaim = projection.claimsById?.[candidate.claimId];
+  const admissionClaim = projection.claimsById?.[admission.claimId];
+  assertInvariant(`${label} projected candidate/admission are active`, candidateClaim?.active === true && admissionClaim?.active === true);
+  try {
+    const candidateView = generatedClaimView(candidateClaim, `${label} candidate projection`);
+    const admissionView = generatedClaimView(admissionClaim, `${label} admission projection`);
+    if (depth === 1) validateProofCandidateAdmissionBinding(candidateView as any, admissionView as any);
+    else validateProofComponentCandidateAdmissionBinding(candidateView as any, admissionView as any);
+  } catch (error) {
+    throw new Error(`${label} Proof admission binding is detached: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return receipt;
+}
+
+/**
  * Validate the complete, quiescent four-role baseline. This function only
  * consumes a checkpoint and compiled config: it performs no filesystem,
  * process, Probe, or Proof calls, which makes it safe to exercise in focused
@@ -920,27 +1031,7 @@ export function validateLiveBaselineCheckpoint(
     const key = scopeKey(candidate.scope, 'candidate');
     assertInvariant('candidate scopes are unique', !candidateByScope.has(key));
     candidateByScope.set(key, candidate);
-    assertInvariant('candidate is emitted by inspect', candidate.producerCheckId === 'inspect' && candidate.checkId === 'inspect');
-    assertInvariant('candidate has its evidence sidecar', candidate.proofCandidateEvidence !== undefined && typeof candidate.proofCandidateEvidenceFingerprint === 'string');
-    const evidence = validateProofCandidateEvidence(candidate.proofCandidateEvidence);
-    assertInvariant('candidate evidence fingerprint is bound', candidate.proofCandidateEvidenceFingerprint === proofCandidateEvidenceFingerprint(evidence));
-    assertInvariant('candidate evidence wire mode matches publication', governedWireModeFromEvidence(evidence) === candidate.wireMode);
-    const mode = governedWireModeFromEvidence(evidence);
-    assertInvariant('candidate wire mode matches its scope', mode === (array(candidate.scope, 'candidate').length === 1 ? 'proof' : 'generic') && candidate.wireMode === mode);
-    const payloadBytes = governedCanonicalJson(candidate.payload, mode);
-    assertInvariant('candidate payload fingerprint is bound', candidate.payloadFingerprint === governedPayloadFingerprint(candidate.payload, mode));
-    assertInvariant('candidate identity digest matches payload', evidence.probe.resultIdentity.resultDigest === governedResultDigest(candidate.payload, mode));
-    assertInvariant('candidate identity byte count matches payload', evidence.probe.resultIdentity.canonicalBytes === Buffer.byteLength(payloadBytes, 'utf8'));
-    const invocation = record(evidence.role.invocation, 'candidate invocation');
-    assertInvariant('candidate invocation is onboard owner', invocation.role_id === 'onboard' && invocation.stance === 'owner');
-    const attestation = record(evidence.probe.attestation, 'Probe attestation');
-    const requested = record(attestation.requested, 'requested attestation');
-    const observed = record(attestation.observed, 'observed attestation');
-    const dispatch = record(attestation.dispatch, 'Probe dispatch attestation');
-    assertInvariant('candidate attestation uses Luna xhigh readonly never', attestation.profileId === 'luna-xhigh-readonly-v1' && requested.model === 'gpt-5.6-luna' && requested.reasoningEffort === 'xhigh' && requested.sandbox === 'read-only' && requested.approvalPolicy === 'never' && observed.model === 'gpt-5.6-luna' && observed.modelProviderId === 'openai' && observed.reasoningEffort === 'xhigh' && observed.approvalPolicy === 'never' && observed.filesystem === 'restricted-read-root' && observed.network === 'restricted');
-    assertInvariant('candidate attestation binds the Probe dispatch', dispatch.source === 'probe-host-tools-call' && dispatch.tool === 'codex' && typeof dispatch.promptDigest === 'string' && /^sha256:[0-9a-f]{64}$/.test(dispatch.promptDigest));
-    const attempt = attempts.find(value => value.nodeGenerationId === candidate.nodeGenerationId && value.attemptId === candidate.attemptId && value.fence === candidate.fence);
-    assertInvariant('candidate is bound to one inspect attempt', attempt !== undefined && sameBinding(attempt.scope, candidate.scope));
+    const { invocation } = validateCandidateExecutionContract(candidate, attempts, `candidate ${key}`);
     if (array(candidate.scope, 'project candidate').length === 1) {
       assertInvariant('project candidate uses Proof catalog schema', invocation.output_schema_id === 'proof.component-catalog-candidate@1');
       const payload = record(candidate.payload, 'project candidate payload');
@@ -952,6 +1043,7 @@ export function validateLiveBaselineCheckpoint(
     }
   }
 
+  const projection = restored.getInstanceProjection() as any;
   const terminals = events.filter(event => event.type === 'ManagedRunTerminated');
   assertInvariant('all managed runs terminate cleanly and completed', terminals.every(event => event.cleanupStatus === 'clean' && event.controllerDecision === 'completed' && event.failureCode === null));
   const inspectTerminals = terminals.filter(event => record(event.binding, 'managed terminal binding').checkId === 'inspect');
@@ -982,40 +1074,9 @@ export function validateLiveBaselineCheckpoint(
     const candidate = candidates.find(value => value.claimId === parents[0] && sameBinding(value.scope, admission.scope));
     assertInvariant('admission uniquely matches candidate', candidate !== undefined && !admittedCandidates.has(candidate.claimId));
     admittedCandidates.add(candidate.claimId);
-    const payload = record(admission.payload, 'admission payload');
-    assertInvariant('admission retains Proof decision wire', typeof payload.__proof_admission_wire === 'string' && payload.__proof_admission_wire.length > 0);
-    const wire = record(JSON.parse(payload.__proof_admission_wire), 'admission decision wire');
-    const receipt = record(wire.receipt, 'admission receipt');
-    const depth = array(admission.scope, 'admission').length;
-    assertInvariant('admission decision is admitted', wire.status === 'ADMITTED' && wire.reject_code === null && receipt.Status === 'ADMITTED' && receipt.Claim === 'proof.candidate@1' && receipt.ClaimID === candidate.claimId);
-    const inspectTerminal = inspectTerminals.find(value => {
-      const binding = record(value.binding, 'inspect terminal binding');
-      return binding.nodeGenerationId === candidate.nodeGenerationId && binding.attemptId === candidate.attemptId && binding.fence === candidate.fence;
-    });
-    assertInvariant('admission has its candidate managed binding', inspectTerminal !== undefined);
-    const candidateBinding = proofBindingForEvent({ ...candidate, managedRunId: record(inspectTerminal.binding, 'inspect terminal binding').managedRunId });
-    assertInvariant('admission receipt binding matches inspect terminal', sameBinding(receipt.Binding, candidateBinding) && record(receipt.Termination, 'admission termination').Type === 'ManagedRunTerminated' && sameBinding(record(receipt.Termination, 'admission termination').Binding, candidateBinding));
-    assertInvariant('admission receipt identity is present', typeof receipt.receipt_id === 'string' && /^sha256:[0-9a-f]{64}$/.test(receipt.receipt_id));
-    assertInvariant('admission version and subject kind match scope', depth === 1 ? receipt.Version === 'proof.role-result-candidate-admission/v2' && record(receipt.Subject, 'project admission subject').kind === 'project' : depth === 2 ? receipt.Version === 'proof.role-result-candidate-admission/v1' && record(receipt.Subject, 'component admission subject').kind === 'component' : false);
+    validateAdmissionExecutionContract(admission, candidate as JsonRecord, inspectTerminals, projection, `baseline admission ${admission.claimId}`);
   }
   assertInvariant('all four candidates have one admission', admittedCandidates.size === 4);
-
-  const projection = restored.getInstanceProjection() as any;
-  for (const candidateEvent of candidates) {
-    const admissionEvent = admissions.find(value => Array.isArray(value.parentClaimIds) && value.parentClaimIds.length === 1 && value.parentClaimIds[0] === candidateEvent.claimId);
-    assertInvariant('candidate has one projected admission', admissionEvent !== undefined);
-    const candidateClaim = projection.claimsById[candidateEvent.claimId];
-    const admissionClaim = projection.claimsById[admissionEvent.claimId];
-    assertInvariant('candidate and admission projections are active', candidateClaim?.active === true && admissionClaim?.active === true);
-    try {
-      const candidateView = generatedClaimView(candidateClaim, 'candidate projection');
-      const admissionView = generatedClaimView(admissionClaim, 'admission projection');
-      if (array(candidateEvent.scope, 'candidate').length === 1) validateProofCandidateAdmissionBinding(candidateView as any, admissionView as any);
-      else validateProofComponentCandidateAdmissionBinding(candidateView as any, admissionView as any);
-    } catch (error) {
-      throw new Error(`Proof admission binding is detached for ${candidateEvent.claimId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
   const project = Object.values(projection.instancesById).find((instance: any) => instance.parentSubgraphInstanceId === undefined && instance.itemKey === projectScopeParts[0]?.key && instance.status === 'active') as any;
   assertInvariant('active project instance is present', project !== undefined);
   const children = Object.values(projection.instancesById).filter((instance: any) => instance.parentSubgraphInstanceId === project.subgraphInstanceId && instance.status === 'active') as any[];
@@ -1069,6 +1130,228 @@ export function validateLiveBaselineCheckpoint(
     componentIds: Object.freeze(sortedComponentIds),
     receiptId,
     counts: Object.freeze({ inspectAttempts: attempts.length, proofCandidates: candidates.length, proofAdmissions: admissions.length, inspectTerminations: inspectTerminals.length, components: children.length, currentCatalogs: currentCatalogs.length, currentRevalidations: currentRevalidations.length, projectReconciliations: currentReceipts.length }),
+    gatePassed: true,
+  };
+}
+
+export interface LiveResumeCheckpointValidation {
+  readonly sessionId: string;
+  readonly graphSemanticDigest: string;
+  readonly changedComponentId: string;
+  readonly changedPaths: readonly string[];
+  readonly suffix: readonly string[];
+  readonly receiptIds: Readonly<{ baseline: string; replacement: string }>;
+  readonly counts: Readonly<{
+    inspectAttempts: number;
+    proofCandidates: number;
+    proofAdmissions: number;
+    inspectTerminations: number;
+    components: number;
+    workItems: number;
+    componentAdmissions: number;
+    projectReconciliations: number;
+    mutationEventCount: number;
+  }>;
+  readonly gatePassed: true;
+}
+
+type LiveResumeValidationOptions = {
+  readonly changedComponentId?: string;
+  readonly changedComponent?: string;
+  readonly changedPaths?: readonly string[];
+  readonly mutationEventCount?: number;
+};
+
+function canonicalValue(value: unknown): string {
+  return canonicalGraphCheckpointJson(value);
+}
+
+function projectionComponentSlice(projection: JsonRecord, componentId: string): JsonRecord {
+  const instances = Object.values(projection.instancesById || {}).filter((value: any) => value.itemKey === componentId);
+  const instanceIds = new Set(instances.map((value: any) => value.subgraphInstanceId));
+  const generations = Object.values(projection.generationsById || {}).filter((value: any) => instanceIds.has((value as any).subgraphInstanceId));
+  const claims = Object.values(projection.claimsById || {}).filter((value: any) => instanceIds.has((value as any).subgraphInstanceId));
+  return {
+    instances,
+    generations,
+    claims,
+  };
+}
+
+function activeComponentInstances(projection: JsonRecord): JsonRecord[] {
+  return Object.values(projection.instancesById || {}).filter((value: any) => value.status === 'active' && value.parentSubgraphInstanceId) as JsonRecord[];
+}
+
+function activeClaims(projection: JsonRecord, claim: string, scopeLength?: number): JsonRecord[] {
+  return Object.values(projection.claimsById || {}).filter((value: any) => value.active === true && value.claim === claim && (scopeLength === undefined || value.scope?.length === scopeLength)) as JsonRecord[];
+}
+
+function eventScopeLength(event: JsonRecord): number {
+  return Array.isArray(event.scope) ? event.scope.length : -1;
+}
+
+function suffixAttemptSequence(events: readonly JsonRecord[], baselineLength: number): {
+  starts: JsonRecord[];
+  suffix: JsonRecord[];
+} {
+  const suffix = events.slice(baselineLength);
+  const starts = suffix.filter(event => event.type === 'AttemptStarted');
+  assertInvariant('resume suffix has exactly four attempt starts', starts.length === 4);
+  assertInvariant('resume suffix dispatches inspect, proof_admit, verify, project_reconcile exactly once',
+    canonicalValue(starts.map(event => event.checkId)) === canonicalValue(['inspect', 'proof_admit', 'verify', 'project_reconcile']));
+  for (const [index, start] of starts.entries()) {
+    const completes = suffix.filter(event => event.type === 'AttemptCompleted' && event.checkId === start.checkId && event.attemptId === start.attemptId && event.fence === start.fence && event.nodeGenerationId === start.nodeGenerationId);
+    assertInvariant(`resume ${start.checkId} attempt completes exactly once`, completes.length === 1);
+    if (index < 3) assertInvariant(`resume ${start.checkId} is scoped to the changed component`, eventScopeLength(start) === 2);
+    else assertInvariant('resume project reconciliation is project-scoped', eventScopeLength(start) === 1);
+  }
+  return { starts, suffix };
+}
+
+/**
+ * Validate one selective Proof continuation without starting a provider. The
+ * baseline and continuation must be quiescent Graph-v2 checkpoints from the
+ * same effective config. The optional fourth argument is intentionally plain
+ * data so focused tests can exercise the complete gate with zero model calls.
+ */
+export function validateLiveResumeCheckpoint(
+  checkpoint: unknown,
+  baselineCheckpoint: unknown,
+  config: JsonRecord,
+  options: LiveResumeValidationOptions = {},
+): LiveResumeCheckpointValidation {
+  // Permit callers that naturally write (checkpoint, config, baseline,
+  // options) while retaining the documented continuation-first form.
+  if (!(baselineCheckpoint as any)?.events && (config as any)?.events) {
+    const swapped = baselineCheckpoint;
+    baselineCheckpoint = config;
+    config = swapped as JsonRecord;
+  }
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as any);
+  const baselineEnvelope = record(baselineCheckpoint, 'resume baseline checkpoint');
+  const envelope = record(checkpoint, 'resume checkpoint');
+  const baselineEvents = array(baselineEnvelope.events, 'resume baseline events');
+  const events = array(envelope.events, 'resume events');
+  const baselineCanonical = canonicalValue(baselineCheckpoint);
+  const canonical = canonicalValue(checkpoint);
+  assertInvariant('resume baseline restores and re-exports canonically',
+    canonicalValue(ExecutionJournal.restoreGraphCheckpoint(plan, baselineCheckpoint).exportGraphCheckpoint(baselineEnvelope.sessionId)) === baselineCanonical);
+  const restored = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  assertInvariant('resume restores and re-exports canonically', canonicalValue(restored.exportGraphCheckpoint(envelope.sessionId)) === canonical);
+  assertInvariant('resume projection replay agrees', canonicalValue(restored.getInstanceProjection()) === canonicalValue(restored.replayInstanceProjection()));
+  const baselineGate = validateLiveBaselineCheckpoint(baselineCheckpoint, config);
+  assertInvariant('resume session is the accepted baseline session', envelope.sessionId === baselineGate.sessionId);
+  assertInvariant('resume graph digest is the accepted baseline digest', envelope.graphSemanticDigest === baselineGate.graphSemanticDigest && envelope.graphSemanticDigest === plan.expansionPlan.graphSemanticDigest);
+  assertInvariant('resume event prefix is byte-identical to baseline', canonicalValue(events.slice(0, baselineEvents.length)) === canonicalValue(baselineEvents));
+  assertInvariant('resume appends at least one event', events.length > baselineEvents.length);
+
+  const projection = restored.getInstanceProjection() as any;
+  const baselineProjection = ExecutionJournal.restoreGraphCheckpoint(plan, baselineCheckpoint).getInstanceProjection() as any;
+  const components = activeComponentInstances(projection);
+  assertInvariant('resume retains exactly three active components', components.length === 3 && new Set(components.map(value => value.itemKey)).size === 3);
+  const componentIds = components.map(value => String(value.itemKey)).sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
+  assertInvariant('resume component set matches baseline', canonicalValue(componentIds) === canonicalValue([...baselineGate.componentIds]));
+
+  const baselineSlices = new Map(baselineGate.componentIds.map(id => [id, projectionComponentSlice(baselineProjection, id)]));
+  const finalSlices = new Map(componentIds.map(id => [id, projectionComponentSlice(projection, id)]));
+  const changedBySlice = componentIds.filter(id => canonicalValue(baselineSlices.get(id)) !== canonicalValue(finalSlices.get(id)));
+  const inferredChanged = changedBySlice.length === 1 ? changedBySlice[0] : undefined;
+  const changedComponentId = options.changedComponentId || options.changedComponent || inferredChanged || '';
+  assertInvariant('exactly one component slice changed', changedBySlice.length === 1 && changedComponentId === inferredChanged);
+  assertInvariant('changed component is active and known', componentIds.includes(changedComponentId));
+
+  const baselineItems = activeClaims(baselineProjection, 'component.work_item@1', 2);
+  const finalItems = activeClaims(projection, 'component.work_item@1', 2);
+  assertInvariant('resume has exactly three current WorkItems', finalItems.length === 3 && new Set(finalItems.map(value => value.payload.component_id)).size === 3);
+  const baselineItemByComponent = new Map(baselineItems.map(value => [String(value.payload.component_id), value]));
+  const finalItemByComponent = new Map(finalItems.map(value => [String(value.payload.component_id), value]));
+  assertInvariant('baseline and current WorkItems close the same three components', componentIds.every(id => baselineItemByComponent.has(id) && finalItemByComponent.has(id)));
+  const changedItems = componentIds.filter(id => canonicalValue(baselineItemByComponent.get(id)?.payload) !== canonicalValue(finalItemByComponent.get(id)?.payload));
+  assertInvariant('exactly one of three WorkItem authorities/input states changed', changedItems.length === 1 && changedItems[0] === changedComponentId);
+  for (const id of componentIds.filter(value => value !== changedComponentId)) {
+    assertInvariant(`unchanged ${id} WorkItem is byte-identical`, canonicalValue(baselineItemByComponent.get(id)?.payload) === canonicalValue(finalItemByComponent.get(id)?.payload));
+    assertInvariant(`unchanged ${id} component projection slice is byte-identical`, canonicalValue(baselineSlices.get(id)) === canonicalValue(finalSlices.get(id)));
+  }
+  const changedItem = record(finalItemByComponent.get(changedComponentId), 'changed WorkItem');
+  const changedPaths = [...(options.changedPaths || [])].map(String).sort();
+  const baselineChangedItem = record(baselineItemByComponent.get(changedComponentId), 'baseline changed WorkItem');
+  const changedInputPaths = array(changedItem.payload.proof_input_state, 'changed WorkItem input state').filter(row => {
+    const value = String(row.path);
+    const before = (baselineChangedItem.payload.proof_input_state as readonly JsonRecord[]).find(previous => previous.path === value);
+    return !before || before.file_hash !== row.file_hash;
+  }).map(value => String(value.path)).sort();
+  const effectiveChangedPaths = changedPaths.length > 0 ? changedPaths : changedInputPaths;
+  assertInvariant('resume changed paths are non-empty', effectiveChangedPaths.length > 0);
+  assertInvariant('changed WorkItem owns every changed path', effectiveChangedPaths.every(file => Array.isArray(changedItem.payload.sorted_owned_paths) && changedItem.payload.sorted_owned_paths.includes(file)));
+  assertInvariant('changed WorkItem input state changes every changed path', effectiveChangedPaths.every(file => changedInputPaths.includes(file)));
+
+  const suffixResult = suffixAttemptSequence(events, baselineEvents.length);
+  const suffix = suffixResult.suffix;
+  const newCandidates = suffix.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
+  const newAdmissions = suffix.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1');
+  const newTerminals = suffix.filter(event => event.type === 'ManagedRunTerminated' && record(event.binding, 'resume terminal binding').checkId === 'inspect');
+  assertInvariant('resume adds exactly one governed candidate, admission, and clean inspect termination', newCandidates.length === 1 && newAdmissions.length === 1 && newTerminals.length === 1);
+  const newCandidate = newCandidates[0];
+  const newAdmission = newAdmissions[0];
+  assertInvariant('new candidate and admission are changed-component scoped', eventScopeLength(newCandidate) === 2 && eventScopeLength(newAdmission) === 2 && sameBinding(newCandidate.scope, newAdmission.scope));
+  assertInvariant('new component admission is active in the current projection', projection.claimsById[newAdmission.claimId]?.active === true);
+  const candidateScopeParts = array(newCandidate.scope, 'resume candidate scope');
+  assertInvariant('new candidate scope names the changed component', String(candidateScopeParts[candidateScopeParts.length - 1].key) === changedComponentId);
+  validateCandidateExecutionContract(newCandidate, suffixResult.starts, 'resume candidate');
+  validateAdmissionExecutionContract(newAdmission, newCandidate, newTerminals, projection, 'resume admission');
+
+  const candidates = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1');
+  const admissions = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1');
+  const inspectAttempts = events.filter(event => event.type === 'AttemptStarted' && event.checkId === 'inspect');
+  const inspectTerminations = events.filter(event => event.type === 'ManagedRunTerminated' && record(event.binding, 'inspect terminal').checkId === 'inspect');
+  assertInvariant('resume totals are exactly five candidates/admissions/inspects', candidates.length === 5 && admissions.length === 5 && inspectAttempts.length === 5 && inspectTerminations.length === 5);
+  const componentAdmissions = admissions.filter(event => eventScopeLength(event) === 2);
+  assertInvariant('resume has exactly three current component admissions', activeClaims(projection, 'proof.admitted_receipt@1', 2).length === 3 && componentAdmissions.length === 4);
+
+  const oldItem = baselineItemByComponent.get(changedComponentId) as JsonRecord;
+  const currentItem = finalItemByComponent.get(changedComponentId) as JsonRecord;
+  assertInvariant('old changed WorkItem is inactive and replacement is current', projection.claimsById[oldItem.claimId]?.active === false && projection.claimsById[currentItem.claimId]?.active === true && oldItem.claimId !== currentItem.claimId);
+  const oldComponentClaims = Object.values(baselineProjection.claimsById || {}).filter((value: any) => value.subgraphInstanceId === oldItem.subgraphInstanceId && ['proof.candidate@1', 'proof.admitted_receipt@1'].includes(value.claim)) as JsonRecord[];
+  for (const oldClaim of oldComponentClaims) assertInvariant(`old changed ${oldClaim.claim} is inactive`, projection.claimsById[oldClaim.claimId]?.active === false);
+  const currentComponentClaims = activeClaims(projection, 'proof.admitted_receipt@1', 2).filter(value => value.subgraphInstanceId === currentItem.subgraphInstanceId);
+  assertInvariant('changed component has one current replacement admission', currentComponentClaims.length === 1 && currentComponentClaims[0].active === true);
+  const changedCurrentGenerations = Object.values(projection.generationsById || {}).filter((value: any) => value.subgraphInstanceId === currentItem.subgraphInstanceId && value.status === 'completed' && projection.activeGenerationIdByNode[value.nodeInstanceId] === value.nodeGenerationId);
+  assertInvariant('changed component current inspect/proof_admit/verify generations are complete', ['inspect', 'proof_admit', 'verify'].every(checkId => changedCurrentGenerations.some((value: any) => value.checkId === checkId)));
+
+  const baselineProject = Object.values(baselineProjection.instancesById).find((value: any) => value.itemKey === 'journalservice' && !value.parentSubgraphInstanceId) as JsonRecord | undefined;
+  const finalProject = Object.values(projection.instancesById).find((value: any) => value.itemKey === 'journalservice' && !value.parentSubgraphInstanceId && value.status === 'active') as JsonRecord | undefined;
+  assertInvariant('baseline and current project instances exist', !!baselineProject && !!finalProject);
+  const projectReconcileGenerations = Object.values(projection.generationsById).filter((value: any) => value.subgraphInstanceId === finalProject?.subgraphInstanceId && value.checkId === 'project_reconcile') as JsonRecord[];
+  const baselineProjectGeneration = Object.values(baselineProjection.generationsById).find((value: any) => value.subgraphInstanceId === baselineProject?.subgraphInstanceId && value.checkId === 'project_reconcile' && value.status === 'completed') as JsonRecord | undefined;
+  const currentProjectGeneration = projectReconcileGenerations.find(value => value.status === 'completed' && projection.activeGenerationIdByNode[value.nodeInstanceId] === value.nodeGenerationId);
+  assertInvariant('old project reconciliation generation is inactive and new one is active/complete', !!baselineProjectGeneration && projection.generationsById[baselineProjectGeneration.nodeGenerationId]?.status === 'inactive' && !!currentProjectGeneration && currentProjectGeneration.nodeGenerationId !== baselineProjectGeneration.nodeGenerationId);
+  const baselineReceipt = activeClaims(baselineProjection, 'proof.project_reconciliation_receipt@1', 1)[0];
+  const currentReceipts = activeClaims(projection, 'proof.project_reconciliation_receipt@1', 1);
+  assertInvariant('old project reconciliation receipt is inactive and new receipt is active', !!baselineReceipt && projection.claimsById[baselineReceipt.claimId]?.active === false && currentReceipts.length === 1 && currentReceipts[0].claimId !== baselineReceipt.claimId);
+  assertInvariant('new reconciliation generation emits the new receipt', currentProjectGeneration.completedOutputClaimIds.length === 1 && currentProjectGeneration.completedOutputClaimIds[0] === currentReceipts[0].claimId);
+  const currentReceiptPayload = record(currentReceipts[0].payload, 'current reconciliation receipt');
+  assertInvariant('current reconciliation closes three components', Array.isArray(currentReceiptPayload.component_admissions) && currentReceiptPayload.component_admissions.length === 3 && Array.isArray(currentReceiptPayload.covered_work_item_digests) && currentReceiptPayload.covered_work_item_digests.length === 3);
+  const expectedParents = deriveProofProjectReconciliationParentClaimIds(projection, currentProjectGeneration);
+  assertInvariant('new reconciliation has exact current parent claims', canonicalValue(currentReceipts[0].parentClaimIds) === canonicalValue(expectedParents));
+  for (const generation of Object.values(projection.generationsById || {}) as JsonRecord[]) {
+    if (projection.activeGenerationIdByNode[generation.nodeInstanceId] === generation.nodeGenerationId) assertInvariant(`current ${generation.checkId} generation is complete`, generation.status === 'completed');
+  }
+
+  const appliedHeaders = suffix.filter(event => event.type === 'ProofCurrentCatalogAuthorityApplied');
+  assertInvariant('resume applies one non-empty Proof authority batch', appliedHeaders.length === 1 && Number.isSafeInteger(appliedHeaders[0].mutationEventCount) && appliedHeaders[0].mutationEventCount > 0);
+  assertInvariant('Proof authority application is bound to its preceding record', suffix[0].type === 'ProofCurrentCatalogAuthorityRecorded' && suffix[1].type === 'ProofCurrentCatalogAuthorityApplied' && suffix[0].authorityId === suffix[1].authorityId && suffix[1].projectSubgraphInstanceId === finalProject.subgraphInstanceId);
+  if (options.mutationEventCount !== undefined) assertInvariant('recorded Proof mutation count matches controller evidence', options.mutationEventCount === appliedHeaders[0].mutationEventCount);
+  const mutationEventCount = Number(appliedHeaders[0].mutationEventCount);
+  const dispatchSuffix = Object.freeze(suffixResult.starts.map((start, index) => index < 3 ? `${changedComponentId}:${start.checkId}` : 'journalservice:project_reconcile'));
+
+  return {
+    sessionId: String(envelope.sessionId),
+    graphSemanticDigest: String(envelope.graphSemanticDigest),
+    changedComponentId,
+    changedPaths: Object.freeze(effectiveChangedPaths),
+    suffix: dispatchSuffix,
+    receiptIds: Object.freeze({ baseline: String(record(baselineReceipt.payload, 'baseline reconciliation receipt').receipt_id), replacement: String(currentReceiptPayload.receipt_id) }),
+    counts: Object.freeze({ inspectAttempts: inspectAttempts.length, proofCandidates: candidates.length, proofAdmissions: admissions.length, inspectTerminations: inspectTerminations.length, components: components.length, workItems: finalItems.length, componentAdmissions: activeClaims(projection, 'proof.admitted_receipt@1', 2).length, projectReconciliations: currentReceipts.length, mutationEventCount }),
     gatePassed: true,
   };
 }
@@ -1140,6 +1423,400 @@ function validateBaselineWorkspace(preflight: JsonRecord, workspace: string): vo
   }
   for (const file of SUBJECT_FILES) {
     assertInvariant(`workspace ${file} still matches its pinned SHA-256`, sha256File(path.join(workspace, file)) === SUBJECT_SHA256[file]);
+  }
+}
+
+function regularPrivateFile(file: string, label: string): void {
+  const stat = fs.lstatSync(file);
+  assertInvariant(`${label} is a private regular file`, stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o777) === 0o600);
+}
+
+function writeExclusiveJson(file: string, value: unknown): void {
+  const bytes = `${JSON.stringify(value, null, 2)}\n`;
+  writeExclusiveBytes(file, bytes);
+}
+
+function writeExclusiveBytes(file: string, bytes: string): void {
+  const descriptor = fs.openSync(file, 'wx', 0o600);
+  try {
+    fs.writeFileSync(descriptor, bytes, 'utf8');
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  fs.chmodSync(file, 0o600);
+}
+
+function fsyncDirectory(directory: string): void {
+  try {
+    const descriptor = fs.openSync(directory, 'r');
+    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+  } catch {
+    // Directory fsync is not available on every supported filesystem. File
+    // contents are still fsynced before publication.
+  }
+}
+
+function resumeArtifacts(outputDirectory: string): string[] {
+  return [
+    RESUME_STARTED_FILE,
+    RESUME_REVALIDATION_FILE,
+    RESUME_WORK_ITEMS_FILE,
+    RESUME_INPUT_METADATA_FILE,
+    RESUME_CHECKPOINT_FILE,
+    RESUME_REPORT_FILE,
+    RESUME_REPORT_MARKDOWN_FILE,
+    RESUME_FAILURE_CHECKPOINT_FILE,
+    RESUME_COMPLETED_FILE,
+  ].filter(file => {
+    try {
+      fs.lstatSync(path.join(outputDirectory, file));
+      return true;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false;
+      throw error;
+    }
+  });
+}
+
+function resumeStagingEntries(outputDirectory: string): string[] {
+  try {
+    return fs.readdirSync(outputDirectory).filter(name => name.startsWith('.resume-publish-'));
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function resumeFinalArtifacts(outputDirectory: string): string[] {
+  return resumeArtifacts(outputDirectory).filter(file => [
+    RESUME_CHECKPOINT_FILE,
+    RESUME_REPORT_FILE,
+    RESUME_REPORT_MARKDOWN_FILE,
+    RESUME_FAILURE_CHECKPOINT_FILE,
+    RESUME_COMPLETED_FILE,
+  ].includes(file));
+}
+
+const RESUME_PUBLICATION_FILES = [
+  RESUME_CHECKPOINT_FILE,
+  RESUME_REPORT_FILE,
+  RESUME_REPORT_MARKDOWN_FILE,
+  RESUME_COMPLETED_FILE,
+] as const;
+
+type PublishedResumeArtifact = {
+  name: string;
+  device: number;
+  inode: number;
+};
+
+function createResumeStagingDirectory(outputDirectory: string): string {
+  const existing = resumeFinalArtifacts(outputDirectory);
+  const staging = resumeStagingEntries(outputDirectory);
+  assertInvariant('resume publication has no pre-existing final evidence', existing.length === 0);
+  assertInvariant('resume publication has no pre-existing staging directory', staging.length === 0);
+  const directory = fs.mkdtempSync(path.join(outputDirectory, '.resume-publish-'));
+  fs.chmodSync(directory, 0o700);
+  return directory;
+}
+
+function stageResumeArtifact(stagingDirectory: string, name: string, bytes: string): void {
+  assertInvariant('resume publication file name is fixed', RESUME_PUBLICATION_FILES.includes(name as typeof RESUME_PUBLICATION_FILES[number]));
+  const staged = path.join(stagingDirectory, `${name}.stage`);
+  writeExclusiveBytes(staged, bytes);
+  regularPrivateFile(staged, `staged resume ${name}`);
+}
+
+function publishResumeArtifacts(
+  outputDirectory: string,
+  stagingDirectory: string,
+  published: PublishedResumeArtifact[],
+): void {
+  assertInvariant('resume staging directory is output-owned', path.dirname(path.resolve(stagingDirectory)) === path.resolve(outputDirectory) && path.basename(stagingDirectory).startsWith('.resume-publish-'));
+  for (const name of RESUME_PUBLICATION_FILES) {
+    const staged = path.join(stagingDirectory, `${name}.stage`);
+    const final = path.join(outputDirectory, name);
+    try {
+      fs.lstatSync(final);
+      throw new Error(`resume final artifact already exists: ${name}`);
+    } catch (error) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+    fs.renameSync(staged, final);
+    const stat = fs.lstatSync(final);
+    published.push({ name, device: stat.dev, inode: stat.ino });
+    assertInvariant(`published resume ${name} is a private regular file`, stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o777) === 0o600);
+    fsyncDirectory(outputDirectory);
+  }
+  fsyncDirectory(outputDirectory);
+}
+
+function cleanupResumePublication(
+  outputDirectory: string,
+  stagingDirectory: string | undefined,
+  published: readonly PublishedResumeArtifact[],
+  preExisting: ReadonlySet<string>,
+): void {
+  for (const artifact of published) {
+    if (preExisting.has(artifact.name)) continue;
+    const file = path.join(outputDirectory, artifact.name);
+    try {
+      const stat = fs.lstatSync(file);
+      // A publication can only remove the same regular inode it just renamed;
+      // a symlink or replacement is never treated as child-owned evidence.
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.dev === artifact.device && stat.ino === artifact.inode) fs.unlinkSync(file);
+    } catch (error) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+  }
+  if (stagingDirectory !== undefined) {
+    const resolvedOutput = path.resolve(outputDirectory);
+    const resolvedStaging = path.resolve(stagingDirectory);
+    assertInvariant('resume staging cleanup is output-owned', path.dirname(resolvedStaging) === resolvedOutput && path.basename(resolvedStaging).startsWith('.resume-publish-'));
+    fs.rmSync(resolvedStaging, { recursive: true, force: true });
+  }
+  fsyncDirectory(outputDirectory);
+}
+
+function assertNoPriorResumeArtifacts(outputDirectory: string): void {
+  const existing = resumeArtifacts(outputDirectory);
+  const staging = resumeStagingEntries(outputDirectory);
+  assertInvariant('resume output has no prior marker or evidence', existing.length === 0 && staging.length === 0);
+}
+
+function proofJsonCommand(binary: string, args: readonly string[], workspace: string, input: string): { value: JsonRecord; bytes: string } {
+  const result = spawnSync(binary, [...args], {
+    cwd: workspace,
+    input,
+    encoding: 'utf8',
+    env: { ...process.env, ...OFFLINE_GO_ENV },
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) throw new Error(`Proof ${args.join(' ')} failed (${result.status}): ${boundedText(String(result.stderr || result.error || ''))}`);
+  const value = parseJsonOutput(String(result.stdout || ''), `Proof ${args.join(' ')}`);
+  return { value, bytes: proofCanonicalJson(value) };
+}
+
+function baselineDiscoveryClaims(checkpoint: JsonRecord): { candidate: JsonRecord; admission: JsonRecord } {
+  const events = array(checkpoint.events, 'baseline discovery events');
+  const candidates = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && eventScopeLength(event) === 1);
+  const admissions = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1' && eventScopeLength(event) === 1);
+  assertInvariant('baseline has one active project candidate', candidates.length === 1);
+  assertInvariant('baseline has one active project admission', admissions.length === 1);
+  assertInvariant('baseline project admission consumes candidate', Array.isArray(admissions[0].parentClaimIds) && admissions[0].parentClaimIds.length === 1 && admissions[0].parentClaimIds[0] === candidates[0].claimId);
+  return { candidate: candidates[0], admission: admissions[0] };
+}
+
+function activeRowsFromProjection(projection: JsonRecord): JsonRecord[] {
+  return activeClaims(projection, 'component.work_item@1', 2).sort((left, right) => String(left.payload.component_id).localeCompare(String(right.payload.component_id)));
+}
+
+function deriveResumeProofInputs(
+  proofBinary: string,
+  workspace: string,
+  baselineCheckpoint: JsonRecord,
+  baselineProjection: JsonRecord,
+  changedPaths: readonly string[],
+): { revalidationBytes: string; workItemsBytes: string; changedComponentId: string; authority: JsonRecord } {
+  const discovery = baselineDiscoveryClaims(baselineCheckpoint);
+  const admissionPayload = record(discovery.admission.payload, 'baseline project admission payload');
+  assertInvariant('baseline project admission retains exact Proof wire', typeof admissionPayload.__proof_admission_wire === 'string' && admissionPayload.__proof_admission_wire.length > 0);
+  const admissionWire = admissionPayload.__proof_admission_wire as string;
+  const revalidationRequest = `{"version":${proofCanonicalJson('proof.catalog-revalidation-request/v2')},"candidate":${proofCanonicalJson(discovery.candidate.payload)},"admission":${admissionWire}}`;
+  const revalidation = proofJsonCommand(proofBinary, ['onboarding', 'revalidate'], workspace, revalidationRequest);
+  const workItemsRequest = `{"version":${proofCanonicalJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(discovery.candidate.payload)},"admission":${admissionWire},"revalidation_receipt":${proofCanonicalJson(revalidation.value.receipt)}}`;
+  const workItems = proofJsonCommand(proofBinary, ['onboarding', 'work-items'], workspace, workItemsRequest);
+  assertInvariant('Proof revalidation has an accepted inventory/catalog/work-items authority', revalidation.value.version === 'proof.catalog-revalidation/v2' && workItems.value.version === 'proof.onboarding-work-item-projection/v1');
+  const baselineEvents = array(baselineCheckpoint.events, 'baseline events');
+  const inventory = baselineEvents.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.structural_inventory@1' && eventScopeLength(event) === 1);
+  assertInvariant('baseline structural inventory is present', inventory !== undefined);
+  const baselineItems = activeRowsFromProjection(baselineProjection);
+  const afterItems = Array.isArray(workItems.value.work_items) ? workItems.value.work_items as JsonRecord[] : [];
+  assertInvariant('Proof returned exactly three work items', afterItems.length === 3);
+  const beforeById = new Map(baselineItems.map(row => [String(row.payload.component_id), row.payload]));
+  const afterById = new Map(afterItems.map(row => [String(row.component_id), row]));
+  assertInvariant('Proof work-item component set matches baseline', beforeById.size === afterById.size && [...beforeById.keys()].every(id => afterById.has(id)));
+  const changed = [...beforeById.keys()].filter(id => canonicalValue(beforeById.get(id)) !== canonicalValue(afterById.get(id)));
+  assertInvariant('exactly one WorkItem authority changed', changed.length === 1);
+  const changedComponentId = changed[0];
+  const changedItem = record(afterById.get(changedComponentId), 'changed Proof WorkItem');
+  assertInvariant('changed WorkItem owns both patched paths', changedPaths.every(file => Array.isArray(changedItem.sorted_owned_paths) && changedItem.sorted_owned_paths.includes(file)));
+  assertInvariant('changed WorkItem input state owns both patched paths', changedPaths.every(file => Array.isArray(changedItem.proof_input_state) && changedItem.proof_input_state.some((row: JsonRecord) => row.path === file)));
+  for (const id of [...beforeById.keys()].filter(value => value !== changedComponentId)) {
+    assertInvariant(`Proof WorkItem ${id} is byte-identical to baseline`, canonicalValue(beforeById.get(id)) === canonicalValue(afterById.get(id)));
+  }
+  const baselineCandidate = record(discovery.candidate.payload, 'baseline project candidate');
+  assertInvariant('Proof catalog authority is unchanged by a selective source patch', canonicalValue(revalidation.value.catalog) === canonicalValue(baselineCandidate));
+  const baselineInventoryPayload = record(inventory.payload, 'baseline structural inventory');
+  const changedInventoryPaths = array(revalidation.value.inventory?.input_state, 'revalidated inventory input state').filter(row => {
+    const before = array(baselineInventoryPayload.input_state, 'baseline inventory input state').find(value => value.path === row.path);
+    return !before || before.file_hash !== row.file_hash;
+  }).map(row => String(row.path)).sort();
+  assertInvariant('revalidated inventory changes exactly the patched paths', canonicalValue(changedInventoryPaths) === canonicalValue([...changedPaths].sort()));
+  return {
+    revalidationBytes: revalidation.bytes,
+    workItemsBytes: workItems.bytes,
+    changedComponentId,
+    authority: {
+      revalidation_sha256: createHash('sha256').update(revalidation.bytes).digest('hex'),
+      work_items_sha256: createHash('sha256').update(workItems.bytes).digest('hex'),
+      changed_component_id: changedComponentId,
+      changed_paths: [...changedPaths].sort(),
+      inventory_changed_paths: changedInventoryPaths,
+      catalog_unchanged: true,
+    },
+  };
+}
+
+type AcceptedResumeArtifact = {
+  preflight: JsonRecord;
+  config: JsonRecord;
+  workspace: string;
+  proofBinary: string;
+  baselineCheckpoint: JsonRecord;
+  baselineProjection: JsonRecord;
+  baselineGate: LiveBaselineCheckpointValidation;
+};
+
+function acceptedResumeArtifact(outputDirectory: string, requireBaselineWorkspace = true): AcceptedResumeArtifact {
+  const outputReal = realDirectory(outputDirectory, 'accepted baseline output');
+  assertInvariant('accepted baseline output is private', (fs.statSync(outputReal).mode & 0o777) === 0o700);
+  const artifact = baselineArtifact(outputDirectory);
+  if (requireBaselineWorkspace) validateBaselineWorkspace(artifact.preflight, artifact.workspace);
+  const baselinePath = path.join(outputDirectory, BASELINE_CHECKPOINT_FILE);
+  const reportPath = path.join(outputDirectory, BASELINE_REPORT_FILE);
+  regularPrivateFile(baselinePath, 'baseline checkpoint');
+  regularPrivateFile(reportPath, 'baseline report');
+  const baselineBytes = fs.readFileSync(baselinePath, 'utf8');
+  const baselineCheckpoint = record(JSON.parse(baselineBytes), 'accepted baseline checkpoint');
+  assertInvariant('baseline checkpoint bytes are canonical', baselineBytes === `${canonicalValue(baselineCheckpoint)}\n`);
+  const baselineReport = record(JSON.parse(fs.readFileSync(reportPath, 'utf8')), 'accepted baseline report');
+  assertInvariant('baseline report is an accepted baseline', baselineReport.status === 'passed' && baselineReport.mode === 'baseline-only' && baselineReport.gate_passed === true);
+  const pins = record(artifact.preflight.pins, 'accepted baseline pins');
+  const modules = record(artifact.preflight.modules, 'accepted baseline modules');
+  assertInvariant('accepted baseline toolchain pins are exact', pins.visor_base === BASE_VISOR_COMMIT && pins.proof_commit === PROOF_COMMIT && pins.probe_version === PROBE_VERSION && pins.codex_version === CODEX_VERSION && pins.hidden_test_sha256 === HIDDEN_TEST_SHA256 && pins.patch_sha256 === PATCH_SHA256 && pins.ts_node_version === modules['ts-node/register/transpile-only']?.version && pins.js_yaml_version === modules['js-yaml']?.version);
+  assertInvariant('accepted baseline subject pins are exact', canonicalValue(pins.subject_files) === canonicalValue(SUBJECT_SHA256) && pins.subject_tree_sha256 === SUBJECT_TREE_SHA256);
+  const baselineGate = validateLiveBaselineCheckpoint(baselineCheckpoint, artifact.config);
+  assertInvariant('baseline report session and receipt match its checkpoint gate', baselineReport.session_id === baselineGate.sessionId && baselineReport.receipt_id === baselineGate.receiptId);
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(artifact.config)) as any);
+  const restored = ExecutionJournal.restoreGraphCheckpoint(plan, baselineCheckpoint);
+  return {
+    ...artifact,
+    baselineCheckpoint,
+    baselineProjection: restored.getInstanceProjection() as JsonRecord,
+    baselineGate,
+  };
+}
+
+function verifyResumePins(artifact: AcceptedResumeArtifact, subjectDirectory: string, evaluatorDirectory: string): JsonRecord {
+  const subjectReal = realDirectory(subjectDirectory, 'resume subject');
+  const evaluatorReal = realDirectory(evaluatorDirectory, 'resume evaluator');
+  assertInvariant('resume subject and evaluator are separate', !pathsOverlap(subjectReal, evaluatorReal));
+  const isolation = record(artifact.preflight.isolation, 'accepted baseline isolation');
+  assertInvariant('resume subject/evaluator are the accepted input trees', subjectReal === path.resolve(String(isolation.subject_source)) && evaluatorReal === path.resolve(String(isolation.evaluator_source)));
+  const pins = record(artifact.preflight.pins, 'accepted preflight pins');
+  const inputs = pinnedInputs(subjectReal, evaluatorReal);
+  assertInvariant('resume subject tree matches accepted baseline pins', canonicalValue(inputs.subject_files) === canonicalValue(pins.subject_files) && inputs.subject_tree_sha256 === pins.subject_tree_sha256);
+  assertInvariant('resume evaluator oracle and patch match accepted pins', inputs.hidden_test_sha256 === pins.hidden_test_sha256 && inputs.patch_sha256 === pins.patch_sha256 && inputs.patch_sha256 === PATCH_SHA256);
+  return { subject_tree_sha256: inputs.subject_tree_sha256, hidden_test_sha256: inputs.hidden_test_sha256, patch_sha256: inputs.patch_sha256 };
+}
+
+function workspaceHashes(workspace: string): Record<string, string> {
+  return Object.fromEntries(SUBJECT_FILES.map(file => [file, sha256File(path.join(workspace, file))]));
+}
+
+function applySelectiveResumePatch(workspace: string, evaluatorDirectory: string, baselineHashes: Record<string, string>): JsonRecord {
+  const patch = path.join(evaluatorDirectory, 'changes', '0001-reject-malformed-write.patch');
+  const patchStat = fs.lstatSync(patch);
+  assertInvariant('resume evaluator patch is a regular non-symlink file', patchStat.isFile() && !patchStat.isSymbolicLink());
+  assertInvariant('resume evaluator patch remains at the accepted SHA-256', sha256File(patch) === PATCH_SHA256);
+  const patchCheck = command('git', ['apply', '--check', patch], workspace);
+  assertInvariant('accepted evaluator patch applies cleanly to baseline workspace', patchCheck.status === 0);
+  const applied = command('git', ['apply', patch], workspace);
+  assertInvariant('accepted evaluator patch applies to workspace', applied.status === 0);
+  const diffCheck = command('git', ['diff', '--check'], workspace);
+  assertInvariant('patched workspace has no whitespace errors', diffCheck.status === 0);
+  const changedPaths = requireCommand('git', ['diff', '--name-only'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean).sort();
+  assertInvariant('selective patch changes exactly http.go and http_test.go', canonicalValue(changedPaths) === canonicalValue(['http.go', 'http_test.go']));
+  const status = requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean);
+  assertInvariant('patched workspace has only the two accepted tracked modifications', status.length === 2 && status.every(line => /^( M|M )/.test(line)));
+  for (const file of SUBJECT_FILES) {
+    const filePath = path.join(workspace, file);
+    const stat = fs.lstatSync(filePath);
+    assertInvariant(`patched workspace ${file} is a regular non-symlink file`, stat.isFile() && !stat.isSymbolicLink());
+  }
+  const after = workspaceHashes(workspace);
+  for (const file of SUBJECT_FILES.filter(value => !changedPaths.includes(value))) assertInvariant(`unchanged workspace ${file} remains pinned`, after[file] === baselineHashes[file]);
+  for (const file of changedPaths) assertInvariant(`changed workspace ${file} differs from baseline`, after[file] !== baselineHashes[file]);
+  const diffBytes = requireCommand('git', ['diff', '--binary'], workspace).stdout;
+  return {
+    changed_paths: changedPaths,
+    workspace_hashes: after,
+    diff_sha256: createHash('sha256').update(diffBytes, 'utf8').digest('hex'),
+    patch_sha256: sha256File(patch),
+    public_test: runWorkspaceTest(workspace),
+  };
+}
+
+function resumeMarkdownBytes(report: JsonRecord): string {
+  const lines = [
+    '# EXP-0209 selective resume',
+    '',
+    `- Status: ${report.status}`,
+    `- Gate passed: ${report.gate_passed === true ? 'yes' : 'no'}`,
+    `- Controller PID: ${report.controller_pid ?? 'unknown'}`,
+    `- Child PID: ${report.child_pid ?? 'unknown'}`,
+    `- Session: ${report.session_id ?? 'unknown'}`,
+    `- Changed component: ${report.changed_component_id ?? 'unknown'}`,
+    `- Changed paths: ${Array.isArray(report.changed_paths) ? report.changed_paths.join(', ') : 'unknown'}`,
+    `- Counts: ${report.counts?.status || JSON.stringify(report.counts || {})}`,
+    `- Error: ${report.error ?? 'none'}`,
+    '',
+    'This report is evidence from one explicitly invoked selective resume. No retry or fallback is performed.',
+    '',
+  ];
+  return lines.join('\n');
+}
+
+function writeResumeMarkdown(report: JsonRecord): void {
+  const file = path.join(String(report.output_directory), RESUME_REPORT_MARKDOWN_FILE);
+  writeExclusiveBytes(file, resumeMarkdownBytes(report));
+}
+
+/**
+ * A controller may add only the missing report after a launched child exits
+ * without publishing one.  Any lstat error other than ENOENT is treated as
+ * evidence: an unreadable/racing path must never be overwritten.
+ */
+function resumeReportExistsSafely(outputDirectory: string): boolean {
+  try {
+    fs.lstatSync(path.join(outputDirectory, RESUME_REPORT_FILE));
+    return true;
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false;
+    return true;
+  }
+}
+
+export function writeControllerResumeFailureIfMissing(
+  outputDirectory: string,
+  checkpoint: unknown,
+  error: unknown,
+): void {
+  if (resumeReportExistsSafely(outputDirectory)) return;
+  const report = resumeFailureReport(outputDirectory, process.pid, undefined, checkpoint, error);
+  try {
+    // wx is the final race guard: a child report winning between lstat and
+    // open is preserved, and its checkpoint/failure evidence is untouched.
+    writeExclusiveJson(path.join(outputDirectory, RESUME_REPORT_FILE), report);
+  } catch {
+    return;
+  }
+  try {
+    writeResumeMarkdown(report);
+  } catch {
+    // Markdown is supplementary; a safely published JSON report is enough.
   }
 }
 
@@ -1329,6 +2006,302 @@ function runBaselineOnly(args: ReturnType<typeof parseArgs>, outputState: Output
   process.stdout.write(String(child.stdout || `EXP-0209 baseline passed: ${args.outputDirectory}\n`));
 }
 
+function resumeFailureReport(outputDirectory: string, controllerPid: number, childPid: number | undefined, checkpoint: unknown, error: unknown): JsonRecord {
+  return {
+    schema: 'urn:reqproof:agent-governance:exp-0209-resume:v1',
+    status: 'failed',
+    mode: childPid === undefined ? 'resume-only' : 'resume-child',
+    output_directory: outputDirectory,
+    controller_pid: controllerPid,
+    ...(childPid === undefined ? {} : { child_pid: childPid }),
+    gate_passed: false,
+    counts: checkpointEventCounts(checkpoint),
+    retries: 0,
+    fallback: false,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function runResumeOnly(args: ReturnType<typeof parseArgs>): void {
+  const outputDirectory = args.outputDirectory;
+  let checkpoint: unknown;
+  let childStarted = false;
+  try {
+    const artifact = acceptedResumeArtifact(outputDirectory);
+    assertNoPriorResumeArtifacts(outputDirectory);
+    const pinEvidence = verifyResumePins(artifact, args.subjectDirectory, args.evaluatorDirectory);
+    const baselineConfigBytes = fs.readFileSync(path.join(outputDirectory, EFFECTIVE_CONFIG_FILE));
+    const baselineCheckpointBytes = fs.readFileSync(path.join(outputDirectory, BASELINE_CHECKPOINT_FILE));
+    const baselineHashes = workspaceHashes(artifact.workspace);
+    const started = {
+      schema: 'urn:reqproof:agent-governance:exp-0209-resume-started:v1',
+      status: 'started',
+      output_directory: outputDirectory,
+      controller_pid: process.pid,
+      baseline_session_id: artifact.baselineGate.sessionId,
+      baseline_checkpoint_sha256: createHash('sha256').update(baselineCheckpointBytes).digest('hex'),
+      effective_config_sha256: createHash('sha256').update(baselineConfigBytes).digest('hex'),
+      baseline_workspace_hashes: baselineHashes,
+      pins: pinEvidence,
+      changed_paths: ['http.go', 'http_test.go'],
+      retries: 0,
+      fallback: false,
+    };
+    // This is deliberately the first write in the resume flow and uses an
+    // exclusive open. A second controller can therefore never overwrite or
+    // reinterpret an in-flight/failed resume.
+    writeExclusiveJson(path.join(outputDirectory, RESUME_STARTED_FILE), started);
+    const patchEvidence = applySelectiveResumePatch(artifact.workspace, args.evaluatorDirectory, baselineHashes);
+    const authority = deriveResumeProofInputs(proofBinaryFromArtifact(artifact), artifact.workspace, artifact.baselineCheckpoint, artifact.baselineProjection, patchEvidence.changed_paths);
+    writeExclusiveBytes(path.join(outputDirectory, RESUME_REVALIDATION_FILE), authority.revalidationBytes);
+    writeExclusiveBytes(path.join(outputDirectory, RESUME_WORK_ITEMS_FILE), authority.workItemsBytes);
+    const inputMetadata = {
+      schema: 'urn:reqproof:agent-governance:exp-0209-resume-inputs:v1',
+      baseline_checkpoint_sha256: started.baseline_checkpoint_sha256,
+      effective_config_sha256: started.effective_config_sha256,
+      revalidation_sha256: authority.authority.revalidation_sha256,
+      work_items_sha256: authority.authority.work_items_sha256,
+      changed_component_id: authority.changedComponentId,
+      changed_paths: patchEvidence.changed_paths,
+      inventory_changed_paths: authority.authority.inventory_changed_paths,
+      catalog_unchanged: authority.authority.catalog_unchanged,
+      workspace_hashes_before: baselineHashes,
+      workspace_hashes_after: patchEvidence.workspace_hashes,
+      diff_sha256: patchEvidence.diff_sha256,
+      patch_sha256: patchEvidence.patch_sha256,
+      session_id: artifact.baselineGate.sessionId,
+      graph_semantic_digest: artifact.baselineGate.graphSemanticDigest,
+      public_test: { status: patchEvidence.public_test.status, passed: patchEvidence.public_test.passed },
+      retries: 0,
+      fallback: false,
+    };
+    writeExclusiveJson(path.join(outputDirectory, RESUME_INPUT_METADATA_FILE), inputMetadata);
+    const child = spawnSync(process.execPath, [
+      '-r', 'ts-node/register/transpile-only', __filename,
+      RESUME_CHILD_FLAG, '--output', outputDirectory,
+      CONTROLLER_PID_FLAG, String(process.pid),
+    ], {
+      cwd: REPO_ROOT,
+      // The child receives only its owned output and controller PID. In
+      // particular, evaluator/subject environment variables are stripped.
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(^|_)(EVALUATOR|SUBJECT)(_|$)/i.test(key))),
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    // spawnSync can return a result object with an error without launching a
+    // child. Only an actually launched child owns failure evidence.
+    if (!child.error) childStarted = true;
+    if (child.error || child.status !== 0) throw new Error(`resume child failed (${child.status}): ${boundedText(String(child.stderr || child.error || child.stdout || ''))}`);
+    process.stdout.write(String(child.stdout || `EXP-0209 selective resume passed: ${outputDirectory}\n`));
+  } catch (error) {
+    // A launched child normally owns publication, but a nonzero child exit
+    // with no report still needs honest controller-side unknown/partial
+    // evidence.  Only an actually present child report suppresses this; all
+    // checkpoint/failure artifacts are left untouched.
+    void childStarted;
+    try { writeControllerResumeFailureIfMissing(outputDirectory, checkpoint, error); } catch {
+      // Preserve the original diagnostic if the output is not writable.
+    }
+    throw error;
+  }
+}
+
+function proofBinaryFromArtifact(artifact: AcceptedResumeArtifact): string {
+  return artifact.proofBinary;
+}
+
+function validateResumeWorkspace(artifact: AcceptedResumeArtifact, marker: JsonRecord, metadata: JsonRecord): void {
+  const workspace = artifact.workspace;
+  const expectedPaths = ['http.go', 'http_test.go'];
+  assertInvariant('resume marker expects the two accepted changed paths', canonicalValue(marker.changed_paths) === canonicalValue(expectedPaths));
+  assertInvariant('resume metadata baseline session and digest match accepted baseline', metadata.session_id === artifact.baselineGate.sessionId && metadata.graph_semantic_digest === artifact.baselineGate.graphSemanticDigest);
+  const status = requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean);
+  assertInvariant('resume workspace has only two modified tracked files', status.length === 2 && status.every(line => /^( M|M )/.test(line)));
+  const changed = requireCommand('git', ['diff', '--name-only'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean).sort();
+  assertInvariant('resume workspace diff is exactly the accepted component files', canonicalValue(changed) === canonicalValue(expectedPaths));
+  assertInvariant('resume metadata changed paths are exact', canonicalValue(metadata.changed_paths) === canonicalValue(expectedPaths));
+  const before = record(marker.baseline_workspace_hashes, 'resume baseline workspace hashes');
+  const after = workspaceHashes(workspace);
+  const recordedAfter = record(metadata.workspace_hashes_after, 'resume current workspace hashes');
+  assertInvariant('resume workspace hashes match controller evidence', canonicalValue(after) === canonicalValue(recordedAfter));
+  for (const file of SUBJECT_FILES) {
+    const stat = fs.lstatSync(path.join(workspace, file));
+    assertInvariant(`resume workspace ${file} is a regular non-symlink file`, stat.isFile() && !stat.isSymbolicLink());
+    if (!expectedPaths.includes(file)) assertInvariant(`resume workspace ${file} remains pinned`, after[file] === before[file] && after[file] === SUBJECT_SHA256[file]);
+    else assertInvariant(`resume workspace ${file} changed from baseline`, after[file] !== before[file]);
+  }
+  const diffBytes = requireCommand('git', ['diff', '--binary'], workspace).stdout;
+  assertInvariant('resume workspace diff digest matches controller evidence', createHash('sha256').update(diffBytes, 'utf8').digest('hex') === metadata.diff_sha256);
+  assertInvariant('resume metadata patch pin is present', metadata.patch_sha256 === PATCH_SHA256);
+}
+
+async function runResumeChild(outputDirectory: string, controllerPid: number): Promise<void> {
+  let checkpoint: unknown;
+  let priorEvidence = false;
+  let childAuthorized = false;
+  let entryFinalArtifacts = new Set<string>();
+  let entryStagingArtifacts = new Set<string>();
+  let stagingDirectory: string | undefined;
+  const published: PublishedResumeArtifact[] = [];
+  try {
+    assertInvariant('resume child PID differs from controller PID', controllerPid !== process.pid);
+    assertInvariant('resume child parent is the controller', process.ppid === controllerPid);
+    try {
+      process.kill(controllerPid, 0);
+    } catch (error) {
+      throw new Error(`resume controller PID ${controllerPid} is not alive`, { cause: error });
+    }
+    const outputReal = realDirectory(outputDirectory, 'owned resume output');
+    assertInvariant('resume output is private', (fs.statSync(outputReal).mode & 0o777) === 0o700);
+    // Snapshot evidence before reading or writing any child-owned input. On a
+    // replay, this snapshot is the immutable boundary: all prior final/staged
+    // artifacts are preserved and no publication is attempted.
+    entryFinalArtifacts = new Set(resumeFinalArtifacts(outputDirectory));
+    entryStagingArtifacts = new Set(resumeStagingEntries(outputDirectory));
+    assertInvariant('resume child has no prior final evidence', entryFinalArtifacts.size === 0);
+    assertInvariant('resume child has no prior staging evidence', entryStagingArtifacts.size === 0);
+    const markerPath = path.join(outputDirectory, RESUME_STARTED_FILE);
+    regularPrivateFile(markerPath, 'resume started marker');
+    const markerBytes = fs.readFileSync(markerPath, 'utf8');
+    const marker = record(JSON.parse(markerBytes), 'resume started marker');
+    assertInvariant('resume started marker is canonical', markerBytes === `${JSON.stringify(marker, null, 2)}\n`);
+    assertInvariant('resume started marker is one-shot and owned by this controller', marker.status === 'started' && marker.controller_pid === controllerPid && marker.output_directory === outputDirectory);
+    const artifact = acceptedResumeArtifact(outputDirectory, false);
+    const markerPins = record(marker.pins, 'resume marker pins');
+    assertInvariant('resume marker pins are exact', markerPins.subject_tree_sha256 === artifact.preflight.pins.subject_tree_sha256 && markerPins.hidden_test_sha256 === HIDDEN_TEST_SHA256 && markerPins.patch_sha256 === PATCH_SHA256);
+    childAuthorized = true;
+    const metadataPath = path.join(outputDirectory, RESUME_INPUT_METADATA_FILE);
+    const revalidationPath = path.join(outputDirectory, RESUME_REVALIDATION_FILE);
+    const workItemsPath = path.join(outputDirectory, RESUME_WORK_ITEMS_FILE);
+    regularPrivateFile(metadataPath, 'resume input metadata');
+    regularPrivateFile(revalidationPath, 'resume revalidation');
+    regularPrivateFile(workItemsPath, 'resume work-items');
+    const metadataBytes = fs.readFileSync(metadataPath, 'utf8');
+    const metadata = record(JSON.parse(metadataBytes), 'resume input metadata');
+    assertInvariant('resume input metadata is canonical', metadataBytes === `${JSON.stringify(metadata, null, 2)}\n`);
+    const baselineBytes = fs.readFileSync(path.join(outputDirectory, BASELINE_CHECKPOINT_FILE));
+    const configBytes = fs.readFileSync(path.join(outputDirectory, EFFECTIVE_CONFIG_FILE));
+    assertInvariant('resume baseline/config hashes match the started marker', createHash('sha256').update(baselineBytes).digest('hex') === marker.baseline_checkpoint_sha256 && createHash('sha256').update(configBytes).digest('hex') === marker.effective_config_sha256 && metadata.baseline_checkpoint_sha256 === marker.baseline_checkpoint_sha256 && metadata.effective_config_sha256 === marker.effective_config_sha256);
+    const revalidationBytes = fs.readFileSync(revalidationPath, 'utf8');
+    const workItemsBytes = fs.readFileSync(workItemsPath, 'utf8');
+    assertInvariant('resume Proof bytes are canonical and hash-bound', proofCanonicalJson(JSON.parse(revalidationBytes)) === revalidationBytes && proofCanonicalJson(JSON.parse(workItemsBytes)) === workItemsBytes && createHash('sha256').update(revalidationBytes).digest('hex') === metadata.revalidation_sha256 && createHash('sha256').update(workItemsBytes).digest('hex') === metadata.work_items_sha256);
+    validateResumeWorkspace(artifact, marker, metadata);
+    const config = artifact.config as import('../../../src/types/config').VisorConfig;
+    const capability = createProofAdmissionCapability(artifact.proofBinary);
+    const registry = CheckProviderRegistry.getInstance();
+    registry.bootstrapProofAdmission(capability);
+    const engine = new StateMachineExecutionEngine(artifact.workspace);
+    // Exactly one continuation call is made after all owned artifacts and the
+    // patched workspace have passed their gates.
+    const continued = await engine.continueProofCurrentCatalogCheckpoint({
+      checkpoint: artifact.baselineCheckpoint,
+      projectSubgraphInstanceId: findProjectSubgraphInstanceId(artifact.baselineProjection),
+      revalidationBytes,
+      workItemsBytes,
+      config,
+      prInfo: baselinePrInfo,
+      maxParallelism: 3,
+      failFast: true,
+    });
+    checkpoint = engine.exportGraphCheckpoint();
+    const gate = validateLiveResumeCheckpoint(checkpoint, artifact.baselineCheckpoint, config, {
+      changedComponentId: metadata.changed_component_id,
+      changedPaths: metadata.changed_paths,
+      mutationEventCount: continued.mutationEventCount,
+    });
+    const checkpointBytes = `${canonicalValue(checkpoint)}\n`;
+    const success: JsonRecord = {
+      schema: 'urn:reqproof:agent-governance:exp-0209-resume:v1',
+      status: 'passed',
+      mode: 'resume-only',
+      output_directory: outputDirectory,
+      controller_pid: controllerPid,
+      child_pid: process.pid,
+      session_id: gate.sessionId,
+      graph_semantic_digest: gate.graphSemanticDigest,
+      changed_component_id: gate.changedComponentId,
+      changed_paths: gate.changedPaths,
+      suffix: gate.suffix,
+      counts: gate.counts,
+      totals: gate.counts,
+      receipt_ids: gate.receiptIds,
+      gate_passed: true,
+      digests: {
+        baseline_checkpoint_sha256: marker.baseline_checkpoint_sha256,
+        continued_checkpoint_sha256: createHash('sha256').update(checkpointBytes).digest('hex'),
+        effective_config_sha256: marker.effective_config_sha256,
+        revalidation_sha256: metadata.revalidation_sha256,
+        work_items_sha256: metadata.work_items_sha256,
+        diff_sha256: metadata.diff_sha256,
+      },
+      retries: 0,
+      fallback: false,
+    };
+    const completed: JsonRecord = {
+      schema: 'urn:reqproof:agent-governance:exp-0209-resume-completed:v1',
+      status: 'completed',
+      session_id: gate.sessionId,
+      graph_semantic_digest: gate.graphSemanticDigest,
+      changed_component_id: gate.changedComponentId,
+      changed_paths: gate.changedPaths,
+      suffix: gate.suffix,
+      totals: gate.counts,
+      receipt_ids: gate.receiptIds,
+      continued_checkpoint_sha256: success.digests.continued_checkpoint_sha256,
+      revalidation_sha256: metadata.revalidation_sha256,
+      work_items_sha256: metadata.work_items_sha256,
+      diff_sha256: metadata.diff_sha256,
+      controller_pid: controllerPid,
+      child_pid: process.pid,
+    };
+    // Stage every success artifact, fsync the private files, then publish in
+    // a fixed order with the completed marker last. No final success name is
+    // opened for writing and a replay can never overwrite prior evidence.
+    stagingDirectory = createResumeStagingDirectory(outputDirectory);
+    stageResumeArtifact(stagingDirectory, RESUME_CHECKPOINT_FILE, checkpointBytes);
+    stageResumeArtifact(stagingDirectory, RESUME_REPORT_FILE, `${JSON.stringify(success, null, 2)}\n`);
+    stageResumeArtifact(stagingDirectory, RESUME_REPORT_MARKDOWN_FILE, resumeMarkdownBytes(success));
+    stageResumeArtifact(stagingDirectory, RESUME_COMPLETED_FILE, `${JSON.stringify(completed, null, 2)}\n`);
+    fsyncDirectory(stagingDirectory);
+    publishResumeArtifacts(outputDirectory, stagingDirectory, published);
+    cleanupResumePublication(outputDirectory, stagingDirectory, [], new Set());
+    stagingDirectory = undefined;
+    process.stdout.write(`EXP-0209 selective resume passed: ${outputDirectory}\n`);
+  } catch (error) {
+    try {
+      priorEvidence = !childAuthorized || entryFinalArtifacts.size > 0 || entryStagingArtifacts.size > 0;
+    } catch {
+      priorEvidence = true;
+    }
+    if (!priorEvidence) {
+      try {
+        cleanupResumePublication(outputDirectory, stagingDirectory, published, new Set([...entryFinalArtifacts, ...entryStagingArtifacts]));
+      } catch {
+        // Do not remove anything outside the inode/path checks above.
+      }
+      try {
+        if (checkpoint !== undefined) writeExclusiveBytes(path.join(outputDirectory, RESUME_FAILURE_CHECKPOINT_FILE), `${canonicalValue(checkpoint)}\n`);
+      } catch {
+        // Failure evidence is optional; never replace a prior artifact.
+      }
+      try {
+        const report = resumeFailureReport(outputDirectory, controllerPid, process.pid, checkpoint, error);
+        writeExclusiveJson(path.join(outputDirectory, RESUME_REPORT_FILE), report);
+        writeResumeMarkdown(report);
+      } catch {
+        // Keep the original process diagnostic.
+      }
+    }
+    throw error;
+  }
+}
+
+function findProjectSubgraphInstanceId(projection: JsonRecord): string {
+  const project = Object.values(projection.instancesById || {}).find((value: any) => value.itemKey === 'journalservice' && !value.parentSubgraphInstanceId && value.status === 'active') as JsonRecord | undefined;
+  assertInvariant('baseline project subgraph instance is present', !!project && typeof project.subgraphInstanceId === 'string');
+  return String(project.subgraphInstanceId);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   let outputDirectory: string | undefined = outputHint(argv);
@@ -1345,6 +2318,14 @@ async function main(): Promise<void> {
       runBaselineOnly(args, outputState);
       return;
     }
+    if (args.mode === 'resume-child') {
+      await runResumeChild(args.outputDirectory, args.controllerPid as number);
+      return;
+    }
+    if (args.mode === 'resume-only') {
+      runResumeOnly(args);
+      return;
+    }
     const report = preflight(args.outputDirectory, args.subjectDirectory, args.evaluatorDirectory, outputState);
     writeJson(path.join(args.outputDirectory, PRECHECK_ARTIFACT), report);
     process.stdout.write(`EXP-0209 preflight passed: ${args.outputDirectory}\n`);
@@ -1352,7 +2333,7 @@ async function main(): Promise<void> {
     const failure = {
       schema: 'urn:reqproof:agent-governance:exp-0209-preflight:v1',
       status: 'failed',
-      mode: argv.includes(BASELINE_CHILD_FLAG) ? 'baseline-child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight-only',
+      mode: argv.includes(RESUME_CHILD_FLAG) ? 'resume-child' : argv.includes('--resume-only') ? 'resume-only' : argv.includes(BASELINE_CHILD_FLAG) ? 'baseline-child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight-only',
       governed_calls: 0,
       model_calls: 0,
       network_dispatches_requested: 0,
@@ -1367,7 +2348,7 @@ async function main(): Promise<void> {
         // not writable; no fallback output is silently selected.
       }
     }
-    const mode = argv.includes(BASELINE_CHILD_FLAG) ? 'baseline child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight';
+    const mode = argv.includes(RESUME_CHILD_FLAG) ? 'resume child' : argv.includes('--resume-only') ? 'resume-only' : argv.includes(BASELINE_CHILD_FLAG) ? 'baseline child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight';
     process.stderr.write(`EXP-0209 ${mode} failed: ${failure.error}\n`);
     process.exitCode = 1;
   }
