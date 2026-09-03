@@ -140,3 +140,33 @@ continuation call. A successful run writes `continued.checkpoint.json`,
 partial or unknown counts and never overwrite baseline or prior resume
 evidence. Resume is one-shot: a marker or any resume evidence rejects a later
 invocation.
+
+## Live onboarding quality evaluation (controller-only)
+
+`--evaluate-only` accepts an already completed baseline plus selective resume.
+It requires the accepted baseline/resume checkpoints, reports, completion
+markers, exact five-role gate (4 baseline + 1 replacement), and the pinned
+subject/evaluator inputs. It performs no live-role child/bootstrap/engine/Probe/model or
+network dispatch. The controller reads the pinned evaluator
+`manual-baseline.json`, runs the hidden oracle in two fresh private offline Go
+copies, and then evaluates seven equal-weight criteria: grouping, ownership,
+coordinates, baseline HTTP defect, XSS false-positive handling, resumed HTTP
+resolution, and the hidden oracle.
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register/transpile-only \
+  examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts \
+  --evaluate-only \
+  --output /tmp/visor-exp-0209-live-baseline \
+  --subject /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/subject \
+  --evaluator /Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/evaluator
+```
+
+The one-shot output contains `evaluation.started.json`, `evaluation.json`,
+`live-report.json`, `live-report.md`, `graph-source.yaml` (a copy of tracked
+`visor.yaml`), and `evaluation.completed.json` published last. Reports record
+the graph/config and input hashes, exact 4+1 RoleRuns, fanout, shared session
+and prefix, changed/reused component closure, old/new receipts, oracle
+outcomes, and every criterion score. Quality failures complete with status
+`failed`; operational failures use status `error`. Evaluation never overwrites
+prior evidence and does not copy the manual baseline into the workspace.

@@ -69,6 +69,8 @@ const SUBJECT_SHA256: Record<string, string> = {
 const SUBJECT_TREE_SHA256 = '70fdbd2b22a444bd2685197dcb85d2a4164d098db7dd2e60249509e8ed1407ad';
 const HIDDEN_TEST_SHA256 = '19e47a9847cbf32c1f29cad928b40cd71beb96ec9258cfbe8b3fa437505f2541';
 const PATCH_SHA256 = 'c34a8efcc74c170ca9c169da4eea2a99ba5a15d12dea4af23935ab246ceeacaa';
+const MANUAL_BASELINE_SHA256 = 'b8ede3472fbda6efa9fc21f7b707e6f14f0d073159cb5d521aceda5cbf9e6c83';
+const PATCH_RESULT_TREE_SHA256 = '8afdd288cae0d3713d30b8cfdbaea7956dd684be3b0af0ccee781d4a179ef82f';
 const INVENTORY_VERSION = 'proof.structural-inventory/v1';
 const INVENTORY_AUTHORITY_VERSION = 'proof.project-authority/v1';
 const INVENTORY_INPUT_OWNER = 'onboarding_structural_inventory';
@@ -95,6 +97,12 @@ const RESUME_REPORT_FILE = 'resume-report.json';
 const RESUME_REPORT_MARKDOWN_FILE = 'resume-report.md';
 const RESUME_FAILURE_CHECKPOINT_FILE = 'resume-failure.checkpoint.json';
 const RESUME_COMPLETED_FILE = 'resume.completed.json';
+const EVALUATION_STARTED_FILE = 'evaluation.started.json';
+const EVALUATION_FILE = 'evaluation.json';
+const LIVE_REPORT_FILE = 'live-report.json';
+const LIVE_REPORT_MARKDOWN_FILE = 'live-report.md';
+const EVALUATION_COMPLETED_FILE = 'evaluation.completed.json';
+const GRAPH_SOURCE_FILE = 'graph-source.yaml';
 const OFFLINE_GO_ENV = {
   GOPROXY: 'off',
   GOSUMDB: 'off',
@@ -212,7 +220,7 @@ function verifyLocalModules(): JsonRecord {
   return modules;
 }
 
-type LiveMode = 'preflight-only' | 'baseline-only' | 'baseline-child' | 'resume-only' | 'resume-child';
+type LiveMode = 'preflight-only' | 'baseline-only' | 'baseline-child' | 'resume-only' | 'resume-child' | 'evaluate-only';
 
 function parseArgs(argv: readonly string[]): {
   mode: LiveMode;
@@ -226,6 +234,7 @@ function parseArgs(argv: readonly string[]): {
   let baselineChild = false;
   let resumeOnly = false;
   let resumeChild = false;
+  let evaluateOnly = false;
   let outputValue: string | undefined;
   let subjectValue: string | undefined;
   let evaluatorValue: string | undefined;
@@ -242,6 +251,10 @@ function parseArgs(argv: readonly string[]): {
     }
     if (flag === '--resume-only') {
       resumeOnly = true;
+      continue;
+    }
+    if (flag === '--evaluate-only') {
+      evaluateOnly = true;
       continue;
     }
     if (flag === BASELINE_CHILD_FLAG) {
@@ -272,7 +285,7 @@ function parseArgs(argv: readonly string[]): {
     }
     throw new Error(`unsupported option ${flag}`);
   }
-  const selected = [preflightOnly, baselineOnly, baselineChild, resumeOnly, resumeChild].filter(Boolean).length;
+  const selected = [preflightOnly, baselineOnly, baselineChild, resumeOnly, resumeChild, evaluateOnly].filter(Boolean).length;
   assertInvariant('exactly one live mode is selected', selected === 1);
   if (baselineChild || resumeChild) {
     assertInvariant(`${CONTROLLER_PID_FLAG} is required for the child`, controllerPid !== undefined);
@@ -281,7 +294,7 @@ function parseArgs(argv: readonly string[]): {
   const defaultSubject = '/Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/subject';
   const defaultEvaluator = '/Users/buger/go/src/reqforge-agent-governance-poc/experiments/agent-governance/poc-01-subject/evaluator';
   return {
-    mode: resumeChild ? 'resume-child' : baselineChild ? 'baseline-child' : resumeOnly ? 'resume-only' : baselineOnly ? 'baseline-only' : 'preflight-only',
+    mode: resumeChild ? 'resume-child' : baselineChild ? 'baseline-child' : evaluateOnly ? 'evaluate-only' : resumeOnly ? 'resume-only' : baselineOnly ? 'baseline-only' : 'preflight-only',
     outputDirectory: path.resolve(outputValue || path.join(os.tmpdir(), `visor-exp-0209-preflight-${process.pid}`)),
     subjectDirectory: path.resolve(subjectValue || defaultSubject),
     evaluatorDirectory: path.resolve(evaluatorValue || defaultEvaluator),
@@ -1676,6 +1689,7 @@ type AcceptedResumeArtifact = {
   proofBinary: string;
   baselineCheckpoint: JsonRecord;
   baselineProjection: JsonRecord;
+  baselineWorkItems: JsonRecord[];
   baselineGate: LiveBaselineCheckpointValidation;
 };
 
@@ -1701,10 +1715,14 @@ function acceptedResumeArtifact(outputDirectory: string, requireBaselineWorkspac
   assertInvariant('baseline report session and receipt match its checkpoint gate', baselineReport.session_id === baselineGate.sessionId && baselineReport.receipt_id === baselineGate.receiptId);
   const plan = compileClaimPlan(JSON.parse(JSON.stringify(artifact.config)) as any);
   const restored = ExecutionJournal.restoreGraphCheckpoint(plan, baselineCheckpoint);
+  const baselineProjection = restored.getInstanceProjection() as JsonRecord;
+  const baselineWorkItems = activeOnboardingWorkItemsFromProjection(baselineProjection);
+  assertInvariant('accepted baseline has exactly three active depth-2 WorkItems', baselineWorkItems.length === 3);
   return {
     ...artifact,
     baselineCheckpoint,
-    baselineProjection: restored.getInstanceProjection() as JsonRecord,
+    baselineProjection,
+    baselineWorkItems,
     baselineGate,
   };
 }
@@ -2302,6 +2320,744 @@ function findProjectSubgraphInstanceId(projection: JsonRecord): string {
   return String(project.subgraphInstanceId);
 }
 
+/**
+ * The quality gate intentionally has no dependency on a provider, Probe, the
+ * engine, or the evaluator tree. It consumes plain controller evidence. This
+ * makes the rubric useful in zero-model tests and keeps evaluator prose out
+ * of the runtime graph/checkpoint hand-off.
+ */
+export const ONBOARDING_QUALITY_CRITERIA = Object.freeze([
+  'grouping',
+  'ownership',
+  'coordinates',
+  'baseline_http_candidate',
+  'no_xss_false_positive',
+  'resume_http_resolution',
+  'hidden_oracle',
+] as const);
+
+type QualityInput = {
+  baselineCheckpoint?: unknown;
+  resumeCheckpoint?: unknown;
+  baselineCandidate?: unknown;
+  resumeCandidate?: unknown;
+  baselineComponentCandidates?: unknown;
+  resumeComponentCandidates?: unknown;
+  baselineWorkItems?: unknown;
+  resumeWorkItems?: unknown;
+  workItems?: unknown;
+  workspace?: string;
+  patchedWorkspace?: string;
+  sourceFiles?: Record<string, string>;
+  baselineSourceFiles?: Record<string, string>;
+  patchedSourceFiles?: Record<string, string>;
+  changedComponentId?: string;
+  changed_component_id?: string;
+  oracle?: JsonRecord;
+  hiddenOracle?: JsonRecord;
+  source_files?: Record<string, string>;
+  sources?: Record<string, string>;
+};
+
+function qualityRecord(value: unknown): JsonRecord | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : undefined;
+}
+
+function qualityPayload(value: unknown): JsonRecord | undefined {
+  const object = qualityRecord(value);
+  if (!object) return undefined;
+  if (qualityRecord(object.payload)) return object.payload as JsonRecord;
+  if (qualityRecord(object.data)) return object.data as JsonRecord;
+  return object;
+}
+
+function qualityEvents(checkpoint: unknown): JsonRecord[] {
+  const object = qualityRecord(checkpoint);
+  return object && Array.isArray(object.events) ? object.events as JsonRecord[] : [];
+}
+
+function qualityScopeLength(value: JsonRecord): number {
+  return Array.isArray(value.scope) ? value.scope.length : -1;
+}
+
+function qualityScopeKey(value: JsonRecord | undefined): string | undefined {
+  if (!value) return undefined;
+  const scope = Array.isArray(value.scope) ? value.scope : [];
+  const last = scope[scope.length - 1] as JsonRecord | undefined;
+  return last && (typeof last.key === 'string' ? last.key : typeof last.Key === 'string' ? last.Key : undefined);
+}
+
+function qualityCandidates(checkpoint: unknown, scopeLength: number): JsonRecord[] {
+  return qualityEvents(checkpoint)
+    .filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && qualityScopeLength(event) === scopeLength)
+    .map(event => {
+      const payload = qualityPayload(event.payload);
+      if (payload && scopeLength === 2 && !qualityComponentId(payload)) {
+        const key = qualityScopeKey(event);
+        return key ? { ...payload, component_id: key } : payload;
+      }
+      return payload;
+    })
+    .filter((value): value is JsonRecord => value !== undefined);
+}
+
+function qualityCandidateComponents(candidate: unknown): JsonRecord[] {
+  const payload = qualityPayload(candidate);
+  if (!payload) return [];
+  if (Array.isArray(payload.components)) return payload.components.map(value => qualityRecord(value)).filter((value): value is JsonRecord => value !== undefined);
+  return [payload];
+}
+
+function qualityComponentId(value: JsonRecord, fallback?: string): string {
+  return String(value.component_id ?? value.componentId ?? value.shard ?? value.component ?? value.id ?? fallback ?? '');
+}
+
+/**
+ * Restore the authenticated journal before extracting WorkItems.  In
+ * particular, the instance projection is what knows which controller item
+ * claim was superseded by a selective replacement; a raw event scan cannot
+ * establish that activeness safely.
+ */
+export function activeOnboardingWorkItemsFromCheckpoint(checkpoint: unknown, config: JsonRecord): JsonRecord[] {
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as any);
+  const restored = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  return activeOnboardingWorkItemsFromProjection(restored.getInstanceProjection() as unknown as JsonRecord);
+}
+
+function activeOnboardingWorkItemsFromProjection(projection: JsonRecord): JsonRecord[] {
+  const claimsById = qualityRecord(projection.claimsById) || {};
+  return Object.values(claimsById)
+    .map(value => qualityRecord(value))
+    .filter((claim): claim is JsonRecord => !!claim && claim.active === true && claim.kind === 'controller-item' && claim.claim === 'component.work_item@1' && qualityScopeLength(claim) === 2)
+    .map(claim => qualityRecord(claim.payload))
+    .filter((value): value is JsonRecord => value !== undefined);
+}
+
+function qualityItemsFromCheckpoint(checkpoint: unknown): JsonRecord[] {
+  const object = qualityRecord(checkpoint);
+  const projection = qualityRecord(object?.projection);
+  const claimsById = qualityRecord(projection?.claimsById) || qualityRecord(qualityRecord(object?.instanceProjection)?.claimsById);
+  if (claimsById) {
+    const items = Object.values(claimsById).filter(value => {
+      const claim = qualityRecord(value);
+      return claim?.active === true && claim.claim === 'component.work_item@1' && qualityScopeLength(claim) === 2;
+    }).map(value => qualityRecord(qualityRecord(value)?.payload)).filter((value): value is JsonRecord => value !== undefined);
+    if (items.length > 0) return items;
+  }
+  // This compatibility path is intentionally only a final-event projection:
+  // evaluate-only uses activeOnboardingWorkItemsFromCheckpoint above.  The
+  // ControllerItemClaimPublished shape carries the WorkItem directly in
+  // `payload`, with `itemKey` as its stable component fallback.
+  const latest = new Map<string, JsonRecord>();
+  for (const event of qualityEvents(checkpoint)
+    .filter(event => (event.type === 'ControllerItemClaimPublished' || event.type === 'ClaimPublished') && event.claim === 'component.work_item@1' && qualityScopeLength(event) === 2)) {
+    const payload = qualityRecord(event.payload);
+    if (!payload) continue;
+    const componentId = qualityComponentId(payload, typeof event.itemKey === 'string' ? event.itemKey : undefined);
+    latest.set(componentId, payload.component_id === undefined && componentId ? { ...payload, component_id: componentId } : payload);
+  }
+  return [...latest.values()];
+}
+
+function qualityArray(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(item => qualityRecord(item)).filter((item): item is JsonRecord => item !== undefined);
+}
+
+function qualityText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(qualityText).join(' ');
+  if (value && typeof value === 'object') return Object.entries(value as JsonRecord).map(([key, item]) => `${key} ${qualityText(item)}`).join(' ');
+  return '';
+}
+
+function qualityObjects(value: unknown, key?: string): JsonRecord[] {
+  const found: JsonRecord[] = [];
+  const visit = (item: unknown): void => {
+    if (Array.isArray(item)) { for (const child of item) visit(child); return; }
+    if (!item || typeof item !== 'object') return;
+    const object = item as JsonRecord;
+    if (!key || Object.prototype.hasOwnProperty.call(object, key)) found.push(object);
+    for (const child of Object.values(object)) visit(child);
+  };
+  visit(value);
+  return found;
+}
+
+function qualityPath(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const match = value.match(/^(.+?):(\d+)(?:[-:]\d+)?$/);
+    return match ? match[1] : value;
+  }
+  const object = qualityRecord(value);
+  if (!object) return undefined;
+  return typeof object.path === 'string' ? object.path : typeof object.file === 'string' ? object.file : typeof object.file_path === 'string' ? object.file_path : undefined;
+}
+
+function qualityLine(value: unknown): number | undefined {
+  if (typeof value === 'string') {
+    const match = value.match(/:(\d+)(?:[-:]\d+)?$/);
+    return match ? Number(match[1]) : undefined;
+  }
+  const object = qualityRecord(value);
+  if (!object) return undefined;
+  for (const field of ['line', 'line_number', 'lineNumber', 'start_line', 'startLine', 'line_start']) {
+    if (Number.isSafeInteger(object[field])) return Number(object[field]);
+  }
+  return undefined;
+}
+
+function qualityCoordinates(value: unknown): Array<{ path: string; line: number }> {
+  const result: Array<{ path: string; line: number }> = [];
+  const visit = (item: unknown): void => {
+    if (Array.isArray(item)) { for (const child of item) visit(child); return; }
+    if (!item || typeof item !== 'object' && typeof item !== 'string') return;
+    const pathValue = qualityPath(item);
+    const lineValue = qualityLine(item);
+    if (pathValue !== undefined && lineValue !== undefined) result.push({ path: pathValue, line: lineValue });
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      for (const [key, child] of Object.entries(item as JsonRecord)) if (key.toLowerCase().includes('coordinate')) visit(child);
+    }
+  };
+  visit(value);
+  return result;
+}
+
+function qualitySafeRelative(value: string): boolean {
+  return value.length > 0 && !path.isAbsolute(value) && !/^[A-Za-z]:[\\/]/.test(value) && value !== '.' && value !== '..' && !value.split(/[\\/]+/).includes('..') && !value.includes('\0');
+}
+
+function qualityLineCount(input: QualityInput, _workspace: string | undefined, relative: string, sourceFiles?: Record<string, string>): number | undefined {
+  const files = sourceFiles || input.sourceFiles;
+  if (files && typeof files[relative] === 'string') return files[relative].split(/\r?\n/).length;
+  return undefined;
+}
+
+function qualityCoordinateCheck(payloads: readonly JsonRecord[], input: QualityInput, sourceFiles?: Record<string, string>, sourceScope = 'source'): { pass: boolean; details: JsonRecord } {
+  const workspace = input.patchedWorkspace || input.workspace;
+  const errors: string[] = [];
+  let ownedCount = 0;
+  let reviewedCount = 0;
+  for (const payload of payloads) {
+    const owned = (Array.isArray(payload.sorted_owned_paths) ? payload.sorted_owned_paths : payload.owned_paths) as unknown[] | undefined;
+    const ownedPaths = (owned || []).map(String);
+    const closure = (Array.isArray(payload.sorted_dependency_closure) ? payload.sorted_dependency_closure : payload.dependency_closure) as unknown[] | undefined;
+    const known = new Set([...ownedPaths, ...(closure || []).map(String)]);
+    const reviewed = qualityArray(payload.reviewedFiles ?? payload.reviewed_files);
+    const reviewedPaths = new Set<string>();
+    for (const row of reviewed) {
+      const reviewedPath = qualityPath(row.path ?? row.file ?? row.file_path);
+      if (!reviewedPath || !qualitySafeRelative(reviewedPath) || !known.has(reviewedPath)) errors.push(`${qualityComponentId(payload)} reviewed path`);
+      else { reviewedPaths.add(reviewedPath); reviewedCount += 1; }
+      const coords = qualityCoordinates(row.coordinates ?? row.coordinate ?? row.spans);
+      for (const coordinate of coords) {
+        const lines = qualityLineCount(input, workspace, coordinate.path, sourceFiles);
+        if (!qualitySafeRelative(coordinate.path) || !known.has(coordinate.path) || lines === undefined || coordinate.line < 1 || coordinate.line > lines) errors.push(`${qualityComponentId(payload)} reviewed coordinate`);
+      }
+    }
+    for (const ownedPath of ownedPaths) if (!reviewedPaths.has(ownedPath)) errors.push(`${qualityComponentId(payload)} missing reviewed ${ownedPath}`);
+    ownedCount += ownedPaths.length;
+    for (const field of ['requirements', 'interfaces', 'findings']) {
+      for (const object of qualityObjects(payload[field])) {
+        for (const coordinate of qualityCoordinates(object.coordinates ?? object.coordinate ?? object.spans)) {
+          const lines = qualityLineCount(input, workspace, coordinate.path, sourceFiles);
+          if (!qualitySafeRelative(coordinate.path) || !known.has(coordinate.path) || lines === undefined || coordinate.line < 1 || coordinate.line > lines) errors.push(`${qualityComponentId(payload)} ${field} coordinate`);
+        }
+      }
+    }
+  }
+  return { pass: payloads.length > 0 && errors.length === 0 && ownedCount > 0 && reviewedCount >= ownedCount, details: { source_scope: sourceScope, payloads: payloads.length, owned_files: ownedCount, reviewed_files: reviewedCount, errors } };
+}
+
+function qualitySeverity(value: unknown): number {
+  const normalized = String(value ?? '').toLowerCase();
+  return normalized === 'critical' ? 4 : normalized === 'high' ? 3 : normalized === 'medium' ? 2 : 0;
+}
+
+function qualityLikelyConfirmed(value: JsonRecord): boolean {
+  const text = qualityText(value).toLowerCase();
+  return Number(value.confidence) >= 0.7 && (String(value.likelihood ?? value.calibration ?? value.certainty ?? '').toLowerCase().includes('likely') || String(value.likelihood ?? value.calibration ?? value.certainty ?? '').toLowerCase().includes('confirmed') || /\b(likely|confirmed)\b/.test(text));
+}
+
+function qualityBugConcepts(value: unknown): { decode: boolean; control: boolean; effect: boolean } {
+  const text = qualityText(value);
+  return {
+    decode: /malformed|decode|invalid json|extra json/i.test(text),
+    control: /fall(?:s|ing)?[-\s]*through|missing return|continues?|no return|unreturned/i.test(text),
+    effect: /persist|mutat|create\s*\(|state|effect|dispatch/i.test(text),
+  };
+}
+
+function qualityHasCoordinate(value: unknown, predicate: (coordinate: { path: string; line: number }) => boolean): boolean {
+  return qualityCoordinates(value).some(predicate);
+}
+
+function qualityPayloadCoordinates(payload: JsonRecord): Array<{ path: string; line: number }> {
+  const coordinates: Array<{ path: string; line: number }> = [];
+  for (const field of ['reviewedFiles', 'reviewed_files', 'requirements', 'interfaces', 'findings']) {
+    for (const object of qualityObjects(payload[field])) coordinates.push(...qualityCoordinates(object.coordinates ?? object.coordinate ?? object.spans));
+  }
+  return coordinates;
+}
+
+function qualityScanSpans(input: QualityInput): { returnLine?: number; testStart?: number; testEnd?: number } {
+  const sourceFiles = input.patchedSourceFiles || input.sourceFiles;
+  const http = sourceFiles?.['http.go'];
+  const test = sourceFiles?.['http_test.go'];
+  const lines = http?.split(/\r?\n/) || [];
+  const decodeIndex = lines.findIndex(line => /\b(?:decodeErr|decodeError|json\.NewDecoder)\b/.test(line) && /if|Decode|decode/i.test(line));
+  let returnIndex = -1;
+  if (decodeIndex >= 0) {
+    let depth = 0;
+    for (let index = decodeIndex; index < lines.length; index += 1) {
+      depth += (lines[index].match(/{/g) || []).length;
+      depth -= (lines[index].match(/}/g) || []).length;
+      if (/\b(?:invalid JSON|malformed|decode)\b/i.test(lines[index]) && /writeJSONError/.test(lines[index])) {
+        const candidate = lines.slice(index + 1, Math.min(lines.length, index + 6)).findIndex(next => /^\s*return\s*\}?\s*$/.test(next));
+        if (candidate >= 0) { returnIndex = index + 1 + candidate; break; }
+      }
+      if (index > decodeIndex && depth <= 0) break;
+    }
+  }
+  const testLines = test?.split(/\r?\n/) || [];
+  const testStartIndex = testLines.findIndex(line => /\bTestMalformedWriteDoesNotPersist\b/.test(line));
+  let testEndIndex = -1;
+  if (testStartIndex >= 0) {
+    let depth = 0;
+    for (let index = testStartIndex; index < testLines.length; index += 1) {
+      depth += (testLines[index].match(/{/g) || []).length;
+      depth -= (testLines[index].match(/}/g) || []).length;
+      if (index === testStartIndex && depth <= 0) { testEndIndex = index; break; }
+      if (index > testStartIndex && depth <= 0) { testEndIndex = index; break; }
+    }
+  }
+  return { returnLine: returnIndex >= 0 ? returnIndex + 2 : undefined, testStart: testStartIndex >= 0 ? testStartIndex + 1 : undefined, testEnd: testEndIndex >= 0 ? testEndIndex + 1 : undefined };
+}
+
+function qualityResult(name: string, pass: boolean, details: JsonRecord): JsonRecord {
+  return { name, pass, score: pass ? 1 : 0, details };
+}
+
+/** Evaluate the seven deterministic onboarding-quality criteria. */
+export function evaluateOnboardingQuality(first: QualityInput | unknown, second?: unknown, third?: unknown): JsonRecord {
+  let input: QualityInput;
+  if (first && typeof first === 'object' && !Array.isArray(first) && (Object.prototype.hasOwnProperty.call(first, 'baselineCheckpoint') || Object.prototype.hasOwnProperty.call(first, 'baselineCandidate') || (Object.prototype.hasOwnProperty.call(first, 'oracle') && !Object.prototype.hasOwnProperty.call(first, 'baseline') && !Object.prototype.hasOwnProperty.call(first, 'resume')))) input = first as QualityInput;
+  else if (qualityRecord(first)?.components !== undefined) input = { baselineCandidate: first, resumeCandidate: second, ...(qualityRecord(third) || {}) } as QualityInput;
+  else if (Array.isArray(first)) input = { baselineCandidate: { components: first }, resumeCandidate: second, ...(qualityRecord(third) || {}) } as QualityInput;
+  else if (qualityRecord(first)?.baseline !== undefined || qualityRecord(first)?.resume !== undefined) {
+    const wrapper = qualityRecord(first) as JsonRecord;
+    const baseline = qualityRecord(wrapper.baseline) || {};
+    const resume = qualityRecord(wrapper.resume) || {};
+    input = { ...wrapper, baselineCheckpoint: baseline.checkpoint || baseline, resumeCheckpoint: resume.checkpoint || resume, baselineCandidate: baseline.candidate, resumeCandidate: resume.candidate } as QualityInput;
+  }
+  else input = { baselineCheckpoint: first, resumeCheckpoint: second, ...(qualityRecord(third) || {}) } as QualityInput;
+  if (!input.sourceFiles) input.sourceFiles = input.source_files || input.sources;
+  const baselineProject = qualityPayload(input.baselineCandidate) || qualityCandidates(input.baselineCheckpoint, 1)[0];
+  const baselineComponents = qualityCandidateComponents(baselineProject);
+  const directResume = input.resumeCandidate ? qualityCandidateComponents(input.resumeCandidate) : [];
+  const resumeCandidates = Array.isArray(input.resumeComponentCandidates) ? input.resumeComponentCandidates.map(qualityPayload).filter((value): value is JsonRecord => value !== undefined) : directResume.length > 0 ? directResume : qualityCandidates(input.resumeCheckpoint, 2);
+  const directBaseline = baselineComponents.filter(component => qualityObjects(component.reviewedFiles ?? component.reviewed_files).length > 0);
+  const baselineCandidates = Array.isArray(input.baselineComponentCandidates) ? input.baselineComponentCandidates.map(qualityPayload).filter((value): value is JsonRecord => value !== undefined) : directBaseline.length > 0 ? directBaseline : qualityCandidates(input.baselineCheckpoint, 2);
+  const changedId = String(input.changedComponentId || input.changed_component_id || qualityScopeKey(qualityEvents(input.resumeCheckpoint).filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && qualityScopeLength(event) === 2).slice(-1)[0]) || '');
+  const latestById = new Map<string, JsonRecord>();
+  for (const candidate of [...baselineCandidates, ...resumeCandidates]) latestById.set(qualityComponentId(candidate), candidate);
+  const baselineDetailsById = new Map<string, JsonRecord>();
+  for (const candidate of baselineCandidates) baselineDetailsById.set(qualityComponentId(candidate), candidate);
+  const componentPayloads = [...latestById.values()];
+  const baselineItems = Array.isArray(input.baselineWorkItems) ? input.baselineWorkItems as unknown[] : qualityItemsFromCheckpoint(input.baselineCheckpoint);
+  const resumedItems = Array.isArray(input.resumeWorkItems || input.workItems) ? (input.resumeWorkItems || input.workItems) as unknown[] : qualityItemsFromCheckpoint(input.resumeCheckpoint);
+  const ownershipItems = baselineItems.length > 0 ? baselineItems : resumedItems;
+  const finalItems = resumedItems.map(qualityPayload).filter((value): value is JsonRecord => value !== undefined);
+  const ownershipItemRecords = ownershipItems.map(qualityPayload).filter((value): value is JsonRecord => value !== undefined);
+  const itemByComponent = new Map(finalItems.map(item => [qualityComponentId(item), item]));
+  const ownershipItemByComponent = new Map(ownershipItemRecords.map(item => [qualityComponentId(item), item]));
+  const componentPaths = (item: JsonRecord | undefined): { owned_paths?: string[]; dependency_closure?: string[] } => {
+    if (!item) return {};
+    const subject = qualityRecord(item.proof_component_subject);
+    const owned = (Array.isArray(item.sorted_owned_paths) ? item.sorted_owned_paths : Array.isArray(item.owned_paths) ? item.owned_paths : Array.isArray(subject?.sorted_owned_paths) ? subject.sorted_owned_paths : undefined)?.map(String);
+    const closure = (Array.isArray(item.sorted_dependency_closure) ? item.sorted_dependency_closure : Array.isArray(item.dependency_closure) ? item.dependency_closure : Array.isArray(subject?.sorted_dependency_closure) ? subject.sorted_dependency_closure : undefined)?.map(String);
+    return { ...(owned ? { owned_paths: owned } : {}), ...(closure ? { dependency_closure: closure } : {}) };
+  };
+  const enrichedComponentPayloads = componentPayloads.map(payload => ({ ...componentPaths(itemByComponent.get(qualityComponentId(payload))), ...payload }));
+
+  const expectedGroups = [['http.go', 'http_test.go'], ['service.go', 'service_test.go'], ['entry.go', 'store.go', 'go.mod']].map(group => group.sort());
+  const actualGroups = baselineComponents.map(component => {
+    const paths = Array.isArray(component.owned_paths) ? component.owned_paths.map(String).sort() : [];
+    return paths;
+  });
+  const groupingPass = actualGroups.length === expectedGroups.length && expectedGroups.every(group => actualGroups.some(actual => canonicalValue(actual) === canonicalValue(group)));
+  const candidateOwnership = baselineComponents.flatMap(component => Array.isArray(component.owned_paths) ? component.owned_paths.map(String) : []);
+  const itemOwnership = ownershipItemRecords.flatMap(item => (Array.isArray(item.sorted_owned_paths) ? item.sorted_owned_paths : item.owned_paths || []).map(String));
+  const candidateIds = new Set(baselineComponents.map(component => qualityComponentId(component)));
+  const itemIds = new Set(ownershipItemRecords.map(item => qualityComponentId(item)));
+  const itemById = ownershipItemByComponent;
+  const mappingPass = candidateIds.size === 3 && itemIds.size === 3 && [...candidateIds].every(id => itemIds.has(id)) && [...baselineComponents].every(component => {
+    const item = itemById.get(qualityComponentId(component));
+    const owned = Array.isArray(component.owned_paths) ? component.owned_paths.map(String).sort() : [];
+    const itemOwned = item ? (Array.isArray(item.sorted_owned_paths) ? item.sorted_owned_paths : item.owned_paths || []).map(String).sort() : [];
+    return !!item && canonicalValue(owned) === canonicalValue(itemOwned);
+  }) && canonicalValue([...candidateOwnership].sort()) === canonicalValue([...new Set(candidateOwnership)].sort()) && canonicalValue([...itemOwnership].sort()) === canonicalValue([...new Set(itemOwnership)].sort()) && canonicalValue([...candidateOwnership].sort()) === canonicalValue([...itemOwnership].sort()) && candidateOwnership.length === SUBJECT_FILES.length;
+  const baselineDetailPayloads = baselineComponents.map(component => {
+    const payload = baselineDetailsById.get(qualityComponentId(component)) || component;
+    return { ...componentPaths(itemByComponent.get(qualityComponentId(component))), ...payload };
+  });
+  const httpBaseline = baselineDetailPayloads.find(component => (Array.isArray(component.owned_paths) && component.owned_paths.includes('http.go')) || /http/i.test(qualityComponentId(component)));
+  const httpResume = (enrichedComponentPayloads.find(component => qualityComponentId(component) === changedId) || (changedId ? undefined : enrichedComponentPayloads.find(component => Array.isArray(component.owned_paths) && component.owned_paths.includes('http.go'))));
+  const baselineFindings = httpBaseline ? qualityObjects(httpBaseline.findings) : [];
+  const bugEvidence = baselineFindings.find(finding => {
+    const text = qualityText(finding);
+    const concepts = qualityBugConcepts(text);
+    return qualitySeverity(finding.severity) >= 2 && qualityLikelyConfirmed(finding) && concepts.decode && concepts.control && concepts.effect && qualityHasCoordinate(finding, coordinate => coordinate.path === 'http.go' && coordinate.line >= 43 && coordinate.line <= 52);
+  });
+  const bugPass = bugEvidence !== undefined;
+  const allBaselinePayloads = baselineDetailPayloads;
+  const xssFalsePositive = allBaselinePayloads.some(payload => qualityObjects(payload.findings).some(finding => qualitySeverity(finding.severity) >= 3 && /xss|cross.?site|html injection|script injection|unsanitized html/i.test(qualityText(finding))));
+  const xssPass = !xssFalsePositive;
+  const resumeText = qualityText(httpResume || '');
+  const resolutionAssertion = /(?:malformed|decode|invalid json|rejected)[\s\S]{0,180}(?:no|without|does not|never|zero|none)[\s\S]{0,100}(?:persist|state|effect|dispatch|mutation)|(?:no|without|does not|never|zero|none)[\s\S]{0,100}(?:persist|state|effect|dispatch|mutation)[\s\S]{0,180}(?:malformed|decode|invalid json|rejected)/i.test(resumeText);
+  const activeDefect = qualityObjects(httpResume?.findings).some(finding => qualitySeverity(finding.severity) >= 2 && qualityLikelyConfirmed(finding) && Object.values(qualityBugConcepts(finding)).some(Boolean) && !/resolved|fixed|closed|no active|remediated/i.test(qualityText(finding)));
+  const spans = qualityScanSpans(input);
+  const resumeCoordinates = httpResume ? qualityPayloadCoordinates(httpResume) : [];
+  const returnCitation = spans.returnLine !== undefined && resumeCoordinates.some(coordinate => coordinate.path === 'http.go' && Math.abs(coordinate.line - spans.returnLine!) <= 1);
+  const testCitation = spans.testStart !== undefined && spans.testEnd !== undefined && resumeCoordinates.some(coordinate => coordinate.path === 'http_test.go' && coordinate.line >= spans.testStart! && coordinate.line <= spans.testEnd!) && /TestMalformedWriteDoesNotPersist/.test(resumeText);
+  const resolutionPass = !!httpResume && resolutionAssertion && !activeDefect && returnCitation && testCitation;
+  const oracle = input.oracle || input.hiddenOracle || {};
+  const oracleBaseline = qualityRecord(oracle.baseline);
+  const oraclePatched = qualityRecord(oracle.patched || oracle.resume);
+  const oraclePass = (oracleBaseline ? Number(oracleBaseline.status) !== 0 && (oracleBaseline.expected_failure_marker === true || oracleBaseline.failure_marker === 'entries after rejected write = 1' || oracleBaseline.marker === 'entries after rejected write = 1' || String(oracleBaseline.outcome || '').toLowerCase() === 'failed') : oracle.baseline_failed === true) && (oraclePatched ? Number(oraclePatched.status) === 0 || oraclePatched.passed === true || String(oraclePatched.outcome || '').toLowerCase() === 'passed' : oracle.patched_passed === true);
+  const baselineCoordinates = qualityCoordinateCheck(baselineDetailPayloads, input, input.baselineSourceFiles || input.sourceFiles, 'original subject');
+  const patchedCoordinates = qualityCoordinateCheck(httpResume ? [httpResume] : [], input, input.patchedSourceFiles || input.sourceFiles, 'patched workspace');
+  const coordinates = {
+    pass: baselineCoordinates.pass && patchedCoordinates.pass,
+    details: { baseline: baselineCoordinates.details, resumed_changed: patchedCoordinates.details },
+  };
+  const criteria = [
+    qualityResult('grouping', groupingPass, { expected: expectedGroups, actual: actualGroups }),
+    qualityResult('ownership', mappingPass, { candidate_paths: candidateOwnership, work_item_paths: itemOwnership, candidate_to_work_item: [...candidateIds].every(id => itemIds.has(id)) }),
+    qualityResult('coordinates', coordinates.pass, coordinates.details),
+    qualityResult('baseline_http_candidate', bugPass, { component_id: httpBaseline ? qualityComponentId(httpBaseline) : null, detected: bugPass, boundary_coordinate: bugEvidence ? qualityCoordinates(bugEvidence).find(coordinate => coordinate.path === 'http.go') : null }),
+    qualityResult('no_xss_false_positive', xssPass, { high_or_critical_xss_finding: xssFalsePositive }),
+    qualityResult('resume_http_resolution', resolutionPass, { component_id: changedId || null, no_active_defect: !activeDefect, semantic_assertion: resolutionAssertion, return_citation: returnCitation, test_citation: testCitation, scanned_spans: spans }),
+    qualityResult('hidden_oracle', oraclePass, { baseline_failed_expected_marker: !!oracleBaseline && Number(oracleBaseline.status) !== 0, patched_passed: !!oraclePatched && Number(oraclePatched.status) === 0 }),
+  ];
+  const score = criteria.reduce((total, criterion) => total + Number(criterion.score), 0);
+  return { schema: 'urn:reqproof:agent-governance:exp-0209-onboarding-quality:v1', criteria, criterion_results: Object.fromEntries(criteria.map(criterion => [criterion.name, criterion])), score, total: ONBOARDING_QUALITY_CRITERIA.length, overall_pass: score === ONBOARDING_QUALITY_CRITERIA.length, pass: score === ONBOARDING_QUALITY_CRITERIA.length };
+}
+
+function verifyManualBaseline(evaluatorDirectory: string): JsonRecord {
+  const file = path.join(evaluatorDirectory, 'manual-baseline.json');
+  const stat = fs.lstatSync(file);
+  assertInvariant('manual baseline is a regular non-symlink file', stat.isFile() && !stat.isSymbolicLink());
+  const bytes = fs.readFileSync(file);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  assertInvariant('manual baseline matches the pinned SHA-256', digest === MANUAL_BASELINE_SHA256);
+  const value = record(JSON.parse(bytes.toString('utf8')), 'manual baseline');
+  assertInvariant('manual baseline schema is exact', value.schema === 'urn:reqproof:agent-governance:p1-manual-baseline:v2' && value.attempt === 2);
+  const subject = record(value.subject, 'manual baseline subject');
+  assertInvariant('manual baseline subject tree is pinned', subject.tree_sha256 === SUBJECT_TREE_SHA256 && subject.go_file_count === 6 && subject.module === 'journalservice' && subject.manifest_digest_rule === 'SHA-256 over ordered sha256sum records: 64 lowercase hex, two spaces, filename, LF.');
+  assertInvariant('manual baseline subject manifest is exact', canonicalValue(subject.manifest_order) === canonicalValue([...SUBJECT_FILES].sort()) && canonicalValue(subject.file_sha256) === canonicalValue(SUBJECT_SHA256));
+  const hidden = record(value.hidden_oracle, 'manual baseline hidden oracle');
+  assertInvariant('manual baseline hidden oracle is pinned', hidden.path === 'evaluator/hidden_missing_return_test.go' && hidden.sha256 === HIDDEN_TEST_SHA256 && hidden.baseline_exit_code === 1 && hidden.baseline_evidence === 'entries after rejected write = 1');
+  const changes = qualityArray(value.changes);
+  const bugfix = changes.find(change => change.id === 'bugfix');
+  assertInvariant('manual baseline bugfix pin is exact', !!bugfix && bugfix.patch === 'evaluator/changes/0001-reject-malformed-write.patch' && bugfix.patch_sha256 === PATCH_SHA256 && bugfix.parent_tree_sha256 === SUBJECT_TREE_SHA256 && bugfix.result_tree_sha256 === PATCH_RESULT_TREE_SHA256 && Array.isArray(bugfix.impact_files) && canonicalValue(bugfix.impact_files) === canonicalValue(['http.go', 'http_test.go']));
+  return { sha256: digest, schema: value.schema, subject_tree_sha256: SUBJECT_TREE_SHA256, hidden_test_sha256: HIDDEN_TEST_SHA256, patch_sha256: PATCH_SHA256 };
+}
+
+type AcceptedEvaluationArtifact = AcceptedResumeArtifact & {
+  resumeStarted: JsonRecord;
+  resumeCheckpoint: JsonRecord;
+  resumeReport: JsonRecord;
+  resumeCompleted: JsonRecord;
+  resumeMetadata: JsonRecord;
+  resumeGate: LiveResumeCheckpointValidation;
+  resumeWorkItems: JsonRecord[];
+  manualBaseline: JsonRecord;
+};
+
+function canonicalPrivateJson(file: string, label: string): JsonRecord {
+  regularPrivateFile(file, label);
+  const bytes = fs.readFileSync(file, 'utf8');
+  const value = record(JSON.parse(bytes), label);
+  assertInvariant(`${label} bytes are canonical`, bytes === `${JSON.stringify(value, null, 2)}\n` || bytes === `${canonicalValue(value)}\n`);
+  return value;
+}
+
+function acceptedEvaluationArtifact(outputDirectory: string, evaluatorDirectory: string): AcceptedEvaluationArtifact {
+  const artifact = acceptedResumeArtifact(outputDirectory, false);
+  const started = canonicalPrivateJson(path.join(outputDirectory, RESUME_STARTED_FILE), 'resume started marker');
+  const metadata = canonicalPrivateJson(path.join(outputDirectory, RESUME_INPUT_METADATA_FILE), 'resume input metadata');
+  const revalidationBytes = fs.readFileSync(path.join(outputDirectory, RESUME_REVALIDATION_FILE));
+  const workItemsBytes = fs.readFileSync(path.join(outputDirectory, RESUME_WORK_ITEMS_FILE));
+  const continued = canonicalPrivateJson(path.join(outputDirectory, RESUME_CHECKPOINT_FILE), 'continued checkpoint');
+  const report = canonicalPrivateJson(path.join(outputDirectory, RESUME_REPORT_FILE), 'resume report');
+  const completed = canonicalPrivateJson(path.join(outputDirectory, RESUME_COMPLETED_FILE), 'resume completed marker');
+  assertInvariant('accepted resume marker is started', started.status === 'started');
+  assertInvariant('accepted resume report is passed', report.status === 'passed' && report.mode === 'resume-only' && report.gate_passed === true);
+  assertInvariant('accepted resume completed marker is completed', completed.status === 'completed');
+  assertInvariant('accepted resume session and digest are unchanged', report.session_id === artifact.baselineGate.sessionId && completed.session_id === artifact.baselineGate.sessionId && report.graph_semantic_digest === artifact.baselineGate.graphSemanticDigest && completed.graph_semantic_digest === artifact.baselineGate.graphSemanticDigest);
+  assertInvariant('accepted resume marker has the baseline binding', started.baseline_session_id === artifact.baselineGate.sessionId && started.baseline_checkpoint_sha256 === createHash('sha256').update(fs.readFileSync(path.join(outputDirectory, BASELINE_CHECKPOINT_FILE))).digest('hex'));
+  assertInvariant('accepted resume metadata is bound to baseline', metadata.session_id === artifact.baselineGate.sessionId && metadata.graph_semantic_digest === artifact.baselineGate.graphSemanticDigest);
+  regularPrivateFile(path.join(outputDirectory, RESUME_REVALIDATION_FILE), 'resume revalidation');
+  regularPrivateFile(path.join(outputDirectory, RESUME_WORK_ITEMS_FILE), 'resume work-items');
+  assertInvariant('accepted resume Proof bytes match metadata hashes', createHash('sha256').update(revalidationBytes).digest('hex') === metadata.revalidation_sha256 && createHash('sha256').update(workItemsBytes).digest('hex') === metadata.work_items_sha256);
+  validateResumeWorkspace(artifact, started, metadata);
+  const resumeGate = validateLiveResumeCheckpoint(continued, artifact.baselineCheckpoint, artifact.config, { changedComponentId: metadata.changed_component_id, changedPaths: metadata.changed_paths, mutationEventCount: metadata.mutation_event_count });
+  assertInvariant('accepted resume has the exact 4+1 RoleRuns', artifact.baselineGate.counts.inspectAttempts === 4 && resumeGate.counts.inspectAttempts === 5 && resumeGate.counts.proofCandidates === 5 && resumeGate.counts.proofAdmissions === 5);
+  const resumeWorkItems = activeOnboardingWorkItemsFromCheckpoint(continued, artifact.config);
+  assertInvariant('accepted resume has exactly three active depth-2 WorkItems', resumeWorkItems.length === 3);
+  const manualBaseline = verifyManualBaseline(evaluatorDirectory);
+  return { ...artifact, resumeStarted: started, resumeCheckpoint: continued, resumeReport: report, resumeCompleted: completed, resumeMetadata: metadata, resumeGate, resumeWorkItems, manualBaseline };
+}
+
+function copyHiddenOracle(directory: string, evaluatorDirectory: string): void {
+  const source = path.join(evaluatorDirectory, 'hidden_missing_return_test.go');
+  const destination = path.join(directory, 'hidden_missing_return_test.go');
+  const stat = fs.lstatSync(source);
+  assertInvariant('hidden oracle is a regular non-symlink file', stat.isFile() && !stat.isSymbolicLink());
+  assertInvariant('hidden oracle remains pinned', sha256File(source) === HIDDEN_TEST_SHA256);
+  fs.copyFileSync(source, destination);
+  fs.chmodSync(destination, 0o600);
+}
+
+function oracleTreeDigest(directory: string): string {
+  const hashes = SUBJECT_FILES.map(file => `${sha256File(path.join(directory, file))}  ${file}\n`).join('');
+  return createHash('sha256').update(hashes).digest('hex');
+}
+
+function runEvaluationOracle(workspace: string, subjectDirectory: string, evaluatorDirectory: string, outputDirectory: string): JsonRecord {
+  const run = (label: string, copy: (destination: string) => void): JsonRecord => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `visor-exp-0209-evaluation-${label}-`));
+    makePrivateDirectory(directory);
+    try {
+      assertInvariant(`${label} oracle copy is outside output/workspace`, !pathsOverlap(directory, outputDirectory) && !pathsOverlap(directory, workspace));
+      copy(directory);
+      copyHiddenOracle(directory, evaluatorDirectory);
+      const result = command('go', ['test', './...'], directory, { ...process.env, ...OFFLINE_GO_ENV });
+      const output = `${result.stdout}\n${result.stderr}`;
+      return {
+        status: result.status,
+        passed: result.status === 0,
+        expected_failure_marker: output.includes('entries after rejected write = 1'),
+        tree_sha256: oracleTreeDigest(directory),
+        hidden_test_sha256: HIDDEN_TEST_SHA256,
+        outside_workspace: !pathWithin(directory, workspace),
+        cleaned: true,
+      };
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  };
+  const baseline = run('baseline', destination => copyBaseline(subjectDirectory, destination));
+  const patched = run('patched', destination => copyBaselineFromWorkspace(workspace, destination));
+  return {
+    command: 'go test ./...',
+    offline_go: true,
+    baseline: { status: baseline.status, failed: baseline.status !== 0, expected_failure_marker: baseline.expected_failure_marker, tree_sha256: baseline.tree_sha256, hidden_test_sha256: baseline.hidden_test_sha256, cleaned: baseline.cleaned },
+    patched: { status: patched.status, passed: patched.status === 0, tree_sha256: patched.tree_sha256, hidden_test_sha256: patched.hidden_test_sha256, cleaned: patched.cleaned },
+  };
+}
+
+const EVALUATION_PUBLICATION_FILES = [GRAPH_SOURCE_FILE, EVALUATION_FILE, LIVE_REPORT_FILE, LIVE_REPORT_MARKDOWN_FILE, EVALUATION_COMPLETED_FILE] as const;
+type PublishedEvaluationArtifact = { name: string; device: number; inode: number };
+
+function evaluationFinalArtifacts(outputDirectory: string): string[] {
+  return [GRAPH_SOURCE_FILE, EVALUATION_FILE, LIVE_REPORT_FILE, LIVE_REPORT_MARKDOWN_FILE, EVALUATION_COMPLETED_FILE].filter(file => {
+    try { fs.lstatSync(path.join(outputDirectory, file)); return true; }
+    catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false; throw error; }
+  });
+}
+
+function evaluationStagingEntries(outputDirectory: string): string[] {
+  try { return fs.readdirSync(outputDirectory).filter(name => name.startsWith('.evaluation-publish-')); }
+  catch (error) { if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return []; throw error; }
+}
+
+function assertNoPriorEvaluationArtifacts(outputDirectory: string): void {
+  const marker = fs.existsSync(path.join(outputDirectory, EVALUATION_STARTED_FILE));
+  assertInvariant('evaluation output has no prior marker or evidence', !marker && evaluationFinalArtifacts(outputDirectory).length === 0 && evaluationStagingEntries(outputDirectory).length === 0);
+}
+
+function createEvaluationStagingDirectory(outputDirectory: string): string {
+  assertInvariant('evaluation publication has no pre-existing final evidence', evaluationFinalArtifacts(outputDirectory).length === 0);
+  assertInvariant('evaluation publication has no pre-existing staging directory', evaluationStagingEntries(outputDirectory).length === 0);
+  const directory = fs.mkdtempSync(path.join(outputDirectory, '.evaluation-publish-'));
+  fs.chmodSync(directory, 0o700);
+  return directory;
+}
+
+function stageEvaluationArtifact(stagingDirectory: string, name: string, bytes: string): void {
+  assertInvariant('evaluation publication file name is fixed', EVALUATION_PUBLICATION_FILES.includes(name as typeof EVALUATION_PUBLICATION_FILES[number]));
+  writeExclusiveBytes(path.join(stagingDirectory, `${name}.stage`), bytes);
+}
+
+function publishEvaluationArtifacts(outputDirectory: string, stagingDirectory: string, published: PublishedEvaluationArtifact[]): void {
+  assertInvariant('evaluation staging directory is output-owned', path.dirname(path.resolve(stagingDirectory)) === path.resolve(outputDirectory) && path.basename(stagingDirectory).startsWith('.evaluation-publish-'));
+  for (const name of EVALUATION_PUBLICATION_FILES) {
+    const staged = path.join(stagingDirectory, `${name}.stage`);
+    const final = path.join(outputDirectory, name);
+    try { fs.lstatSync(final); throw new Error(`evaluation final artifact already exists: ${name}`); }
+    catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; }
+    fs.renameSync(staged, final);
+    const stat = fs.lstatSync(final);
+    assertInvariant(`published evaluation ${name} is private`, stat.isFile() && !stat.isSymbolicLink() && (stat.mode & 0o777) === 0o600);
+    published.push({ name, device: stat.dev, inode: stat.ino });
+    fsyncDirectory(outputDirectory);
+  }
+  fsyncDirectory(outputDirectory);
+}
+
+function cleanupEvaluationPublication(outputDirectory: string, stagingDirectory: string | undefined, published: readonly PublishedEvaluationArtifact[]): void {
+  for (const artifact of published) {
+    const file = path.join(outputDirectory, artifact.name);
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.dev === artifact.device && stat.ino === artifact.inode) fs.unlinkSync(file);
+    } catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; }
+  }
+  if (stagingDirectory) {
+    assertInvariant('evaluation staging cleanup is output-owned', path.dirname(path.resolve(stagingDirectory)) === path.resolve(outputDirectory) && path.basename(stagingDirectory).startsWith('.evaluation-publish-'));
+    fs.rmSync(stagingDirectory, { recursive: true, force: true });
+  }
+  fsyncDirectory(outputDirectory);
+}
+
+function evaluationMarkdownBytes(report: JsonRecord): string {
+  const criteria = Array.isArray(report.criteria) ? report.criteria.map((criterion: JsonRecord) => `- ${criterion.name}: ${criterion.pass ? 'pass' : 'fail'} (${criterion.score}/1)`).join('\n') : '';
+  return ['# EXP-0209 onboarding quality evaluation', '', `- Status: ${report.status}`, `- Score: ${report.score}/${report.total}`, `- Session: ${report.session_id}`, `- Changed component: ${report.changed_component_id}`, `- Oracle baseline failed: ${report.oracle?.baseline?.failed ? 'yes' : 'no'}`, `- Oracle patched passed: ${report.oracle?.patched?.passed ? 'yes' : 'no'}`, '', 'Criteria:', criteria, '', 'This report contains controller evidence and hashes only.', ''].join('\n');
+}
+
+function writeEvaluationArtifacts(outputDirectory: string, report: JsonRecord, completed: JsonRecord, graphSourceBytes: string): void {
+  const staging = createEvaluationStagingDirectory(outputDirectory);
+  const published: PublishedEvaluationArtifact[] = [];
+  try {
+    stageEvaluationArtifact(staging, GRAPH_SOURCE_FILE, graphSourceBytes);
+    stageEvaluationArtifact(staging, EVALUATION_FILE, `${JSON.stringify(report, null, 2)}\n`);
+    stageEvaluationArtifact(staging, LIVE_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`);
+    stageEvaluationArtifact(staging, LIVE_REPORT_MARKDOWN_FILE, evaluationMarkdownBytes(report));
+    stageEvaluationArtifact(staging, EVALUATION_COMPLETED_FILE, `${JSON.stringify(completed, null, 2)}\n`);
+    fsyncDirectory(staging);
+    publishEvaluationArtifacts(outputDirectory, staging, published);
+    cleanupEvaluationPublication(outputDirectory, staging, []);
+  } catch (error) {
+    try { cleanupEvaluationPublication(outputDirectory, staging, published); } catch { /* Preserve original publication error. */ }
+    throw error;
+  }
+}
+
+function trackedGraphSourceBytes(): Buffer {
+  const relative = path.relative(REPO_ROOT, PROFILE_PATH).split(path.sep).join('/');
+  const stat = fs.lstatSync(PROFILE_PATH);
+  assertInvariant('graph source is a regular non-symlink file', stat.isFile() && !stat.isSymbolicLink());
+  const tracked = requireCommand('git', ['ls-files', '--error-unmatch', '--', relative]).stdout.trim();
+  assertInvariant('graph source is tracked at its expected path', tracked === relative);
+  const status = requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no', '--', relative]).stdout;
+  assertInvariant('graph source has no working-tree diff', status === '');
+  const headBytes = execFileSync('git', ['show', `HEAD:${relative}`], { cwd: REPO_ROOT, maxBuffer: 16 * 1024 * 1024 });
+  const currentBytes = fs.readFileSync(PROFILE_PATH);
+  assertInvariant('graph source bytes match the current HEAD blob', Buffer.from(headBytes).equals(currentBytes));
+  return currentBytes;
+}
+
+function runEvaluateOnly(args: ReturnType<typeof parseArgs>): boolean {
+  const outputDirectory = args.outputDirectory;
+  let started = false;
+  try {
+    assertNoPriorEvaluationArtifacts(outputDirectory);
+    const artifact = acceptedEvaluationArtifact(outputDirectory, args.evaluatorDirectory);
+    const inputPins = verifyResumePins(artifact, args.subjectDirectory, args.evaluatorDirectory);
+    const baselineBytes = fs.readFileSync(path.join(outputDirectory, BASELINE_CHECKPOINT_FILE));
+    const continuedBytes = fs.readFileSync(path.join(outputDirectory, RESUME_CHECKPOINT_FILE));
+    const configBytes = fs.readFileSync(path.join(outputDirectory, EFFECTIVE_CONFIG_FILE));
+    const graphSourceBytes = trackedGraphSourceBytes();
+    const startedEvidence = {
+      schema: 'urn:reqproof:agent-governance:exp-0209-evaluation-started:v1',
+      status: 'started',
+      output_directory: outputDirectory,
+      controller_pid: process.pid,
+      session_id: artifact.baselineGate.sessionId,
+      graph_semantic_digest: artifact.baselineGate.graphSemanticDigest,
+      baseline_checkpoint_sha256: createHash('sha256').update(baselineBytes).digest('hex'),
+      continued_checkpoint_sha256: createHash('sha256').update(continuedBytes).digest('hex'),
+      effective_config_sha256: createHash('sha256').update(configBytes).digest('hex'),
+      manual_baseline_sha256: artifact.manualBaseline.sha256,
+    };
+    writeExclusiveJson(path.join(outputDirectory, EVALUATION_STARTED_FILE), startedEvidence);
+    started = true;
+    const oracle = runEvaluationOracle(artifact.workspace, args.subjectDirectory, args.evaluatorDirectory, outputDirectory);
+    const baselineSourceFiles = Object.fromEntries(SUBJECT_FILES.map(file => [file, fs.readFileSync(path.join(args.subjectDirectory, file), 'utf8')]));
+    const patchedSourceFiles = Object.fromEntries(SUBJECT_FILES.map(file => [file, fs.readFileSync(path.join(artifact.workspace, file), 'utf8')]));
+    const quality = evaluateOnboardingQuality({ baselineCheckpoint: artifact.baselineCheckpoint, resumeCheckpoint: artifact.resumeCheckpoint, baselineWorkItems: artifact.baselineWorkItems, resumeWorkItems: artifact.resumeWorkItems, baselineSourceFiles, patchedSourceFiles, changedComponentId: artifact.resumeGate.changedComponentId, oracle });
+    const graphSourceSha256 = createHash('sha256').update(graphSourceBytes).digest('hex');
+    const baselineEvents = qualityEvents(artifact.baselineCheckpoint);
+    const resumeEvents = qualityEvents(artifact.resumeCheckpoint);
+    const baselineRuns = baselineEvents.filter(event => event.type === 'AttemptStarted' && event.checkId === 'inspect');
+    const allRuns = resumeEvents.filter(event => event.type === 'AttemptStarted' && event.checkId === 'inspect');
+    const acceptedPins = record(artifact.preflight.pins, 'accepted evaluation pins');
+    const acceptedModules = record(artifact.preflight.modules, 'accepted evaluation modules');
+    const prefixSha256 = createHash('sha256').update(canonicalValue(baselineEvents), 'utf8').digest('hex');
+    const report: JsonRecord = {
+      schema: 'urn:reqproof:agent-governance:exp-0209-evaluation:v1',
+      status: quality.overall_pass ? 'passed' : 'failed',
+      mode: 'evaluate-only',
+      output_directory: outputDirectory,
+      controller_pid: process.pid,
+      session_id: artifact.resumeGate.sessionId,
+      graph_semantic_digest: artifact.resumeGate.graphSemanticDigest,
+      effective_config_graph_digest: artifact.resumeGate.graphSemanticDigest,
+      score: quality.score,
+      total: quality.total,
+      gate_passed: quality.overall_pass,
+      criteria: quality.criteria,
+      role_runs: { baseline: 4, resume: 1, total: 5, exact: baselineRuns.length === 4 && allRuns.length === 5, baseline_sequence: baselineRuns.map(event => String(event.checkId)), resume_sequence: allRuns.slice(4).map(event => String(event.checkId)) },
+      parallel_fanout: { max_parallelism: 3, baseline_component_inspects: 3, fanout_verified: true },
+      session_prefix: { same_session: artifact.resumeGate.sessionId === artifact.baselineGate.sessionId, prefix_identical: true, prefix_events: baselineEvents.length, prefix_sha256: prefixSha256 },
+      same_session: artifact.resumeGate.sessionId === artifact.baselineGate.sessionId,
+      same_graph_digest: artifact.resumeGate.graphSemanticDigest === artifact.baselineGate.graphSemanticDigest,
+      prefix_identical: true,
+      changed_component_id: artifact.resumeGate.changedComponentId,
+      changed_paths: artifact.resumeGate.changedPaths,
+      changed_components: [artifact.resumeGate.changedComponentId],
+      reused_components: artifact.baselineGate.componentIds.filter(id => id !== artifact.resumeGate.changedComponentId),
+      receipts: { old: artifact.resumeGate.receiptIds.baseline, new: artifact.resumeGate.receiptIds.replacement },
+      old_receipt_id: artifact.resumeGate.receiptIds.baseline,
+      new_receipt_id: artifact.resumeGate.receiptIds.replacement,
+      closure: { components: 3, work_items: artifact.resumeGate.counts.workItems, component_admissions: artifact.resumeGate.counts.componentAdmissions, project_reconciliations: artifact.resumeGate.counts.projectReconciliations },
+      oracle,
+      hashes: { baseline_checkpoint_sha256: startedEvidence.baseline_checkpoint_sha256, continued_checkpoint_sha256: startedEvidence.continued_checkpoint_sha256, effective_config_sha256: startedEvidence.effective_config_sha256, graph_source_sha256: graphSourceSha256, manual_baseline_sha256: artifact.manualBaseline.sha256, hidden_test_sha256: HIDDEN_TEST_SHA256, patch_sha256: PATCH_SHA256, diff_sha256: artifact.resumeMetadata.diff_sha256, revalidation_sha256: artifact.resumeMetadata.revalidation_sha256, work_items_sha256: artifact.resumeMetadata.work_items_sha256 },
+      exact_pins: { visor_base: BASE_VISOR_COMMIT, proof_commit: PROOF_COMMIT, probe_version: PROBE_VERSION, ts_node_version: acceptedModules['ts-node/register/transpile-only']?.version, js_yaml_version: acceptedModules['js-yaml']?.version, codex_version: CODEX_VERSION, subject_files: acceptedPins.subject_files, subject_tree_sha256: inputPins.subject_tree_sha256, hidden_test_sha256: inputPins.hidden_test_sha256, patch_sha256: inputPins.patch_sha256, manual_baseline_sha256: MANUAL_BASELINE_SHA256 },
+      quality,
+    };
+    const completed: JsonRecord = { schema: 'urn:reqproof:agent-governance:exp-0209-evaluation-completed:v1', status: quality.overall_pass ? 'completed' : 'failed', session_id: report.session_id, graph_semantic_digest: report.graph_semantic_digest, score: report.score, total: report.total, gate_passed: report.gate_passed, evaluation_sha256: createHash('sha256').update(JSON.stringify(report)).digest('hex'), controller_pid: process.pid };
+    writeEvaluationArtifacts(outputDirectory, report, completed, graphSourceBytes.toString('utf8'));
+    process.stdout.write(`EXP-0209 onboarding evaluation ${report.status}: ${outputDirectory}\n`);
+    return quality.overall_pass;
+  } catch (error) {
+    if (started) {
+      // The started marker is deliberately never replaced. An operational
+      // error is distinct from a completed quality failure.
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        if (evaluationFinalArtifacts(outputDirectory).length === 0 && evaluationStagingEntries(outputDirectory).length === 0) {
+          const marker = qualityRecord(JSON.parse(fs.readFileSync(path.join(outputDirectory, EVALUATION_STARTED_FILE), 'utf8'))) || {};
+          const report: JsonRecord = {
+            schema: 'urn:reqproof:agent-governance:exp-0209-evaluation:v1', status: 'error', mode: 'evaluate-only', output_directory: outputDirectory,
+            controller_pid: process.pid, session_id: marker.session_id, graph_semantic_digest: marker.graph_semantic_digest,
+            score: 0, total: ONBOARDING_QUALITY_CRITERIA.length, gate_passed: false, criteria: [],
+            error: message.replace(args.evaluatorDirectory, '<evaluator>').replace(args.subjectDirectory, '<subject>'),
+            hashes: { baseline_checkpoint_sha256: marker.baseline_checkpoint_sha256, continued_checkpoint_sha256: marker.continued_checkpoint_sha256, effective_config_sha256: marker.effective_config_sha256, manual_baseline_sha256: marker.manual_baseline_sha256 },
+          };
+          const completed: JsonRecord = { schema: 'urn:reqproof:agent-governance:exp-0209-evaluation-completed:v1', status: 'error', session_id: marker.session_id, graph_semantic_digest: marker.graph_semantic_digest, score: 0, total: ONBOARDING_QUALITY_CRITERIA.length, gate_passed: false, controller_pid: process.pid };
+          writeEvaluationArtifacts(outputDirectory, report, completed, fs.readFileSync(PROFILE_PATH, 'utf8'));
+        }
+      } catch { /* Preserve the original operational diagnostic. */ }
+      process.stderr.write(`EXP-0209 evaluation error: ${message}\n`);
+    }
+    throw error;
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   let outputDirectory: string | undefined = outputHint(argv);
@@ -2326,6 +3082,11 @@ async function main(): Promise<void> {
       runResumeOnly(args);
       return;
     }
+    if (args.mode === 'evaluate-only') {
+      const passed = runEvaluateOnly(args);
+      if (!passed) process.exitCode = 2;
+      return;
+    }
     const report = preflight(args.outputDirectory, args.subjectDirectory, args.evaluatorDirectory, outputState);
     writeJson(path.join(args.outputDirectory, PRECHECK_ARTIFACT), report);
     process.stdout.write(`EXP-0209 preflight passed: ${args.outputDirectory}\n`);
@@ -2333,7 +3094,7 @@ async function main(): Promise<void> {
     const failure = {
       schema: 'urn:reqproof:agent-governance:exp-0209-preflight:v1',
       status: 'failed',
-      mode: argv.includes(RESUME_CHILD_FLAG) ? 'resume-child' : argv.includes('--resume-only') ? 'resume-only' : argv.includes(BASELINE_CHILD_FLAG) ? 'baseline-child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight-only',
+      mode: argv.includes(RESUME_CHILD_FLAG) ? 'resume-child' : argv.includes('--evaluate-only') ? 'evaluate-only' : argv.includes('--resume-only') ? 'resume-only' : argv.includes(BASELINE_CHILD_FLAG) ? 'baseline-child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight-only',
       governed_calls: 0,
       model_calls: 0,
       network_dispatches_requested: 0,
@@ -2348,7 +3109,7 @@ async function main(): Promise<void> {
         // not writable; no fallback output is silently selected.
       }
     }
-    const mode = argv.includes(RESUME_CHILD_FLAG) ? 'resume child' : argv.includes('--resume-only') ? 'resume-only' : argv.includes(BASELINE_CHILD_FLAG) ? 'baseline child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight';
+    const mode = argv.includes(RESUME_CHILD_FLAG) ? 'resume child' : argv.includes('--evaluate-only') ? 'evaluate-only' : argv.includes('--resume-only') ? 'resume-only' : argv.includes(BASELINE_CHILD_FLAG) ? 'baseline child' : argv.includes('--baseline-only') ? 'baseline-only' : 'preflight';
     process.stderr.write(`EXP-0209 ${mode} failed: ${failure.error}\n`);
     process.exitCode = 1;
   }
