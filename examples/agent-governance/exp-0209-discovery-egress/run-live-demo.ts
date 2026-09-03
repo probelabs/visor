@@ -83,6 +83,7 @@ const LIVE_FILES = new Set([
   'examples/agent-governance/exp-0209-discovery-egress/README.md',
   'tests/integration/exp-0209-discovery-egress.test.ts',
   'tests/integration/exp-0209-onboarding-quality.test.ts',
+  'tests/integration/exp-0208-product-native-demo-pack.test.ts',
   'tests/unit/exp-0209-live-baseline-validator.test.ts',
   'tests/fixtures/proof-current-catalog-checkpoint-child.ts',
   'src/providers/governed-proof-inspect-check-provider.ts',
