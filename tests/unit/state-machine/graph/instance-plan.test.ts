@@ -8,6 +8,9 @@ import {
   resolveJsonPointer,
 } from '../../../../src/state-machine/graph/instance-plan';
 import { compileClaimPlan } from '../../../../src/state-machine/graph/claim-plan';
+import { readFileSync } from 'fs';
+import * as yaml from 'js-yaml';
+import * as path from 'path';
 
 function config(): any {
   return {
@@ -107,7 +110,105 @@ function proofAdmissionConfig(): any {
   return value;
 }
 
+function discoveryFixture(): any {
+  const fixturePath = path.resolve(
+    __dirname,
+    '../../../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml'
+  );
+  return yaml.load(readFileSync(fixturePath, 'utf8'));
+}
+
 describe('Graph v2 C2 expansion plan', () => {
+  it('compiles the exact seven-node discovery topology and reconciliation barrier', () => {
+    const plan = compileClaimPlan(discoveryFixture()).expansionPlan;
+    const template = plan.templatesByName['discover-project'];
+
+    expect(template.templateNodeKeys).toEqual([
+      'inspect',
+      'materialize_catalog',
+      'project_reconcile',
+      'proof_admit',
+      'revalidate_catalog',
+      'structural_inventory',
+      'verify',
+    ]);
+    expect(template.topology).toEqual([
+      'structural_inventory',
+      'inspect',
+      'proof_admit',
+      'verify',
+      'revalidate_catalog',
+      'materialize_catalog',
+      'project_reconcile',
+    ]);
+    expect(template.nodesByKey.project_reconcile.check).toMatchObject({
+      type: 'proof-project-reconcile',
+      depends_on: ['materialize_catalog'],
+      wait_for_expansion: { owner: 'materialize_catalog', terminal_node: 'verify' },
+      emits: [{ claim: 'proof.project_reconciliation_receipt@1', from: 'output' }],
+    });
+    expect(template.nodesByKey.project_reconcile.consumptions).toEqual([]);
+    expect(template.nodesByKey.project_reconcile.waitForExpansion).toEqual({
+      owner: 'materialize_catalog',
+      terminal_node: 'verify',
+    });
+  });
+
+  it('keeps the existing six-node discovery profile valid', () => {
+    const value = discoveryFixture();
+    delete value.subgraphs['discover-project'].checks.project_reconcile;
+    const template = compileClaimPlan(value).expansionPlan.templatesByName['discover-project'];
+    expect(template.templateNodeKeys).not.toContain('project_reconcile');
+    expect(template.topology).toEqual([
+      'structural_inventory',
+      'inspect',
+      'proof_admit',
+      'verify',
+      'revalidate_catalog',
+      'materialize_catalog',
+    ]);
+  });
+
+  it.each([
+    ['wrong name', (value: any) => {
+      const checks = value.subgraphs['discover-project'].checks;
+      checks.reconcile_project = checks.project_reconcile;
+      delete checks.project_reconcile;
+    }],
+    ['wrong type', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.type = 'noop';
+    }],
+    ['extra dependency', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.depends_on = [
+        'materialize_catalog',
+        'verify',
+      ];
+    }],
+    ['wrong emission', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.emits = [
+        { claim: 'component.catalog@1', from: 'output' },
+      ];
+    }],
+    ['wrong barrier owner', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.wait_for_expansion.owner = 'verify';
+    }],
+    ['wrong barrier terminal', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.wait_for_expansion.terminal_node = 'inspect';
+    }],
+    ['forbidden consumes', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.consumes = [
+        { claim: 'project.catalog@1', as: 'project' },
+      ];
+    }],
+    ['unknown provider key', (value: any) => {
+      value.subgraphs['discover-project'].checks.project_reconcile.extra = true;
+    }],
+  ])('rejects malformed seven-node reconciliation profile: %s', (_name, mutate) => {
+    const value = discoveryFixture();
+    mutate(value);
+    expect(() => compileClaimPlan(value)).toThrow(InstancePlanError);
+  });
+
   it('compiles the exact reserved inspect -> proof_admit -> verify profile', () => {
     const plan = compileClaimPlan(proofAdmissionConfig()).expansionPlan;
     const template = plan.byOwner.discover.template;

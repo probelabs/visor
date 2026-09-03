@@ -2141,4 +2141,17 @@ describe('managed-run authority snapshots', () => {
     expect(() => snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'managed' }, proofAdmissionRequest: '{}' })).toThrow('PROOF_ADMISSION_REQUEST_AUTHORITY_MISMATCH');
     expect(snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-admit' }, proofAdmissionRequest: '{}' }).proofAdmissionRequest).toBe('{}');
   });
+
+  it('requires the reconciliation request only for the exact Proof project reconciler', () => {
+    const base: any = { prInfo: {}, dependencyResults: new Map(), executionContext: {}, binding: helperManagedBinding() };
+    expect(() => snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-project-reconcile' } })).toThrow('PROOF_PROJECT_RECONCILIATION_REQUEST_AUTHORITY_MISMATCH');
+    expect(() => snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'managed' }, proofProjectReconciliationRequest: '{}' })).toThrow('PROOF_PROJECT_RECONCILIATION_REQUEST_AUTHORITY_MISMATCH');
+    expect(snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-project-reconcile' }, proofProjectReconciliationRequest: '{}' }).proofProjectReconciliationRequest).toBe('{}');
+    expect(() => snapshotManagedRunStartRequest({
+      ...base,
+      checkConfig: { type: 'proof-project-reconcile' },
+      proofAdmissionRequest: '{}',
+      proofProjectReconciliationRequest: '{}',
+    })).toThrow('PROOF_REQUEST_FIELDS_MUTUALLY_EXCLUSIVE');
+  });
 });

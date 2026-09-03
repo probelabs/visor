@@ -19,6 +19,7 @@ import {
   type ManagedRunBindingV1,
   type ManagedRunFailureCode,
 } from '../graph/instance-kernel';
+import { PROOF_PROJECT_RECONCILE_PROVIDER_TYPE } from '../graph/instance-plan';
 
 type ManagedRunProtocolFailureCode = Extract<
   ManagedRunFailureCode,
@@ -267,9 +268,19 @@ function snapshotReadonlyMap(
 export function snapshotManagedRunStartRequest(
   request: ManagedRunStartRequest
 ): ManagedRunStartRequest {
+  const hasProofAdmissionRequest = request.proofAdmissionRequest !== undefined;
+  const hasProofProjectReconciliationRequest = request.proofProjectReconciliationRequest !== undefined;
   const proofAdmission = request.checkConfig.type === 'proof-admit';
-  if (proofAdmission !== (request.proofAdmissionRequest !== undefined)) {
+  const proofProjectReconciliation = request.checkConfig.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE;
+
+  if (hasProofAdmissionRequest && hasProofProjectReconciliationRequest) {
+    throw new Error('PROOF_REQUEST_FIELDS_MUTUALLY_EXCLUSIVE');
+  }
+  if (proofAdmission !== hasProofAdmissionRequest) {
     throw new Error('PROOF_ADMISSION_REQUEST_AUTHORITY_MISMATCH');
+  }
+  if (proofProjectReconciliation !== hasProofProjectReconciliationRequest) {
+    throw new Error('PROOF_PROJECT_RECONCILIATION_REQUEST_AUTHORITY_MISMATCH');
   }
   const copies = new WeakMap<object, unknown>();
   const snapshot = {
@@ -280,7 +291,10 @@ export function snapshotManagedRunStartRequest(
     binding: copyAndFreezePlainData(request.binding, copies),
     executionConfigDigest: request.executionConfigDigest,
     workingDirectory: request.workingDirectory,
-    ...(request.proofAdmissionRequest !== undefined ? { proofAdmissionRequest: request.proofAdmissionRequest } : {}),
+    ...(hasProofAdmissionRequest ? { proofAdmissionRequest: request.proofAdmissionRequest } : {}),
+    ...(hasProofProjectReconciliationRequest
+      ? { proofProjectReconciliationRequest: request.proofProjectReconciliationRequest }
+      : {}),
   };
   return Object.freeze(snapshot);
 }

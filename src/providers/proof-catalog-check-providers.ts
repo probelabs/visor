@@ -29,6 +29,7 @@ import {
   proofV1DecisionJson,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
+export { proofCatalogRevalidationReceiptIdentityJson } from './proof-admission-cli-child';
 import {
   governedCanonicalJson,
   governedPayloadFingerprint,

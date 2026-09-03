@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { compareProofStrings, validateGovernedProofCandidateClaim, validateProofCatalogRevalidationProjection, validateProofCurrentCatalogAuthorityBytes } from '../../../src/providers/proof-catalog-check-providers';
+import { compareProofStrings, proofCatalogRevalidationReceiptIdentityJson, validateGovernedProofCandidateClaim, validateProofCatalogRevalidationProjection, validateProofCurrentCatalogAuthorityBytes } from '../../../src/providers/proof-catalog-check-providers';
 import {
   canonicalJson,
   immutableCanonicalValue,
@@ -233,7 +233,72 @@ function genericCandidateFromFixture(value: any): { candidate: any; evidence: an
   return { candidate, evidence: genericEvidence };
 }
 
+const identitySha = (digit: string): string => `sha256:${digit.repeat(64)}`;
+const identityAuthorities = [
+  {
+    subject: {
+      fingerprint: identitySha('b'), sorted_dependency_closure: ['http.go'], component_id: 'api',
+      project_id: 'journalservice', version: 'proof.component-subject/v1', sorted_owned_paths: ['http.go'],
+    },
+    work_item_digest: identitySha('a'), component_id: 'api',
+  },
+  {
+    subject: {
+      sorted_owned_paths: ['store.go'], version: 'proof.component-subject/v1', fingerprint: identitySha('d'),
+      component_id: 'store', sorted_dependency_closure: ['store.go'], project_id: 'journalservice',
+    },
+    component_id: 'store', work_item_digest: identitySha('c'),
+  },
+];
+const identityAuthoritiesGolden = `[{"component_id":"api","work_item_digest":"${identitySha('a')}","subject":{"version":"proof.component-subject/v1","project_id":"journalservice","component_id":"api","sorted_owned_paths":["http.go"],"sorted_dependency_closure":["http.go"],"fingerprint":"${identitySha('b')}"}},{"component_id":"store","work_item_digest":"${identitySha('c')}","subject":{"version":"proof.component-subject/v1","project_id":"journalservice","component_id":"store","sorted_owned_paths":["store.go"],"sorted_dependency_closure":["store.go"],"fingerprint":"${identitySha('d')}"}}]`;
+
+function identityReceipt(version: 'proof.catalog-revalidation-receipt/v1' | 'proof.catalog-revalidation-receipt/v2', projectLineage?: unknown): Record<string, unknown> {
+  return {
+    version, decision: 'accepted', project_id: 'journalservice', project_fingerprint: identitySha('1'),
+    boundary_fingerprint: identitySha('2'), inventory_claim_id: identitySha('3'), catalog_claim_id: identitySha('4'),
+    admission_candidate_id: identitySha('5'), admission_result_digest: identitySha('6'), admission_receipt_id: identitySha('7'),
+    component_authorities: identityAuthorities,
+    ...(version === 'proof.catalog-revalidation-receipt/v2' ? { project_lineage: projectLineage } : {}),
+    receipt_id: '',
+  };
+}
+
 describe('proof-admitted catalog egress', () => {
+  it('matches Proof v2 full receipt identity bytes for null and populated lineage', () => {
+    const expectedNull = `{"admission_candidate_id":"${identitySha('5')}","admission_receipt_id":"${identitySha('7')}","admission_result_digest":"${identitySha('6')}","boundary_fingerprint":"${identitySha('2')}","catalog_claim_id":"${identitySha('4')}","component_authorities":${identityAuthoritiesGolden},"decision":"accepted","inventory_claim_id":"${identitySha('3')}","project_fingerprint":"${identitySha('1')}","project_id":"journalservice","project_lineage":null,"receipt_id":"","version":"proof.catalog-revalidation-receipt/v2"}`;
+    expect(proofCatalogRevalidationReceiptIdentityJson(
+      identityReceipt('proof.catalog-revalidation-receipt/v2', null)
+    )).toBe(expectedNull);
+
+    const lineage = {
+      baseline_revision: identitySha('9'), object_format: 'sha256', fingerprint: identitySha('8'),
+      version: 'proof.git-project-lineage-binding/v1',
+    };
+    const lineageGolden = `{"version":"proof.git-project-lineage-binding/v1","fingerprint":"${identitySha('8')}","object_format":"sha256","baseline_revision":"${identitySha('9')}"}`;
+    const expectedPopulated = `{"admission_candidate_id":"${identitySha('5')}","admission_receipt_id":"${identitySha('7')}","admission_result_digest":"${identitySha('6')}","boundary_fingerprint":"${identitySha('2')}","catalog_claim_id":"${identitySha('4')}","component_authorities":${identityAuthoritiesGolden},"decision":"accepted","inventory_claim_id":"${identitySha('3')}","project_fingerprint":"${identitySha('1')}","project_id":"journalservice","project_lineage":${lineageGolden},"receipt_id":"","version":"proof.catalog-revalidation-receipt/v2"}`;
+    expect(proofCatalogRevalidationReceiptIdentityJson(
+      identityReceipt('proof.catalog-revalidation-receipt/v2', lineage)
+    )).toBe(expectedPopulated);
+  });
+
+  it('matches Proof v1 full struct-order receipt identity bytes', () => {
+    const expected = `{"version":"proof.catalog-revalidation-receipt/v1","decision":"accepted","project_id":"journalservice","project_fingerprint":"${identitySha('1')}","boundary_fingerprint":"${identitySha('2')}","inventory_claim_id":"${identitySha('3')}","catalog_claim_id":"${identitySha('4')}","admission_candidate_id":"${identitySha('5')}","admission_result_digest":"${identitySha('6')}","admission_receipt_id":"${identitySha('7')}","component_authorities":${identityAuthoritiesGolden},"receipt_id":""}`;
+    expect(proofCatalogRevalidationReceiptIdentityJson(
+      identityReceipt('proof.catalog-revalidation-receipt/v1')
+    )).toBe(expected);
+  });
+
+  it('rejects a receipt that the Proof serializer would otherwise partially encode', () => {
+    const value: any = fixture();
+    const authorities = (value.revalidation.payload.receipt.component_authorities as any[]).map(authority => ({
+      ...authority,
+      subject: { ...authority.subject },
+    }));
+    authorities[0].subject.extra = true;
+    const receipt = { ...(value.revalidation.payload.receipt as Record<string, unknown>), component_authorities: authorities, receipt_id: '' };
+    expect(() => proofCatalogRevalidationReceiptIdentityJson(receipt)).toThrow(/catalog revalidation receipt identity value|authority/);
+  });
+
   it('validates exact current authority bytes and materializes Proof-sorted components', () => {
     const value: any = fixture();
     const revalidation = value.revalidation.payload;

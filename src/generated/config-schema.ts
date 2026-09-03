@@ -1052,11 +1052,72 @@ export const configSchema = {
           type: 'string',
           description: 'Message template for log checks',
         },
-        instructions: { type: 'string' },
-        invocation: { type: 'object', additionalProperties: false, required: ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'], properties: { role_id: { type: 'string' }, stance: { type: 'string', enum: ['owner', 'external-review'] }, subject: { anyOf: [{ type: 'object', additionalProperties: false, required: ['kind', 'id', 'fingerprint'], properties: { kind: { type: 'string', enum: ['project', 'requirement'] }, id: { type: 'string' }, fingerprint: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' } } }, { type: 'object', additionalProperties: false, required: ['kind'], properties: { kind: { const: 'component' } } }] }, output_schema_id: { type: 'string' }, output_schema: { type: 'string' } } },
-        invocation_digest: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' },
-        result_schema: { type: 'string' },
-        profile: { type: 'string', const: 'luna-xhigh-readonly-v1' },
+        instructions: {
+          type: 'string',
+        },
+        invocation: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'],
+          properties: {
+            role_id: {
+              type: 'string',
+            },
+            stance: {
+              type: 'string',
+              enum: ['owner', 'external-review'],
+            },
+            subject: {
+              anyOf: [
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['kind', 'id', 'fingerprint'],
+                  properties: {
+                    kind: {
+                      type: 'string',
+                      enum: ['project', 'requirement'],
+                    },
+                    id: {
+                      type: 'string',
+                    },
+                    fingerprint: {
+                      type: 'string',
+                      pattern: '^sha256:[0-9a-f]{64}$',
+                    },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['kind'],
+                  properties: {
+                    kind: {
+                      const: 'component',
+                    },
+                  },
+                },
+              ],
+            },
+            output_schema_id: {
+              type: 'string',
+            },
+            output_schema: {
+              type: 'string',
+            },
+          },
+        },
+        invocation_digest: {
+          type: 'string',
+          pattern: '^sha256:[0-9a-f]{64}$',
+        },
+        result_schema: {
+          type: 'string',
+        },
+        profile: {
+          type: 'string',
+          const: 'luna-xhigh-readonly-v1',
+        },
         level: {
           type: 'string',
           enum: ['debug', 'info', 'warn', 'error'],
@@ -1195,7 +1256,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17440-33481-src_types_config.ts-0-65638%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1212,7 +1273,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17440-33481-src_types_config.ts-0-65638%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1318,7 +1379,11 @@ export const configSchema = {
         'a2a',
         'utcp',
         'proof-admit',
+        'proof-structural-inventory',
+        'proof-catalog-revalidate',
+        'proof-admitted-catalog',
         'governed-proof-inspect',
+        'proof-project-reconcile',
       ],
       description: 'Valid check types in configuration',
     },
@@ -2071,7 +2136,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-17440-33481-src_types_config.ts-0-65638%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -2086,14 +2151,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-17440-33481-src_types_config.ts-0-65638>>':
+    'Record<string,Partial<interface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-17440-33481-src_types_config.ts-0-65638%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-17440-33481-src_types_config.ts-0-65638>': {
+    'Partial<interface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624>': {
       type: 'object',
       additionalProperties: false,
     },

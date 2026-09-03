@@ -10,6 +10,8 @@ import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
+  PROOF_PROJECT_RECONCILE_NODE_KEY,
+  PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
 } from './instance-plan';
 import {
@@ -785,6 +787,162 @@ export interface ProofCurrentCatalogAuthorityProjection {
   readonly revalidationBytesBase64: string;
   readonly workItemsBytesBase64: string;
   readonly components: readonly ProofCurrentCatalogAuthorityComponentProjection[];
+}
+
+function invalidProjectReconciliationParents(detail: string): never {
+  throw new InstanceKernelError('INVALID_PARENT_CLAIMS', detail);
+}
+
+function currentCompletedGeneratedOutput(
+  projection: InstanceProjection,
+  claim: InstanceClaimProjection,
+  checkId: string,
+  subgraphInstanceId: string,
+): NodeGenerationProjection {
+  const generation = claim.nodeGenerationId
+    ? projection.generationsById[claim.nodeGenerationId]
+    : undefined;
+  const node = generation ? projection.nodesById[generation.nodeInstanceId] : undefined;
+  if (!claim.active || claim.kind !== 'generated-output' || claim.producerCheckId !== checkId ||
+      claim.subgraphInstanceId !== subgraphInstanceId || !generation || generation.status !== 'completed' ||
+      !generation.scheduled || generation.checkId !== checkId || generation.templateNodeKey !== checkId ||
+      generation.subgraphInstanceId !== subgraphInstanceId || !node ||
+      node.subgraphInstanceId !== subgraphInstanceId || node.templateNodeKey !== checkId ||
+      !scopePathEquals(node.scope, generation.scope) || !scopePathEquals(claim.scope, generation.scope) ||
+      projection.activeGenerationIdByNode[generation.nodeInstanceId] !== generation.nodeGenerationId ||
+      generation.completedOutputClaimIds.length !== 1 || generation.completedOutputClaimIds[0] !== claim.claimId ||
+      claim.producerAttemptId !== generation.attemptId || claim.producerFence !== generation.fence ||
+      !sameStrings(claim.parentClaimIds, generation.activeInputClaimIds)) {
+    invalidProjectReconciliationParents(`${checkId} is not the exact current completed output`);
+  }
+  return generation;
+}
+
+/**
+ * Derive the only dynamic parent set allowed by graph v2: one current project
+ * revalidation plus every current component admission closed by the nested
+ * completion barrier. No authored aggregate or provider output selects these
+ * parents; they are recovered exclusively from current immutable graph facts.
+ */
+export function deriveProofProjectReconciliationParentClaimIds(
+  projection: InstanceProjection,
+  generation: NodeGenerationProjection,
+): readonly string[] {
+  const stored = projection.generationsById[generation.nodeGenerationId];
+  const project = projection.instancesById[generation.subgraphInstanceId];
+  const reconciliationNode = projection.nodesById[generation.nodeInstanceId];
+  if (!stored || canonicalJson(stored) !== canonicalJson(generation) ||
+      generation.templateNodeKey !== PROOF_PROJECT_RECONCILE_NODE_KEY ||
+      generation.checkId !== PROOF_PROJECT_RECONCILE_NODE_KEY ||
+      (generation.status !== 'ready' && generation.status !== 'running' && generation.status !== 'completed') ||
+      !generation.expansionBarrierDigest || !SHA256_PATTERN.test(generation.expansionBarrierDigest) ||
+      projection.activeGenerationIdByNode[generation.nodeInstanceId] !== generation.nodeGenerationId ||
+      !project || project.status !== 'active' || project.parentSubgraphInstanceId !== undefined ||
+      project.subgraphInstanceId !== generation.subgraphInstanceId || project.sessionId.length === 0 ||
+      project.nodeInstanceIdsByTemplateNode[PROOF_PROJECT_RECONCILE_NODE_KEY] !== generation.nodeInstanceId ||
+      !reconciliationNode || reconciliationNode.subgraphInstanceId !== project.subgraphInstanceId ||
+      reconciliationNode.templateNodeKey !== PROOF_PROJECT_RECONCILE_NODE_KEY ||
+      !scopePathEquals(reconciliationNode.scope, generation.scope) ||
+      !scopePathEquals(project.scope, generation.scope) || generation.scope.length !== 1 ||
+      generation.activeInputClaimIds.length !== 0) {
+    invalidProjectReconciliationParents('Project reconciliation generation is inactive, stale, or detached');
+  }
+
+  const materializeNodeId = project.nodeInstanceIdsByTemplateNode.materialize_catalog;
+  const materializeGenerationId = materializeNodeId
+    ? projection.activeGenerationIdByNode[materializeNodeId]
+    : undefined;
+  const materializeGeneration = materializeGenerationId
+    ? projection.generationsById[materializeGenerationId]
+    : undefined;
+  if (!materializeNodeId || !materializeGeneration || materializeGeneration.nodeInstanceId !== materializeNodeId ||
+      materializeGeneration.subgraphInstanceId !== project.subgraphInstanceId ||
+      materializeGeneration.checkId !== 'materialize_catalog' ||
+      materializeGeneration.templateNodeKey !== 'materialize_catalog' ||
+      materializeGeneration.status !== 'completed' || !materializeGeneration.scheduled ||
+      materializeGeneration.completedOutputClaimIds.length !== 1) {
+    invalidProjectReconciliationParents('Current materialize_catalog generation is missing or nonterminal');
+  }
+  const catalog = projection.claimsById[materializeGeneration.completedOutputClaimIds[0]];
+  if (!catalog || catalog.claim !== 'component.catalog@1' || !scopePathEquals(catalog.scope, project.scope)) {
+    invalidProjectReconciliationParents('Current materialize_catalog output is not the component catalog');
+  }
+  const catalogGeneration = currentCompletedGeneratedOutput(
+    projection,
+    catalog,
+    'materialize_catalog',
+    project.subgraphInstanceId,
+  );
+  if (catalogGeneration.nodeGenerationId !== materializeGeneration.nodeGenerationId) {
+    invalidProjectReconciliationParents('Component catalog is detached from current materialize_catalog');
+  }
+
+  const currentRevalidations = Object.values(projection.claimsById).filter(claim =>
+    claim.active && claim.claim === PROOF_CATALOG_REVALIDATION_CLAIM &&
+    claim.subgraphInstanceId === project.subgraphInstanceId);
+  if (currentRevalidations.length !== 1 || !catalog.parentClaimIds.includes(currentRevalidations[0].claimId)) {
+    invalidProjectReconciliationParents('Current project revalidation is missing or ambiguous');
+  }
+  const revalidation = currentRevalidations[0];
+  currentCompletedGeneratedOutput(projection, revalidation, 'revalidate_catalog', project.subgraphInstanceId);
+
+  const children = Object.values(projection.instancesById).filter(instance =>
+    instance.status === 'active' && instance.parentSubgraphInstanceId === project.subgraphInstanceId);
+  if (children.length < 2 || children.length > 4 ||
+      new Set(children.map(child => child.itemKey)).size !== children.length ||
+      children.some(child => child.catalogClaimId !== catalog.claimId ||
+        child.catalogProducerNodeGenerationId !== catalogGeneration.nodeGenerationId ||
+        child.expansionOwnerNodeInstanceId !== catalogGeneration.nodeInstanceId ||
+        child.catalogClaimRef !== catalog.claim || !child.activeItemClaimId || (() => {
+          const item = child.activeItemClaimId ? projection.claimsById[child.activeItemClaimId] : undefined;
+          return !item || !item.active || item.kind !== 'controller-item' ||
+            item.subgraphInstanceId !== child.subgraphInstanceId ||
+            item.controllerCatalogClaimId !== catalog.claimId ||
+            item.parentClaimIds.length !== 1 || item.parentClaimIds[0] !== catalog.claimId;
+        })())) {
+    invalidProjectReconciliationParents('Selected component set is incomplete, foreign, or stale');
+  }
+
+  const admissionIds = children.map(child => {
+    const verifyNodeId = child.nodeInstanceIdsByTemplateNode.verify;
+    const verifyGenerationId = verifyNodeId
+      ? projection.activeGenerationIdByNode[verifyNodeId]
+      : undefined;
+    const verify = verifyGenerationId ? projection.generationsById[verifyGenerationId] : undefined;
+    if (!verifyNodeId || !verify || verify.nodeInstanceId !== verifyNodeId ||
+        verify.subgraphInstanceId !== child.subgraphInstanceId ||
+        verify.templateNodeKey !== 'verify' || verify.checkId !== 'verify' ||
+        verify.status !== 'completed' || !verify.scheduled ||
+        verify.activeInputClaimIds.length !== 2 || new Set(verify.activeInputClaimIds).size !== 2) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} verify is not current and complete`);
+    }
+    const inputs = verify.activeInputClaimIds.map(claimId => projection.claimsById[claimId]);
+    const candidate = inputs.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+    const admission = inputs.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    const activeCandidates = Object.values(projection.claimsById).filter(claim =>
+      claim.active && claim.subgraphInstanceId === child.subgraphInstanceId && claim.claim === PROOF_CANDIDATE_CLAIM);
+    const activeAdmissions = Object.values(projection.claimsById).filter(claim =>
+      claim.active && claim.subgraphInstanceId === child.subgraphInstanceId && claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    if (!candidate || !admission || activeCandidates.length !== 1 || activeAdmissions.length !== 1 ||
+        activeCandidates[0].claimId !== candidate.claimId || activeAdmissions[0].claimId !== admission.claimId ||
+        !sameStrings(verify.activeInputClaimIds, [candidate.claimId, admission.claimId].sort())) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} verify inputs are not the unique candidate and admission`);
+    }
+    currentCompletedGeneratedOutput(projection, candidate, 'inspect', child.subgraphInstanceId);
+    const admissionGeneration = currentCompletedGeneratedOutput(projection, admission, 'proof_admit', child.subgraphInstanceId);
+    if (!sameStrings(admissionGeneration.activeInputClaimIds, [candidate.claimId]) ||
+        !sameStrings(admission.parentClaimIds, [candidate.claimId])) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} admission is detached from its candidate`);
+    }
+    return admission.claimId;
+  });
+
+  const parents = [revalidation.claimId, ...admissionIds]
+    .sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+  if (new Set(parents).size !== parents.length) {
+    invalidProjectReconciliationParents('Project reconciliation parents are duplicated');
+  }
+  return Object.freeze(parents);
 }
 
 interface ProofApplicationReducerContext {
@@ -2002,7 +2160,28 @@ function reduceGeneratedLifecycle(
     if (event.producerCheckId !== generation.checkId) {
       throw new InstanceKernelError('INVALID_GENERATION_BINDING', 'Generated claim has wrong producer');
     }
-    if (!sameStrings(event.parentClaimIds, generation.activeInputClaimIds)) {
+    const projectReconciliationPublication =
+      generation.templateNodeKey === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+      generation.checkId === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+      event.checkId === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+      event.producerCheckId === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+      event.claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM;
+    if (event.claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM && !projectReconciliationPublication) {
+      throw new InstanceKernelError(
+        'INVALID_GENERATION_BINDING',
+        'Project reconciliation receipts are reserved for the exact project_reconcile generation'
+      );
+    }
+    if (projectReconciliationPublication && event.wireMode !== 'proof') {
+      throw new InstanceKernelError(
+        'INVALID_WIRE_MODE',
+        'Project reconciliation receipts require Proof wire identity'
+      );
+    }
+    const expectedParentClaimIds = projectReconciliationPublication
+      ? deriveProofProjectReconciliationParentClaimIds(projection, generation)
+      : generation.activeInputClaimIds;
+    if (!sameStrings(event.parentClaimIds, expectedParentClaimIds)) {
       throw new InstanceKernelError('INVALID_PARENT_CLAIMS', 'Generated claim has wrong exact parents');
     }
     const payloadFingerprint = governedPayloadFingerprint(event.payload, event.wireMode);
@@ -2012,11 +2191,12 @@ function reduceGeneratedLifecycle(
     const hasEvidence = event.proofCandidateEvidence !== undefined || event.proofCandidateEvidenceFingerprint !== undefined;
     const proofRevalidationPublication = event.claim === PROOF_CATALOG_REVALIDATION_CLAIM &&
       event.checkId === 'revalidate_catalog' && generation.templateNodeKey === 'revalidate_catalog';
-    if (proofRevalidationPublication) {
+    const proofManagedPublication = proofRevalidationPublication || projectReconciliationPublication;
+    if (proofManagedPublication) {
       const managedRun = projection.managedRunsByAttemptId[event.attemptId];
       if (!managedRun || managedRun.status !== 'terminated' || managedRun.cleanupStatus !== 'clean' ||
           managedRun.controllerDecision !== 'completed' || managedRun.failureCode !== undefined) {
-        throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof catalog publications require a clean managed terminal');
+        throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof publications require a clean managed terminal');
       }
     }
     if (event.claim === PROOF_CANDIDATE_CLAIM) {
@@ -2047,7 +2227,7 @@ function reduceGeneratedLifecycle(
       if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
         throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof candidate publication requires a clean managed terminal');
       }
-    } else if (hasEvidence || (!proofRevalidationPublication && event.wireMode !== 'generic')) {
+    } else if (hasEvidence || (!proofManagedPublication && event.wireMode !== 'generic')) {
       throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Evidence sidecars are reserved for proof candidates');
     }
     const claimIdentity = {

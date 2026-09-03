@@ -146,6 +146,60 @@ checks:
       expect(() => configManager.validateConfig(config)).toThrow('RESERVED_PROOF_ADMISSION_ROOT');
     });
 
+    it('keeps generated governed-inspect invocation, digest, and profile fields closed', () => {
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      const governed = {
+        version: '1.0',
+        checks: {
+          inspect: {
+            type: 'governed-proof-inspect',
+            instructions: 'Inspect the current Proof subject',
+            invocation: {
+              role_id: 'onboard',
+              stance: 'owner',
+              subject: {
+                kind: 'project',
+                id: 'fixture',
+                fingerprint: `sha256:${'a'.repeat(64)}`,
+              },
+              output_schema_id: 'fixture.result@1',
+              output_schema: 'e30=',
+            },
+            invocation_digest: `sha256:${'b'.repeat(64)}`,
+            result_schema: '{}',
+            profile: 'luna-xhigh-readonly-v1',
+          },
+        },
+      };
+      expect(validate(governed)).toBe(true);
+
+      const malformed = [
+        { ...governed.checks.inspect, invocation: { ...governed.checks.inspect.invocation, extra: true } },
+        { ...governed.checks.inspect, invocation_digest: 'b'.repeat(64) },
+        { ...governed.checks.inspect, profile: 'unbounded' },
+      ];
+      for (const inspect of malformed) {
+        expect(validate({ version: '1.0', checks: { inspect } })).toBe(false);
+      }
+
+      const selector = {
+        ...governed.checks.inspect,
+        invocation: { ...governed.checks.inspect.invocation, subject: { kind: 'component' } },
+      };
+      expect(validate({ version: '1.0', checks: { inspect: selector } })).toBe(true);
+      expect(validate({
+        version: '1.0',
+        checks: {
+          inspect: {
+            ...selector,
+            invocation: { ...selector.invocation, subject: { kind: 'component', id: 'forged' } },
+          },
+        },
+      })).toBe(false);
+    });
+
     it('accepts the human-readable Graph v2 C1 fixture through generated schema and semantics', () => {
       const realFs = jest.requireActual<typeof fs>('fs');
       const fixturePath = path.resolve(
@@ -174,6 +228,83 @@ checks:
       expect(validate(parsed)).toBe(true);
       expect(validate.errors).toBeNull();
       expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('accepts the human-readable seven-node Proof onboarding graph', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as VisorConfig;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(parsed)).toBe(true);
+      expect(validate.errors).toBeNull();
+      expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('keeps the project reconciliation receipt nested Proof authorities closed and v2-only', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as any;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        parsed.claim_types['proof.project_reconciliation_receipt@1'].schema
+      );
+      const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
+      const subject = (componentId: string, pathValue: string, digit: string) => ({
+        version: 'proof.component-subject/v1',
+        project_id: 'journalservice',
+        component_id: componentId,
+        sorted_owned_paths: [pathValue],
+        sorted_dependency_closure: [pathValue],
+        fingerprint: digest(digit),
+      });
+      const receipt = {
+        version: 'proof.project-reconciliation-receipt/v1',
+        project_authority: {
+          version: 'proof.project-authority/v1', project_id: 'journalservice',
+          subject_fingerprint: digest('1'), code_fingerprint: digest('2'), tests_fingerprint: digest('3'),
+        },
+        catalog_revalidation_receipt: {
+          version: 'proof.catalog-revalidation-receipt/v2', decision: 'accepted', project_id: 'journalservice',
+          project_fingerprint: digest('1'), boundary_fingerprint: digest('4'), inventory_claim_id: digest('5'),
+          catalog_claim_id: digest('6'), admission_candidate_id: digest('7'), admission_result_digest: digest('8'),
+          admission_receipt_id: digest('9'),
+          component_authorities: [
+            { component_id: 'api', work_item_digest: digest('a'), subject: subject('api', 'http.go', 'b') },
+            { component_id: 'store', work_item_digest: digest('c'), subject: subject('store', 'store.go', 'd') },
+          ],
+          project_lineage: {
+            version: 'proof.git-project-lineage-binding/v1', fingerprint: digest('e'),
+            object_format: 'sha256', baseline_revision: digest('f'),
+          },
+          receipt_id: digest('a'),
+        },
+        component_admissions: [
+          { component_id: 'api', work_item_digest: digest('a'), candidate_id: digest('b'), result_digest: digest('c'), operational_scope_digest: digest('d') },
+          { component_id: 'store', work_item_digest: digest('e'), candidate_id: digest('f'), result_digest: digest('1'), operational_scope_digest: digest('2') },
+        ],
+        covered_work_item_digests: [digest('a'), digest('e')],
+        receipt_id: digest('3'),
+      };
+      expect(validate(receipt)).toBe(true);
+
+      const v1WithLineage = JSON.parse(JSON.stringify(receipt));
+      v1WithLineage.catalog_revalidation_receipt.version = 'proof.catalog-revalidation-receipt/v1';
+      expect(validate(v1WithLineage)).toBe(false);
+
+      const subjectWithExtra = JSON.parse(JSON.stringify(receipt));
+      subjectWithExtra.catalog_revalidation_receipt.component_authorities[0].subject.extra = true;
+      expect(validate(subjectWithExtra)).toBe(false);
+
+      const lineageWithExtra = JSON.parse(JSON.stringify(receipt));
+      lineageWithExtra.catalog_revalidation_receipt.project_lineage.extra = true;
+      expect(validate(lineageWithExtra)).toBe(false);
     });
 
     it('rejects malformed C2 references and executable template control flow prelaunch', () => {

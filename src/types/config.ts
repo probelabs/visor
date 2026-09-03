@@ -224,7 +224,8 @@ export type ConfigCheckType =
   | 'proof-structural-inventory'
   | 'proof-catalog-revalidate'
   | 'proof-admitted-catalog'
-  | 'governed-proof-inspect';
+  | 'governed-proof-inspect'
+  | 'proof-project-reconcile';
 
 /**
  * Valid event triggers for checks

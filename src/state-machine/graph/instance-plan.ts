@@ -32,6 +32,9 @@ export const PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE = 'proof-catalog-revalidat
 export const PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE = 'proof-structural-inventory';
 export const PROOF_ADMIT_PROVIDER_TYPE = 'proof-admit';
 export const GOVERNED_PROOF_INSPECT_PROVIDER_TYPE = 'governed-proof-inspect';
+export const PROOF_PROJECT_RECONCILE_PROVIDER_TYPE = 'proof-project-reconcile';
+export const PROOF_PROJECT_RECONCILE_NODE_KEY = 'project_reconcile';
+export const PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM = 'proof.project_reconciliation_receipt@1';
 export const PROOF_ADMIT_NODE_KEY = 'proof_admit';
 
 export class InstancePlanError extends Error {
@@ -363,11 +366,12 @@ function validateReservedProofAdmissionTemplate(
       check.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
       check.type === PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
       check.type === PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE ||
+      check.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE ||
       claimList(check, 'emits').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM || claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM
       ) ||
       claimList(check, 'consumes').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM
+        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM || claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM
       )
     );
   });
@@ -387,8 +391,17 @@ function validateReservedProofAdmissionTemplate(
   }
 
   const hasCatalogEgress = nodeKeys.includes('revalidate_catalog') || nodeKeys.includes('materialize_catalog');
+  const hasProjectReconciliation = nodeKeys.includes(PROOF_PROJECT_RECONCILE_NODE_KEY);
   const expectedNodes = hasCatalogEgress
-    ? ['structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'revalidate_catalog', 'materialize_catalog']
+    ? [
+        'structural_inventory',
+        'inspect',
+        PROOF_ADMIT_NODE_KEY,
+        'verify',
+        'revalidate_catalog',
+        'materialize_catalog',
+        ...(hasProjectReconciliation ? [PROOF_PROJECT_RECONCILE_NODE_KEY] : []),
+      ]
     : ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
   const expectedNodeKeys = [...expectedNodes].sort();
   if (nodeKeys.length !== expectedNodeKeys.length || nodeKeys.some((key, index) => key !== expectedNodeKeys[index])) {
@@ -508,6 +521,52 @@ function validateReservedProofAdmissionTemplate(
       [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM].sort().join('\0')
     ) {
       rejectReservedProfile(name, 'materialize_catalog must consume the template input, candidate, admission receipt, and current revalidation');
+    }
+
+    if (hasProjectReconciliation) {
+      const reconciliation = resolvedChecks[PROOF_PROJECT_RECONCILE_NODE_KEY];
+      if (reconciliation.type !== PROOF_PROJECT_RECONCILE_PROVIDER_TYPE) {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must have type ${PROOF_PROJECT_RECONCILE_PROVIDER_TYPE}`
+        );
+      }
+      validateCatalogEgressConfig(name, PROOF_PROJECT_RECONCILE_NODE_KEY, reconciliation, [
+        'type',
+        'depends_on',
+        'wait_for_expansion',
+        'emits',
+      ]);
+      const dependencies = dependencyTokens(
+        reconciliation,
+        `${name}.${PROOF_PROJECT_RECONCILE_NODE_KEY}`
+      );
+      if (dependencies.length !== 1 || dependencies[0] !== 'materialize_catalog') {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must depend only on materialize_catalog`
+        );
+      }
+      if (claimList(reconciliation, 'emits').join('\0') !== PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM) {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must emit only ${PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM}`
+        );
+      }
+      const wait = reconciliation.wait_for_expansion;
+      if (
+        !wait ||
+        typeof wait !== 'object' ||
+        Array.isArray(wait) ||
+        !hasExactKeys(wait, ['owner', 'terminal_node']) ||
+        (wait as Record<string, unknown>).owner !== 'materialize_catalog' ||
+        (wait as Record<string, unknown>).terminal_node !== 'verify'
+      ) {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must wait for materialize_catalog terminal verify`
+        );
+      }
     }
   }
 }

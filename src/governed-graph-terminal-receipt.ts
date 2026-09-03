@@ -2,17 +2,18 @@ import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { canonicalJson } from './state-machine/graph/claim-kernel';
-import { PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM, PROOF_STRUCTURAL_INVENTORY_CLAIM } from './state-machine/graph/instance-plan';
+import { PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM, PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM, PROOF_STRUCTURAL_INVENTORY_CLAIM } from './state-machine/graph/instance-plan';
 import type { ExecutionJournal } from './snapshot-store';
 import { requireKeyedScopePath, type InstanceProjection, type NodeGenerationProjection } from './state-machine/graph/instance-kernel';
 import { validateProofCandidateEvidence } from './providers/governed-proof-inspect-check-provider';
 import { COMPONENT_WORK_ITEM_CLAIM } from './providers/governed-proof-inspect-check-provider';
 
+export { PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM } from './state-machine/graph/instance-plan';
+
 export const GOVERNED_GRAPH_TERMINAL_RECEIPT_SCHEMA = 'visor.governed-graph-terminal-receipt/v1';
 /** Multi-component extension; v1 remains the wire shape for one-component callers. */
 export const GOVERNED_GRAPH_MULTI_TERMINAL_RECEIPT_SCHEMA = 'visor.governed-graph-terminal-receipt/v2';
 export const PROOF_DISCOVERY_CATALOG_CANDIDATE_CLAIM = 'proof.component_catalog_candidate@1';
-export const PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM = 'proof.project_reconciliation_receipt@1';
 export const PROOF_ONBOARDING_CANDIDATE_CLAIM = 'proof.onboarding_candidate@1';
 const SHA = /^[0-9a-f]{64}$/;
 const FAILURE_CODES = new Set(['MANAGED_HANDLE_INVALID','MANAGED_BINDING_MISMATCH','MANAGED_START_FAILED','MANAGED_STARTED_RECEIPT_INVALID','MANAGED_OUTCOME_FAILED','MANAGED_OUTCOME_RECEIPT_INVALID','MANAGED_DEADLINE_EXCEEDED','MANAGED_CANCEL_FAILED','MANAGED_CANCEL_RECEIPT_INVALID','MANAGED_CLOSE_FAILED','MANAGED_CLEANUP_RECEIPT_INVALID','MANAGED_SANDBOX_UNSUPPORTED','MANAGED_DEBOUNCE_UNSUPPORTED','MANAGED_FATAL_SUMMARY','MANAGED_FAIL_IF','MANAGED_HALT_EXECUTION','MANAGED_CLAIM_VALIDATION_FAILED','MANAGED_POST_PROVIDER_FAILED']);

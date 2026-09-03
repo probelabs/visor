@@ -67,6 +67,10 @@ export class ConfigManager {
     'utcp',
     'proof-admit',
     'governed-proof-inspect',
+    'proof-structural-inventory',
+    'proof-catalog-revalidate',
+    'proof-admitted-catalog',
+    'proof-project-reconcile',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];

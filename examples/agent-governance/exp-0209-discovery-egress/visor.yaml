@@ -453,6 +453,96 @@ claim_types:
                 object_format: { enum: [sha1, sha256] }
                 baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
             receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+  proof.project_reconciliation_receipt@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - project_authority
+        - catalog_revalidation_receipt
+        - component_admissions
+        - covered_work_item_digests
+        - receipt_id
+      properties:
+        version: { const: proof.project-reconciliation-receipt/v1 }
+        project_authority:
+          type: object
+          additionalProperties: false
+          required: [version, project_id, subject_fingerprint, code_fingerprint, tests_fingerprint]
+          properties:
+            version: { const: proof.project-authority/v1 }
+            project_id: { type: string, minLength: 1 }
+            subject_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            code_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            tests_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        catalog_revalidation_receipt:
+          type: object
+          additionalProperties: false
+          required: [version, decision, project_id, project_fingerprint, boundary_fingerprint, inventory_claim_id, catalog_claim_id, admission_candidate_id, admission_result_digest, admission_receipt_id, component_authorities, project_lineage, receipt_id]
+          properties:
+            version: { const: proof.catalog-revalidation-receipt/v2 }
+            decision: { const: accepted }
+            project_id: { type: string, minLength: 1 }
+            project_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            inventory_claim_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            catalog_claim_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_candidate_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_result_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            component_authorities:
+              type: array
+              minItems: 2
+              maxItems: 4
+              items:
+                type: object
+                additionalProperties: false
+                required: [component_id, work_item_digest, subject]
+                properties:
+                  component_id: { type: string, minLength: 1 }
+                  work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                  subject:
+                    type: object
+                    additionalProperties: false
+                    required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                    properties:
+                      version: { const: proof.component-subject/v1 }
+                      project_id: { type: string, minLength: 1 }
+                      component_id: { type: string, minLength: 1 }
+                      sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            project_lineage:
+              type: [object, 'null']
+              additionalProperties: false
+              required: [version, fingerprint, object_format, baseline_revision]
+              properties:
+                version: { const: proof.git-project-lineage-binding/v1 }
+                fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                object_format: { enum: [sha1, sha256] }
+                baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
+            receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        component_admissions:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            type: object
+            additionalProperties: false
+            required: [component_id, work_item_digest, candidate_id, result_digest, operational_scope_digest]
+            properties:
+              component_id: { type: string, minLength: 1 }
+              work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              candidate_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              result_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              operational_scope_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        covered_work_item_digests:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
   component.catalog@1:
     schema:
       type: object
@@ -673,6 +763,14 @@ subgraphs:
           items_pointer: /components
           key_pointer: /component_id
           item_claim: component.work_item@1
+      project_reconcile:
+        type: proof-project-reconcile
+        depends_on: [materialize_catalog]
+        wait_for_expansion:
+          owner: materialize_catalog
+          terminal_node: verify
+        emits:
+          - { claim: proof.project_reconciliation_receipt@1, from: output }
 
   onboard-component:
     input: { name: component, claim: component.work_item@1 }

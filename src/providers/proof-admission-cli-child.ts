@@ -44,6 +44,15 @@ const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'ou
 const C0_COMPONENT_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema'] as const;
 const RECEIPT_COMMON_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
 const RECEIPT_V2_KEYS = [...RECEIPT_COMMON_KEYS.slice(0, 16), 'ProjectLineage', 'receipt_id'] as const;
+const CATALOG_REVALIDATION_RECEIPT_COMMON_KEYS = [
+  'version', 'decision', 'project_id', 'project_fingerprint', 'boundary_fingerprint',
+  'inventory_claim_id', 'catalog_claim_id', 'admission_candidate_id',
+  'admission_result_digest', 'admission_receipt_id', 'component_authorities', 'receipt_id',
+] as const;
+const CATALOG_REVALIDATION_RECEIPT_V1_KEYS = CATALOG_REVALIDATION_RECEIPT_COMMON_KEYS;
+const CATALOG_REVALIDATION_RECEIPT_V2_KEYS = [
+  ...CATALOG_REVALIDATION_RECEIPT_COMMON_KEYS.slice(0, 11), 'project_lineage', 'receipt_id',
+] as const;
 const CANDIDATE_ENVELOPE_KEYS = ['Version', 'Invocation', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'AttestationVersion', 'ExecutionSource', 'ProbeInvocationDigest', 'IdentityVersion', 'IdentitySource', 'ResultDigest', 'CanonicalBytes', 'ProbeResultBytes', 'VisorPayloadBytes', 'Publication', 'Binding', 'Termination'] as const;
 type ExecutableStat = Readonly<{
   realpath: string; dev: number; ino: number; mode: number; uid: number; gid: number; size: number;
@@ -202,6 +211,67 @@ function goComponentReceiptJson(value: Record<string, unknown>): string {
   // CatalogRevalidationReceipt.MarshalJSON uses a map for v2, so Go sorts
   // these outer keys lexically after encoding the typed nested values above.
   return proofTopLevelJson(fields);
+}
+
+/**
+ * Return the exact Proof receipt preimage encoding used for a catalog
+ * revalidation identity.  Keep this boundary beside the existing Go-shaped
+ * serializer: callers must not reconstruct the v2 map/struct nesting with a
+ * generic JSON encoder.
+ *
+ * This is deliberately a shape validator, not a second semantic receipt
+ * validator.  The catalog provider validates project/component lineage when
+ * it has the corresponding inventory, work-items, and claims available.
+ */
+export function proofCatalogRevalidationReceiptIdentityJson(value: unknown): string {
+  if (!plain(value) || !exactUnordered(value, value.version === 'proof.catalog-revalidation-receipt/v2'
+    ? CATALOG_REVALIDATION_RECEIPT_V2_KEYS
+    : CATALOG_REVALIDATION_RECEIPT_V1_KEYS)) {
+    fail('catalog revalidation receipt identity value is not a closed receipt');
+  }
+  const receipt = value as Record<string, unknown>;
+  if ((receipt.version !== 'proof.catalog-revalidation-receipt/v1' && receipt.version !== 'proof.catalog-revalidation-receipt/v2') ||
+      receipt.decision !== 'accepted' || typeof receipt.project_id !== 'string' || receipt.project_id.length === 0 ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.project_fingerprint)) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.boundary_fingerprint)) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.inventory_claim_id)) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.catalog_claim_id)) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.admission_candidate_id)) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.admission_result_digest)) ||
+      !/^sha256:[0-9a-f]{64}$/.test(String(receipt.admission_receipt_id)) ||
+      !(receipt.receipt_id === '' || /^sha256:[0-9a-f]{64}$/.test(String(receipt.receipt_id))) ||
+      !Array.isArray(receipt.component_authorities) || receipt.component_authorities.length < 2 || receipt.component_authorities.length > 4) {
+    fail('catalog revalidation receipt identity fields are invalid');
+  }
+  for (const [index, authority] of receipt.component_authorities.entries()) {
+    if (!plain(authority) || !exactUnordered(authority, ['component_id', 'work_item_digest', 'subject']) ||
+        typeof authority.component_id !== 'string' || authority.component_id.length === 0 ||
+        typeof authority.work_item_digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(authority.work_item_digest) ||
+        !plain(authority.subject) || !exactUnordered(authority.subject, ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure', 'fingerprint']) ||
+        authority.subject.version !== 'proof.component-subject/v1' || typeof authority.subject.project_id !== 'string' || authority.subject.project_id.length === 0 ||
+        typeof authority.subject.component_id !== 'string' || authority.subject.component_id.length === 0 ||
+        !Array.isArray(authority.subject.sorted_owned_paths) || authority.subject.sorted_owned_paths.length === 0 ||
+        authority.subject.sorted_owned_paths.some(path => typeof path !== 'string' || path.length === 0) ||
+        !Array.isArray(authority.subject.sorted_dependency_closure) || authority.subject.sorted_dependency_closure.length === 0 ||
+        authority.subject.sorted_dependency_closure.some(path => typeof path !== 'string' || path.length === 0) ||
+        typeof authority.subject.fingerprint !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(authority.subject.fingerprint) ||
+        authority.subject.component_id !== authority.component_id) {
+      fail(`catalog revalidation receipt authority ${index} is invalid`);
+    }
+  }
+  if (receipt.version === 'proof.catalog-revalidation-receipt/v2') {
+    const lineage = receipt.project_lineage;
+    if (lineage !== null && (!plain(lineage) || !exactUnordered(lineage, ['version', 'fingerprint', 'object_format', 'baseline_revision']) ||
+        lineage.version !== 'proof.git-project-lineage-binding/v1' || typeof lineage.fingerprint !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test(lineage.fingerprint) ||
+        (lineage.object_format !== 'sha1' && lineage.object_format !== 'sha256') || typeof lineage.baseline_revision !== 'string' ||
+        (lineage.object_format === 'sha1' ? !/^sha1:[0-9a-f]{40}$/.test(lineage.baseline_revision) : !/^sha256:[0-9a-f]{64}$/.test(lineage.baseline_revision)))) {
+      fail('catalog revalidation receipt lineage is invalid');
+    }
+  }
+  const encoded = goComponentReceiptJson(receipt);
+  if (encoded === '') fail('catalog revalidation receipt identity cannot be encoded');
+  return encoded;
 }
 
 function goComponentAuthorityJson(value: Record<string, unknown>): string {

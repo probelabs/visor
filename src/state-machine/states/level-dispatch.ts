@@ -37,6 +37,9 @@ import type { CheckConfig } from '../../types/config';
 import {
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILE_NODE_KEY,
+  PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
 } from '../graph/instance-plan';
 import type {
   CatalogRequestAttemptStartedEvent,
@@ -126,12 +129,19 @@ function trustedManagedProofWireMode(
   providerType: string,
   checkConfig: CheckConfig
 ): GovernedWireMode {
-  const expectedClaim = checkId === 'revalidate_catalog'
-    ? PROOF_CATALOG_REVALIDATION_CLAIM
-    : undefined;
-  const expectedProvider = checkId === 'revalidate_catalog'
-    ? PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE
-    : undefined;
+  const expected = checkId === 'revalidate_catalog'
+    ? {
+        provider: PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+        claim: PROOF_CATALOG_REVALIDATION_CLAIM,
+      }
+    : checkId === PROOF_PROJECT_RECONCILE_NODE_KEY
+      ? {
+          provider: PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+          claim: PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
+        }
+      : undefined;
+  const expectedClaim = expected?.claim;
+  const expectedProvider = expected?.provider;
   if (!expectedClaim || providerType !== expectedProvider || checkConfig.type !== expectedProvider ||
       !Array.isArray(checkConfig.emits) || checkConfig.emits.length !== 1) {
     return 'generic';
@@ -3302,17 +3312,27 @@ async function executeSingleCheck(
       const snapshot = (() => {
         try {
           return snapshotManagedRun(
-            () =>
-              provider.startManaged!(snapshotManagedRunStartRequest({
-                prInfo,
-                checkConfig: providerConfig,
-                dependencyResults,
-                executionContext,
-                binding,
-                executionConfigDigest: context.journal.getGeneratedExecution(dynamic!.attempt.nodeGenerationId).node.executionConfigDigest,
-                workingDirectory: controllerWorkingDirectory(context),
-                ...(checkId === 'proof_admit' ? { proofAdmissionRequest: context.journal.getProofAdmissionRequest(dynamic!.attempt.nodeGenerationId) } : {}),
-              })),
+            () => provider.startManaged!(snapshotManagedRunStartRequest({
+              prInfo,
+              checkConfig: providerConfig,
+              dependencyResults,
+              executionContext,
+              binding,
+              executionConfigDigest: context.journal.getGeneratedExecution(dynamic!.attempt.nodeGenerationId).node.executionConfigDigest,
+              workingDirectory: controllerWorkingDirectory(context),
+              ...(checkId === 'proof_admit'
+                ? { proofAdmissionRequest: context.journal.getProofAdmissionRequest(dynamic!.attempt.nodeGenerationId) }
+                : {}),
+              ...(checkId === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+                providerType === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE &&
+                checkConfig.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE
+                ? {
+                    proofProjectReconciliationRequest: context.journal.getProofProjectReconciliationRequest(
+                      dynamic!.attempt.nodeGenerationId
+                    ),
+                }
+                : {}),
+            })),
             binding
           );
         } catch (error) {

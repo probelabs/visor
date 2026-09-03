@@ -614,11 +614,17 @@ describe('EXP-0209 admitted discovery egress', () => {
         const admissions = published('proof.admitted_receipt@1');
         const revalidations = published('proof.catalog_revalidation@1');
         const catalogs = published('component.catalog@1');
+        const reconciliations = published('proof.project_reconciliation_receipt@1');
         expect(inventories).toHaveLength(1);
         expect(candidates).toHaveLength(4);
         expect(admissions).toHaveLength(4);
         expect(revalidations).toHaveLength(1);
         expect(catalogs).toHaveLength(1);
+        expect(reconciliations).toHaveLength(1);
+        expect(reconciliations[0].wireMode).toBe('proof');
+        expect(reconciliations[0].payload.version).toBe('proof.project-reconciliation-receipt/v1');
+        expect(reconciliations[0].payload.component_admissions).toHaveLength(3);
+        expect(reconciliations[0].payload.covered_work_item_digests).toHaveLength(3);
         const componentCandidates = candidates.filter(event => event.scope.length === 2);
         const componentAdmissions = admissions.filter(event => event.scope.length === 2);
         const projectCandidates = candidates.filter(event => event.scope.length === 1);
@@ -668,6 +674,12 @@ describe('EXP-0209 admitted discovery egress', () => {
           expect(wire).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', reject_code: null }));
           expect(wire.receipt).toEqual(expect.objectContaining({ ClaimID: candidate.claimId, Claim: 'proof.candidate@1', Status: 'ADMITTED' }));
         }
+        const expectedReconciliationParents = [
+          revalidations[0].claimId,
+          ...componentAdmissions.map(event => event.claimId),
+        ].sort();
+        expect(reconciliations[0].parentClaimIds).toEqual(expectedReconciliationParents);
+        expect(reconciliations[0].payload.component_admissions.map((row: any) => row.component_id)).toEqual(['alpha', 'beta', 'gamma']);
         const inspectActivations = events.filter(event => event.type === 'NodeGenerationActivated' && event.checkId === 'inspect' && event.scope.length === 2);
         const verifyActivations = events.filter(event => event.type === 'NodeGenerationActivated' && event.checkId === 'verify' && event.scope.length === 2);
         expect(inspectActivations).toHaveLength(3);
@@ -716,14 +728,45 @@ describe('EXP-0209 admitted discovery egress', () => {
         expect(restoredRevalidation.claimId).toBe(revalidations[0].claimId);
         expect(restoredRevalidation.payloadFingerprint).toBe(revalidations[0].payloadFingerprint);
         expect(Object.is(restoredRevalidation.payload.catalog.components[0].interfaces[1].n, -0)).toBe(true);
-        // Pre-wire-mode v1 checkpoints omitted generated wireMode. This
-        // deliberately collapsed signed-zero payload is not accepted: strict
-        // Proof lineage catches the byte loss before replay can proceed.
+        const restoredReconciliation: any = restored.getInstanceProjection().claimsById[reconciliations[0].claimId];
+        expect(restoredReconciliation.payload).toEqual(reconciliations[0].payload);
+        expect(restoredReconciliation.parentClaimIds).toEqual(expectedReconciliationParents);
+
         const cloneCheckpoint = (value: any): any => Array.isArray(value)
           ? value.map(cloneCheckpoint)
           : value && typeof value === 'object'
             ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneCheckpoint(child)]))
             : value;
+
+        // A forged final receipt is rejected even when both the publication
+        // identity and outer checkpoint integrity are recomputed.
+        const forgedReconciliation = cloneCheckpoint(checkpoint);
+        const forgedEvent = forgedReconciliation.events.find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.project_reconciliation_receipt@1');
+        expect(forgedEvent).toBeDefined();
+        forgedEvent.payload.component_admissions[0].candidate_id = `sha256:${'f'.repeat(64)}`;
+        forgedEvent.payloadFingerprint = proofPayloadFingerprint(forgedEvent.payload);
+        forgedEvent.claimId = sha256Canonical({
+          claim: forgedEvent.claim,
+          payloadFingerprint: forgedEvent.payloadFingerprint,
+          producerCheckId: forgedEvent.checkId,
+          scope: forgedEvent.scope,
+          attemptId: forgedEvent.attemptId,
+          fence: forgedEvent.fence,
+          parentClaimIds: [...forgedEvent.parentClaimIds].sort(),
+        });
+        const forgedBody = {
+          kind: forgedReconciliation.kind,
+          version: forgedReconciliation.version,
+          sessionId: forgedReconciliation.sessionId,
+          graphSemanticDigest: forgedReconciliation.graphSemanticDigest,
+          frontier: forgedReconciliation.frontier,
+          events: forgedReconciliation.events,
+        };
+        forgedReconciliation.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(forgedBody), 'utf8').digest('hex');
+        expect(() => ExecutionJournal.restoreGraphCheckpoint((engine as any)._lastContext.claimPlan, forgedReconciliation)).toThrow(/reconciliation|receipt|identity|Proof authority replay/i);
+        // Pre-wire-mode v1 checkpoints omitted generated wireMode. This
+        // deliberately collapsed signed-zero payload is not accepted: strict
+        // Proof lineage catches the byte loss before replay can proceed.
         const legacy = cloneCheckpoint(checkpoint);
         for (const event of legacy.events) {
           if (event.type === 'ClaimPublished' && event.nodeGenerationId) delete event.wireMode;

@@ -21,6 +21,8 @@ import {
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
   PROOF_CANDIDATE_CLAIM,
+  PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
   type ExpansionPlan,
 } from './instance-plan';
 
@@ -129,7 +131,8 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
       check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
       check.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
       check.type === PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
-      check.type === PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE
+      check.type === PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE ||
+      check.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE
     ) {
       throw new ClaimPlanError(
         `Root check "${checkId}" cannot use a reserved Proof admission provider`,
@@ -141,7 +144,8 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
         declaration.claim === PROOF_CANDIDATE_CLAIM ||
         declaration.claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
         declaration.claim === PROOF_CATALOG_REVALIDATION_CLAIM ||
-        declaration.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM
+        declaration.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM ||
+        declaration.claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM
       )) {
         throw new ClaimPlanError(
           `Root check "${checkId}" cannot declare reserved Proof admission claim`,
@@ -156,10 +160,12 @@ export function compileClaimPlan(config: Partial<VisorConfig>): ClaimPlan {
         expansion.claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
         expansion.claim === PROOF_CATALOG_REVALIDATION_CLAIM ||
         expansion.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM ||
+        expansion.claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM ||
         expansion.item_claim === PROOF_CANDIDATE_CLAIM ||
         expansion.item_claim === PROOF_ADMITTED_RECEIPT_CLAIM ||
         expansion.item_claim === PROOF_CATALOG_REVALIDATION_CLAIM ||
-        expansion.item_claim === PROOF_STRUCTURAL_INVENTORY_CLAIM)
+        expansion.item_claim === PROOF_STRUCTURAL_INVENTORY_CLAIM ||
+        expansion.item_claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM)
     ) {
       throw new ClaimPlanError(
         `Root check "${checkId}" cannot route a reserved proof admission claim through expansion`,

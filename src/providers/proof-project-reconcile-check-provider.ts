@@ -13,9 +13,11 @@ import {
   PROOF_ADMISSION_UNAVAILABLE,
   startProofManagedCliChild,
 } from './proof-admission-cli-child';
+import { PROOF_PROJECT_RECONCILE_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
+
+export { PROOF_PROJECT_RECONCILE_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
 
 /** The registry name is deliberately local to this sealed provider boundary. */
-export const PROOF_PROJECT_RECONCILE_PROVIDER_TYPE = 'proof-project-reconcile';
 export const PROOF_PROJECT_RECONCILE_PROVIDER_NAME = PROOF_PROJECT_RECONCILE_PROVIDER_TYPE;
 export const PROOF_PROJECT_RECONCILIATION_REQUEST_VERSION = 'proof.project-reconciliation-request/v1';
 export const PROOF_PROJECT_RECONCILIATION_RECEIPT_VERSION = 'proof.project-reconciliation-receipt/v1';

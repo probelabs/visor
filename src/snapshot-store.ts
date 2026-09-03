@@ -39,6 +39,7 @@ import {
   deriveSubgraphInstanceId,
   deriveProofCurrentCatalogAuthorityId,
   deriveProofCurrentCatalogAuthorityMutationDigest,
+  deriveProofProjectReconciliationParentClaimIds,
   immutableInstanceEvent,
   immutableProofApplicationEvent,
   immutableInstanceProjection,
@@ -77,8 +78,18 @@ import {
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
   PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILE_NODE_KEY,
+  PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
 } from './state-machine/graph/instance-plan';
-import { goCompatibleProofJson, proofCandidateAdmissionRequestJson, proofComponentCandidateEnvelopeJson } from './providers/proof-admission-cli-child';
+import {
+  extractProofAdmissionCandidate,
+  goCompatibleProofJson,
+  proofCandidateAdmissionRequestJson,
+  proofComponentCandidateEnvelopeJson,
+  PROOF_ADMISSION_WIRE_FIELD,
+  validateProofComponentAdmissionOutcome,
+} from './providers/proof-admission-cli-child';
 import {
   governedCanonicalJson,
   governedPayloadFingerprint,
@@ -91,7 +102,20 @@ import {
   type GovernedWireMode,
 } from './providers/proof-wire';
 import { validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
-import { validateProofCandidateAdmissionBinding, validateProofCatalogRevalidationProjection, validateProofComponentCandidateAdmissionBinding, validateProofCurrentCatalogAuthorityBytes, type ProofCurrentCatalogAuthorityBytes } from './providers/proof-catalog-check-providers';
+import {
+  compareProofStrings,
+  proofCatalogRevalidationReceiptIdentityJson,
+  proofWorkItemDigestForReconciliation,
+  validateProofCandidateAdmissionBinding,
+  validateProofCatalogRevalidationProjection,
+  validateProofComponentCandidateAdmissionBinding,
+  validateProofCurrentCatalogAuthorityBytes,
+  type ProofCurrentCatalogAuthorityBytes,
+} from './providers/proof-catalog-check-providers';
+import {
+  PROOF_PROJECT_RECONCILIATION_RECEIPT_VERSION,
+  PROOF_PROJECT_RECONCILIATION_REQUEST_VERSION,
+} from './providers/proof-project-reconcile-check-provider';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -197,6 +221,98 @@ function proofDomainDigest(domain: string, encoded: string): string {
   const length = Buffer.alloc(8);
   length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update(domain, 'utf8').update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+
+function proofStructJson(fields: readonly (readonly [string, string])[]): string {
+  return `{${fields.map(([key, value]) => `${JSON.stringify(key)}:${value}`).join(',')}}`;
+}
+
+function proofStringJson(value: string): string {
+  return goCompatibleProofJson(value);
+}
+
+function proofScopeJson(scope: readonly {
+  readonly kind: string;
+  readonly expansion_owner_check: string;
+  readonly key: string;
+  readonly subgraph_instance_id: string;
+}[]): string {
+  return `[${scope.map(segment => proofStructJson([
+    ['kind', proofStringJson(segment.kind)],
+    ['expansion_owner_check', proofStringJson(segment.expansion_owner_check)],
+    ['key', proofStringJson(segment.key)],
+    ['subgraph_instance_id', proofStringJson(segment.subgraph_instance_id)],
+  ])).join(',')}]`;
+}
+
+/** Exact encoding of onboardingreconcile.Receipt before ReceiptID is filled.
+ * The outer value and ProjectAuthority are Go structs; the nested catalog
+ * receipt is a Proof v2 map and therefore delegates to Proof's serializer. */
+function proofProjectReconciliationReceiptIdentityJson(value: Record<string, unknown>): string {
+  const authority = value.project_authority;
+  const catalogReceipt = value.catalog_revalidation_receipt;
+  const admissions = value.component_admissions;
+  const covered = value.covered_work_item_digests;
+  if (!isRecord(authority) || !isRecord(catalogReceipt) || !Array.isArray(admissions) || !Array.isArray(covered)) {
+    throw new ClaimKernelError('INVALID_PROOF_RECONCILIATION', 'Project reconciliation receipt identity is not closed');
+  }
+  const authorityJson = proofStructJson([
+    ['version', proofStringJson(String(authority.version))],
+    ['project_id', proofStringJson(String(authority.project_id))],
+    ['subject_fingerprint', proofStringJson(String(authority.subject_fingerprint))],
+    ['code_fingerprint', proofStringJson(String(authority.code_fingerprint))],
+    ['tests_fingerprint', proofStringJson(String(authority.tests_fingerprint))],
+  ]);
+  const admissionJson = `[${admissions.map(value => {
+    if (!isRecord(value)) throw new ClaimKernelError('INVALID_PROOF_RECONCILIATION', 'Component admission is not an object');
+    return proofStructJson([
+      ['component_id', proofStringJson(String(value.component_id))],
+      ['work_item_digest', proofStringJson(String(value.work_item_digest))],
+      ['candidate_id', proofStringJson(String(value.candidate_id))],
+      ['result_digest', proofStringJson(String(value.result_digest))],
+      ['operational_scope_digest', proofStringJson(String(value.operational_scope_digest))],
+    ]);
+  }).join(',')}]`;
+  return proofStructJson([
+    ['version', proofStringJson(String(value.version))],
+    ['project_authority', authorityJson],
+    ['catalog_revalidation_receipt', proofCatalogRevalidationReceiptIdentityJson(catalogReceipt)],
+    ['component_admissions', admissionJson],
+    ['covered_work_item_digests', goCompatibleProofJson(covered)],
+    ['receipt_id', proofStringJson('')],
+  ]);
+}
+
+function exactJsonRecord(value: unknown, expected: readonly string[]): value is Record<string, unknown> {
+  return isRecord(value) && Reflect.ownKeys(value).length === expected.length &&
+    Reflect.ownKeys(value).every(key => typeof key === 'string' && expected.includes(key) &&
+      !!Object.getOwnPropertyDescriptor(value, key)?.enumerable);
+}
+
+function reconciliationFailure(detail: string): never {
+  throw new ClaimKernelError('INVALID_PROOF_RECONCILIATION', detail);
+}
+
+interface ProofProjectReconciliationComponentAuthority {
+  readonly componentId: string;
+  readonly item: InstanceClaimProjection;
+  readonly candidate: InstanceClaimProjection;
+  readonly admission: InstanceClaimProjection;
+  readonly candidateRaw: Buffer;
+  readonly admissionWire: string;
+  readonly identity: ReturnType<typeof validateProofComponentAdmissionOutcome>;
+  readonly workItemDigest: string;
+}
+
+interface ProofProjectReconciliationAuthority {
+  readonly generation: NodeGenerationProjection;
+  readonly project: InstanceProjection['instancesById'][string];
+  readonly projectID: string;
+  readonly inventory: InstanceClaimProjection;
+  readonly candidate: InstanceClaimProjection;
+  readonly admission: InstanceClaimProjection;
+  readonly revalidation: InstanceClaimProjection;
+  readonly components: readonly ProofProjectReconciliationComponentAuthority[];
 }
 
 function componentAuthorityFailure(detail: string): never {
@@ -1278,12 +1394,18 @@ function compiledManagedProofWireMode(
   generation: { readonly templateNodeKey: string; readonly checkId: string },
   node: CompiledTemplateNode
 ): GovernedWireMode {
-  const expectedClaim = generation.templateNodeKey === 'revalidate_catalog' && generation.checkId === 'revalidate_catalog'
-      ? PROOF_CATALOG_REVALIDATION_CLAIM
-      : undefined;
-  const expectedType = expectedClaim === PROOF_CATALOG_REVALIDATION_CLAIM
-      ? PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE
-      : undefined;
+  const projectReconciliation = generation.templateNodeKey === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+    generation.checkId === PROOF_PROJECT_RECONCILE_NODE_KEY;
+  const expectedClaim = projectReconciliation
+      ? PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM
+      : generation.templateNodeKey === 'revalidate_catalog' && generation.checkId === 'revalidate_catalog'
+        ? PROOF_CATALOG_REVALIDATION_CLAIM
+        : undefined;
+  const expectedType = projectReconciliation
+      ? PROOF_PROJECT_RECONCILE_PROVIDER_TYPE
+      : expectedClaim === PROOF_CATALOG_REVALIDATION_CLAIM
+        ? PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE
+        : undefined;
   if (!expectedClaim || node.check.type !== expectedType || node.emissions.length !== 1) return 'generic';
   const emission = node.emissions[0] as unknown as Record<string, unknown>;
   const keys = Reflect.ownKeys(emission);
@@ -1765,6 +1887,304 @@ export class ExecutionJournal {
       }
       validateComponentChildAdmission(this.instanceProjection, instance.subgraphInstanceId, false);
     }
+    for (const generation of Object.values(this.instanceProjection.generationsById)) {
+      if (generation.status !== 'completed' || generation.templateNodeKey !== PROOF_PROJECT_RECONCILE_NODE_KEY) continue;
+      const node = this.instanceProjection.nodesById[generation.nodeInstanceId];
+      if (!node) reconciliationFailure('completed project reconciliation node is unavailable');
+      const claim = generation.completedOutputClaimIds.length === 1
+        ? this.instanceProjection.claimsById[generation.completedOutputClaimIds[0]]
+        : undefined;
+      if (!claim || claim.claim !== PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM) {
+        reconciliationFailure('completed project reconciliation has no unique receipt');
+      }
+      const authority = this.assembleProofProjectReconciliationAuthority(generation.nodeGenerationId);
+      this.validateProofProjectReconciliationReceipt(claim.payload, authority);
+    }
+  }
+
+  private currentProjectOutput(
+    claim: InstanceClaimProjection,
+    checkId: string,
+    project: InstanceProjection['instancesById'][string],
+  ): NodeGenerationProjection {
+    const generation = claim.nodeGenerationId
+      ? this.instanceProjection.generationsById[claim.nodeGenerationId]
+      : undefined;
+    const node = generation ? this.instanceProjection.nodesById[generation.nodeInstanceId] : undefined;
+    if (!claim.active || claim.kind !== 'generated-output' || claim.claim === '' ||
+        claim.producerCheckId !== checkId || claim.subgraphInstanceId !== project.subgraphInstanceId ||
+        !generation || generation.status !== 'completed' || !generation.scheduled ||
+        generation.checkId !== checkId || generation.templateNodeKey !== checkId ||
+        generation.subgraphInstanceId !== project.subgraphInstanceId || !node ||
+        node.subgraphInstanceId !== project.subgraphInstanceId || node.templateNodeKey !== checkId ||
+        !scopePathEquals(node.scope, generation.scope) || !scopePathEquals(claim.scope, generation.scope) ||
+        this.instanceProjection.activeGenerationIdByNode[generation.nodeInstanceId] !== generation.nodeGenerationId ||
+        generation.completedOutputClaimIds.length !== 1 || generation.completedOutputClaimIds[0] !== claim.claimId ||
+        claim.producerAttemptId !== generation.attemptId || claim.producerFence !== generation.fence) {
+      reconciliationFailure(`${checkId} is not the exact current completed project output`);
+    }
+    return generation;
+  }
+
+  private assembleProofProjectReconciliationAuthority(nodeGenerationId: string): ProofProjectReconciliationAuthority {
+    const generation = this.instanceProjection.generationsById[nodeGenerationId];
+    if (!generation || generation.templateNodeKey !== PROOF_PROJECT_RECONCILE_NODE_KEY ||
+        generation.checkId !== PROOF_PROJECT_RECONCILE_NODE_KEY) {
+      reconciliationFailure('project reconciliation generation is not the reserved node');
+    }
+    const project = this.instanceProjection.instancesById[generation.subgraphInstanceId];
+    if (!project) reconciliationFailure('project reconciliation project instance is unavailable');
+    try {
+      deriveProofProjectReconciliationParentClaimIds(this.instanceProjection, generation);
+    } catch (error) {
+      if (error instanceof ClaimKernelError) throw error;
+      reconciliationFailure(`project reconciliation parent lineage is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const materializeNodeId = project.nodeInstanceIdsByTemplateNode.materialize_catalog;
+    const materializeGenerationId = materializeNodeId
+      ? this.instanceProjection.activeGenerationIdByNode[materializeNodeId]
+      : undefined;
+    const materializeGeneration = materializeGenerationId
+      ? this.instanceProjection.generationsById[materializeGenerationId]
+      : undefined;
+    if (!materializeGeneration || materializeGeneration.status !== 'completed' ||
+        materializeGeneration.completedOutputClaimIds.length !== 1) {
+      reconciliationFailure('project reconciliation materialize_catalog output is unavailable');
+    }
+    const catalog = this.instanceProjection.claimsById[materializeGeneration.completedOutputClaimIds[0]];
+    if (!catalog || catalog.claim !== 'component.catalog@1') reconciliationFailure('project reconciliation catalog is unavailable');
+    const catalogGeneration = this.currentProjectOutput(catalog, 'materialize_catalog', project);
+    if (catalogGeneration.nodeGenerationId !== materializeGeneration.nodeGenerationId) {
+      reconciliationFailure('project reconciliation catalog is detached from materialize_catalog');
+    }
+    const parentClaims = catalog.parentClaimIds.map(claimId => this.instanceProjection.claimsById[claimId]);
+    const inventory = parentClaims.find(claim => claim?.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
+    const candidate = parentClaims.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+    const admission = parentClaims.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    const revalidation = parentClaims.find(claim => claim?.claim === PROOF_CATALOG_REVALIDATION_CLAIM);
+    if (!inventory || !candidate || !admission || !revalidation || parentClaims.length !== 4 ||
+        new Set(parentClaims.map(claim => claim?.claimId)).size !== 4 ||
+        canonicalJson(catalog.parentClaimIds) !== canonicalJson([...catalog.parentClaimIds].sort())) {
+      reconciliationFailure('project reconciliation catalog lineage is incomplete');
+    }
+    for (const parent of [inventory, candidate, admission, revalidation]) {
+      if (!parent.active || !scopePathEquals(parent.scope, project.scope)) {
+        reconciliationFailure('project reconciliation lineage scope is detached');
+      }
+    }
+    this.currentProjectOutput(inventory, 'structural_inventory', project);
+    const candidateGeneration = this.currentProjectOutput(candidate, 'inspect', project);
+    const admissionGeneration = this.currentProjectOutput(admission, PROOF_ADMIT_NODE_KEY, project);
+    if (candidateGeneration.nodeGenerationId !== candidate.nodeGenerationId ||
+        admissionGeneration.nodeGenerationId !== admission.nodeGenerationId ||
+        canonicalJson(admission.parentClaimIds) !== canonicalJson([candidate.claimId])) {
+      reconciliationFailure('project reconciliation discovery admission lineage is detached');
+    }
+    try {
+      validateProofCandidateAdmissionBinding(
+        generatedClaimView(candidate, 'discovery candidate'),
+        generatedClaimView(admission, 'discovery admission'),
+      );
+    } catch (error) {
+      reconciliationFailure(`project discovery admission is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const candidatePayload = candidate.payload;
+    const inventoryPayload = inventory.payload;
+    const projectID = isRecord(candidatePayload) && typeof candidatePayload.project_id === 'string'
+      ? candidatePayload.project_id
+      : undefined;
+    if (!projectID || !isRecord(inventoryPayload)) reconciliationFailure('project reconciliation authority has no project identity');
+    try {
+      validateProofCatalogRevalidationProjection(
+        revalidation.payload,
+        inventoryPayload,
+        generatedClaimView(candidate, 'discovery candidate'),
+        generatedClaimView(admission, 'discovery admission'),
+        projectID,
+        generatedClaimView(revalidation, 'catalog revalidation'),
+        inventory.claimId,
+      );
+    } catch (error) {
+      reconciliationFailure(`project catalog revalidation is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const children = Object.values(this.instanceProjection.instancesById)
+      .filter(instance => instance.status === 'active' && instance.parentSubgraphInstanceId === project.subgraphInstanceId)
+      .sort((left, right) => compareProofStrings(left.itemKey, right.itemKey));
+    const parentIds = deriveProofProjectReconciliationParentClaimIds(this.instanceProjection, generation);
+    const components = children.map(child => {
+      if (!child.activeItemClaimId) reconciliationFailure(`component ${child.itemKey} has no active WorkItem`);
+      const item = this.instanceProjection.claimsById[child.activeItemClaimId];
+      if (!item || !item.active || item.claim !== 'component.work_item@1') reconciliationFailure(`component ${child.itemKey} WorkItem is unavailable`);
+      const verifyNodeId = child.nodeInstanceIdsByTemplateNode.verify;
+      const verifyGenerationId = verifyNodeId ? this.instanceProjection.activeGenerationIdByNode[verifyNodeId] : undefined;
+      const verify = verifyGenerationId ? this.instanceProjection.generationsById[verifyGenerationId] : undefined;
+      if (!verify || verify.status !== 'completed' ||
+          verify.activeInputClaimIds.length !== 2) reconciliationFailure(`component ${child.itemKey} verify is incomplete`);
+      const verifyClaims = verify.activeInputClaimIds.map(claimId => this.instanceProjection.claimsById[claimId]);
+      const componentCandidate = verifyClaims.find(value => value?.claim === PROOF_CANDIDATE_CLAIM);
+      const componentAdmission = verifyClaims.find(value => value?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+      if (!componentCandidate || !componentAdmission || !componentCandidate.nodeGenerationId || !componentAdmission.nodeGenerationId) {
+        reconciliationFailure(`component ${child.itemKey} candidate/admission is unavailable`);
+      }
+      try {
+        validateProofComponentCandidateAdmissionBinding(
+          generatedClaimView(componentCandidate, `component ${child.itemKey} candidate`),
+          generatedClaimView(componentAdmission, `component ${child.itemKey} admission`),
+        );
+      } catch (error) {
+        reconciliationFailure(`component ${child.itemKey} admission is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const candidateRequest = this.getProofAdmissionRequest(componentAdmission.nodeGenerationId);
+      const extracted = extractProofAdmissionCandidate(candidateRequest);
+      const admissionPayload = componentAdmission.payload;
+      const admissionWire = isRecord(admissionPayload) && typeof admissionPayload[PROOF_ADMISSION_WIRE_FIELD] === 'string'
+        ? admissionPayload[PROOF_ADMISSION_WIRE_FIELD]
+        : undefined;
+      if (!admissionWire) reconciliationFailure(`component ${child.itemKey} admission has no exact Proof wire`);
+      let identity: ReturnType<typeof validateProofComponentAdmissionOutcome>;
+      try {
+        identity = validateProofComponentAdmissionOutcome(extracted.candidateRaw, admissionWire);
+      } catch (error) {
+        reconciliationFailure(`component ${child.itemKey} admission identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      let invocationAuthority: ProofComponentInvocationAuthorityV1;
+      try {
+        invocationAuthority = this.getProofComponentInvocationAuthority(componentCandidate.nodeGenerationId);
+      } catch (error) {
+        reconciliationFailure(`component ${child.itemKey} invocation authority is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const subject = isRecord(item.payload) ? item.payload.proof_component_subject : undefined;
+      const expectedScope = child.scope.map(segment => ({
+        kind: segment.kind,
+        expansion_owner_check: segment.expansionOwnerCheck,
+        key: segment.key,
+        subgraph_instance_id: segment.subgraphInstanceId,
+      }));
+      const itemComponentId = isRecord(item.payload) ? item.payload.component_id : undefined;
+      if (identity.subject.kind !== 'component' || identity.subject.id !== child.itemKey ||
+          !isRecord(subject) || identity.subject.fingerprint !== subject.fingerprint ||
+          invocationAuthority.subject.component_id !== child.itemKey ||
+          governedCanonicalJson(invocationAuthority.subject, 'proof') !== governedCanonicalJson(subject, 'proof') ||
+          !isRecord(invocationAuthority.work_item) || invocationAuthority.work_item.component_id !== itemComponentId ||
+          canonicalJson(identity.scope) !== canonicalJson(expectedScope)) {
+        reconciliationFailure(`component ${child.itemKey} admission is cross-scope or stale`);
+      }
+      let workItemDigest: string;
+      try {
+        workItemDigest = proofWorkItemDigestForReconciliation(
+          invocationAuthority.work_item,
+          projectID,
+        );
+      } catch (error) {
+        reconciliationFailure(`component ${child.itemKey} WorkItem digest is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!parentIds.includes(componentAdmission.claimId)) reconciliationFailure(`component ${child.itemKey} admission is not a selected parent`);
+      return {
+        componentId: child.itemKey,
+        item,
+        candidate: componentCandidate,
+        admission: componentAdmission,
+        candidateRaw: extracted.candidateRaw,
+        admissionWire,
+        identity,
+        workItemDigest,
+      };
+    });
+    if (components.length < 2 || components.length > 4 ||
+        canonicalJson(components.map(component => component.admission.claimId).sort()) !== canonicalJson([...parentIds].filter(claimId => claimId !== revalidation.claimId).sort())) {
+      reconciliationFailure('project reconciliation component set does not close the parent barrier');
+    }
+    return {
+      generation,
+      project,
+      projectID,
+      inventory,
+      candidate,
+      admission,
+      revalidation,
+      components,
+    };
+  }
+
+  /** Return the exact Go Request bytes consumed by onboarding reconcile. */
+  getProofProjectReconciliationRequest(nodeGenerationId: string): string {
+    const authority = this.assembleProofProjectReconciliationAuthority(nodeGenerationId);
+    const candidateBytes = governedCanonicalJson(authority.candidate.payload, 'proof');
+    const revalidationBytes = governedCanonicalJson(authority.revalidation.payload, 'proof');
+    const admissionBinding = validateProofCandidateAdmissionBinding(
+      generatedClaimView(authority.candidate, 'discovery candidate'),
+      generatedClaimView(authority.admission, 'discovery admission'),
+    );
+    const outcomes = authority.components.map(component => `{${[
+      `"component_id":${proofStringJson(component.componentId)}`,
+      `"candidate":${component.candidateRaw.toString('utf8')}`,
+      `"admission":${component.admissionWire}`,
+    ].join(',')}}`).join(',');
+    return `{${[
+      `"version":${proofStringJson(PROOF_PROJECT_RECONCILIATION_REQUEST_VERSION)}`,
+      `"discovery_candidate":${candidateBytes}`,
+      `"discovery_admission":${admissionBinding.wire}`,
+      `"catalog_revalidation":${revalidationBytes}`,
+      `"outcomes":[${outcomes}]`,
+    ].join(',')}}`;
+  }
+
+  private validateProofProjectReconciliationReceipt(
+    payload: unknown,
+    authority: ProofProjectReconciliationAuthority,
+  ): void {
+    const keys = ['version', 'project_authority', 'catalog_revalidation_receipt', 'component_admissions', 'covered_work_item_digests', 'receipt_id'] as const;
+    if (!exactJsonRecord(payload, keys) || payload.version !== PROOF_PROJECT_RECONCILIATION_RECEIPT_VERSION ||
+        !isRecord(payload.project_authority) || !isRecord(payload.catalog_revalidation_receipt) ||
+        !Array.isArray(payload.component_admissions) || !Array.isArray(payload.covered_work_item_digests) ||
+        typeof payload.receipt_id !== 'string') {
+      reconciliationFailure('project reconciliation receipt envelope is invalid');
+    }
+    const inventoryPayload = authority.inventory.payload;
+    const projectAuthority = isRecord(inventoryPayload) ? inventoryPayload.authority : undefined;
+    if (!projectAuthority || governedCanonicalJson(payload.project_authority, 'proof') !== governedCanonicalJson(projectAuthority, 'proof')) {
+      reconciliationFailure('project reconciliation receipt authority is detached');
+    }
+    const expectedRevalidation = isRecord(authority.revalidation.payload)
+      ? authority.revalidation.payload.receipt
+      : undefined;
+    if (!expectedRevalidation || governedCanonicalJson(payload.catalog_revalidation_receipt, 'proof') !== governedCanonicalJson(expectedRevalidation, 'proof')) {
+      reconciliationFailure('project reconciliation receipt catalog authority is stale');
+    }
+    const expectedAdmissions = authority.components.map(component => {
+      const scopeDigest = proofDomainDigest(
+        'proof.component-outcome-operational-scope/v1',
+        proofScopeJson(component.identity.scope),
+      );
+      return {
+        component_id: component.componentId,
+        work_item_digest: component.workItemDigest,
+        candidate_id: component.identity.candidateId,
+        result_digest: component.identity.resultDigest,
+        operational_scope_digest: scopeDigest,
+      };
+    });
+    const actualAdmissions = payload.component_admissions;
+    if (actualAdmissions.length !== expectedAdmissions.length ||
+        actualAdmissions.some((value, index) => !exactJsonRecord(value, ['component_id', 'work_item_digest', 'candidate_id', 'result_digest', 'operational_scope_digest']) ||
+          governedCanonicalJson(value, 'proof') !== governedCanonicalJson(expectedAdmissions[index], 'proof'))) {
+      reconciliationFailure('project reconciliation component admissions are not exact');
+    }
+    const covered = authority.components.map(component => component.workItemDigest).sort(compareProofStrings);
+    if (payload.covered_work_item_digests.length !== covered.length ||
+        payload.covered_work_item_digests.some((value, index) => value !== covered[index])) {
+      reconciliationFailure('project reconciliation covered WorkItems are not exact');
+    }
+    let expectedReceiptID: string;
+    try {
+      expectedReceiptID = proofDomainDigest(
+        'proof.project-reconciliation-receipt/id/v1',
+        proofProjectReconciliationReceiptIdentityJson(payload),
+      );
+    } catch (error) {
+      reconciliationFailure(`project reconciliation receipt identity is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (payload.receipt_id !== expectedReceiptID) reconciliationFailure('project reconciliation receipt ID is invalid');
   }
 
   getGeneratedExecution(nodeGenerationId: string) {
@@ -2505,6 +2925,17 @@ export class ExecutionJournal {
     } else if (input.wireMode !== undefined && input.wireMode !== compiledWireMode) {
       throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Generated claim wire mode is detached from compiled check authority');
     }
+    const projectReconciliation = generation.templateNodeKey === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+      generation.checkId === PROOF_PROJECT_RECONCILE_NODE_KEY &&
+      node.check.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE &&
+      node.emissions.length === 1 && node.emissions[0].claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM;
+    if (projectReconciliation) {
+      if (compiledWireMode !== 'proof' || input.executionConfigDigest !== generation.executionConfigDigest) {
+        throw new ClaimKernelError('INVALID_PROOF_RECONCILIATION', 'Project reconciliation requires its exact Proof wire and execution authority');
+      }
+      const projectReconciliationAuthority = this.assembleProofProjectReconciliationAuthority(generation.nodeGenerationId);
+      this.validateProofProjectReconciliationReceipt(payload, projectReconciliationAuthority);
+    }
     let staged = before;
     const events: InstanceRuntimeEvent[] = [];
     const stage = (event: InstanceRuntimeEvent): void => {
@@ -2523,7 +2954,9 @@ export class ExecutionJournal {
       const wireMode: GovernedWireMode = proofCandidateEmission ? (candidateWireMode || 'generic') : compiledWireMode;
       const immutablePayload = immutableGovernedValue(payload, wireMode);
       const payloadFingerprint = governedPayloadFingerprint(payload, wireMode);
-      const parentClaimIds = [...generation.activeInputClaimIds].sort();
+      const parentClaimIds = projectReconciliation
+        ? [...deriveProofProjectReconciliationParentClaimIds(before, generation)]
+        : [...generation.activeInputClaimIds].sort();
       const eventId =
         Math.max(this.claimProjection.lastEventId, staged.lastEventId) + publications.length + 1;
       const published: GeneratedClaimPublishedEvent = {
