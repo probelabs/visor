@@ -109,6 +109,7 @@ const RESUME_REPORT_FILE = 'resume-report.json';
 const RESUME_REPORT_MARKDOWN_FILE = 'resume-report.md';
 const RESUME_FAILURE_CHECKPOINT_FILE = 'resume-failure.checkpoint.json';
 const RESUME_COMPLETED_FILE = 'resume.completed.json';
+const PROOF_RUNTIME_CACHE_FILES = ['.proof/index.db', '.proof/index.db-wal', '.proof/index.db-shm'] as const;
 const EVALUATION_STARTED_FILE = 'evaluation.started.json';
 const EVALUATION_FILE = 'evaluation.json';
 const LIVE_REPORT_FILE = 'live-report.json';
@@ -1434,6 +1435,23 @@ function baselineArtifact(outputDirectory: string): { preflight: JsonRecord; con
   return { preflight, config, workspace, proofBinary };
 }
 
+export function gitStatusWithoutProofCache(workspace: string): string[] {
+  const proofDirectory = path.join(workspace, '.proof');
+  const proofStat = fs.lstatSync(proofDirectory);
+  assertInvariant('workspace .proof is a regular non-symlink directory', proofStat.isDirectory() && !proofStat.isSymbolicLink());
+  for (const relative of PROOF_RUNTIME_CACHE_FILES) {
+    try {
+      const stat = fs.lstatSync(path.join(workspace, relative));
+      assertInvariant(`workspace ${relative} is a regular non-symlink file`, stat.isFile() && !stat.isSymbolicLink());
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') continue;
+      throw error;
+    }
+  }
+  const excluded = PROOF_RUNTIME_CACHE_FILES.map(relative => `:(exclude)${relative}`);
+  return requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no', '--', '.', ...excluded], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean);
+}
+
 function validateBaselineWorkspace(preflight: JsonRecord, workspace: string): void {
   const expectedTracked = [...SUBJECT_FILES, 'proof.yaml'].sort();
   const baseline = record(preflight.baseline, 'preflight baseline git evidence');
@@ -1441,8 +1459,8 @@ function validateBaselineWorkspace(preflight: JsonRecord, workspace: string): vo
   assertInvariant('preflight recorded the exact expected tracked files', JSON.stringify(baseline.tracked_files) === JSON.stringify(expectedTracked));
   const tracked = requireCommand('git', ['ls-files'], workspace).stdout.trim().split('\n').filter(Boolean).sort();
   assertInvariant('workspace tracks exactly the accepted preflight files', JSON.stringify(tracked) === JSON.stringify(expectedTracked));
-  const status = requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no'], workspace).stdout;
-  assertInvariant('workspace git status is clean with no untracked files', status === '');
+  const status = gitStatusWithoutProofCache(workspace);
+  assertInvariant('workspace git status is clean with no untracked files', status.length === 0);
   for (const file of expectedTracked) {
     const filePath = path.join(workspace, file);
     const stat = fs.lstatSync(filePath);
@@ -1771,7 +1789,7 @@ function applySelectiveResumePatch(workspace: string, evaluatorDirectory: string
   assertInvariant('patched workspace has no whitespace errors', diffCheck.status === 0);
   const changedPaths = requireCommand('git', ['diff', '--name-only'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean).sort();
   assertInvariant('selective patch changes exactly http.go and http_test.go', canonicalValue(changedPaths) === canonicalValue(['http.go', 'http_test.go']));
-  const status = requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean);
+  const status = gitStatusWithoutProofCache(workspace);
   assertInvariant('patched workspace has only the two accepted tracked modifications', status.length === 2 && status.every(line => /^( M|M )/.test(line)));
   for (const file of SUBJECT_FILES) {
     const filePath = path.join(workspace, file);
@@ -2147,7 +2165,7 @@ function validateResumeWorkspace(artifact: AcceptedResumeArtifact, marker: JsonR
   const expectedPaths = ['http.go', 'http_test.go'];
   assertInvariant('resume marker expects the two accepted changed paths', canonicalValue(marker.changed_paths) === canonicalValue(expectedPaths));
   assertInvariant('resume metadata baseline session and digest match accepted baseline', metadata.session_id === artifact.baselineGate.sessionId && metadata.graph_semantic_digest === artifact.baselineGate.graphSemanticDigest);
-  const status = requireCommand('git', ['status', '--porcelain', '--untracked-files=all', '--ignored=no'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean);
+  const status = gitStatusWithoutProofCache(workspace);
   assertInvariant('resume workspace has only two modified tracked files', status.length === 2 && status.every(line => /^( M|M )/.test(line)));
   const changed = requireCommand('git', ['diff', '--name-only'], workspace).stdout.split('\n').map(value => value.trim()).filter(Boolean).sort();
   assertInvariant('resume workspace diff is exactly the accepted component files', canonicalValue(changed) === canonicalValue(expectedPaths));

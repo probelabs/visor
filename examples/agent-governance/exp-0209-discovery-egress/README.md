@@ -91,6 +91,11 @@ discovery and up to 3 component inspections), depending on discovery. Only
 exactly four RoleRuns (three components) pass the baseline gate. The baseline
 runner's run-scoped factory budget ceiling is four RoleRuns; retries are zero
 and fallback is false.
+The baseline precheck omits only Proof's `.proof/index.db`, `.proof/index.db-wal`,
+and `.proof/index.db-shm` cache sidecars from porcelain status. It first requires
+a real non-symlink `.proof` directory; each present cache file must be regular
+and non-symlink. All other tracked and untracked workspace status remains visible
+and fails closed.
 Invoke it only when that live spend is explicitly intended:
 
 ```sh

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { describe, expect, it } from '@jest/globals';
 import {
+  gitStatusWithoutProofCache,
   validateLiveBaselineCheckpoint,
   validateLiveResumeCheckpoint,
   writeControllerResumeFailureIfMissing,
@@ -25,6 +26,56 @@ function produceFixture(directory: string): void {
 }
 
 describe('EXP-0209 live baseline checkpoint validator', () => {
+  it('omits only regular Proof cache sidecars while preserving other porcelain entries', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-status-'));
+    try {
+      const git = (args: string[]) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' });
+      git(['init', '-q']);
+      git(['config', 'user.email', 'visor-exp0209@example.invalid']);
+      git(['config', 'user.name', 'EXP-0209 status fixture']);
+      fs.writeFileSync(path.join(directory, 'tracked.txt'), 'original\n');
+      git(['add', 'tracked.txt']);
+      git(['-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fixture']);
+      fs.writeFileSync(path.join(directory, 'tracked.txt'), 'changed\n');
+      fs.writeFileSync(path.join(directory, 'root-untracked.txt'), 'visible\n');
+      fs.mkdirSync(path.join(directory, '.proof'));
+      fs.writeFileSync(path.join(directory, '.proof', 'index.db'), 'cache\n');
+      fs.writeFileSync(path.join(directory, '.proof', 'unexpected'), 'visible\n');
+      const status = gitStatusWithoutProofCache(directory);
+      expect(status).toEqual(expect.arrayContaining(['M tracked.txt', '?? root-untracked.txt', '?? .proof/unexpected']));
+      for (const file of ['index.db', 'index.db-wal', 'index.db-shm']) expect(status).not.toContain(`?? .proof/${file}`);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['proof symlink', 'cache symlink', 'cache directory'])('rejects a %s before excluding cache paths', variant => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-status-invalid-'));
+    try {
+      const proof = path.join(directory, '.proof');
+      if (variant === 'proof symlink') {
+        const target = path.join(directory, 'proof-target');
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, proof, 'dir');
+      } else {
+        fs.mkdirSync(proof);
+        for (const file of ['index.db', 'index.db-wal', 'index.db-shm']) fs.writeFileSync(path.join(proof, file), 'cache\n');
+        const cache = path.join(proof, 'index.db');
+        if (variant === 'cache symlink') {
+          fs.unlinkSync(cache);
+          fs.symlinkSync(path.join(directory, 'cache-target'), cache);
+          fs.writeFileSync(path.join(directory, 'cache-target'), 'cache\n');
+        } else {
+          fs.unlinkSync(cache);
+          fs.mkdirSync(cache);
+        }
+      }
+      expect(() => gitStatusWithoutProofCache(directory)).toThrow(/workspace \.proof/);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('accepts the deterministic baseline and rejects catalog tampering', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-validator-'));
     try {
