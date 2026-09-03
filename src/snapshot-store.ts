@@ -37,7 +37,9 @@ import {
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
   deriveProofCurrentCatalogAuthorityId,
+  deriveProofCurrentCatalogAuthorityMutationDigest,
   immutableInstanceEvent,
+  immutableProofApplicationEvent,
   immutableInstanceProjection,
   queryReadyGenerations,
   reduceInstanceEvent,
@@ -64,6 +66,7 @@ import {
   type ManagedRunFailureCode,
   type ManagedRunTerminatedEvent,
   type ProofCurrentCatalogAuthorityRecordedEvent,
+  type ProofCurrentCatalogAuthorityAppliedEvent,
 } from './state-machine/graph/instance-kernel';
 import {
   PROOF_ADMIT_NODE_KEY,
@@ -87,7 +90,7 @@ import {
   type GovernedWireMode,
 } from './providers/proof-wire';
 import { validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
-import { validateProofCandidateAdmissionBinding, validateProofCatalogRevalidationProjection, validateProofComponentCandidateAdmissionBinding } from './providers/proof-catalog-check-providers';
+import { validateProofCandidateAdmissionBinding, validateProofCatalogRevalidationProjection, validateProofComponentCandidateAdmissionBinding, validateProofCurrentCatalogAuthorityBytes, type ProofCurrentCatalogAuthorityBytes } from './providers/proof-catalog-check-providers';
 import {
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
@@ -251,6 +254,7 @@ function assembleProofComponentInvocationAuthority(
   projection: InstanceProjection,
   component: InstanceClaimProjection,
   admissionRequest: string,
+  currentAuthorityBytes?: ProofCurrentCatalogAuthorityBytes,
 ): ProofComponentInvocationAuthorityV1 {
   if (!component.active || component.kind !== 'controller-item' || component.claim !== 'component.work_item@1' ||
       !component.controllerCatalogClaimId || component.parentClaimIds.length !== 1 ||
@@ -351,15 +355,17 @@ function assembleProofComponentInvocationAuthority(
   const projectID = (candidate.payload as Record<string, unknown>)?.project_id;
   if (typeof projectID !== 'string' || !inventoryPayload || typeof inventoryPayload !== 'object') componentAuthorityFailure('Proof lineage project is unavailable');
   try {
-    revalidationProjection = validateProofCatalogRevalidationProjection(
-      revalidation.payload,
-      inventoryPayload as Record<string, unknown>,
-      admitted.candidate,
-      admissionView,
-      projectID,
-      generatedClaimView(revalidation, 'revalidation'),
-      inventory.claimId,
-    );
+    revalidationProjection = currentAuthorityBytes
+      ? currentAuthorityBytes.revalidation
+      : validateProofCatalogRevalidationProjection(
+        revalidation.payload,
+        inventoryPayload as Record<string, unknown>,
+        admitted.candidate,
+        admissionView,
+        projectID,
+        generatedClaimView(revalidation, 'revalidation'),
+        inventory.claimId,
+      );
   } catch (error) {
     componentAuthorityFailure(`current revalidation is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -543,6 +549,24 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
         }
       }
       return event as unknown as ProofCurrentCatalogAuthorityRecordedEvent;
+    case 'ProofCurrentCatalogAuthorityApplied':
+      exact([
+        'version', 'type', 'eventId', 'sessionId', 'scope',
+        'projectSubgraphInstanceId', 'authorityId', 'mutationEventCount',
+        'mutationEventsDigest',
+      ]);
+      base();
+      if (typeof event.projectSubgraphInstanceId !== 'string' ||
+          typeof event.authorityId !== 'string' ||
+          typeof event.mutationEventCount !== 'number' ||
+          !Number.isSafeInteger(event.mutationEventCount) || event.mutationEventCount < 0 ||
+          typeof event.mutationEventsDigest !== 'string' ||
+          !CHECKPOINT_SHA256.test(event.projectSubgraphInstanceId) ||
+          !CHECKPOINT_SHA256.test(event.authorityId) ||
+          !CHECKPOINT_SHA256.test(event.mutationEventsDigest)) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof authority application header has invalid fields');
+      }
+      return event as unknown as ProofCurrentCatalogAuthorityAppliedEvent;
     case 'ControllerItemClaimPublished':
       exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'expansionSpecDigest', 'catalogClaimId', 'itemKey', 'subgraphInstanceId', 'incarnation', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'parentClaimIds']);
       base();
@@ -740,6 +764,17 @@ function validateCheckpointPlanAuthority(
     }
     return;
   }
+  if (event.type === 'ProofCurrentCatalogAuthorityApplied') {
+    const project = instanceProjection.instancesById[event.projectSubgraphInstanceId];
+    const authority = instanceProjection.currentProofCatalogAuthorityByProject[event.projectSubgraphInstanceId];
+    proofProjectExpansionForPlan(plan, project);
+    if (!project || project.status !== 'active' || event.sessionId !== project.sessionId ||
+        canonicalJson(project.scope) !== canonicalJson(event.scope) ||
+        !authority || authority.authorityId !== event.authorityId) {
+      checkpointAuthorityFailure('Proof authority application is not bound to the current compiled project authority');
+    }
+    return;
+  }
   if (event.type === 'ControllerItemClaimPublished') {
     const instance = instanceProjection.instancesById[event.subgraphInstanceId];
     if (!instance) checkpointAuthorityFailure('Controller item claim references an unknown instance');
@@ -845,7 +880,7 @@ function checkpointBody(value: Record<string, unknown>): Record<string, unknown>
 /** Canonical bytes used for both checkpoint integrity and file publication. */
 export function canonicalGraphCheckpointJson(value: unknown): string {
   const active = new Set<object>();
-  const encode = (current: unknown): string => {
+  const encode = (current: unknown, proofApplicationClaimIds: ReadonlySet<string> = new Set()): string => {
     if (current === null || typeof current === 'boolean' || typeof current === 'string') return JSON.stringify(current);
     if (typeof current === 'number') {
       if (!Number.isFinite(current)) throw new Error('non-finite number is not canonical JSON');
@@ -855,17 +890,42 @@ export function canonicalGraphCheckpointJson(value: unknown): string {
     if (active.has(current as object)) throw new Error('checkpoint value is cyclic');
     active.add(current as object);
     try {
-      if (Array.isArray(current)) return `[${current.map(item => encode(item)).join(',')}]`;
+      if (Array.isArray(current)) {
+        const suffixClaimIds = new Set(proofApplicationClaimIds);
+        for (let index = 0; index < current.length; index++) {
+          const marker = current[index];
+          if (marker && typeof marker === 'object' && !Array.isArray(marker) &&
+              (marker as Record<string, unknown>).type === 'ProofCurrentCatalogAuthorityApplied') {
+            const count = (marker as Record<string, unknown>).mutationEventCount;
+            if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) {
+              for (const mutation of current.slice(index + 1, index + 1 + count)) {
+                if (mutation && typeof mutation === 'object' && !Array.isArray(mutation) &&
+                    (mutation as Record<string, unknown>).type === 'ControllerItemClaimPublished' &&
+                    (mutation as Record<string, unknown>).claim === 'component.work_item@1' &&
+                    typeof (mutation as Record<string, unknown>).claimId === 'string') {
+                  suffixClaimIds.add((mutation as Record<string, unknown>).claimId as string);
+                }
+              }
+            }
+          }
+        }
+        return `[${current.map(item => encode(item, suffixClaimIds)).join(',')}]`;
+      }
       const prototype = Object.getPrototypeOf(current);
       if (prototype !== Object.prototype && prototype !== null) throw new Error('checkpoint object is not plain');
       const record = current as Record<string, unknown>;
       const generated = record.type === 'ClaimPublished' && hasOwn(record, 'nodeGenerationId');
+      const proofApplicationController = record.type === 'ControllerItemClaimPublished' &&
+        record.claim === 'component.work_item@1' && typeof record.claimId === 'string' &&
+        proofApplicationClaimIds.has(record.claimId);
       return `{${Object.keys(record).sort().map(key => {
         const encoded = generated && key === 'payload'
           ? governedCanonicalJson(record[key], record.wireMode === 'proof' ? 'proof' : 'generic')
+          : proofApplicationController && key === 'payload'
+            ? governedCanonicalJson(record[key], 'proof')
           : generated && key === 'proofCandidateEvidence'
             ? governedProofCandidateEvidenceJson(record[key])
-            : encode(record[key]);
+            : encode(record[key], proofApplicationClaimIds);
         return `${JSON.stringify(key)}:${encoded}`;
       }).join(',')}}`;
     } finally { active.delete(current as object); }
@@ -1003,10 +1063,20 @@ function ensureReplayAuthorityEventsQuiescent(
 ): void {
   let claimPrefix = createInitialClaimProjection();
   let instancePrefix = createInitialInstanceProjection();
-  for (const event of events) {
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
     const route = routeCheckpointEvent(event);
     if (route.claim) claimPrefix = reduceClaimEvent(claimPrefix, event as ClaimRuntimeEvent, claimPlan);
     if (route.instance) {
+      if (event.type === 'ProofCurrentCatalogAuthorityApplied') {
+        const end = index + event.mutationEventCount + 1;
+        if (end > events.length) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof authority application batch is truncated');
+        const group = events.slice(index, end) as readonly InstanceRuntimeEvent[];
+        ensureCheckpointQuiescent(claimPrefix, instancePrefix);
+        instancePrefix = reduceInstanceEventBatch(instancePrefix, group);
+        index = end - 1;
+        continue;
+      }
       if (event.type === 'ProofCurrentCatalogAuthorityRecorded') ensureCheckpointQuiescent(claimPrefix, instancePrefix);
       instancePrefix = reduceInstanceEvent(instancePrefix, event as InstanceRuntimeEvent);
     }
@@ -1165,7 +1235,35 @@ export class ExecutionJournal {
     const instanceEvents: InstanceRuntimeEvent[] = [];
     let claimPrefix = createInitialClaimProjection();
     let instancePrefix = createInitialInstanceProjection();
-    for (const event of events) {
+    for (let index = 0; index < events.length; index++) {
+      const event = events[index];
+      if (event.type === 'ProofCurrentCatalogAuthorityApplied') {
+        const groupEnd = index + event.mutationEventCount + 1;
+        if (groupEnd > events.length) {
+          throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof authority application batch is truncated');
+        }
+        const group = events.slice(index, groupEnd) as readonly InstanceRuntimeEvent[];
+        ensureCheckpointQuiescent(claimPrefix, instancePrefix);
+        const beforeGroup = instancePrefix;
+        for (const member of group) {
+          const memberRoute = routeCheckpointEvent(member);
+          if (memberRoute.claim || !memberRoute.instance) {
+            throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof authority application contains a non-instance mutation');
+          }
+          // Every member is checked against the authenticated pre-batch
+          // projection.  The Proof reducer performs the only legal staged
+          // transition, including the completed materialize source exception.
+          validateCheckpointPlanAuthority(member, claimPlan, claimPrefix, beforeGroup, false);
+        }
+        try {
+          instancePrefix = reduceInstanceEventBatch(beforeGroup, group);
+        } catch (error) {
+          throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint Proof authority application replay failed', error);
+        }
+        instanceEvents.push(...group);
+        index = groupEnd - 1;
+        continue;
+      }
       const route = routeCheckpointEvent(event);
       if (route.claim) {
         claimEvents.push(event as ClaimRuntimeEvent);
@@ -1529,7 +1627,60 @@ export class ExecutionJournal {
     const admission = catalog.parentClaimIds.map(claimId => this.instanceProjection.claimsById[claimId]).find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
     if (!admission?.nodeGenerationId) componentAuthorityFailure('admission generation is unavailable');
     const request = this.getProofAdmissionRequest(admission.nodeGenerationId);
-    return assembleProofComponentInvocationAuthority(this.instanceProjection, component, request);
+    // Only a changed row whose active claim is the sealed replacement may use
+    // the applied aggregate. Unchanged children must reconstruct the
+    // historical authority that created their claim; using the newest
+    // aggregate for them would silently relabel historical evidence.
+    const appliedAuthority = this.instanceProjection.appliedProofCatalogAuthorityByProject[project.subgraphInstanceId];
+    const appliedRow = appliedAuthority?.components.find(value =>
+      value.subgraphInstanceId === component.subgraphInstanceId
+    );
+    // A sealed Proof application is also the provenance for its replacement
+    // claim.  A later identical refresh records an `unchanged` row, but must
+    // not erase that provenance: the active replacement still has the exact
+    // historicalItemClaimId binding recorded by the sealed receipt.  Generic
+    // children (including unchanged beta/gamma) are never allowed to opt in
+    // merely because the newest aggregate happens to be present.
+    const proofReplacementClaim = component.wireMode === 'proof' ||
+      this.instanceProjection.proofApplicationClaimIds[component.claimId] === true;
+    const currentAuthority = appliedAuthority && appliedRow && proofReplacementClaim &&
+      ((appliedRow.comparison === 'changed' && appliedRow.historicalItemClaimId !== component.claimId) ||
+       (appliedRow.comparison === 'unchanged' && appliedRow.historicalItemClaimId === component.claimId))
+      ? appliedAuthority
+      : undefined;
+    let currentAuthorityBytes: ProofCurrentCatalogAuthorityBytes | undefined;
+    if (currentAuthority) {
+      const row = currentAuthority.components.find(value => value.subgraphInstanceId === component.subgraphInstanceId);
+      if (!row ||
+          (row.comparison === 'changed' && row.historicalItemClaimId === component.claimId) ||
+          (row.comparison === 'unchanged' && row.historicalItemClaimId !== component.claimId) ||
+          (row.comparison !== 'changed' && row.comparison !== 'unchanged')) {
+        componentAuthorityFailure('applied Proof authority does not match the active component WorkItem');
+      }
+      const sourceParents = catalog.parentClaimIds.map(claimId => this.instanceProjection.claimsById[claimId]);
+      const currentCandidate = sourceParents.find(value => value?.claim === PROOF_CANDIDATE_CLAIM);
+      const currentAdmission = sourceParents.find(value => value?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+      if (!currentCandidate || !currentAdmission) componentAuthorityFailure('applied Proof authority source admission lineage is unavailable');
+      currentAuthorityBytes = validateProofCurrentCatalogAuthorityBytes({
+        revalidationBytesBase64: currentAuthority.revalidationBytesBase64,
+        workItemsBytesBase64: currentAuthority.workItemsBytesBase64,
+        candidate: generatedClaimView(currentCandidate, 'candidate'),
+        admission: generatedClaimView(currentAdmission, 'admission'),
+      });
+      const currentItem = currentAuthorityBytes.items.find(value => value.component_id === componentInstance.itemKey);
+      if (!currentItem || governedCanonicalJson(currentItem, 'proof') !== governedCanonicalJson(component.payload, 'proof') ||
+          governedPayloadFingerprint(currentItem, 'proof') !== governedPayloadFingerprint(component.payload, 'proof') ||
+          deriveItemFingerprint(currentItem) !== row.currentItemFingerprint ||
+          component.payloadFingerprint !== row.currentItemFingerprint) {
+        componentAuthorityFailure('applied Proof WorkItems output is detached from the active component claim');
+      }
+    }
+    const assembled = assembleProofComponentInvocationAuthority(this.instanceProjection, component, request, currentAuthorityBytes);
+    if (!currentAuthorityBytes) return assembled;
+    return validateProofComponentInvocationAuthority({
+      ...assembled,
+      catalog_revalidation_receipt: currentAuthorityBytes.revalidation.receipt,
+    });
 
   }
 
@@ -1901,6 +2052,186 @@ export class ExecutionJournal {
     return event;
   }
 
+  /**
+   * Atomically apply the latest authenticated Proof catalog authority to the
+   * changed component instances.  The mutation suffix is built exclusively
+   * from the current projection and the already-validated Proof WorkItems
+   * bytes; callers cannot supply a disposition, item, or generation.
+   */
+  applyProofCurrentCatalogAuthority(input: {
+    readonly projectSubgraphInstanceId: string;
+    readonly authorityId: string;
+  }): ProofCurrentCatalogAuthorityAppliedEvent {
+    ensureCheckpointQuiescent(this.claimProjection, this.instanceProjection);
+    const project = this.instanceProjection.instancesById[input.projectSubgraphInstanceId];
+    if (!project || project.status !== 'active' || project.scope.length !== 1) {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', 'Proof authority application requires one active project instance');
+    }
+    proofProjectExpansionForPlan(this.requireClaimPlan(), project);
+    const authority = this.instanceProjection.currentProofCatalogAuthorityByProject[input.projectSubgraphInstanceId];
+    if (!authority || authority.authorityId !== input.authorityId ||
+        this.instanceProjection.appliedProofCatalogAuthorityByProject[input.projectSubgraphInstanceId]?.authorityId === input.authorityId) {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', 'Proof authority application is stale or already applied');
+    }
+    const source = this.instanceProjection.claimsById[authority.sourceCatalogClaimId];
+    if (!source || !source.active || source.claim !== 'component.catalog@1' ||
+        source.kind !== 'generated-output' || source.producerCheckId !== 'materialize_catalog') {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', 'Proof authority source catalog is unavailable');
+    }
+    const sourceParents = source.parentClaimIds.map(claimId => this.instanceProjection.claimsById[claimId]);
+    const candidate = sourceParents.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+    const admission = sourceParents.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    if (!candidate || !admission) {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', 'Proof authority source admission lineage is unavailable');
+    }
+    let validated: ReturnType<typeof validateProofCurrentCatalogAuthorityBytes>;
+    try {
+      validated = validateProofCurrentCatalogAuthorityBytes({
+        revalidationBytesBase64: authority.revalidationBytesBase64,
+        workItemsBytesBase64: authority.workItemsBytesBase64,
+        candidate: generatedClaimView(candidate, 'candidate'),
+        admission: generatedClaimView(admission, 'admission'),
+      });
+    } catch (error) {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Current Proof authority bytes are invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const components = authority.components
+      .filter(row => row.comparison === 'changed')
+      .sort((left, right) => Buffer.from(left.componentId, 'utf8').compare(Buffer.from(right.componentId, 'utf8')));
+    const events: InstanceRuntimeEvent[] = [];
+    const headerEventId = this.nextRuntimeEventId();
+    let nextEventId = headerEventId + 1;
+    for (const row of components) {
+      const instance = this.instanceProjection.instancesById[row.subgraphInstanceId];
+      if (!instance || instance.status !== 'active' || instance.itemKey !== row.componentId ||
+          instance.catalogClaimId !== authority.sourceCatalogClaimId || !instance.activeItemClaimId ||
+          instance.activeItemClaimId !== row.historicalItemClaimId) {
+        throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Historical component ${row.componentId} is stale or detached`);
+      }
+      const historical = this.instanceProjection.claimsById[instance.activeItemClaimId];
+      const componentExpansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
+      const item = validated.items.find(value => value.component_id === row.componentId);
+      if (!historical || !historical.active || historical.payloadFingerprint !== row.historicalItemFingerprint ||
+          !item || deriveItemFingerprint(item) !== row.currentItemFingerprint ||
+          governedCanonicalJson(item, 'proof') === governedCanonicalJson(historical.payload, 'proof')) {
+        throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Current WorkItem ${row.componentId} is not an exact changed Proof item`);
+      }
+      const generations = Object.values(this.instanceProjection.generationsById)
+        .filter(generation => generation.subgraphInstanceId === instance.subgraphInstanceId && generation.status !== 'inactive')
+        .sort((left, right) => left.nodeGenerationId.localeCompare(right.nodeGenerationId));
+      if (generations.some(generation => generation.status === 'ready' || generation.status === 'running')) {
+        throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Component ${row.componentId} has a nonterminal generation`);
+      }
+      if (Object.values(this.instanceProjection.instancesById).some(candidateInstance =>
+        candidateInstance.status === 'active' && candidateInstance.parentSubgraphInstanceId === instance.subgraphInstanceId)) {
+        throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Component ${row.componentId} has active descendants`);
+      }
+      for (const generation of generations) {
+        events.push({
+          version: 1,
+          type: 'NodeGenerationInactivated',
+          eventId: nextEventId++,
+          sessionId: project.sessionId,
+          scope: instance.scope,
+          subgraphInstanceId: instance.subgraphInstanceId,
+          nodeInstanceId: generation.nodeInstanceId,
+          nodeGenerationId: generation.nodeGenerationId,
+          incarnation: generation.incarnation,
+          outputClaimIds: [...generation.completedOutputClaimIds].sort(),
+          reason: 'superseded',
+        });
+      }
+      const itemFingerprint = deriveItemFingerprint(item);
+      const incarnation = instance.incarnation + 1;
+      const claimId = deriveControllerItemClaimId({
+        claim: 'component.work_item@1',
+        payloadFingerprint: itemFingerprint,
+        expansionSpecDigest: instance.expansionSpecDigest,
+        catalogClaimId: authority.sourceCatalogClaimId,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        incarnation,
+        scope: instance.scope,
+      });
+      events.push({
+        version: 1,
+        type: 'ControllerItemClaimPublished',
+        eventId: nextEventId++,
+        sessionId: project.sessionId,
+        scope: instance.scope,
+        expansionOwnerCheck: componentExpansion.expansionOwnerCheck,
+        expansionSpecDigest: instance.expansionSpecDigest,
+        catalogClaimId: authority.sourceCatalogClaimId,
+        itemKey: row.componentId,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        incarnation,
+        claimId,
+        claim: 'component.work_item@1',
+        payload: item,
+        payloadFingerprint: itemFingerprint,
+        parentClaimIds: [authority.sourceCatalogClaimId],
+      });
+      const inspectNodeId = instance.nodeInstanceIdsByTemplateNode.inspect;
+      const previousInspect = inspectNodeId
+        ? Object.values(this.instanceProjection.generationsById).find(generation =>
+          generation.nodeInstanceId === inspectNodeId && generation.status !== 'inactive')
+        : undefined;
+      if (!inspectNodeId || !previousInspect || previousInspect.status === 'ready' || previousInspect.status === 'running') {
+        throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Component ${row.componentId} has no terminal inspect generation`);
+      }
+      const inputIds = previousInspect.activeInputClaimIds.map(claim => claim === historical.claimId ? claimId : claim).sort();
+      const inspect = componentExpansion.template.nodesByKey.inspect;
+      if (!inspect) throw new ClaimKernelError('INVALID_PROOF_CURRENT_APPLICATION', `Component ${row.componentId} inspect node is unavailable`);
+      const nodeGenerationId = deriveNodeGenerationId({
+        nodeInstanceId: inspectNodeId,
+        incarnation,
+        itemFingerprint,
+        executionConfigDigest: inspect.executionConfigDigest,
+        activeInputClaimIds: inputIds,
+      });
+      events.push({
+        version: 1,
+        type: 'NodeGenerationActivated',
+        eventId: nextEventId++,
+        sessionId: project.sessionId,
+        scope: instance.scope,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        nodeInstanceId: inspectNodeId,
+        nodeGenerationId,
+        templateNodeKey: 'inspect',
+        checkId: 'inspect',
+        incarnation,
+        itemFingerprint,
+        executionConfigDigest: inspect.executionConfigDigest,
+        activeInputClaimIds: inputIds,
+        ...(previousInspect.nestedExpansionCatalogClaimRef
+          ? { nestedExpansionCatalogClaimRef: previousInspect.nestedExpansionCatalogClaimRef }
+          : {}),
+      });
+    }
+    const header: ProofCurrentCatalogAuthorityAppliedEvent = {
+      version: 1,
+      type: 'ProofCurrentCatalogAuthorityApplied',
+      eventId: headerEventId,
+      sessionId: project.sessionId,
+      scope: project.scope,
+      projectSubgraphInstanceId: project.subgraphInstanceId,
+      authorityId: authority.authorityId,
+      mutationEventCount: events.length,
+      mutationEventsDigest: deriveProofCurrentCatalogAuthorityMutationDigest({
+        authorityId: authority.authorityId,
+        mutations: events,
+      }),
+    };
+    // The first mutation follows the marker and was assigned header.eventId+1
+    // while the suffix was constructed; the digest therefore covers the
+    // exact persisted IDs without a second renumbering pass.
+    const stored = [immutableInstanceEvent(header), ...events.map(event => immutableProofApplicationEvent(event))];
+    const projected = reduceInstanceEventBatch(this.instanceProjection, stored);
+    this.runtimeEvents.push(...stored);
+    this.instanceProjection = projected;
+    return stored[0] as ProofCurrentCatalogAuthorityAppliedEvent;
+  }
+
   private stageGeneratedCompletion(
     input: { attempt: GeneratedAttemptStartedEvent; payload: unknown; executionConfigDigest?: string; proofCandidateEvidence?: ProofCandidateEvidenceV1; wireMode?: GovernedWireMode },
     prefix: readonly InstanceRuntimeEvent[] = []
@@ -2163,6 +2494,7 @@ export class ExecutionJournal {
           'CatalogReconciliationRequested',
           'SubgraphExpanded',
           'ProofCurrentCatalogAuthorityRecorded',
+          'ProofCurrentCatalogAuthorityApplied',
           'ControllerItemClaimPublished',
           'NodeGenerationInactivated',
           'NodeGenerationActivated',
@@ -2717,9 +3049,22 @@ export class ExecutionJournal {
   }
 
   readRuntimeEvents(): readonly (ClaimRuntimeEvent | InstanceRuntimeEvent)[] {
+    const proofApplicationClaimIds = new Set<string>();
+    for (let index = 0; index < this.runtimeEvents.length; index++) {
+      const marker = this.runtimeEvents[index];
+      if (marker.type !== 'ProofCurrentCatalogAuthorityApplied') continue;
+      for (const event of this.runtimeEvents.slice(index + 1, index + marker.mutationEventCount + 1)) {
+        if (event.type === 'ControllerItemClaimPublished' && event.claim === 'component.work_item@1') {
+          proofApplicationClaimIds.add(event.claimId);
+        }
+      }
+      index += marker.mutationEventCount;
+    }
     return Object.freeze(this.runtimeEvents.map(event =>
       event.type === 'ClaimPublished' && 'nodeGenerationId' in event
         ? immutableInstanceEvent(event as InstanceRuntimeEvent)
+        : proofApplicationClaimIds.has('claimId' in event ? event.claimId : '')
+          ? immutableProofApplicationEvent(event as InstanceRuntimeEvent)
         : immutableCanonicalValue(event)
     ));
   }

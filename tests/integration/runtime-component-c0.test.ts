@@ -7,8 +7,17 @@ import * as yaml from 'js-yaml';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapshot-store';
 import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
-import { proofCanonicalJson } from '../../src/providers/proof-wire';
-import { deriveProofCurrentCatalogAuthorityId, reduceInstanceEvent } from '../../src/state-machine/graph/instance-kernel';
+import { proofCanonicalJson, proofTopLevelJson } from '../../src/providers/proof-wire';
+import { goCompatibleProofJson } from '../../src/providers/proof-admission-cli-child';
+import {
+  deriveControllerItemClaimId,
+  deriveItemFingerprint,
+  deriveNodeGenerationId,
+  deriveProofCurrentCatalogAuthorityId,
+  deriveProofCurrentCatalogAuthorityMutationDigest,
+  immutableInstanceProjection,
+  reduceInstanceEvent,
+} from '../../src/state-machine/graph/instance-kernel';
 
 const PROOF_AUTHORITY = '/Users/buger/go/src/reqforge-exp-0207a-proof-cli-admission';
 const EXP0209_PROFILE = '/Users/buger/go/src/visor-exp-0208-product-native-demo-pack/examples/agent-governance/exp-0209-discovery-egress/visor.yaml';
@@ -28,6 +37,77 @@ function domainDigest(domain: string, value: string): string {
   const bytes = Buffer.from(value, 'utf8');
   const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+
+function componentWorkItemWire(value: any): any {
+  const mapping = value.proof_path_mapping;
+  const subject = value.proof_component_subject;
+  return {
+    version: value.version,
+    project_id: value.project_id,
+    component_id: value.component_id,
+    sorted_owned_paths: value.sorted_owned_paths,
+    sorted_dependency_closure: value.sorted_dependency_closure,
+    proof_path_mapping: {
+      paths: mapping.paths,
+      components: mapping.components,
+      owner: mapping.owner,
+      risk_tier: mapping.risk_tier,
+      enforcement: mapping.enforcement,
+    },
+    proof_input_state: value.proof_input_state.map((row: any) => ({
+      owner_kind: row.owner_kind,
+      owner_id: row.owner_id,
+      input_kind: row.input_kind,
+      path: row.path,
+      file_hash: row.file_hash,
+    })),
+    proof_component_subject: {
+      version: subject.version,
+      project_id: subject.project_id,
+      component_id: subject.component_id,
+      sorted_owned_paths: subject.sorted_owned_paths,
+      sorted_dependency_closure: subject.sorted_dependency_closure,
+      fingerprint: subject.fingerprint,
+    },
+  };
+}
+
+function rederiveCatalogRevalidationReceiptID(receipt: any): void {
+  const authorities = receipt.component_authorities.map((authority: any) => ({
+    component_id: authority.component_id,
+    work_item_digest: authority.work_item_digest,
+    subject: {
+      version: authority.subject.version,
+      project_id: authority.subject.project_id,
+      component_id: authority.subject.component_id,
+      sorted_owned_paths: authority.subject.sorted_owned_paths,
+      sorted_dependency_closure: authority.subject.sorted_dependency_closure,
+      fingerprint: authority.subject.fingerprint,
+    },
+  }));
+  const lineage = receipt.project_lineage === null ? null : {
+    version: receipt.project_lineage.version,
+    fingerprint: receipt.project_lineage.fingerprint,
+    object_format: receipt.project_lineage.object_format,
+    baseline_revision: receipt.project_lineage.baseline_revision,
+  };
+  const unsigned = proofTopLevelJson({
+    version: goCompatibleProofJson(receipt.version),
+    decision: goCompatibleProofJson(receipt.decision),
+    project_id: goCompatibleProofJson(receipt.project_id),
+    project_fingerprint: goCompatibleProofJson(receipt.project_fingerprint),
+    boundary_fingerprint: goCompatibleProofJson(receipt.boundary_fingerprint),
+    inventory_claim_id: goCompatibleProofJson(receipt.inventory_claim_id),
+    catalog_claim_id: goCompatibleProofJson(receipt.catalog_claim_id),
+    admission_candidate_id: goCompatibleProofJson(receipt.admission_candidate_id),
+    admission_result_digest: goCompatibleProofJson(receipt.admission_result_digest),
+    admission_receipt_id: goCompatibleProofJson(receipt.admission_receipt_id),
+    component_authorities: goCompatibleProofJson(authorities),
+    project_lineage: goCompatibleProofJson(lineage),
+    receipt_id: goCompatibleProofJson(''),
+  });
+  receipt.receipt_id = domainDigest('proof.catalog-revalidation-receipt/id/v2', unsigned);
 }
 
 function bare(seed: string): string { return createHash('sha256').update(seed).digest('hex'); }
@@ -461,6 +541,21 @@ setTimeout(() => {
         env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
       }));
       const refreshedWorkItems = runWorkItems(refreshedRevalidation.receipt);
+      // Preserve a valid Proof WorkItem with a signed zero in the actual
+      // activation payload. The revalidation receipt authenticates its
+      // production-compatible component WorkItem wire, so update that digest
+      // and receipt ID rather than weakening validation.
+      const signedZeroRevalidationItem = refreshedRevalidation.work_items.find((value: any) => value.component_id === 'alpha');
+      const signedZeroWorkItemsItem = refreshedWorkItems.work_items.find((value: any) => value.component_id === 'alpha');
+      expect(signedZeroRevalidationItem).toBeDefined();
+      expect(signedZeroWorkItemsItem).toBeDefined();
+      signedZeroRevalidationItem.proof_path_mapping.risk_tier = -0;
+      signedZeroWorkItemsItem.proof_path_mapping.risk_tier = -0;
+      const signedZeroDigest = `sha256:${createHash('sha256').update(goCompatibleProofJson(componentWorkItemWire(signedZeroRevalidationItem)), 'utf8').digest('hex')}`;
+      const signedZeroAuthorityRow = refreshedRevalidation.receipt.component_authorities.find((value: any) => value.component_id === 'alpha');
+      expect(signedZeroAuthorityRow).toBeDefined();
+      signedZeroAuthorityRow.work_item_digest = signedZeroDigest;
+      rederiveCatalogRevalidationReceiptID(refreshedRevalidation.receipt);
       const revalidationBytes = proofCanonicalJson(refreshedRevalidation);
       const workItemsBytes = proofCanonicalJson(refreshedWorkItems);
       const projectSubgraphInstanceId = journal.getInstanceProjection().instancesById[componentGeneration.subgraphInstanceId].parentSubgraphInstanceId!;
@@ -504,10 +599,221 @@ setTimeout(() => {
       const secondAuthorityEvent = journal.recordProofCurrentCatalogAuthority({ projectSubgraphInstanceId, revalidationBytes, workItemsBytes });
       expect(secondAuthorityEvent.previousAuthorityId).toBe(authorityEvent.authorityId);
       expect(reduceInstanceEvent(afterAuthorityProjection, secondAuthorityEvent)).toEqual(journal.getInstanceProjection());
+      // A predecessor authority can never be applied after a newer CAS
+      // record, even while the graph is still quiescent.
+      expect(() => journal.applyProofCurrentCatalogAuthority({ projectSubgraphInstanceId, authorityId: authorityEvent.authorityId })).toThrow(/stale|authority/i);
+      const beforeApplyEvents = journal.readRuntimeEvents();
+      const beforeApply = journal.getInstanceProjection();
+      const applied = journal.applyProofCurrentCatalogAuthority({ projectSubgraphInstanceId, authorityId: secondAuthorityEvent.authorityId });
+      expect(applied.mutationEventCount).toBeGreaterThan(0);
+      expect(applied.mutationEventsDigest).toMatch(/^[0-9a-f]{64}$/);
+      const afterApply = journal.getInstanceProjection();
+      const appliedAuthorityBytes = JSON.parse(Buffer.from(
+        afterApply.appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId].revalidationBytesBase64,
+        'base64'
+      ).toString('utf8'));
+      expect(Object.is(appliedAuthorityBytes.catalog.components.find((value: any) => value.id === 'alpha').interfaces[0].n, -0)).toBe(true);
+      const appliedAlphaClaim = afterApply.claimsById[afterApply.instancesById[alphaGeneration.scope[1].subgraphInstanceId].activeItemClaimId!];
+      expect(appliedAlphaClaim.wireMode).toBe('proof');
+      expect(Object.is((appliedAlphaClaim.payload as any).proof_path_mapping?.risk_tier, -0)).toBe(true);
+      // Beta is unchanged: its completed child keeps the original
+      // historical authority across the changed-alpha apply.
+      expect(journal.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId)).toEqual(authority);
+      expect(afterApply.appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId]).toEqual(
+        expect.objectContaining({ authorityId: secondAuthorityEvent.authorityId })
+      );
+      expect(afterApply.instancesById[alphaGeneration.scope[1].subgraphInstanceId].incarnation).toBe(
+        beforeApply.instancesById[alphaGeneration.scope[1].subgraphInstanceId].incarnation + 1
+      );
+      expect(afterApply.instancesById[componentGeneration.scope[1].subgraphInstanceId]).toEqual(
+        beforeApply.instancesById[componentGeneration.scope[1].subgraphInstanceId]
+      );
+      const unchangedInstances = Object.values(beforeApply.instancesById).filter(instance =>
+        instance.parentSubgraphInstanceId === projectSubgraphInstanceId && instance.itemKey !== 'alpha'
+      );
+      expect(unchangedInstances).toHaveLength(2);
+      let unchangedGenerationCount = 0;
+      for (const unchangedInstance of unchangedInstances) {
+        const unchangedId = unchangedInstance.subgraphInstanceId;
+        expect(afterApply.instancesById[unchangedId]).toEqual(unchangedInstance);
+        for (const nodeInstanceId of Object.values(unchangedInstance.nodeInstanceIdsByTemplateNode)) {
+          const generationId = beforeApply.activeGenerationIdByNode[nodeInstanceId];
+          if (!generationId) continue;
+          unchangedGenerationCount++;
+          expect(afterApply.activeGenerationIdByNode[nodeInstanceId]).toBe(generationId);
+          expect(afterApply.generationsById[generationId]).toEqual(beforeApply.generationsById[generationId]);
+        }
+        expect(Object.fromEntries(Object.entries(afterApply.claimsById).filter(([, claim]) => claim.subgraphInstanceId === unchangedId))).toEqual(
+          Object.fromEntries(Object.entries(beforeApply.claimsById).filter(([, claim]) => claim.subgraphInstanceId === unchangedId))
+        );
+      }
+      expect(unchangedGenerationCount).toBeGreaterThan(0);
+      const alphaInstanceBefore = beforeApply.instancesById[alphaGeneration.scope[1].subgraphInstanceId];
+      const alphaInstanceAfter = afterApply.instancesById[alphaGeneration.scope[1].subgraphInstanceId];
+      expect(alphaInstanceAfter.subgraphInstanceId).toBe(alphaInstanceBefore.subgraphInstanceId);
+      expect(alphaInstanceAfter.nodeInstanceIdsByTemplateNode).toEqual(alphaInstanceBefore.nodeInstanceIdsByTemplateNode);
+      expect(alphaInstanceAfter.incarnation).toBe(alphaInstanceBefore.incarnation + 1);
+      const readyAfterApply = journal.queryReadyWork().filter(value => value.scope.length === 2);
+      expect(readyAfterApply).toHaveLength(1);
+      expect(readyAfterApply[0].subgraphInstanceId).toBe(alphaGeneration.scope[1].subgraphInstanceId);
+      expect(readyAfterApply[0].scheduled).toBe(false);
+      expect(readyAfterApply[0].fence).toBeUndefined();
+      expect(readyAfterApply[0].attemptId).toBeUndefined();
+      const changedAuthority = journal.getProofComponentInvocationAuthority(readyAfterApply[0].nodeGenerationId);
+      expect(changedAuthority.work_item).toEqual(expect.objectContaining({ component_id: 'alpha' }));
+      expect(changedAuthority.catalog_revalidation_receipt).toEqual(expect.objectContaining({ version: 'proof.catalog-revalidation-receipt/v2' }));
+      expect(journal.readRuntimeEvents().slice(0, beforeApplyEvents.length)).toEqual(beforeApplyEvents);
+      const appliedEvents = journal.readRuntimeEvents();
+      const appliedIndex = appliedEvents.findIndex(event => event.type === 'ProofCurrentCatalogAuthorityApplied');
+      expect(appliedIndex).toBeGreaterThanOrEqual(0);
+      const appliedMarker: any = appliedEvents[appliedIndex];
+      const appliedGroup = appliedEvents.slice(appliedIndex, appliedIndex + appliedMarker.mutationEventCount + 1);
+      const appliedController = appliedGroup.find((event: any) => event.type === 'ControllerItemClaimPublished');
+      expect(appliedController).toBeDefined();
+      expect(() => reduceInstanceEvent(beforeApply, appliedController as any)).toThrow();
+      // Even if an attacker first gets one old generation inactivated, the
+      // controller claim cannot be spliced in without the private validated
+      // batch context. Model that already-reduced prefix with the authority
+      // temporarily removed, then restore the live authority and retry.
+      const firstInactivation = appliedGroup.find((event: any) => event.type === 'NodeGenerationInactivated');
+      expect(firstInactivation).toBeDefined();
+      const unprotectedPrefix = immutableInstanceProjection({
+        ...beforeApply,
+        currentProofCatalogAuthorityByProject: {},
+        appliedProofCatalogAuthorityByProject: {},
+        proofApplicationClaimIds: {},
+      } as any);
+      expect(() => reduceInstanceEvent(unprotectedPrefix, firstInactivation as any)).toThrow(/catalog|authority|application|generation/i);
+      // Exercise the replacement with the real pinned Proof C0 admission
+      // boundary before exporting the checkpoint.  The answer itself is
+      // still a deterministic focused Probe answer; the subprocess and its
+      // authenticated Proof candidate are real.
+      let replacementC0Request: any;
+      const replacementC0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: any) => ({
+        answer: () => {
+          replacementC0Request = request;
+          const data = { component_id: request.invocation.subject.id, status: 'ok' };
+          const bytes = canonicalJson(data);
+          const d = 'a'.repeat(64);
+          return {
+            data,
+            runtimeAttestation: {
+              version: 'probe.governed-codex-attestation/v2', profileId: PROFILE,
+              requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+              observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' },
+              executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+              dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'c'.repeat(64)}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+            },
+            resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: governed.governedResultDigest(data), canonicalBytes: Buffer.byteLength(bytes, 'utf8') },
+          };
+        }, cancel: () => undefined, close: () => undefined,
+      }), capability);
+      const replacementExecution = journal.getGeneratedExecution(readyAfterApply[0].nodeGenerationId);
+      const replacementRun = replacementC0Provider.startManaged({
+        prInfo: {} as any,
+        checkConfig: replacementExecution.node.check,
+        dependencyResults: new Map(),
+        executionContext: { claims: replacementExecution.claims, proofComponentAuthority: changedAuthority },
+        // C0 itself is exercised through the real pinned Proof capability;
+        // keep this invocation side-effect free in the graph journal because
+        // its focused answer intentionally is a findings payload, not the
+        // component-catalog candidate emitted by the discovery inspect.
+        binding: { ...binding(), nodeGenerationId: readyAfterApply[0].nodeGenerationId, nodeInstanceId: readyAfterApply[0].nodeInstanceId },
+        executionConfigDigest: replacementExecution.node.executionConfigDigest,
+        workingDirectory: root,
+      });
+      await expect(replacementRun.started).resolves.toMatchObject({ kind: 'started' });
+      const replacementOutcome: any = await replacementRun.outcome;
+      expect(replacementOutcome.kind).toBe('succeeded-proof-candidate');
+      await expect(replacementRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+      expect(replacementC0Request?.invocation.subject).toEqual({ kind: 'component', id: 'alpha', fingerprint: changedAuthority.subject.fingerprint });
+      expect(replacementC0Request?.invocation.component_authority).toEqual(changedAuthority);
+      // The unchanged components never enter the runner.  Leave the next
+      // changed-stage generation terminal for checkpoint export.
+      const preReplacementLifecycleEvents = journal.readRuntimeEvents();
+      const previousFence = Math.max(0, ...preReplacementLifecycleEvents.map(event => 'fence' in event && typeof event.fence === 'number' ? event.fence : 0));
+      let replacementLifecycleAttempt: any;
+      for (const ready of journal.queryReadyWork().filter(value => value.scope.length === 2)) {
+        const attempt = journal.startGeneratedAttempt(ready.nodeGenerationId);
+        if (ready.subgraphInstanceId === alphaGeneration.scope[1].subgraphInstanceId) replacementLifecycleAttempt = attempt;
+        journal.scheduleGeneratedAttempt(attempt);
+        journal.failGeneratedAttempt(attempt, 'c2b-checkpoint-harness');
+      }
+      expect(replacementLifecycleAttempt?.fence).toBe(previousFence + 1);
+      const replacementLifecycleEvents = journal.readRuntimeEvents().slice(preReplacementLifecycleEvents.length);
+      expect(replacementLifecycleEvents.filter(event => event.type === 'AttemptStarted' && 'nodeGenerationId' in event)
+        .map(event => (event as any).nodeGenerationId)).toEqual([replacementLifecycleAttempt.nodeGenerationId]);
+      expect(replacementLifecycleEvents.filter(event => event.type === 'AttemptStarted' && 'nodeGenerationId' in event)
+        .every(event => (event as any).scope[1].subgraphInstanceId === alphaGeneration.scope[1].subgraphInstanceId)).toBe(true);
+      const afterReplacementLifecycle = journal.getInstanceProjection();
+      const lifecycleAuthorityBytes = JSON.parse(Buffer.from(
+        afterReplacementLifecycle.appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId].revalidationBytesBase64,
+        'base64'
+      ).toString('utf8'));
+      expect(Object.is(lifecycleAuthorityBytes.catalog.components.find((value: any) => value.id === 'alpha').interfaces[0].n, -0)).toBe(true);
+      const lifecycleAlphaClaim = afterReplacementLifecycle.claimsById[afterReplacementLifecycle.instancesById[alphaGeneration.scope[1].subgraphInstanceId].activeItemClaimId!];
+      expect(lifecycleAlphaClaim.wireMode).toBe('proof');
+      expect(Object.is((lifecycleAlphaClaim.payload as any).proof_path_mapping?.risk_tier, -0)).toBe(true);
+      const replayedAfterReplacementLifecycle = journal.replayInstanceProjection();
+      const replayedAuthorityBytes = JSON.parse(Buffer.from(
+        replayedAfterReplacementLifecycle.appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId].revalidationBytesBase64,
+        'base64'
+      ).toString('utf8'));
+      expect(Object.is(replayedAuthorityBytes.catalog.components.find((value: any) => value.id === 'alpha').interfaces[0].n, -0)).toBe(true);
+      const replayedAlphaClaim = replayedAfterReplacementLifecycle.claimsById[replayedAfterReplacementLifecycle.instancesById[alphaGeneration.scope[1].subgraphInstanceId].activeItemClaimId!];
+      expect(replayedAlphaClaim.wireMode).toBe('proof');
+      expect(Object.is((replayedAlphaClaim.payload as any).proof_path_mapping?.risk_tier, -0)).toBe(true);
+      // Once the replacement lifecycle is quiescent, a byte-identical
+      // refresh is legal and emits a zero-mutation application. Persisted
+      // Proof provenance must continue to select alpha's replacement claim;
+      // unchanged beta remains on its original historical authority.
+      const repeatedAuthorityEvent = journal.recordProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        revalidationBytes,
+        workItemsBytes,
+      });
+      const repeatedAuthorityProjection: any = journal.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId];
+      expect(repeatedAuthorityProjection.components.map((row: any) => row.comparison)).toEqual(['unchanged', 'unchanged', 'unchanged']);
+      expect(repeatedAuthorityProjection.components.find((row: any) => row.componentId === 'alpha').historicalItemClaimId)
+        .toBe(journal.getInstanceProjection().instancesById[alphaGeneration.scope[1].subgraphInstanceId].activeItemClaimId);
+      const repeatedApplied = journal.applyProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        authorityId: repeatedAuthorityEvent.authorityId,
+      });
+      expect(repeatedApplied.mutationEventCount).toBe(0);
+      const afterRepeatedApply = journal.getInstanceProjection();
+      expect(afterRepeatedApply.appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId]).toEqual(
+        expect.objectContaining({ authorityId: repeatedAuthorityEvent.authorityId })
+      );
+      const repeatedChangedAuthority = journal.getProofComponentInvocationAuthority(readyAfterApply[0].nodeGenerationId);
+      expect(repeatedChangedAuthority).toEqual(changedAuthority);
+      expect(journal.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId)).toEqual(authority);
+      expect(journal.replayInstanceProjection()).toEqual(afterRepeatedApply);
+      expect(() => journal.applyProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        authorityId: repeatedAuthorityEvent.authorityId,
+      })).toThrow(/stale|already|authority/i);
+      expect(() => journal.applyProofCurrentCatalogAuthority({ projectSubgraphInstanceId, authorityId: secondAuthorityEvent.authorityId })).toThrow();
       const stalePredecessor = { ...secondAuthorityEvent, previousAuthorityId: authorityEvent.sourceCatalogClaimId };
       stalePredecessor.authorityId = deriveProofCurrentCatalogAuthorityId(stalePredecessor);
       expect(() => reduceInstanceEvent(afterAuthorityProjection, stalePredecessor)).toThrow();
       const checkpoint = journal.exportGraphCheckpoint(sessionId);
+      const canonicalCheckpointBytes = canonicalGraphCheckpointJson(checkpoint);
+      const restoredFromCanonicalCheckpoint = ExecutionJournal.restoreGraphCheckpoint(
+        plan,
+        JSON.parse(canonicalCheckpointBytes)
+      );
+      const canonicalRestoredAuthorityBytes = JSON.parse(Buffer.from(
+        restoredFromCanonicalCheckpoint.getInstanceProjection().appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId].revalidationBytesBase64,
+        'base64'
+      ).toString('utf8'));
+      expect(Object.is(canonicalRestoredAuthorityBytes.catalog.components.find((value: any) => value.id === 'alpha').interfaces[0].n, -0)).toBe(true);
+      const canonicalRestoredProjection = restoredFromCanonicalCheckpoint.getInstanceProjection();
+      const canonicalRestoredAlphaClaim = canonicalRestoredProjection.claimsById[canonicalRestoredProjection.instancesById[alphaGeneration.scope[1].subgraphInstanceId].activeItemClaimId!];
+      expect(canonicalRestoredAlphaClaim.wireMode).toBe('proof');
+      expect(Object.is((canonicalRestoredAlphaClaim.payload as any).proof_path_mapping?.risk_tier, -0)).toBe(true);
+      expect(restoredFromCanonicalCheckpoint.getProofComponentInvocationAuthority(readyAfterApply[0].nodeGenerationId)).toEqual(repeatedChangedAuthority);
+      expect(restoredFromCanonicalCheckpoint.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId)).toEqual(authority);
 
       const cloneValue = (value: any): any => Array.isArray(value)
         ? value.map(cloneValue)
@@ -526,6 +832,182 @@ setTimeout(() => {
         value.integrity = { algorithm: 'sha256', digest: createHash('sha256').update(canonicalGraphCheckpointJson(body), 'utf8').digest('hex') };
         return value;
       };
+      const renumberCheckpointEvents = (value: any): void => {
+        value.events.forEach((event: any, index: number) => { event.eventId = index + 1; });
+        value.frontier = { eventCount: value.events.length, lastEventId: value.events.length };
+      };
+      const appliedGroupInfo = (value: any): { index: number; marker: any; mutations: any[] } => {
+        const index = value.events.findIndex((event: any) => event.type === 'ProofCurrentCatalogAuthorityApplied');
+        expect(index).toBeGreaterThanOrEqual(0);
+        const marker = value.events[index];
+        return { index, marker, mutations: value.events.slice(index + 1, index + 1 + marker.mutationEventCount) };
+      };
+      const rederiveAppliedDigest = (value: any): void => {
+        const { marker, mutations } = appliedGroupInfo(value);
+        marker.mutationEventsDigest = deriveProofCurrentCatalogAuthorityMutationDigest({
+          authorityId: marker.authorityId,
+          mutations,
+        });
+      };
+      // A separate pre-authority journal proves the no-op path independently
+      // of the changed-alpha replacement above.  It must emit only the
+      // aggregate marker (zero mutations), persist the exact Proof bytes, and
+      // remain idempotent across replay and checkpoint restore.
+      const unchangedJournal = ExecutionJournal.restoreGraphCheckpoint(plan, cloneValue(checkpointBeforeAuthority));
+      const unchangedAuthorityEvent = unchangedJournal.recordProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        revalidationBytes: historicalRevalidationBytes,
+        workItemsBytes: historicalWorkItemsBytes,
+      });
+      const unchangedAuthorityProjection: any = unchangedJournal.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId];
+      expect(unchangedAuthorityProjection.components.map((row: any) => row.comparison)).toEqual(['unchanged', 'unchanged', 'unchanged']);
+      const unchangedApplied = unchangedJournal.applyProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        authorityId: unchangedAuthorityEvent.authorityId,
+      });
+      expect(unchangedApplied.mutationEventCount).toBe(0);
+      const unchangedAfterApply = unchangedJournal.getInstanceProjection();
+      expect(unchangedAfterApply.appliedProofCatalogAuthorityByProject[projectSubgraphInstanceId]).toEqual(
+        expect.objectContaining({
+          authorityId: unchangedAuthorityEvent.authorityId,
+          revalidationBytesBase64: unchangedAuthorityEvent.revalidationBytesBase64,
+          workItemsBytesBase64: unchangedAuthorityEvent.workItemsBytesBase64,
+        })
+      );
+      expect(unchangedJournal.replayInstanceProjection()).toEqual(unchangedAfterApply);
+      expect(() => unchangedJournal.applyProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId,
+        authorityId: unchangedAuthorityEvent.authorityId,
+      })).toThrow(/stale|already|authority/i);
+      const unchangedCheckpoint = unchangedJournal.exportGraphCheckpoint(sessionId);
+      const unchangedRestored = ExecutionJournal.restoreGraphCheckpoint(plan, cloneValue(unchangedCheckpoint));
+      expect(unchangedRestored.getInstanceProjection()).toEqual(unchangedAfterApply);
+      expect(unchangedRestored.replayInstanceProjection()).toEqual(unchangedAfterApply);
+
+      // Removing the atomic marker but preserving a perfectly contiguous
+      // event prefix must still fail: the first inactivation is guarded by
+      // the pending changed Proof authority.
+      const strippedMarker = cloneValue(checkpoint) as any;
+      const strippedInfo = appliedGroupInfo(strippedMarker);
+      strippedMarker.events.splice(strippedInfo.index, 1);
+      renumberCheckpointEvents(strippedMarker);
+      rehashCheckpoint(strippedMarker);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, strippedMarker)).toThrow(/authority|application|catalog|generation|instance replay/i);
+
+      // Proof lineage is immutable graph provenance. Removing both aggregate
+      // authority records and the application marker must not downgrade the
+      // retained first inactivation into a generic lifecycle event.
+      const strippedProofAuthority = cloneValue(checkpoint) as any;
+      strippedProofAuthority.events = strippedProofAuthority.events.filter((event: any) =>
+        event.type !== 'ProofCurrentCatalogAuthorityRecorded' && event.type !== 'ProofCurrentCatalogAuthorityApplied'
+      );
+      expect(strippedProofAuthority.events.some((event: any) => event.type === 'NodeGenerationInactivated')).toBe(true);
+      renumberCheckpointEvents(strippedProofAuthority);
+      rehashCheckpoint(strippedProofAuthority);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, strippedProofAuthority)).toThrow(/authority|application|catalog|generation|instance replay/i);
+
+      // A real EOF in the middle of the marker's suffix is rejected before
+      // later events can make the graph appear quiescent.
+      const truncatedSuffix = cloneValue(checkpoint) as any;
+      const truncatedInfo = appliedGroupInfo(truncatedSuffix);
+      expect(truncatedInfo.marker.mutationEventCount).toBeGreaterThan(1);
+      truncatedSuffix.events = truncatedSuffix.events.slice(0, truncatedInfo.index + truncatedInfo.marker.mutationEventCount);
+      renumberCheckpointEvents(truncatedSuffix);
+      rehashCheckpoint(truncatedSuffix);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, truncatedSuffix)).toThrow(/truncated|authority|mutation|instance replay/i);
+
+      // Reorder two valid mutations, then repair positional IDs and both
+      // digests. Semantic batch grammar—not the outer hash—must reject it.
+      const reorderedSuffix = cloneValue(checkpoint) as any;
+      const reorderedInfo = appliedGroupInfo(reorderedSuffix);
+      const firstMutationIndex = reorderedInfo.index + 1;
+      [reorderedSuffix.events[firstMutationIndex], reorderedSuffix.events[firstMutationIndex + 1]] = [
+        reorderedSuffix.events[firstMutationIndex + 1], reorderedSuffix.events[firstMutationIndex],
+      ];
+      renumberCheckpointEvents(reorderedSuffix);
+      rederiveAppliedDigest(reorderedSuffix);
+      rehashCheckpoint(reorderedSuffix);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, reorderedSuffix)).toThrow(/authority|mutation|generation|instance replay|checkpoint/i);
+
+      // Add a duplicate valid mutation, repairing count, event positions and
+      // aggregate integrity. The exact suffix grammar still rejects it.
+      const extraMutation = cloneValue(checkpoint) as any;
+      const extraInfo = appliedGroupInfo(extraMutation);
+      extraMutation.events.splice(extraInfo.index + 2, 0, cloneValue(extraInfo.mutations[0]));
+      extraMutation.events[extraInfo.index].mutationEventCount++;
+      renumberCheckpointEvents(extraMutation);
+      rederiveAppliedDigest(extraMutation);
+      rehashCheckpoint(extraMutation);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, extraMutation)).toThrow(/authority|mutation|generation|instance replay|checkpoint/i);
+
+      // Tamper the replacement WorkItem and repair every dependent generic
+      // identity (claim, activation input, generation), aggregate digest, and
+      // checkpoint digest. Validation must reach the authenticated Proof item
+      // comparison rather than failing merely on a stale hash.
+      const semanticPayloadTamper = cloneValue(checkpoint) as any;
+      const semanticInfo = appliedGroupInfo(semanticPayloadTamper);
+      const semanticController = semanticInfo.mutations.find((event: any) => event.type === 'ControllerItemClaimPublished' && event.claim === 'component.work_item@1');
+      expect(semanticController).toBeDefined();
+      const oldControllerClaimId = semanticController.claimId;
+      semanticController.payload.authority.work_item_digest = `sha256:${'1'.repeat(64)}`;
+      semanticController.payloadFingerprint = deriveItemFingerprint(semanticController.payload);
+      semanticController.claimId = deriveControllerItemClaimId({
+        claim: semanticController.claim,
+        payloadFingerprint: semanticController.payloadFingerprint,
+        expansionSpecDigest: semanticController.expansionSpecDigest,
+        catalogClaimId: semanticController.catalogClaimId,
+        subgraphInstanceId: semanticController.subgraphInstanceId,
+        incarnation: semanticController.incarnation,
+        scope: semanticController.scope,
+      });
+      const semanticActivation = semanticInfo.mutations.find((event: any) => event.type === 'NodeGenerationActivated' && event.templateNodeKey === 'inspect');
+      expect(semanticActivation).toBeDefined();
+      semanticActivation.activeInputClaimIds = semanticActivation.activeInputClaimIds.map((claimId: string) => claimId === oldControllerClaimId ? semanticController.claimId : claimId).sort();
+      semanticActivation.itemFingerprint = semanticController.payloadFingerprint;
+      semanticActivation.nodeGenerationId = deriveNodeGenerationId({
+        nodeInstanceId: semanticActivation.nodeInstanceId,
+        incarnation: semanticActivation.incarnation,
+        itemFingerprint: semanticController.payloadFingerprint,
+        executionConfigDigest: semanticActivation.executionConfigDigest,
+        activeInputClaimIds: semanticActivation.activeInputClaimIds,
+      });
+      renumberCheckpointEvents(semanticPayloadTamper);
+      rederiveAppliedDigest(semanticPayloadTamper);
+      rehashCheckpoint(semanticPayloadTamper);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, semanticPayloadTamper)).toThrow(/authority|item|revalidation|instance replay|checkpoint/i);
+
+      const tamperAppliedMarker = (mutate: (event: any) => void): any => {
+        const tampered = cloneValue(checkpoint) as any;
+        const marker = tampered.events.find((event: any) => event.type === 'ProofCurrentCatalogAuthorityApplied');
+        expect(marker).toBeDefined();
+        mutate(marker);
+        return rehashCheckpoint(tampered);
+      };
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperAppliedMarker(event => {
+        event.mutationEventsDigest = '0'.repeat(64);
+      }))).toThrow(/authority|mutation|digest|instance replay/i);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperAppliedMarker(event => {
+        event.mutationEventCount += 1;
+      }))).toThrow(/authority|mutation|truncated|instance replay/i);
+      const appliedEventIndex = checkpoint.events.findIndex(event => event.type === 'ProofCurrentCatalogAuthorityApplied');
+      expect(appliedEventIndex).toBeGreaterThanOrEqual(0);
+      const appliedEvent = checkpoint.events[appliedEventIndex] as any;
+      const mutationEventIndex = appliedEventIndex + 1;
+      const tamperAppliedMutation = (mutate: (events: any[]) => void): any => {
+        const tampered = cloneValue(checkpoint) as any;
+        mutate(tampered.events);
+        return rehashCheckpoint(tampered);
+      };
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperAppliedMutation(events => {
+        events[mutationEventIndex].eventId += 1;
+      }))).toThrow(/authority|event|mutation|instance replay/i);
+      if (appliedEvent.mutationEventCount > 1) {
+        expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperAppliedMutation(events => {
+          const first = events[mutationEventIndex];
+          events[mutationEventIndex] = events[mutationEventIndex + 1];
+          events[mutationEventIndex + 1] = first;
+        }))).toThrow(/authority|mutation|generation|instance replay|checkpoint|contiguous/i);
+      }
       const tamperLastAuthority = (mutate: (event: any) => void): any => {
         const tampered = cloneValue(checkpoint) as any;
         const authorityEvents = tampered.events.filter((event: any) => event.type === 'ProofCurrentCatalogAuthorityRecorded');
@@ -571,6 +1053,9 @@ setTimeout(() => {
 
       const restored = ExecutionJournal.restoreGraphCheckpoint(plan, cloneValue(checkpoint));
       const restoredAuthority = restored.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId);
+      // Checkpoint restore must preserve the same historical authority for
+      // unchanged beta; it must not relabel the completed child with the
+      // changed-alpha aggregate's newer receipt.
       expect(restoredAuthority).toEqual(authority);
       expect(restored.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId]).toEqual(journal.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId]);
       const restoredComponentExecution = restored.getGeneratedExecution(componentGeneration.nodeGenerationId);
@@ -581,6 +1066,12 @@ setTimeout(() => {
       const checkpointBody = { kind: tampered.kind, version: tampered.version, sessionId: tampered.sessionId, graphSemanticDigest: tampered.graphSemanticDigest, frontier: tampered.frontier, events: tampered.events };
       tampered.integrity.digest = createHash('sha256').update(canonicalGraphCheckpointJson(checkpointBody), 'utf8').digest('hex');
       expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tampered)).toThrow();
+      const tamperedAppliedPayload = cloneValue(checkpoint) as any;
+      const appliedControllerEvent = tamperedAppliedPayload.events.slice(appliedEventIndex + 1, appliedEventIndex + appliedEvent.mutationEventCount + 1)
+        .find((event: any) => event.type === 'ControllerItemClaimPublished');
+      expect(appliedControllerEvent).toBeDefined();
+      appliedControllerEvent.payload.authority.work_item_digest = `sha256:${'1'.repeat(64)}`;
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, rehashCheckpoint(tamperedAppliedPayload))).toThrow(/authority|item|mutation|instance replay/i);
       let c0Request: GovernedProbeRunnerRequest | undefined;
       const c0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => ({
         answer: () => {

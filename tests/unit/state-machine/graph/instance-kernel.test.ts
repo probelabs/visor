@@ -10,6 +10,7 @@ import {
   deriveItemFingerprint,
   deriveManagedRunId,
   deriveNodeGenerationId,
+  deriveProofCurrentCatalogAuthorityMutationDigest,
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
   InstanceKernelError,
@@ -1316,5 +1317,29 @@ describe('Graph v2 C3 managed run lifecycle kernel', () => {
       'INVALID_MANAGED_BATCH'
     );
     expect(startedProjection.lastEventId).toBe(7);
+  });
+
+  it('accepts the Proof application marker grammar only as an atomic batch header', () => {
+    const identity = instanceIdentity('marker');
+    const authorityId = sha256Canonical('authority');
+    const header = {
+      version: 1 as const,
+      type: 'ProofCurrentCatalogAuthorityApplied' as const,
+      eventId: 1,
+      sessionId,
+      scope: identity.scope,
+      projectSubgraphInstanceId: sha256Canonical('project'),
+      authorityId,
+      mutationEventCount: 0,
+      mutationEventsDigest: deriveProofCurrentCatalogAuthorityMutationDigest({ authorityId, mutations: [] }),
+    };
+    expectKernelError(
+      () => reduceInstanceEventBatch(createInitialInstanceProjection(), [header]),
+      'INVALID_PROOF_CURRENT_APPLICATION'
+    );
+    expectKernelError(
+      () => reduceInstanceEventBatch(createInitialInstanceProjection(), [{ ...header, unexpected: true } as any]),
+      'INVALID_PROOF_CURRENT_APPLICATION'
+    );
   });
 });
