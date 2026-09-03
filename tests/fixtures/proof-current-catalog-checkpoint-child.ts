@@ -163,9 +163,9 @@ function fakeDiscovery(request: GovernedProbeRunnerRequest): unknown {
     version: 'proof.component-catalog-candidate/v1',
     project_id: 'journalservice',
     components: [
-      { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], interfaces: [{ name: 'HTTP' }, { n: -0 }] },
-      { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'], interfaces: [{ name: 'Policy' }] },
       { id: 'gamma', responsibility: 'storage domain', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'], interfaces: [{ name: 'Store' }] },
+      { id: 'alpha', responsibility: 'HTTP adapter', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], entry_points: ['zeta', 'alpha'], state_effects: ['writes', 'reads'], interfaces: [{ name: 'HTTP' }, { n: -0 }], uncertainty: ['medium', 'low'] },
+      { id: 'beta', responsibility: 'service policy', owned_paths: ['beta.go'], dependency_closure: ['beta.go'], interfaces: [{ name: 'Policy' }] },
     ],
   });
   const d = 'a'.repeat(64);
@@ -362,14 +362,15 @@ async function continueFrom(directory: string): Promise<void> {
   const source = JSON.parse(fs.readFileSync(path.join(directory, 'baseline.json'), 'utf8'));
   const checkpoint = JSON.parse(source.checkpoint);
   const config = source.config;
+  const baselineProjection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
   const root = config.checks.project.value.projects[0].root;
   const sourceBefore = sourceDigests(root);
   fs.writeFileSync(path.join(root, 'alpha.go'), 'package journal\n// alpha.go changed\n', 'utf8');
   const sourceAfter = sourceDigests(root);
   const editedPaths = COMPONENT_FILES.filter(name => sourceBefore[name] !== sourceAfter[name]);
   const binary = proofBinary();
-  const authority = deriveResumeProofInputs(binary, root, checkpoint, source.projection, editedPaths);
-  const { revalidationBytes, workItemsBytes } = authority;
+  const authority = deriveResumeProofInputs(binary, root, checkpoint, baselineProjection, editedPaths);
+  const { revalidationBytes, workItemsBytes, changedComponentId } = authority;
   const capability = require('../../src/providers/proof-admission-cli-child').createProofAdmissionCapability(binary);
   const registry = CheckProviderRegistry.getInstance();
   registry.bootstrapProofAdmission(capability);
@@ -401,6 +402,7 @@ async function continueFrom(directory: string): Promise<void> {
       calls,
       probeDispatches,
       editedPaths,
+      changedComponentId,
       sourceBefore,
       sourceAfter,
       authorityId: continued.authorityId,

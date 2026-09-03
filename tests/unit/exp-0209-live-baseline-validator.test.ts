@@ -10,6 +10,7 @@ import {
   validateLiveResumeCheckpoint,
   writeControllerResumeFailureIfMissing,
 } from '../../examples/agent-governance/exp-0209-discovery-egress/run-live-demo';
+import { proofCanonicalJson } from '../../src/providers/proof-wire';
 import { canonicalGraphCheckpointJson } from '../../src/snapshot-store';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -146,6 +147,12 @@ describe('EXP-0209 live baseline checkpoint validator', () => {
       });
       const artifact = JSON.parse(fs.readFileSync(path.join(directory, 'baseline.json'), 'utf8')) as Record<string, any>;
       const continuation = JSON.parse(fs.readFileSync(path.join(directory, 'continuation.json'), 'utf8')) as Record<string, any>;
+      const baselineCheckpoint = JSON.parse(artifact.checkpoint) as Record<string, any>;
+      const rawCandidate = baselineCheckpoint.events.find((event: Record<string, any>) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope?.length === 1) as Record<string, any> | undefined;
+      const baselineRevalidation = Object.values(artifact.projection.claimsById).find((claim: any) => claim.active && claim.claim === 'proof.catalog_revalidation@1' && claim.scope?.length === 1) as Record<string, any> | undefined;
+      expect(rawCandidate).toBeDefined();
+      expect(baselineRevalidation).toBeDefined();
+      expect(proofCanonicalJson(rawCandidate!.payload)).not.toBe(proofCanonicalJson(baselineRevalidation!.payload.catalog));
       const accepted = validateLiveResumeCheckpoint(
         JSON.parse(continuation.checkpoint),
         JSON.parse(artifact.checkpoint),
@@ -154,6 +161,7 @@ describe('EXP-0209 live baseline checkpoint validator', () => {
       );
       expect(accepted.gatePassed).toBe(true);
       expect(accepted.changedComponentId).toBe('alpha');
+      expect(continuation.changedComponentId).toBe('alpha');
       expect(accepted.counts.proofCandidates).toBe(5);
       expect(accepted.suffix).toEqual(['alpha:inspect', 'alpha:proof_admit', 'alpha:verify', 'journalservice:project_reconcile']);
       expect(accepted.receiptIds.replacement).not.toBe(accepted.receiptIds.baseline);

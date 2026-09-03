@@ -1699,6 +1699,10 @@ export function deriveResumeProofInputs(
     candidate: { ...candidateProjection, payload: discovery.candidate.payload } as any,
     admission: { ...admissionProjection, payload: discovery.admission.payload } as any,
   });
+  const baselineRevalidations = activeClaims(baselineProjection, 'proof.catalog_revalidation@1', 1);
+  assertInvariant('baseline has one active project catalog revalidation', baselineRevalidations.length === 1);
+  const baselineRevalidation = record(baselineRevalidations[0].payload, 'baseline catalog revalidation');
+  assertInvariant('baseline catalog revalidation retains its catalog', baselineRevalidation.catalog !== undefined);
   const baselineEvents = array(baselineCheckpoint.events, 'baseline events');
   const inventory = baselineEvents.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.structural_inventory@1' && eventScopeLength(event) === 1);
   assertInvariant('baseline structural inventory is present', inventory !== undefined);
@@ -1717,8 +1721,7 @@ export function deriveResumeProofInputs(
   for (const id of [...beforeById.keys()].filter(value => value !== changedComponentId)) {
     assertInvariant(`Proof WorkItem ${id} is byte-identical to baseline`, canonicalValue(beforeById.get(id)) === canonicalValue(afterById.get(id)));
   }
-  const baselineCandidate = record(discovery.candidate.payload, 'baseline project candidate');
-  assertInvariant('Proof catalog authority is unchanged by a selective source patch', canonicalValue(validated.revalidation.catalog) === canonicalValue(baselineCandidate));
+  assertInvariant('Proof catalog authority is unchanged by a selective source patch', proofCanonicalJson(validated.revalidation.catalog) === proofCanonicalJson(baselineRevalidation.catalog));
   const baselineInventoryPayload = record(inventory.payload, 'baseline structural inventory');
   const changedInventoryPaths = array(validated.revalidation.inventory?.input_state, 'revalidated inventory input state').filter(row => {
     const before = array(baselineInventoryPayload.input_state, 'baseline inventory input state').find(value => value.path === row.path);
