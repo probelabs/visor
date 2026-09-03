@@ -25,6 +25,7 @@ import {
 import {
   validateProofCandidateAdmissionBinding,
   validateProofComponentCandidateAdmissionBinding,
+  validateProofCurrentCatalogAuthorityBytes,
 } from '../../../src/providers/proof-catalog-check-providers';
 import {
   governedResultDigest,
@@ -1668,7 +1669,7 @@ function activeRowsFromProjection(projection: JsonRecord): JsonRecord[] {
   return activeClaims(projection, 'component.work_item@1', 2).sort((left, right) => String(left.payload.component_id).localeCompare(String(right.payload.component_id)));
 }
 
-function deriveResumeProofInputs(
+export function deriveResumeProofInputs(
   proofBinary: string,
   workspace: string,
   baselineCheckpoint: JsonRecord,
@@ -1684,11 +1685,25 @@ function deriveResumeProofInputs(
   const workItemsRequest = `{"version":${proofCanonicalJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(discovery.candidate.payload)},"admission":${admissionWire},"revalidation_receipt":${proofCanonicalJson(revalidation.value.receipt)}}`;
   const workItems = proofJsonCommand(proofBinary, ['onboarding', 'work-items'], workspace, workItemsRequest);
   assertInvariant('Proof revalidation has an accepted inventory/catalog/work-items authority', revalidation.value.version === 'proof.catalog-revalidation/v2' && workItems.value.version === 'proof.onboarding-work-item-projection/v1');
+  const candidateClaim = baselineProjection.claimsById?.[discovery.candidate.claimId];
+  const admissionClaim = baselineProjection.claimsById?.[discovery.admission.claimId];
+  assertInvariant('projected candidate/admission are active', candidateClaim?.active === true && admissionClaim?.active === true);
+  // JSON.stringify loses Proof's signed-zero spelling in persisted projections;
+  // retain the checkpoint payload while taking claim identity/provenance from
+  // the projected generated views.
+  const candidateProjection = generatedClaimView(candidateClaim, 'baseline project candidate projection');
+  const admissionProjection = generatedClaimView(admissionClaim, 'baseline project admission projection');
+  const validated = validateProofCurrentCatalogAuthorityBytes({
+    revalidationBytesBase64: Buffer.from(revalidation.bytes, 'utf8').toString('base64'),
+    workItemsBytesBase64: Buffer.from(workItems.bytes, 'utf8').toString('base64'),
+    candidate: { ...candidateProjection, payload: discovery.candidate.payload } as any,
+    admission: { ...admissionProjection, payload: discovery.admission.payload } as any,
+  });
   const baselineEvents = array(baselineCheckpoint.events, 'baseline events');
   const inventory = baselineEvents.find(event => event.type === 'ClaimPublished' && event.claim === 'proof.structural_inventory@1' && eventScopeLength(event) === 1);
   assertInvariant('baseline structural inventory is present', inventory !== undefined);
   const baselineItems = activeRowsFromProjection(baselineProjection);
-  const afterItems = Array.isArray(workItems.value.work_items) ? workItems.value.work_items as JsonRecord[] : [];
+  const afterItems = [...validated.items] as JsonRecord[];
   assertInvariant('Proof returned exactly three work items', afterItems.length === 3);
   const beforeById = new Map(baselineItems.map(row => [String(row.payload.component_id), row.payload]));
   const afterById = new Map(afterItems.map(row => [String(row.component_id), row]));
@@ -1703,9 +1718,9 @@ function deriveResumeProofInputs(
     assertInvariant(`Proof WorkItem ${id} is byte-identical to baseline`, canonicalValue(beforeById.get(id)) === canonicalValue(afterById.get(id)));
   }
   const baselineCandidate = record(discovery.candidate.payload, 'baseline project candidate');
-  assertInvariant('Proof catalog authority is unchanged by a selective source patch', canonicalValue(revalidation.value.catalog) === canonicalValue(baselineCandidate));
+  assertInvariant('Proof catalog authority is unchanged by a selective source patch', canonicalValue(validated.revalidation.catalog) === canonicalValue(baselineCandidate));
   const baselineInventoryPayload = record(inventory.payload, 'baseline structural inventory');
-  const changedInventoryPaths = array(revalidation.value.inventory?.input_state, 'revalidated inventory input state').filter(row => {
+  const changedInventoryPaths = array(validated.revalidation.inventory?.input_state, 'revalidated inventory input state').filter(row => {
     const before = array(baselineInventoryPayload.input_state, 'baseline inventory input state').find(value => value.path === row.path);
     return !before || before.file_hash !== row.file_hash;
   }).map(row => String(row.path)).sort();

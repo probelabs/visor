@@ -153,9 +153,14 @@ describe('EXP-0209 live baseline checkpoint validator', () => {
         { changedComponentId: 'alpha', changedPaths: ['alpha.go'] },
       );
       expect(accepted.gatePassed).toBe(true);
+      expect(accepted.changedComponentId).toBe('alpha');
       expect(accepted.counts.proofCandidates).toBe(5);
       expect(accepted.suffix).toEqual(['alpha:inspect', 'alpha:proof_admit', 'alpha:verify', 'journalservice:project_reconcile']);
       expect(accepted.receiptIds.replacement).not.toBe(accepted.receiptIds.baseline);
+      const baselineItems = new Map(Object.values(artifact.projection.claimsById).filter((claim: any) => claim.active && claim.claim === 'component.work_item@1' && claim.scope?.length === 2).map((claim: any) => [claim.payload.component_id, claim.payload]));
+      const resumedItems = new Map(Object.values(continuation.projection.claimsById).filter((claim: any) => claim.active && claim.claim === 'component.work_item@1' && claim.scope?.length === 2).map((claim: any) => [claim.payload.component_id, claim.payload]));
+      expect(['alpha', 'beta', 'gamma'].filter(id => canonicalGraphCheckpointJson(baselineItems.get(id)) !== canonicalGraphCheckpointJson(resumedItems.get(id)))).toEqual(['alpha']);
+      for (const id of ['beta', 'gamma']) expect(canonicalGraphCheckpointJson(resumedItems.get(id))).toBe(canonicalGraphCheckpointJson(baselineItems.get(id)));
 
       const tampered = JSON.parse(continuation.checkpoint) as Record<string, any>;
       const baselineEventCount = (JSON.parse(artifact.checkpoint) as Record<string, any>).events.length;

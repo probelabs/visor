@@ -17,6 +17,7 @@ import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapsh
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 import { deriveProofCurrentCatalogAuthorityMutationDigest } from '../../src/state-machine/graph/instance-kernel';
+import { deriveResumeProofInputs } from '../../examples/agent-governance/exp-0209-discovery-egress/run-live-demo';
 
 const ROOT = path.resolve(__dirname, '../..');
 const PROFILE_PATH = path.resolve(__dirname, '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml');
@@ -367,19 +368,8 @@ async function continueFrom(directory: string): Promise<void> {
   const sourceAfter = sourceDigests(root);
   const editedPaths = COMPONENT_FILES.filter(name => sourceBefore[name] !== sourceAfter[name]);
   const binary = proofBinary();
-  const candidateEvent = checkpoint.events.find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope.length === 1);
-  const admissionEvent = checkpoint.events.find((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1' && event.scope.length === 1);
-  if (!candidateEvent || !admissionEvent) throw new Error('baseline Proof candidate/admission missing');
-  const admission = JSON.parse(admissionEvent.payload.__proof_admission_wire);
-  const request = proofCanonicalJson({ version: 'proof.catalog-revalidation-request/v2', candidate: candidateEvent.payload, admission });
-  const revalidation = invoke(binary, root, ['onboarding', 'revalidate'], request);
-  // Proof's Go decoder intentionally compares the request to its struct-field
-  // order.  Preserve the exact admission wire emitted by the prior Proof
-  // command while canonicalizing the other Proof values.
-  const workItemsRequest = `{"version":${proofCanonicalJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(candidateEvent.payload)},"admission":${admissionEvent.payload.__proof_admission_wire},"revalidation_receipt":${proofCanonicalJson(revalidation.receipt)}}`;
-  const workItems = invoke(binary, root, ['onboarding', 'work-items'], workItemsRequest);
-  const revalidationBytes = proofCanonicalJson(revalidation);
-  const workItemsBytes = proofCanonicalJson(workItems);
+  const authority = deriveResumeProofInputs(binary, root, checkpoint, source.projection, editedPaths);
+  const { revalidationBytes, workItemsBytes } = authority;
   const capability = require('../../src/providers/proof-admission-cli-child').createProofAdmissionCapability(binary);
   const registry = CheckProviderRegistry.getInstance();
   registry.bootstrapProofAdmission(capability);
