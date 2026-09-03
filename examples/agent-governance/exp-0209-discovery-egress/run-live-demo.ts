@@ -77,9 +77,18 @@ const INVENTORY_INPUT_OWNER = 'onboarding_structural_inventory';
 const LIVE_SCRIPT = 'examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts';
 const LIVE_FILES = new Set([
   LIVE_SCRIPT,
+  'examples/agent-governance/exp-0209-discovery-egress/visor.yaml',
   'examples/agent-governance/exp-0209-discovery-egress/README.md',
+  'tests/integration/exp-0209-discovery-egress.test.ts',
   'tests/integration/exp-0209-onboarding-quality.test.ts',
   'tests/unit/exp-0209-live-baseline-validator.test.ts',
+  'tests/fixtures/proof-current-catalog-checkpoint-child.ts',
+  'src/providers/governed-proof-inspect-check-provider.ts',
+  'src/providers/governed-probe-runner.ts',
+  'src/providers/proof-catalog-check-providers.ts',
+  'tests/unit/providers/governed-proof-context.exp-0209.test.ts',
+  'tests/unit/providers/governed-proof-inspect-check-provider.test.ts',
+  'tests/unit/providers/governed-probe-runner.test.ts',
 ]);
 const PRECHECK_ARTIFACT = 'preflight.json';
 const EFFECTIVE_CONFIG_FILE = 'effective-config.yaml';
@@ -607,6 +616,8 @@ function resolveProjectRoleWithInput(
   assertInvariant('Proof resolved onboard role has instructions', typeof resolved.instructions === 'string' && resolved.instructions.length > 0);
   assertInvariant('Proof resolved onboard role has digest', typeof resolved.invocation_digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(resolved.invocation_digest));
   rootCheck.invocation = invocation;
+  // Proof's shipped onboard role owns the system instructions.  The graph's
+  // bounded specialization is carried by the authored user message below.
   rootCheck.instructions = resolved.instructions;
   rootCheck.invocation_digest = resolved.invocation_digest;
   rootCheck.result_schema = Buffer.from(String(invocation.output_schema), 'base64').toString('utf8');

@@ -1,14 +1,13 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import {
   createGovernedProofInspectProviderForFocusedTest,
-  GOVERNED_PROOF_INSPECT_MESSAGE,
   GOVERNED_PROBE_UNAVAILABLE,
   GovernedProofInspectCheckProvider,
   projectGovernedProofInspectConfig,
   validateProofCandidateEvidence,
   governedResultDigest,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
-import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 
 const binding: any = Object.freeze({
   managedRunId: 'managed', sessionId: 'session', checkId: 'inspect',
@@ -98,6 +97,15 @@ describe('governed Proof inspect provider', () => {
     expect(() => projectGovernedProofInspectConfig({ ...config(), consumes: [], emits: [] })).not.toThrow();
   });
 
+  it('retains the authored project message in its bound config identity', () => {
+    const authored = projectGovernedProofInspectConfig(config());
+    const altered = projectGovernedProofInspectConfig({ ...config(), message: 'Use the supplied inventory contract.' });
+    expect(authored.message).toBe('Review the component');
+    expect(altered.message).toBe('Use the supplied inventory contract.');
+    expect(sha256Canonical(authored)).not.toBe(sha256Canonical(altered));
+    expect(() => projectGovernedProofInspectConfig({ ...config(), message: 'x'.repeat(32769) })).toThrow('config fields are invalid');
+  });
+
   it('accepts controller timeout metadata but strips it from Proof authority', () => {
     const projected = projectGovernedProofInspectConfig({ ...config(), ai: { timeout: 600000 } });
     expect((projected as any).ai).toBeUndefined();
@@ -139,7 +147,7 @@ describe('governed Proof inspect provider', () => {
     await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
     const outcome: any = await run.outcome;
     expect(outcome.kind).toBe('succeeded-proof-candidate');
-    expect(captured.message).toBe(GOVERNED_PROOF_INSPECT_MESSAGE);
+    expect(captured.message).toBe(config().message);
     expect(captured.instructions).toBe(config().instructions);
     expect(captured.invocation).toEqual(config().invocation);
     expect(captured.invocationDigest).toBe(config().invocation_digest);

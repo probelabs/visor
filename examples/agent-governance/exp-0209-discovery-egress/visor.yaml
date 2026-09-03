@@ -45,8 +45,8 @@ claim_types:
             project_id: { type: string, minLength: 1 }
             components:
               type: array
-              minItems: 2
-              maxItems: 4
+              minItems: 3
+              maxItems: 3
               items:
                 type: object
                 additionalProperties: false
@@ -54,8 +54,8 @@ claim_types:
                 properties:
                   id: { type: string, minLength: 1 }
                   responsibility: { type: string, minLength: 1 }
-                  owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                  dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                   entry_points: { type: array, items: { type: string, minLength: 1 } }
                   state_effects: { type: array, items: { type: string, minLength: 1 } }
                   interfaces: { type: array, items: {} }
@@ -343,8 +343,8 @@ claim_types:
             project_id: { type: string, minLength: 1 }
             components:
               type: array
-              minItems: 2
-              maxItems: 4
+              minItems: 3
+              maxItems: 3
               items:
                 type: object
                 additionalProperties: false
@@ -352,16 +352,16 @@ claim_types:
                 properties:
                   id: { type: string, minLength: 1 }
                   responsibility: { type: string, minLength: 1 }
-                  owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                  dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                   entry_points: { type: array, items: { type: string, minLength: 1 } }
                   state_effects: { type: array, items: { type: string, minLength: 1 } }
                   interfaces: { type: array, items: {} }
                   uncertainty: { type: array, items: { type: string, minLength: 1 } }
         work_items:
           type: array
-          minItems: 2
-          maxItems: 4
+          minItems: 3
+          maxItems: 3
           items:
             type: object
             additionalProperties: false
@@ -370,8 +370,8 @@ claim_types:
               version: { const: reqproof.onboarding-component-work-item/v1 }
               project_id: { type: string, minLength: 1 }
               component_id: { type: string, minLength: 1 }
-              sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-              sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+              sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+              sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
               proof_path_mapping:
                 type: object
                 additionalProperties: false
@@ -403,8 +403,8 @@ claim_types:
                   version: { const: proof.component-subject/v1 }
                   project_id: { type: string, minLength: 1 }
                   component_id: { type: string, minLength: 1 }
-                  sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                  sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                   fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         receipt:
           type: object
@@ -423,8 +423,8 @@ claim_types:
             admission_receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
             component_authorities:
               type: array
-              minItems: 2
-              maxItems: 4
+              minItems: 3
+              maxItems: 3
               items:
                 type: object
                 additionalProperties: false
@@ -440,8 +440,8 @@ claim_types:
                       version: { const: proof.component-subject/v1 }
                       project_id: { type: string, minLength: 1 }
                       component_id: { type: string, minLength: 1 }
-                      sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                      sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                       fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
             project_lineage:
               type: [object, 'null']
@@ -493,8 +493,8 @@ claim_types:
             admission_receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
             component_authorities:
               type: array
-              minItems: 2
-              maxItems: 4
+              minItems: 3
+              maxItems: 3
               items:
                 type: object
                 additionalProperties: false
@@ -510,8 +510,8 @@ claim_types:
                       version: { const: proof.component-subject/v1 }
                       project_id: { type: string, minLength: 1 }
                       component_id: { type: string, minLength: 1 }
-                      sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                      sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                       fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
             project_lineage:
               type: [object, 'null']
@@ -525,8 +525,8 @@ claim_types:
             receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         component_admissions:
           type: array
-          minItems: 2
-          maxItems: 4
+          minItems: 3
+          maxItems: 3
           items:
             type: object
             additionalProperties: false
@@ -539,8 +539,8 @@ claim_types:
               operational_scope_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         covered_work_item_digests:
           type: array
-          minItems: 2
-          maxItems: 4
+          minItems: 3
+          maxItems: 3
           items: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
   component.catalog@1:
@@ -551,8 +551,8 @@ claim_types:
       properties:
         components:
           type: array
-          minItems: 2
-          maxItems: 4
+          minItems: 3
+          maxItems: 3
           items:
             type: object
             additionalProperties: false
@@ -561,8 +561,8 @@ claim_types:
               version: { const: reqproof.onboarding-component-work-item/v1 }
               project_id: { type: string, minLength: 1 }
               component_id: { type: string, minLength: 1 }
-              sorted_owned_paths: { type: array, items: { type: string } }
-              sorted_dependency_closure: { type: array, items: { type: string } }
+              sorted_owned_paths: { type: array, uniqueItems: true, items: { type: string } }
+              sorted_dependency_closure: { type: array, uniqueItems: true, items: { type: string } }
               proof_path_mapping:
                 type: object
                 additionalProperties: false
@@ -594,8 +594,8 @@ claim_types:
                   version: { const: proof.component-subject/v1 }
                   project_id: { type: string, minLength: 1 }
                   component_id: { type: string, minLength: 1 }
-                  sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                  sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                   fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
               authority:
                 type: object
@@ -612,8 +612,8 @@ claim_types:
                       version: { const: proof.component-subject/v1 }
                       project_id: { type: string, minLength: 1 }
                       component_id: { type: string, minLength: 1 }
-                      sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                      sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                      sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                       fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
   component.work_item@1:
     schema:
@@ -624,8 +624,8 @@ claim_types:
         version: { const: reqproof.onboarding-component-work-item/v1 }
         project_id: { type: string, minLength: 1 }
         component_id: { type: string, minLength: 1 }
-        sorted_owned_paths: { type: array, items: { type: string } }
-        sorted_dependency_closure: { type: array, items: { type: string } }
+        sorted_owned_paths: { type: array, uniqueItems: true, items: { type: string } }
+        sorted_dependency_closure: { type: array, uniqueItems: true, items: { type: string } }
         proof_path_mapping:
           type: object
           additionalProperties: false
@@ -657,8 +657,8 @@ claim_types:
             version: { const: proof.component-subject/v1 }
             project_id: { type: string, minLength: 1 }
             component_id: { type: string, minLength: 1 }
-            sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-            sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+            sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+            sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
             fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
         authority:
           type: object
@@ -675,8 +675,8 @@ claim_types:
                 version: { const: proof.component-subject/v1 }
                 project_id: { type: string, minLength: 1 }
                 component_id: { type: string, minLength: 1 }
-                sorted_owned_paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
-                sorted_dependency_closure: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
                 fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
 checks:
   project:
@@ -709,7 +709,13 @@ subgraphs:
           - { claim: proof.structural_inventory@1, from: output }
       inspect:
         type: governed-proof-inspect
-        message: Execute the bound Proof discovery role and return only the closed canonical catalog JSON.
+        message: >-
+          Execute the bound Proof discovery role and return only the closed canonical catalog JSON.
+          For this bounded demo, return exactly 3 components. The owned_paths arrays must form
+          an exact once-only partition of every path in current_inventory.sorted_paths, including
+          tests and manifests such as go.mod. Each dependency_closure may contain only exact paths
+          from current_inventory.sorted_paths and must include every owned path. Never use package,
+          symbol, or component labels as paths.
         instructions: Discover the project's independently onboardable components; every path must be observed in the supplied Proof inventory. Do not invent files.
         profile: luna-xhigh-readonly-v1
         invocation:
@@ -720,9 +726,9 @@ subgraphs:
             id: journalservice
             fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           output_schema_id: proof.component-catalog-candidate@1
-          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJ2ZXJzaW9uIiwicHJvamVjdF9pZCIsImNvbXBvbmVudHMiXSwicHJvcGVydGllcyI6eyJ2ZXJzaW9uIjp7ImNvbnN0IjoicHJvb2YuY29tcG9uZW50LWNhdGFsb2ctY2FuZGlkYXRlL3YxIn0sInByb2plY3RfaWQiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sImNvbXBvbmVudHMiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjIsIm1heEl0ZW1zIjo0LCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJpZCIsInJlc3BvbnNpYmlsaXR5Iiwib3duZWRfcGF0aHMiXSwicHJvcGVydGllcyI6eyJpZCI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfSwicmVzcG9uc2liaWxpdHkiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sIm93bmVkX3BhdGhzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX0sImRlcGVuZGVuY3lfY2xvc3VyZSI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MSwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX19LCJlbnRyeV9wb2ludHMiOnsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX19LCJzdGF0ZV9lZmZlY3RzIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9fSwiaW50ZXJmYWNlcyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6e319LCJ1bmNlcnRhaW50eSI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX19fX19fQ==
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJ2ZXJzaW9uIiwicHJvamVjdF9pZCIsImNvbXBvbmVudHMiXSwicHJvcGVydGllcyI6eyJ2ZXJzaW9uIjp7ImNvbnN0IjoicHJvb2YuY29tcG9uZW50LWNhdGFsb2ctY2FuZGlkYXRlL3YxIn0sInByb2plY3RfaWQiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sImNvbXBvbmVudHMiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjMsIm1heEl0ZW1zIjozLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJpZCIsInJlc3BvbnNpYmlsaXR5Iiwib3duZWRfcGF0aHMiXSwicHJvcGVydGllcyI6eyJpZCI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfSwicmVzcG9uc2liaWxpdHkiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sIm93bmVkX3BhdGhzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfSwidW5pcXVlSXRlbXMiOnRydWV9LCJkZXBlbmRlbmN5X2Nsb3N1cmUiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjEsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9LCJ1bmlxdWVJdGVtcyI6dHJ1ZX0sImVudHJ5X3BvaW50cyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX0sInN0YXRlX2VmZmVjdHMiOnsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX19LCJpbnRlcmZhY2VzIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7fX0sInVuY2VydGFpbnR5Ijp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9fX19fX19
         invocation_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        result_schema: '{"type":"object","additionalProperties":false,"required":["version","project_id","components"],"properties":{"version":{"const":"proof.component-catalog-candidate/v1"},"project_id":{"type":"string","minLength":1},"components":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"object","additionalProperties":false,"required":["id","responsibility","owned_paths"],"properties":{"id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1},"owned_paths":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"dependency_closure":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"entry_points":{"type":"array","items":{"type":"string","minLength":1}},"state_effects":{"type":"array","items":{"type":"string","minLength":1}},"interfaces":{"type":"array","items":{}},"uncertainty":{"type":"array","items":{"type":"string","minLength":1}}}}}}}'
+        result_schema: '{"type":"object","additionalProperties":false,"required":["version","project_id","components"],"properties":{"version":{"const":"proof.component-catalog-candidate/v1"},"project_id":{"type":"string","minLength":1},"components":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"object","additionalProperties":false,"required":["id","responsibility","owned_paths"],"properties":{"id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1},"owned_paths":{"type":"array","minItems":1,"items":{"type":"string","minLength":1},"uniqueItems":true},"dependency_closure":{"type":"array","minItems":1,"items":{"type":"string","minLength":1},"uniqueItems":true},"entry_points":{"type":"array","items":{"type":"string","minLength":1}},"state_effects":{"type":"array","items":{"type":"string","minLength":1}},"interfaces":{"type":"array","items":{}},"uncertainty":{"type":"array","items":{"type":"string","minLength":1}}}}}}}'
         consumes:
           - { claim: project.discovery_item@1, as: project }
           - { claim: proof.structural_inventory@1, as: current_inventory }

@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as ProbeModule from '@probelabs/probe';
-import {
-  GOVERNED_PROOF_ROLE_MESSAGE,
-  GovernedProbeAgentRunner,
-} from '../../../src/providers/governed-probe-runner';
-import { governedProofRuntimePrompt } from '../../../src/providers/governed-proof-inspect-check-provider';
+import { GovernedProbeAgentRunner } from '../../../src/providers/governed-probe-runner';
 import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GovernedProbeRunnerRequest } from '../../../src/providers/governed-proof-inspect-check-provider';
 
@@ -81,7 +77,7 @@ describe('private governed Probe runner', () => {
     expect(answerGoverned).not.toHaveBeenCalled();
   });
 
-  it('initializes once and calls only identified answerGoverned with C0 schema/digest', async () => {
+  it('initializes once and sends the authored message with the bound C0 schema/digest', async () => {
     const runner = new GovernedProbeAgentRunner(request());
     await runner.answer(request({ message: 'candidate-controlled text' }));
     await runner.answer(request({
@@ -91,12 +87,12 @@ describe('private governed Probe runner', () => {
     }));
     expect(initialize).toHaveBeenCalledTimes(1);
     expect(answerGoverned).toHaveBeenCalledTimes(2);
-    expect(answerGoverned).toHaveBeenNthCalledWith(1, GOVERNED_PROOF_ROLE_MESSAGE, {
+    expect(answerGoverned).toHaveBeenNthCalledWith(1, request().message, {
       schema: '{"type":"object"}',
       invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
     });
-    expect(answerGoverned).toHaveBeenNthCalledWith(2, GOVERNED_PROOF_ROLE_MESSAGE, {
+    expect(answerGoverned).toHaveBeenNthCalledWith(2, request().message, {
       schema: '{"type":"object"}',
       invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
@@ -111,11 +107,36 @@ describe('private governed Probe runner', () => {
     });
     const runner = new GovernedProbeAgentRunner(request({ context, contextDigest: `sha256:${'5'.repeat(64)}` }));
     await runner.answer(request({ context }));
-    expect(answerGoverned).toHaveBeenCalledWith(governedProofRuntimePrompt(context), {
+    expect(answerGoverned).toHaveBeenCalledWith(`${request().message}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${JSON.stringify(context)}`, {
       schema: '{"type":"object"}',
       invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
     });
+  });
+
+  it('puts the canonical project discovery inventory in the authored Probe message', async () => {
+    const context: any = immutableCanonicalValue({
+      version: 'visor.proof-project-discovery-context/v1',
+      project: { claimId: '1'.repeat(64), claim: 'project.discovery_item@1', payloadFingerprint: sha256Canonical({ project_id: 'journalservice' }), scope: [], payload: { project_id: 'journalservice' } },
+      current_inventory: { claimId: '2'.repeat(64), claim: 'proof.structural_inventory@1', payloadFingerprint: sha256Canonical({ sorted_paths: ['entry.go', 'go.mod'] }), scope: [], payload: { sorted_paths: ['entry.go', 'go.mod'] } },
+    });
+    const authored = 'Return the closed catalog from this inventory.';
+    const runner = new GovernedProbeAgentRunner(request({ message: authored, context, contextDigest: `sha256:${'5'.repeat(64)}` }));
+    await runner.answer(request({ message: 'ignored by construction', context }));
+    expect(answerGoverned).toHaveBeenCalledWith(`${authored}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${JSON.stringify(context)}`, {
+      schema: '{"type":"object"}',
+      invocationDigest,
+      resultIdentity: 'probe.governed-result-identity/v1',
+    });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['oversized', 'x'.repeat(32769)],
+  ])('rejects an %s authored message before Probe construction', (_label, message) => {
+    expect(() => new GovernedProbeAgentRunner(request({ message }))).toThrow('message');
+    expect(initialize).not.toHaveBeenCalled();
+    expect(answerGoverned).not.toHaveBeenCalled();
   });
 
   it('cancels and closes at most once without initializing or dispatching a model', async () => {

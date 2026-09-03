@@ -260,6 +260,7 @@ function installFakeProbe(
   const providers = Object.getOwnPropertyDescriptor(registry as any, 'providers')!.value as Map<string, unknown>;
   const previous = providers.get('governed-proof-inspect');
   const fake = createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => ({
+    preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'a'.repeat(64)}`, promptBytes: 0 }),
     answer: async () => {
       const kind = (request.invocation.subject as Record<string, unknown>).kind;
       if (kind === 'project') {

@@ -50,7 +50,11 @@ function fixture() {
 
 describe('EXP-0209 onboarding quality gate', () => {
   it('scores a complete controller evidence fixture at seven', () => {
-    const result = evaluateOnboardingQuality(fixture());
+    const evidence = fixture();
+    expect(evidence.baselineCandidate.components).toHaveLength(3);
+    expect(evidence.workItems).toHaveLength(3);
+    expect(evidence.baselineCandidate.components.flatMap((value: any) => value.owned_paths).sort()).toEqual(files.slice().sort());
+    const result = evaluateOnboardingQuality(evidence);
     expect(result.score).toBe(7);
     expect(result.overall_pass).toBe(true);
     expect(result.criteria).toHaveLength(7);

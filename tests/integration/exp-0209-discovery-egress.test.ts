@@ -222,6 +222,27 @@ it('runs the real pinned Proof admission, revalidation, and activation-safe Work
     expect(workItems.catalog).toEqual(revalidation.catalog);
     expect(workItems.work_items.map((item: any) => item.component_id)).toEqual(['B', 'a', 'gamma']);
     expect(candidateTextWire).toContain('proof.role-result-candidate-envelope/v1');
+
+    const malformedPayload = JSON.parse(candidateText) as Record<string, any>;
+    malformedPayload.components[0].dependency_closure = ['not-in-inventory.go'];
+    const malformedText = proofCanonicalForTest(malformedPayload);
+    const malformedBytes = Buffer.from(malformedText, 'utf8');
+    const malformedCandidate = {
+      ...candidate,
+      ResultDigest: proofDomainDigest('probe.governed-result-identity/data/v1', malformedText),
+      CanonicalBytes: malformedBytes.length,
+      ProbeResultBytes: malformedBytes.toString('base64'),
+      VisorPayloadBytes: malformedBytes.toString('base64'),
+      Publication: {
+        ...candidate.Publication,
+        PayloadFingerprint: createHash('sha256').update(malformedBytes).digest('hex'),
+        Payload: malformedBytes.toString('base64'),
+      },
+    };
+    const malformedAdmissionWire = invoke(['admit-candidate'], JSON.stringify({ version: 'proof.role-result-candidate-cli-request/v1', candidate: malformedCandidate })).trimEnd();
+    expect(JSON.parse(malformedAdmissionWire).status).toBe('ADMITTED');
+    const malformedRevalidationRequest = proofCanonicalForTest({ version: 'proof.catalog-revalidation-request/v2', candidate: malformedPayload, admission: JSON.parse(malformedAdmissionWire) });
+    expect(() => invoke(['onboarding', 'revalidate'], malformedRevalidationRequest)).toThrow();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -573,6 +594,7 @@ describe('EXP-0209 admitted discovery egress', () => {
       let releaseComponents!: () => void;
       const componentBarrier = new Promise<void>(resolve => { releaseComponents = resolve; });
       const fakeProbe = governed.createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => ({
+        preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'a'.repeat(64)}`, promptBytes: 17 }),
         answer: async () => {
           const subject = request.invocation.subject as Record<string, unknown>;
           if (subject.kind === 'project') {

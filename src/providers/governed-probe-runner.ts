@@ -78,9 +78,12 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
     const root = controllerRoot(request.workingDirectory);
     this.resultSchema = request.resultSchema;
     this.invocationDigest = request.invocationDigest;
+    if (typeof request.message !== 'string' || request.message.length === 0 || Buffer.byteLength(request.message, 'utf8') > 32768) {
+      throw new Error('GOVERNED_PROOF_INVALID: message is invalid');
+    }
     this.userMessage = request.context
-      ? `${GOVERNED_PROOF_ROLE_MESSAGE}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`
-      : GOVERNED_PROOF_ROLE_MESSAGE;
+      ? `${request.message}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`
+      : request.message;
     const governedCodexProfile = profileFor(root);
     const options: ExactProbeAgentOptions = {
       provider: 'codex',

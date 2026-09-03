@@ -40,6 +40,9 @@ const PROFILE = 'luna-xhigh-readonly-v1';
 export const COMPONENT_WORK_ITEM_CLAIM = 'component.work_item@1';
 export const PROOF_ROLE_AUTHORITY_CLAIM = 'proof.component_role_authority@1';
 export const GOVERNED_PROOF_CONTEXT_VERSION = 'visor.proof-runtime-context/v1';
+export const PROJECT_DISCOVERY_CLAIM = 'project.discovery_item@1';
+export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
+export const GOVERNED_PROOF_PROJECT_CONTEXT_VERSION = 'visor.proof-project-discovery-context/v1';
 export const GOVERNED_PROOF_CONTEXT_MAX_BYTES = 131072;
 const AUTHORED = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile'] as const;
 const CONTROLLER = new Set(['checkName', 'prompt', 'exec', 'schema', 'group', 'focus', 'transform', 'transform_js', 'env', 'forEach', 'eventContext', '__outputHistory', '__globalTools', 'checksMeta', 'workflowInputs', 'ai']);
@@ -190,7 +193,11 @@ export function projectGovernedProofInspectConfig(value: unknown): CheckProvider
   if (!text(value.result_schema, 131072)) fail('result_schema is invalid');
   const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
   if (value.result_schema !== decoded) fail('result_schema does not equal invocation output_schema');
-  return immutableCanonicalValue(Object.fromEntries(AUTHORED.map(k => [k, k === 'message' ? GOVERNED_PROOF_INSPECT_MESSAGE : value[k]]))) as CheckProviderConfig;
+  // Project-scoped checks may author their request message.  The built-in
+  // onboard role remains controller-resolved below for component selectors;
+  // replacing this field here would silently discard the graph's contract
+  // before it can reach the governed Probe boundary.
+  return immutableCanonicalValue(Object.fromEntries(AUTHORED.map(k => [k, value[k]]))) as CheckProviderConfig;
 }
 
 export interface GovernedProofRuntimeContextClaimV1 {
@@ -216,6 +223,14 @@ export interface GovernedProofRuntimeContextV1 {
   readonly authority: GovernedProofRuntimeContextClaimV1;
 }
 
+export interface GovernedProofProjectDiscoveryContextV1 {
+  readonly version: typeof GOVERNED_PROOF_PROJECT_CONTEXT_VERSION;
+  readonly project: GovernedProofRuntimeContextClaimV1;
+  readonly current_inventory: GovernedProofRuntimeContextClaimV1;
+}
+
+export type GovernedProofRuntimeContext = GovernedProofRuntimeContextV1 | GovernedProofProjectDiscoveryContextV1;
+
 /**
  * Candidate evidence remains v1 for wire compatibility; the optional context
  * fields are mandatory for the two-claim onboarding profile. Legacy one-claim
@@ -225,7 +240,7 @@ export interface ProofCandidateEvidenceV1 {
   readonly version: 'visor.proof-candidate-evidence/v1';
   readonly role: { readonly invocation: Record<string, unknown>; readonly invocationDigest: string };
   readonly probe: { readonly attestation: Record<string, unknown>; readonly resultIdentity: Record<string, unknown> };
-  readonly context?: GovernedProofRuntimeContextV1;
+  readonly context?: GovernedProofRuntimeContext;
   readonly contextDigest?: string;
 }
 export interface GovernedProbeRunnerRequest {
@@ -237,8 +252,8 @@ export interface GovernedProbeRunnerRequest {
   readonly executionConfigDigest: string;
   readonly binding: ManagedRunBindingV1;
   readonly workingDirectory: string;
-  /** Sealed runtime context; present only for the component onboarding profile. */
-  readonly context?: GovernedProofRuntimeContextV1;
+  /** Sealed runtime context; present only for the canonical onboarding profiles. */
+  readonly context?: GovernedProofRuntimeContext;
   readonly contextDigest?: string;
 }
 export interface GovernedProbeDispatchPreview {
@@ -357,14 +372,53 @@ function projectEmbeddedAuthority(
   });
 }
 
-function validateRuntimeContextShape(value: unknown): GovernedProofRuntimeContextV1 {
-  if (!plain(value) || !exact(value, ['version', 'component', 'authority']) || value.version !== GOVERNED_PROOF_CONTEXT_VERSION) fail('runtime context header is invalid');
-  if (JSON.stringify(value) !== canonicalJson(value)) fail('runtime context is noncanonical');
+function validateStructuralInventoryForContext(value: unknown, projectID: string): Record<string, unknown> {
+  try {
+    // Deliberately defer this import: the Proof catalog provider imports the
+    // evidence type from this module, so a static import would create a load
+    // cycle before the shared validator is initialized.
+    const catalog = require('./proof-catalog-check-providers') as typeof import('./proof-catalog-check-providers');
+    return catalog.validateStructuralInventory(value, projectID);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('GOVERNED_PROOF_INVALID:')) throw error;
+    fail(`project discovery inventory is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function validateProjectDiscoveryContextPayload(
+  project: GovernedProofRuntimeContextClaimV1,
+  inventory: GovernedProofRuntimeContextClaimV1,
+  expectedSubject?: { projectId: string; fingerprint: string }
+): void {
+  const projectPayload = project.payload;
+  const inventoryPayload = inventory.payload;
+  if (!plain(projectPayload) || typeof projectPayload.project_id !== 'string' || projectPayload.project_id.length === 0 ||
+      !plain(inventoryPayload) || !plain(inventoryPayload.authority)) fail('project discovery context payload is invalid');
+  const authority = inventoryPayload.authority;
+  if (authority.project_id !== projectPayload.project_id || !wire(authority.subject_fingerprint)) fail('project discovery context identity is detached');
+  validateStructuralInventoryForContext(inventoryPayload, projectPayload.project_id);
+  if (expectedSubject && (expectedSubject.projectId !== projectPayload.project_id || expectedSubject.fingerprint !== authority.subject_fingerprint)) fail('project discovery context subject is detached');
+}
+
+function validateRuntimeContextShape(value: unknown): GovernedProofRuntimeContext {
+  if (!plain(value) || typeof value.version !== 'string' || JSON.stringify(value) !== canonicalJson(value)) fail('runtime context header is invalid');
   const context = value as Record<string, unknown>;
-  const component = validateProjectedRuntimeContextClaim(context.component, COMPONENT_WORK_ITEM_CLAIM);
-  const authority = validateProjectedRuntimeContextClaim(context.authority, PROOF_ROLE_AUTHORITY_CLAIM);
-  if (component.claimId === authority.claimId || canonicalJson(component.scope) !== canonicalJson(authority.scope)) fail('runtime context claims are not distinct and co-scoped');
-  return immutableCanonicalValue({ version: GOVERNED_PROOF_CONTEXT_VERSION as typeof GOVERNED_PROOF_CONTEXT_VERSION, component, authority });
+  if (context.version === GOVERNED_PROOF_CONTEXT_VERSION) {
+    if (!exact(value, ['version', 'component', 'authority'])) fail('runtime context header is invalid');
+    const component = validateProjectedRuntimeContextClaim(context.component, COMPONENT_WORK_ITEM_CLAIM);
+    const authority = validateProjectedRuntimeContextClaim(context.authority, PROOF_ROLE_AUTHORITY_CLAIM);
+    if (component.claimId === authority.claimId || canonicalJson(component.scope) !== canonicalJson(authority.scope)) fail('runtime context claims are not distinct and co-scoped');
+    return immutableCanonicalValue({ version: GOVERNED_PROOF_CONTEXT_VERSION as typeof GOVERNED_PROOF_CONTEXT_VERSION, component, authority });
+  }
+  if (context.version === GOVERNED_PROOF_PROJECT_CONTEXT_VERSION) {
+    if (!exact(value, ['version', 'project', 'current_inventory'])) fail('project discovery context header is invalid');
+    const project = validateProjectedRuntimeContextClaim(context.project, PROJECT_DISCOVERY_CLAIM);
+    const inventory = validateProjectedRuntimeContextClaim(context.current_inventory, PROOF_STRUCTURAL_INVENTORY_CLAIM);
+    if (project.claimId === inventory.claimId || canonicalJson(project.scope) !== canonicalJson(inventory.scope)) fail('project discovery context claims are not distinct and co-scoped');
+    validateProjectDiscoveryContextPayload(project, inventory);
+    return immutableCanonicalValue({ version: GOVERNED_PROOF_PROJECT_CONTEXT_VERSION as typeof GOVERNED_PROOF_PROJECT_CONTEXT_VERSION, project, current_inventory: inventory });
+  }
+  fail('runtime context version is unsupported');
 }
 
 /**
@@ -387,12 +441,29 @@ export function projectGovernedProofRuntimeContext(
   return context;
 }
 
-export function governedProofRuntimeContextDigest(context: GovernedProofRuntimeContextV1): string {
+/** Project the exact project and structural-inventory inputs for discovery. */
+export function projectGovernedProofProjectDiscoveryContext(
+  claims: unknown,
+  binding: ManagedRunBindingV1,
+  expectedSubject?: { projectId: string; fingerprint: string }
+): GovernedProofProjectDiscoveryContextV1 {
+  if (!plain(claims) || !exact(claims, ['project', 'current_inventory'])) fail('project discovery context requires exactly project and current_inventory claims');
+  const record = claims as Record<string, unknown>;
+  const project = validateRuntimeContextClaim(record.project, PROJECT_DISCOVERY_CLAIM, binding.scope);
+  const inventory = validateRuntimeContextClaim(record.current_inventory, PROOF_STRUCTURAL_INVENTORY_CLAIM, binding.scope);
+  if (project.claimId === inventory.claimId || canonicalJson(project.scope) !== canonicalJson(inventory.scope)) fail('project discovery context claims are not distinct and co-scoped');
+  validateProjectDiscoveryContextPayload(project, inventory, expectedSubject);
+  const context = immutableCanonicalValue({ version: GOVERNED_PROOF_PROJECT_CONTEXT_VERSION as typeof GOVERNED_PROOF_PROJECT_CONTEXT_VERSION, project, current_inventory: inventory });
+  if (Buffer.byteLength(canonicalJson(context), 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('project discovery context exceeds bounded byte limit');
+  return context;
+}
+
+export function governedProofRuntimeContextDigest(context: GovernedProofRuntimeContext): string {
   validateRuntimeContextShape(context);
   return `sha256:${sha256Canonical(context)}`;
 }
 
-export function governedProofRuntimePrompt(context: GovernedProofRuntimeContextV1): string {
+export function governedProofRuntimePrompt(context: GovernedProofRuntimeContext): string {
   const projected = validateRuntimeContextShape(context);
   const bytes = canonicalJson(projected);
   if (Buffer.byteLength(bytes, 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('runtime context exceeds bounded byte limit');
@@ -406,9 +477,11 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   binding: ManagedRunBindingV1
 ): void {
   const contextClaims = parentClaims.filter(claim => claim.claim === COMPONENT_WORK_ITEM_CLAIM);
+  const projectClaims = parentClaims.filter(claim => claim.claim === PROJECT_DISCOVERY_CLAIM);
+  const inventoryClaims = parentClaims.filter(claim => claim.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
   const invocation = evidence.role.invocation;
   if (plain(invocation) && own(invocation, 'component_authority')) {
-    if (contextClaims.length !== 1) fail('component invocation authority requires exactly one WorkItem parent');
+    if (contextClaims.length !== 1 || projectClaims.length !== 0 || inventoryClaims.length !== 0) fail('component invocation authority requires exactly one WorkItem parent');
     const authority = validateProofComponentInvocationAuthority(invocation.component_authority);
     const invocationSubject = invocation.subject as Record<string, unknown>;
     if (!plain(invocationSubject) || invocationSubject.id !== authority.subject.component_id || invocationSubject.fingerprint !== authority.subject.fingerprint) fail('component invocation subject is detached from authority');
@@ -418,6 +491,23 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
       work_item_digest: authority.work_item_digest,
       subject: authority.subject,
     })) fail('component invocation authority is detached from WorkItem');
+    return;
+  }
+  if (projectClaims.length > 0 || inventoryClaims.length > 0) {
+    if (projectClaims.length !== 1 || inventoryClaims.length !== 1 || contextClaims.length !== 0 || parentClaims.length !== 2 || !evidence.context || evidence.context.version !== GOVERNED_PROOF_PROJECT_CONTEXT_VERSION || evidence.contextDigest === undefined) fail('project discovery runtime context is missing or foreign');
+    const context = validateRuntimeContextShape(evidence.context);
+    if (context.version !== GOVERNED_PROOF_PROJECT_CONTEXT_VERSION) fail('project discovery runtime context is invalid');
+    const project = projectClaims[0];
+    const inventory = inventoryClaims[0];
+    if (canonicalJson(project.scope) !== canonicalJson(binding.scope) || canonicalJson(inventory.scope) !== canonicalJson(binding.scope) ||
+        canonicalJson(context.project.scope) !== canonicalJson(binding.scope) || canonicalJson(context.current_inventory.scope) !== canonicalJson(binding.scope) ||
+        canonicalJson(context.project) !== canonicalJson({ claimId: project.claimId, claim: project.claim, payloadFingerprint: project.payloadFingerprint, scope: project.scope, payload: project.payload }) ||
+        canonicalJson(context.current_inventory) !== canonicalJson({ claimId: inventory.claimId, claim: inventory.claim, payloadFingerprint: inventory.payloadFingerprint, scope: inventory.scope, payload: inventory.payload })) fail('project discovery runtime context is stale or foreign');
+    validateProjectDiscoveryContextPayload(context.project, context.current_inventory);
+    const projectPayload = project.payload;
+    const authority = plain(context.current_inventory.payload) && plain(context.current_inventory.payload.authority) ? context.current_inventory.payload.authority : undefined;
+    const subject = plain(invocation.subject) ? invocation.subject : undefined;
+    if (!plain(projectPayload) || !plain(authority) || !subject || subject.kind !== 'project' || subject.id !== projectPayload.project_id || subject.fingerprint !== authority.subject_fingerprint) fail('project discovery invocation is detached from runtime context');
     return;
   }
   if (contextClaims.length === 0) {
@@ -433,27 +523,39 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   if (canonicalJson(context.component.scope) !== canonicalJson(binding.scope) || canonicalJson(context.authority.scope) !== canonicalJson(binding.scope)) fail('runtime context scope is foreign');
 }
 
-function requiresRuntimeContext(config: CheckProviderConfig): boolean {
+type RuntimeContextKind = 'component' | 'project';
+function requiresRuntimeContext(config: CheckProviderConfig): RuntimeContextKind | undefined {
   // The component selector uses the controller-owned Proof authority and C0
   // itself as the runtime binding. The legacy envelope context remains for
   // already-resolved EXP-0209 checks.
-  if (isGovernedProofComponentSelector(config.invocation)) return false;
+  if (isGovernedProofComponentSelector(config.invocation)) return undefined;
   const consumes = config.consumes;
-  if (consumes === undefined) return false;
+  if (consumes === undefined) return undefined;
   if (!Array.isArray(consumes)) fail('config consumes is not an array');
   const component = consumes.filter(value => plain(value) && value.claim === COMPONENT_WORK_ITEM_CLAIM && value.as === 'component');
-  if (component.length === 0) {
+  const project = consumes.filter(value => plain(value) && value.claim === PROJECT_DISCOVERY_CLAIM && value.as === 'project');
+  const inventory = consumes.filter(value => plain(value) && value.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM && value.as === 'current_inventory');
+  const exactProjectConsume = (value: unknown): boolean => plain(value) &&
+    (exact(value, ['claim', 'as']) || (exact(value, ['claim', 'as', 'cardinality']) && value.cardinality === 'one'));
+  const hasComponentContextClaim = consumes.some(value => plain(value) && value.claim === COMPONENT_WORK_ITEM_CLAIM);
+  if (hasComponentContextClaim) {
     if (consumes.some(value => plain(value) && value.claim === PROOF_ROLE_AUTHORITY_CLAIM)) fail('runtime authority must be carried by the component WorkItem envelope');
-    return false;
+    if (component.length !== 1 || consumes.length !== 1 || consumes.some(value => !plain(value))) fail('runtime context declarations are not the canonical WorkItem envelope');
+    return 'component';
   }
-  if (component.length !== 1 || consumes.length !== 1 || consumes.some(value => !plain(value))) fail('runtime context declarations are not the canonical WorkItem envelope');
-  return true;
+  const hasProjectContextClaim = consumes.some(value => plain(value) && (value.claim === PROJECT_DISCOVERY_CLAIM || value.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM));
+  if (hasProjectContextClaim) {
+    if (project.length !== 1 || inventory.length !== 1 || consumes.length !== 2 || consumes.some(value => !exactProjectConsume(value))) fail('project discovery runtime context declarations are not exact');
+    return 'project';
+  }
+  if (consumes.some(value => plain(value) && value.claim === PROOF_ROLE_AUTHORITY_CLAIM)) fail('runtime authority must be carried by the component WorkItem envelope');
+  return undefined;
 }
 
 function evidenceFromResult(
   config: CheckProviderConfig,
   result: { data: unknown; runtimeAttestation: Record<string, unknown>; resultIdentity: Record<string, unknown> },
-  context?: GovernedProofRuntimeContextV1,
+  context?: GovernedProofRuntimeContext,
   dispatchPreview?: GovernedProbeDispatchPreview
 ): ProofCandidateEvidenceV1 {
   validateRunnerResult(result);
@@ -531,13 +633,20 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
   async isAvailable(): Promise<boolean> { return false; }
   getRequirements(): string[] { return [GOVERNED_PROBE_UNAVAILABLE]; }
   startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
-    const runtimeContextRequired = requiresRuntimeContext(request.checkConfig);
+    const runtimeContextKind = requiresRuntimeContext(request.checkConfig);
+    const runtimeContextRequired = runtimeContextKind !== undefined;
     const config = projectGovernedProofInspectConfig(request.checkConfig); if (!/^[0-9a-f]{64}$/.test(request.executionConfigDigest)) fail('executionConfigDigest is invalid');
     if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0) fail('workingDirectory is invalid');
     const binding = immutableCanonicalValue(request.binding);
-    const context = runtimeContextRequired
-      ? projectGovernedProofRuntimeContext(request.executionContext?.claims, binding)
-      : undefined;
+    let context: GovernedProofRuntimeContext | undefined;
+    if (runtimeContextKind === 'project') {
+      const invocation = config.invocation;
+      const subject = plain(invocation) && plain(invocation.subject) ? invocation.subject : undefined;
+      if (!subject || subject.kind !== 'project' || typeof subject.id !== 'string' || typeof subject.fingerprint !== 'string') fail('project discovery invocation subject is invalid');
+      context = projectGovernedProofProjectDiscoveryContext(request.executionContext?.claims, binding, { projectId: subject.id, fingerprint: subject.fingerprint });
+    } else if (runtimeContextKind === 'component') {
+      context = projectGovernedProofRuntimeContext(request.executionContext?.claims, binding);
+    }
     const contextDigest = context ? governedProofRuntimeContextDigest(context) : undefined;
     const selector = isGovernedProofComponentSelector(request.checkConfig.invocation);
     if (selector && !this.capability) fail(PROOF_ADMISSION_UNAVAILABLE);
@@ -577,7 +686,7 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
         effective = immutableProofCanonicalValue(resolvedConfig) as CheckProviderConfig;
       }
       const invocation = effective.invocation as Record<string, unknown>;
-      const runnerConfig = { message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) };
+      const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) };
       runnerRequest = selector ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;
       runner = this.factory(runnerRequest);
       if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');

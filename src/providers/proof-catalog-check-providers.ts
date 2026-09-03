@@ -572,7 +572,7 @@ function validateInputState(value: unknown, label: string, expectedOwnerKind?: s
   }
 }
 
-function validateStructuralInventory(value: unknown, projectID: string): PlainRecord {
+export function validateStructuralInventory(value: unknown, projectID: string): PlainRecord {
   const keys = ['version', 'authority', 'sorted_paths', 'sorted_module_paths', 'boundary_fingerprint', 'input_state'];
   if (!exact(value, keys) || value.version !== STRUCTURAL_INVENTORY_VERSION || !fingerprint(value.boundary_fingerprint)) {
     invalid('structural inventory is not a closed Proof projection');
