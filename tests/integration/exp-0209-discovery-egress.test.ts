@@ -4,11 +4,13 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 import * as yaml from 'js-yaml';
 import type { PRInfo } from '../../src/pr-analyzer';
 import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
-import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, compileClaimSchema, immutableCanonicalValue, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
 const PROFILE = resolve(__dirname, '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml');
 const PROOF_AUTHORITY = '/Users/buger/go/src/reqforge-exp-0207a-proof-cli-admission';
@@ -888,4 +890,38 @@ describe('EXP-0209 admitted discovery egress', () => {
       rmSync(repository, { recursive: true, force: true });
     }
   }, 180000);
+
+  it('accepts the retained Attempt-003 HTTP candidate shape at the widened 16-item cap', () => {
+    // Portable shape oracle for retained Attempt-003 HTTP final: rollout SHA-256
+    // 079d2f301e069b8e6c11594e4189d99052ef8d5f3db07fb0ede94262c1c11ed1;
+    // final JSON SHA-256 6c52614628dc2ecbf0d87288f942c6f9948373461ee90d0397b6f7f28f20ac11 (12801 bytes), 4/4/4/3 IDs.
+    const config: any = yaml.load(readFileSync(PROFILE, 'utf8'));
+    const claimSchema = config.claim_types['proof.candidate@1'].schema.oneOf.find((schema: any) => schema.properties?.requirements);
+    const invocationBytes = Buffer.from(config.subgraphs['onboard-component'].checks.inspect.invocation.output_schema, 'base64').toString('utf8');
+    expect(invocationBytes).toBe(JSON.stringify(claimSchema));
+    expect(createHash('sha256').update(invocationBytes).digest('hex')).toBe('049c5872c0f7eff8d4524acae058f05d4659cfabef73d45665306f19633759a6');
+    expect(claimSchema.properties.requirements.maxItems).toBe(16);
+    expect(config.claim_types['project.catalog@1'].schema.properties.projects.maxItems).toBe(1);
+    expect(claimSchema.properties.interfaces.maxItems).toBe(32);
+    const coordinate = () => [{ path: 'http.go', line: 1 }];
+    const prefixes = ['STK', 'SYS', 'SW', 'INT'];
+    const requirements = prefixes.flatMap(prefix => Array.from({ length: prefix === 'INT' ? 3 : 4 }, (_, index) => ({ id: `${prefix}-ATTEMPT003-${index}`, text: `Requirement ${prefix}-${index}`, coordinates: coordinate() })));
+    expect(requirements).toHaveLength(15);
+    const candidate = { schema: 'reqproof.component-onboarding/v1', project: 'journalservice', shard: 'http-api', reviewedFiles: [{ path: 'http.go', coordinates: coordinate() }], requirements, interfaces: [], findings: [], unknowns: [], repositoryMutated: false, commandsExecuted: false, checklistCompleted: false };
+    const validate = compileClaimSchema(claimSchema);
+    expect(() => validate(candidate)).not.toThrow();
+    const seventeen = [...requirements, { ...requirements[0], id: 'STK-ATTEMPT003-EXTRA-1' }, { ...requirements[0], id: 'STK-ATTEMPT003-EXTRA-2' }];
+    expect(seventeen).toHaveLength(17);
+    const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: true });
+    addFormats(ajv);
+    const oldSchema = JSON.parse(JSON.stringify(claimSchema));
+    oldSchema.properties.requirements.maxItems = 12;
+    const oldValidate = ajv.compile(oldSchema);
+    expect(oldValidate(candidate)).toBe(false);
+    expect(oldValidate.errors?.map(error => ({ keyword: error.keyword, instancePath: error.instancePath, limit: (error.params as any).limit }))).toEqual([{ keyword: 'maxItems', instancePath: '/requirements', limit: 12 }]);
+    const newValidate = ajv.compile(claimSchema);
+    expect(newValidate({ ...candidate, requirements: seventeen })).toBe(false);
+    expect(newValidate.errors?.map(error => ({ keyword: error.keyword, instancePath: error.instancePath, limit: (error.params as any).limit }))).toEqual([{ keyword: 'maxItems', instancePath: '/requirements', limit: 16 }]);
+    expect(() => validate({ ...candidate, requirements: seventeen })).toThrow(/more than 16 items/);
+  });
 });
