@@ -1033,6 +1033,12 @@ function workItemWire(value: PlainRecord): PlainRecord {
   };
 }
 
+/** Validate and hash a Proof WorkItem using its reconciliation wire. */
+export function proofWorkItemDigestForReconciliation(value: unknown, projectID: string): string {
+  const validated = validateWorkItem(value, projectID, 'reconciliation work item');
+  return plainDigest(workItemWire(validated));
+}
+
 export function validateProofCatalogRevalidationProjection(value: unknown, inventory: PlainRecord, candidate: CandidateClaimInput, admission: CandidateClaimInput, projectID: string, revalidationClaim?: CandidateClaimInput, inventoryClaimId?: string): PlainRecord {
   // Catalog revalidation is the v2 onboarding lane. A historical generic
   // proof.candidate@1 claim may still travel through the ordinary graph, but

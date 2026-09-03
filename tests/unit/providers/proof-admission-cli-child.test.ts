@@ -10,8 +10,10 @@ import {
   goCompatibleProofJson,
   PROOF_ADMISSION_UNAVAILABLE,
   createProofAdmissionCliChildForFocusedTest,
+  extractProofAdmissionCandidate,
   proofExecutableAvailable,
   startProofAdmissionCliChild,
+  validateProofComponentAdmissionOutcome,
 } from '../../../src/providers/proof-admission-cli-child';
 import { createProofAdmitProviderForFocusedTest } from '../../../src/providers/proof-admit-check-provider';
 import { snapshotManagedRunStartRequest } from '../../../src/state-machine/dispatch/managed-run';
@@ -190,8 +192,8 @@ function wireDigest(domain: string, value: string): string {
   return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
 }
 
-function admissionDecision(order: 'legacy' | 'canonical' | 'permuted'): string {
-  const value = candidate(); const publication = value.Publication as Record<string, unknown>;
+function admissionDecision(order: 'legacy' | 'canonical' | 'permuted', value = candidate()): string {
+  const publication = value.Publication as Record<string, unknown>;
   const candidateBytes = goCompatibleProofJson(value);
   const subject = value.Subject as Record<string, unknown>;
   const bindingValue = value.Binding as Record<string, unknown>;
@@ -249,6 +251,34 @@ describe('Proof admission CLI child', () => {
         await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
       } finally { group.kill.mockRestore(); }
     }));
+  });
+
+  it('preserves exact UTF-8 candidate RawMessage bytes through component admission validation', () => {
+    const value = candidate();
+    const componentID = 'café-component';
+    const roleID = 'spéc-review';
+    const subject = { kind: 'component', id: componentID, fingerprint: `sha256:${'a'.repeat(64)}` };
+    const scope = [{ Kind: 'keyed', ExpansionOwnerCheck: 'discover', Key: componentID, SubgraphInstanceID: '1'.repeat(64) }];
+    value.Invocation = { ...(value.Invocation as Record<string, unknown>), role_id: roleID, subject };
+    value.RoleID = roleID;
+    value.Subject = subject;
+    (value.Publication as Record<string, unknown>).Scope = scope;
+    (value.Binding as Record<string, unknown>).Scope = scope;
+    (value.Termination as Record<string, unknown>).Scope = scope;
+    ((value.Termination as Record<string, unknown>).Binding as Record<string, unknown>).Scope = scope;
+
+    const candidateWire = goCompatibleProofJson(value);
+    const requestWire = goCompatibleProofJson({
+      version: 'proof.role-result-candidate-cli-request/v1',
+      candidate: value,
+    });
+    const extraction = extractProofAdmissionCandidate(requestWire);
+    expect(extraction.candidateRaw).toEqual(Buffer.from(candidateWire, 'utf8'));
+
+    expect(validateProofComponentAdmissionOutcome(candidateWire, admissionDecision('legacy', value))).toMatchObject({
+      subject,
+      scope: [{ kind: 'keyed', expansion_owner_check: 'discover', key: componentID }],
+    });
   });
 
   it('rejects a semantically valid v1 decision with a permuted legacy field order', async () => {

@@ -191,6 +191,7 @@ describe('CheckProviderRegistry', () => {
   describe('getAllProviders', () => {
     it('should return all provider instances', () => {
       registry.reset();
+      const baselineCount = registry.getAllProviders().length;
 
       const provider1 = new MockCheckProvider('provider1');
       const provider2 = new MockCheckProvider('provider2');
@@ -201,8 +202,7 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAllProviders();
       expect(providers).toContain(provider1);
       expect(providers).toContain(provider2);
-      // Reset adds 19 default providers, including both sealed proof providers, + 2 custom.
-      expect(providers.length).toBe(21);
+      expect(providers.length).toBe(baselineCount + 2);
     });
   });
 

@@ -306,7 +306,33 @@ function digest(domain: string, bytes: Buffer): string {
   length.writeBigUInt64BE(BigInt(bytes.length));
   return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
 }
-function parseRequest(request: string): { raw: Buffer; candidate: Record<string, unknown>; candidateRaw: Buffer; wireMode: GovernedWireMode } {
+export interface ProofAdmissionCandidateExtraction {
+  /** The decoded candidate object is only for shape/identity validation. */
+  readonly candidate: Record<string, unknown>;
+  /** Exact candidate bytes as they appeared inside the admission request. */
+  readonly candidateRaw: Buffer;
+  readonly wireMode: GovernedWireMode;
+}
+
+/** The authenticated component admission projection exposed to onboarding. */
+export interface ProofComponentAdmissionOutcome {
+  readonly candidateId: string;
+  readonly resultDigest: string;
+  readonly subject: Readonly<{
+    readonly kind: string;
+    readonly id: string;
+    readonly fingerprint: string;
+  }>;
+  readonly scope: readonly Readonly<{
+    readonly kind: string;
+    readonly expansion_owner_check: string;
+    readonly key: string;
+    readonly subgraph_instance_id: string;
+  }>[];
+  readonly receiptId: string;
+}
+
+function parseRequest(request: string): { raw: Buffer } & ProofAdmissionCandidateExtraction {
   const raw = Buffer.from(request, 'utf8');
   if (raw.length > REQUEST_LIMIT) fail('request exceeds bounded wire limit');
   try { new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { fail('request UTF-8 is invalid'); }
@@ -323,7 +349,26 @@ function parseRequest(request: string): { raw: Buffer; candidate: Record<string,
   const start = marker + '"candidate":'.length;
   const encoded = proofComponentCandidateEnvelopeJson(candidate);
   if (marker < 0 || request.slice(start, start + encoded.length) !== encoded || request.slice(start + encoded.length) !== '}') fail('candidate wire is not canonical');
-  return { raw, candidate, candidateRaw: Buffer.from(encoded, 'utf8'), wireMode };
+  // Keep the RawMessage boundary exact.  The candidate has already been
+  // checked against Proof's serializer above, but its bytes must still come
+  // from the request itself rather than from JSON.parse/JSON.stringify.
+  const byteStart = Buffer.byteLength(request.slice(0, start), 'utf8');
+  const byteLength = Buffer.byteLength(encoded, 'utf8');
+  return { raw, candidate, candidateRaw: raw.subarray(byteStart, byteStart + byteLength), wireMode };
+}
+
+/**
+ * Extract the exact Proof candidate RawMessage from an admission request.
+ * Consumers that need candidate identity must use candidateRaw; serializing
+ * the decoded candidate can erase Proof-owned numeric or UTF-8 identity.
+ */
+export function extractProofAdmissionCandidate(request: string): ProofAdmissionCandidateExtraction {
+  const parsed = parseRequest(request);
+  return Object.freeze({
+    candidate: parsed.candidate,
+    candidateRaw: Buffer.from(parsed.candidateRaw),
+    wireMode: parsed.wireMode,
+  });
 }
 function b64(value: unknown): Buffer {
   if (typeof value !== 'string' || value.length === 0 || Buffer.from(value, 'base64').toString('base64') !== value) fail('wire bytes are invalid');
@@ -547,6 +592,78 @@ function validateReceipt(decision: unknown, candidate: Record<string, unknown>, 
     : proofStructJson(unsignedFields);
   const receiptDomain = expectedVersion === RECEIPT_VERSION_V2 ? RECEIPT_ID_DOMAIN_V2 : RECEIPT_ID_DOMAIN_V1;
   if (receipt.receipt_id !== digest(receiptDomain, Buffer.from(unsigned, 'utf8'))) fail('admission receipt ID is invalid');
+}
+
+function decodeProofWire(value: string | Buffer, label: string): string {
+  if (typeof value !== 'string' && !Buffer.isBuffer(value)) fail(`${label} type is invalid`);
+  const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value);
+  let decoded: string;
+  try { decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { fail(`${label} UTF-8 is invalid`); }
+  // Buffer.from(string, 'utf8') replaces lone UTF-16 surrogates. Refuse that
+  // lossy boundary so a string and a Buffer have the same exact-wire rules.
+  if (typeof value === 'string' && decoded !== value) fail(`${label} UTF-8 is invalid`);
+  return decoded;
+}
+
+/**
+ * Validate and project one admitted Proof component candidate. The candidate
+ * and decision remain independent wire inputs so their authenticated byte
+ * boundaries are retained by parseRequest and acceptedAdmissionDecisionWire.
+ */
+export function validateProofComponentAdmissionOutcome(
+  candidateWire: string | Buffer,
+  admissionWire: string | Buffer,
+): ProofComponentAdmissionOutcome {
+  const candidateText = decodeProofWire(candidateWire, 'candidate');
+  const admissionText = decodeProofWire(admissionWire, 'admission');
+  const parsed = parseRequest(`{"version":"proof.role-result-candidate-cli-request/v1","candidate":${candidateText}}`);
+  const subject = parsed.candidate.Subject;
+  if (!plain(subject) || subject.kind !== 'component' || typeof subject.id !== 'string' || subject.id.length === 0 ||
+      typeof subject.fingerprint !== 'string' || subject.fingerprint.length === 0) {
+    fail('component candidate subject is invalid');
+  }
+
+  let decision: unknown;
+  try { decision = JSON.parse(admissionText); } catch { fail('admission is not JSON'); }
+  if (!acceptedAdmissionDecisionWire(decision, admissionText)) fail('admission decision wire is not canonical');
+  validateReceipt(decision, parsed.candidate, parsed.candidateRaw, parsed.wireMode);
+
+  if (!plain(decision) || decision.status !== 'ADMITTED' || !plain(decision.receipt) ||
+      decision.receipt.Version !== RECEIPT_VERSION_V1) {
+    fail('component admission is not an admitted v1 receipt');
+  }
+  const receipt = decision.receipt;
+  const binding = receipt.Binding;
+  if (!plain(binding) || !Array.isArray(binding.Scope) || binding.Scope.length === 0) fail('component admission binding scope is invalid');
+  const terminal = binding.Scope[binding.Scope.length - 1];
+  if (!plain(terminal) || terminal.Kind !== 'keyed' || terminal.Key !== subject.id) fail('component admission binding scope is not terminal for the component');
+
+  const scope = binding.Scope.map((segment, index) => {
+    if (!plain(segment) || typeof segment.Kind !== 'string' || typeof segment.ExpansionOwnerCheck !== 'string' ||
+        typeof segment.Key !== 'string' || typeof segment.SubgraphInstanceID !== 'string') {
+      fail(`component admission binding scope segment ${index} is invalid`);
+    }
+    return {
+      kind: segment.Kind,
+      expansion_owner_check: segment.ExpansionOwnerCheck,
+      key: segment.Key,
+      subgraph_instance_id: segment.SubgraphInstanceID,
+    };
+  });
+  if (typeof receipt.CandidateID !== 'string' || typeof receipt.ProbeResultDigest !== 'string' || typeof receipt.receipt_id !== 'string') {
+    fail('component admission receipt identity has invalid types');
+  }
+  return freeze({
+    candidateId: receipt.CandidateID,
+    resultDigest: receipt.ProbeResultDigest,
+    subject: {
+      kind: subject.kind,
+      id: subject.id,
+      fingerprint: subject.fingerprint,
+    },
+    scope,
+    receiptId: receipt.receipt_id,
+  }) as ProofComponentAdmissionOutcome;
 }
 
 function executableStat(path: string): ExecutableStat | undefined {
@@ -775,7 +892,8 @@ type ProofManagedCommand =
   | readonly ['admit-candidate']
   | readonly ['onboarding', 'inventory']
   | readonly ['onboarding', 'revalidate']
-  | readonly ['onboarding', 'work-items'];
+  | readonly ['onboarding', 'work-items']
+  | readonly ['onboarding', 'reconcile'];
 
 interface ProofManagedCliRequest {
   readonly binding: ManagedRunBindingV1;
@@ -794,7 +912,7 @@ function validProofManagedCommand(value: unknown): value is ProofManagedCommand 
   return Array.isArray(value) && (
     (value.length === 1 && value[0] === 'admit-candidate') ||
     (value.length === 2 && value[0] === 'onboarding' &&
-      (value[1] === 'inventory' || value[1] === 'revalidate' || value[1] === 'work-items'))
+      (value[1] === 'inventory' || value[1] === 'revalidate' || value[1] === 'work-items' || value[1] === 'reconcile'))
   );
 }
 

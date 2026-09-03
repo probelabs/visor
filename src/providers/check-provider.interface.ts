@@ -169,6 +169,8 @@ export interface ManagedRunStartRequest {
   readonly workingDirectory?: string;
   /** Controller-projected, canonical Proof candidate request for proof-admit. */
   readonly proofAdmissionRequest?: string;
+  /** Controller-injected, exact Proof whole-project reconciliation request. */
+  readonly proofProjectReconciliationRequest?: string;
 }
 
 export interface ManagedRunStartedReceiptV1 {
