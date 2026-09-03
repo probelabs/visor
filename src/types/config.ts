@@ -548,6 +548,19 @@ export interface ExpansionConfig {
   };
 }
 
+/**
+ * Hold one parent-template node open until the terminal node of every
+ * current child instance produced by a sibling expansion has completed.
+ * This is deliberately limited to one sibling expansion owner and one child
+ * terminal node; it is not a general fan-in/cardinality declaration.
+ */
+export interface WaitForExpansionConfig {
+  /** Sibling node in this template that owns the depth-2 expansion. */
+  owner: string;
+  /** Terminal node key in the owner's child template. */
+  terminal_node: string;
+}
+
 /** One externally supplied claim binding for a generated subgraph template. */
 export interface SubgraphInputConfig {
   name: string;
@@ -699,6 +712,8 @@ export interface CheckConfig {
   consumes?: ClaimConsumptionConfig[];
   /** Optional C2 keyed expansion owned by this root check. */
   expand?: ExpansionConfig;
+  /** Optional bounded completion barrier for a nested expansion. */
+  wait_for_expansion?: WaitForExpansionConfig;
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */

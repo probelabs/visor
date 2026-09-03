@@ -226,6 +226,7 @@ export function deriveNodeGenerationId(input: {
   readonly itemFingerprint: string;
   readonly executionConfigDigest: string;
   readonly activeInputClaimIds: readonly string[];
+  readonly expansionBarrierDigest?: string;
 }): string {
   return sha256Canonical({
     v: 1,
@@ -234,6 +235,42 @@ export function deriveNodeGenerationId(input: {
     itemFingerprint: input.itemFingerprint,
     executionConfigDigest: input.executionConfigDigest,
     activeInputClaimIds: [...input.activeInputClaimIds].sort(),
+    ...(input.expansionBarrierDigest !== undefined
+      ? { expansionBarrierDigest: input.expansionBarrierDigest }
+      : {}),
+  });
+}
+
+/** Stable semantic identity of one nested-expansion completion barrier. */
+export interface ExpansionBarrierChildState {
+  readonly itemKey: string;
+  readonly workItemFingerprint: string | null;
+  readonly terminalGenerationId: string | null;
+  readonly terminalGenerationStatus: NodeGenerationStatus | 'missing' | 'detached';
+  readonly nestedCatalogClaimId: string;
+  readonly nestedCatalogProducerGenerationId: string | null;
+}
+
+export function deriveExpansionBarrierDigest(input: {
+  readonly expansionOwnerCheck: string;
+  readonly terminalNode: string;
+  readonly nestedExpansionSpecDigest: string;
+  readonly nestedTemplateDigest: string;
+  readonly nestedCatalogClaimId: string;
+  readonly children: readonly ExpansionBarrierChildState[];
+}): string {
+  const children = [...input.children]
+    .sort((left, right) => Buffer.from(left.itemKey, 'utf8').compare(Buffer.from(right.itemKey, 'utf8')))
+    .map(child => ({ ...child }));
+  return sha256Canonical({
+    v: 1,
+    domain: 'nested-expansion-completion-barrier/v1',
+    expansionOwnerCheck: input.expansionOwnerCheck,
+    terminalNode: input.terminalNode,
+    nestedExpansionSpecDigest: input.nestedExpansionSpecDigest,
+    nestedTemplateDigest: input.nestedTemplateDigest,
+    nestedCatalogClaimId: input.nestedCatalogClaimId,
+    children,
   });
 }
 
@@ -453,6 +490,7 @@ export interface NodeGenerationActivatedEvent extends InstanceEventBase {
   readonly executionConfigDigest: string;
   readonly activeInputClaimIds: readonly string[];
   readonly nestedExpansionCatalogClaimRef?: string;
+  readonly expansionBarrierDigest?: string;
 }
 
 export interface SubgraphTombstonedEvent extends InstanceEventBase {
@@ -664,6 +702,7 @@ export interface NodeGenerationProjection {
   readonly executionConfigDigest: string;
   readonly activeInputClaimIds: readonly string[];
   readonly nestedExpansionCatalogClaimRef?: string;
+  readonly expansionBarrierDigest?: string;
   readonly status: NodeGenerationStatus;
   readonly attemptId?: string;
   readonly fence?: number;
@@ -2526,6 +2565,12 @@ function reduceInstanceEventInternal(
           'Nested expansion catalog authority'
         );
       }
+      if (event.expansionBarrierDigest !== undefined && !SHA256_PATTERN.test(event.expansionBarrierDigest)) {
+        throw new InstanceKernelError(
+          'INVALID_GENERATION_BINDING',
+          'Expansion barrier digest must be a lowercase SHA-256 identity'
+        );
+      }
       if (
         !node ||
         node.subgraphInstanceId !== instance.subgraphInstanceId ||
@@ -2557,6 +2602,9 @@ function reduceInstanceEventInternal(
         itemFingerprint: event.itemFingerprint,
         executionConfigDigest: event.executionConfigDigest,
         activeInputClaimIds: inputIds,
+        ...(event.expansionBarrierDigest
+          ? { expansionBarrierDigest: event.expansionBarrierDigest }
+          : {}),
       });
       if (event.nodeGenerationId !== generationId || projection.generationsById[generationId]) {
         throw new InstanceKernelError('INVALID_GENERATION_ID', 'Node generation identity is invalid');
@@ -2574,6 +2622,9 @@ function reduceInstanceEventInternal(
         activeInputClaimIds: inputIds,
         ...(event.nestedExpansionCatalogClaimRef
           ? { nestedExpansionCatalogClaimRef: event.nestedExpansionCatalogClaimRef }
+          : {}),
+        ...(event.expansionBarrierDigest
+          ? { expansionBarrierDigest: event.expansionBarrierDigest }
           : {}),
         status: 'ready',
         scheduled: false,
@@ -3013,6 +3064,22 @@ export function reduceInstanceEventBatch(
             scopePathEquals(staged.scope, event.binding.scope) &&
             staged.subgraphInstanceId ===
               event.binding.scope[event.binding.scope.length - 1].subgraphInstanceId
+          ) {
+            stagedProjection = reduceInstanceEvent(stagedProjection, staged);
+            continue;
+          }
+          // A child terminal can unblock exactly one wait barrier on its
+          // immediate parent. It is still the ordinary activation event; the
+          // reduced scope check prevents it from targeting an unrelated
+          // ancestor or sibling. The compiled plan binds the digest to the
+          // parent's wait_for_expansion node at checkpoint/live boundaries.
+          if (
+            staged.type === 'NodeGenerationActivated' &&
+            staged.expansionBarrierDigest !== undefined &&
+            event.binding.scope.length > 1 &&
+            staged.scope.length === event.binding.scope.length - 1 &&
+            scopePathEquals(staged.scope, event.binding.scope.slice(0, -1)) &&
+            staged.subgraphInstanceId === event.binding.scope[0].subgraphInstanceId
           ) {
             stagedProjection = reduceInstanceEvent(stagedProjection, staged);
             continue;

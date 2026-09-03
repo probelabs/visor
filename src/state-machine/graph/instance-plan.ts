@@ -7,6 +7,7 @@ import type {
   ExpansionConfig,
   SubgraphConfig,
   VisorConfig,
+  WaitForExpansionConfig,
 } from '../../types/config';
 import {
   immutableCanonicalValue,
@@ -55,6 +56,7 @@ export interface CompiledTemplateNode {
   readonly consumptions: readonly Required<ClaimConsumptionConfig>[];
   readonly dependencyNodeKeys: readonly string[];
   readonly executionConfigDigest: string;
+  readonly waitForExpansion?: Readonly<WaitForExpansionConfig>;
 }
 
 export interface CompiledSubgraphTemplate {
@@ -285,6 +287,31 @@ function resolvedTemplateCheck(check: CheckConfig): CheckConfig {
     type: check.type || 'ai',
     ...(check.consumes ? { consumes: consumptions } : {}),
   });
+}
+
+function compileWaitForExpansion(
+  templateName: string,
+  nodeKey: string,
+  value: unknown,
+  siblingKeys: ReadonlySet<string>,
+): Readonly<WaitForExpansionConfig> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !hasExactKeys(value, ['owner', 'terminal_node'])) {
+    throw new InstancePlanError(
+      'INVALID_WAIT_FOR_EXPANSION',
+      `Template check "${templateName}.${nodeKey}" wait_for_expansion must contain only owner and terminal_node`
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const owner = requireNonEmptyString(record.owner, `subgraphs.${templateName}.checks.${nodeKey}.wait_for_expansion.owner`);
+  const terminalNode = requireNonEmptyString(record.terminal_node, `subgraphs.${templateName}.checks.${nodeKey}.wait_for_expansion.terminal_node`);
+  if (owner === nodeKey || !siblingKeys.has(owner)) {
+    throw new InstancePlanError(
+      'INVALID_WAIT_FOR_EXPANSION',
+      `Template check "${templateName}.${nodeKey}" wait_for_expansion.owner must name a sibling node`
+    );
+  }
+  return Object.freeze({ owner, terminal_node: terminalNode });
 }
 
 function claimList(check: CheckConfig, field: 'emits' | 'consumes'): string[] {
@@ -728,6 +755,20 @@ function compileTemplate(
   const nodesByKey: Record<string, CompiledTemplateNode> = {};
   for (const nodeKey of nodeKeys) {
     const check = resolvedChecks[nodeKey];
+    const waitForExpansion = compileWaitForExpansion(
+      name,
+      nodeKey,
+      check.wait_for_expansion,
+      new Set(nodeKeys),
+    );
+    if (waitForExpansion &&
+        (dependencies[nodeKey].length !== 1 || dependencies[nodeKey][0] !== waitForExpansion.owner ||
+          (check.consumes?.length || 0) !== 0)) {
+      throw new InstancePlanError(
+        'INVALID_WAIT_FOR_EXPANSION',
+        `Template check "${name}.${nodeKey}" wait_for_expansion must depend only on its owner and declare no consumes`,
+      );
+    }
     const executionConfigDigest = sha256Canonical({
       v: 1,
       templateDigest,
@@ -743,6 +784,7 @@ function compileTemplate(
       consumptions: consumptionsByNode[nodeKey],
       dependencyNodeKeys: dependencies[nodeKey],
       executionConfigDigest,
+      ...(waitForExpansion ? { waitForExpansion } : {}),
     });
   }
 
@@ -780,6 +822,13 @@ export function compileExpansionPlan(
   const subgraphs = config.subgraphs;
   const owners = Object.entries(checks).filter(([, check]) => hasOwn(check, 'expand'));
   const hasSubgraphs = hasOwn(config, 'subgraphs');
+  const rootWaiter = Object.entries(checks).find(([, check]) => hasOwn(check, 'wait_for_expansion'));
+  if (rootWaiter) {
+    throw new InstancePlanError(
+      'INVALID_WAIT_FOR_EXPANSION',
+      `Root check "${rootWaiter[0]}" cannot declare wait_for_expansion; barriers belong to subgraph templates`,
+    );
+  }
   if (!hasSubgraphs && owners.length === 0) {
     return Object.freeze({
       active: false,
@@ -1121,6 +1170,46 @@ export function compileExpansionPlan(
       template: childTemplate,
       graphSemanticDigest,
     });
+  }
+
+  // A wait barrier is intentionally a narrow binding: it can only observe
+  // the one already-compiled depth-2 expansion owned by a sibling in this
+  // exact parent template, and its terminal node must be a child-template
+  // node. This keeps readiness in the existing graph authority rather than
+  // introducing a second fan-in topology.
+  const waitOwnerByTemplate = new Set<string>();
+  for (const template of Object.values(templatesByName)) {
+    for (const nodeKey of template.templateNodeKeys) {
+      const wait = template.nodesByKey[nodeKey].waitForExpansion;
+      if (!wait) continue;
+      const nested = byNestedOwner[qualifiedNestedExpansionOwner(template.name, wait.owner)];
+      if (!nested) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.owner must own the compiled depth-2 expansion`
+        );
+      }
+      if (!nested.template.nodesByKey[wait.terminal_node]) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.terminal_node must exist in child template "${nested.template.name}"`
+        );
+      }
+      if (nested.template.dependentsByNode[wait.terminal_node].length !== 0) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.terminal_node must be a child-template sink`
+        );
+      }
+      const ownerKey = qualifiedNestedExpansionOwner(template.name, wait.owner);
+      if (waitOwnerByTemplate.has(ownerKey)) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template "${template.name}" may define only one wait_for_expansion node for owner "${wait.owner}"`
+        );
+      }
+      waitOwnerByTemplate.add(ownerKey);
+    }
   }
 
   return Object.freeze({

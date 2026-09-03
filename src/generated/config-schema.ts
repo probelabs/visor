@@ -897,6 +897,10 @@ export const configSchema = {
           $ref: '#/definitions/ExpansionConfig',
           description: 'Optional C2 keyed expansion owned by this root check.',
         },
+        wait_for_expansion: {
+          $ref: '#/definitions/WaitForExpansionConfig',
+          description: 'Optional bounded completion barrier for a nested expansion.',
+        },
         group: {
           type: 'string',
           description:
@@ -1863,6 +1867,26 @@ export const configSchema = {
       required: ['claim', 'template', 'items_pointer', 'key_pointer', 'item_claim'],
       additionalProperties: false,
       description: 'Compile one terminal catalog claim into stable keyed template instances.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    WaitForExpansionConfig: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Sibling node in this template that owns the depth-2 expansion.',
+        },
+        terminal_node: {
+          type: 'string',
+          description: "Terminal node key in the owner's child template.",
+        },
+      },
+      required: ['owner', 'terminal_node'],
+      additionalProperties: false,
+      description:
+        'Hold one parent-template node open until the terminal node of every current child instance produced by a sibling expansion has completed. This is deliberately limited to one sibling expansion owner and one child terminal node; it is not a general fan-in/cardinality declaration.',
       patternProperties: {
         '^x-': {},
       },

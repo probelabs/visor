@@ -34,6 +34,7 @@ import {
   deriveItemFingerprint,
   deriveManagedRunId,
   deriveNodeGenerationId,
+  deriveExpansionBarrierDigest,
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
   deriveProofCurrentCatalogAuthorityId,
@@ -584,13 +585,19 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
       }
       return event as unknown as InstanceRuntimeEvent;
     case 'NodeGenerationActivated':
-      exact(hasOwn(event, 'nestedExpansionCatalogClaimRef')
-        ? ['version', 'type', 'eventId', 'sessionId', 'scope', 'subgraphInstanceId', 'nodeInstanceId', 'nodeGenerationId', 'templateNodeKey', 'checkId', 'incarnation', 'itemFingerprint', 'executionConfigDigest', 'activeInputClaimIds', 'nestedExpansionCatalogClaimRef']
-        : ['version', 'type', 'eventId', 'sessionId', 'scope', 'subgraphInstanceId', 'nodeInstanceId', 'nodeGenerationId', 'templateNodeKey', 'checkId', 'incarnation', 'itemFingerprint', 'executionConfigDigest', 'activeInputClaimIds']);
+      exact([
+        'version', 'type', 'eventId', 'sessionId', 'scope', 'subgraphInstanceId',
+        'nodeInstanceId', 'nodeGenerationId', 'templateNodeKey', 'checkId',
+        'incarnation', 'itemFingerprint', 'executionConfigDigest',
+        'activeInputClaimIds',
+        ...(hasOwn(event, 'nestedExpansionCatalogClaimRef') ? ['nestedExpansionCatalogClaimRef'] : []),
+        ...(hasOwn(event, 'expansionBarrierDigest') ? ['expansionBarrierDigest'] : []),
+      ]);
       base();
       if (typeof event.subgraphInstanceId !== 'string' || typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string' || typeof event.templateNodeKey !== 'string' || typeof event.checkId !== 'string' ||
           typeof event.incarnation !== 'number' || !Number.isSafeInteger(event.incarnation) || event.incarnation < 0 || typeof event.itemFingerprint !== 'string' || typeof event.executionConfigDigest !== 'string' || !Array.isArray(event.activeInputClaimIds) ||
-          (hasOwn(event, 'nestedExpansionCatalogClaimRef') && typeof event.nestedExpansionCatalogClaimRef !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generation activation event has invalid fields');
+          (hasOwn(event, 'nestedExpansionCatalogClaimRef') && typeof event.nestedExpansionCatalogClaimRef !== 'string') ||
+          (hasOwn(event, 'expansionBarrierDigest') && (typeof event.expansionBarrierDigest !== 'string' || !CHECKPOINT_SHA256.test(event.expansionBarrierDigest)))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generation activation event has invalid fields');
       return event as unknown as InstanceRuntimeEvent;
     case 'SubgraphTombstoned':
       exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'sourceCatalogClaimId', 'itemKey', 'subgraphInstanceId', 'lastIncarnation', 'nodeGenerationIds', 'outputClaimIds']);
@@ -717,12 +724,174 @@ function proofProjectExpansionForPlan(
   return expansion;
 }
 
+/** Compute one bounded nested-expansion barrier from the authoritative
+ * projection. Live scheduling and checkpoint restore must use this exact
+ * predicate; keeping it pure prevents a rehashed checkpoint from selecting a
+ * different denominator or completion interpretation. */
+function expansionBarrierForProjection(
+  plan: ClaimPlan,
+  projection: InstanceProjection,
+  instance: InstanceProjection['instancesById'][string],
+  node: CompiledTemplateNode,
+  completingGenerationId?: string,
+): {
+  readonly ownerCompleted: boolean;
+  readonly selectionAuthoritative: boolean;
+  readonly ready: boolean;
+  readonly digest: string;
+} {
+  const wait = node.waitForExpansion;
+  if (!wait) return { ownerCompleted: true, selectionAuthoritative: true, ready: true, digest: '' };
+  const parentExpansion = instance.parentSubgraphInstanceId
+    ? plan.expansionPlan?.byNestedOwner[instance.expansionOwnerCheck]
+    : plan.expansionPlan?.byOwner[instance.expansionOwnerCheck];
+  const nestedExpansion = parentExpansion
+    ? plan.expansionPlan?.byNestedOwner[qualifiedNestedExpansionOwner(parentExpansion.template.name, wait.owner)]
+    : undefined;
+  if (!parentExpansion || !nestedExpansion) throw new Error('Wait barrier expansion owner is not compiled');
+  if (parentExpansion.expansionSpecDigest !== instance.expansionSpecDigest) {
+    throw new Error('Wait barrier instance is not bound to its compiled expansion');
+  }
+  const ownerNodeInstanceId = instance.nodeInstanceIdsByTemplateNode[wait.owner];
+  const ownerGenerationId = ownerNodeInstanceId
+    ? projection.activeGenerationIdByNode[ownerNodeInstanceId]
+    : undefined;
+  const ownerGeneration = ownerGenerationId ? projection.generationsById[ownerGenerationId] : undefined;
+  const catalog = ownerGeneration?.nestedExpansionCatalogClaimRef === nestedExpansion.catalogClaimRef
+    ? Object.values(projection.claimsById).find(claim =>
+        claim.active && claim.kind === 'generated-output' &&
+        claim.claim === nestedExpansion.catalogClaimRef &&
+        claim.nodeGenerationId === ownerGeneration.nodeGenerationId &&
+        claim.subgraphInstanceId === instance.subgraphInstanceId &&
+        scopePathEquals(claim.scope, instance.scope) &&
+        claim.producerCheckId === ownerGeneration.checkId &&
+        claim.producerAttemptId === ownerGeneration.attemptId &&
+        claim.producerFence === ownerGeneration.fence &&
+        ownerGeneration.completedOutputClaimIds.includes(claim.claimId))
+    : undefined;
+  const ownerComplete = !!ownerGeneration && ownerGeneration.scheduled &&
+    (ownerGeneration.status === 'completed' || ownerGeneration.nodeGenerationId === completingGenerationId);
+  const selectedKeys = new Set<string>();
+  if (catalog) {
+    try {
+      nestedExpansion.catalogValidator(catalog.payload);
+      const rawItems = resolveJsonPointer(catalog.payload, nestedExpansion.itemsPointer);
+      if (!Array.isArray(rawItems)) throw new Error('catalog items pointer is not an array');
+      for (const item of rawItems) {
+        nestedExpansion.itemValidator(item);
+        const key = canonicalCatalogKey(resolveJsonPointer(item, nestedExpansion.keyPointer));
+        if (selectedKeys.has(key)) throw new Error(`duplicate catalog key ${key}`);
+        selectedKeys.add(key);
+      }
+    } catch (error) {
+      throw new Error(`Wait barrier catalog is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const allChildren = Object.values(projection.instancesById)
+    .filter(candidate => candidate.status === 'active' &&
+      candidate.parentSubgraphInstanceId === instance.subgraphInstanceId &&
+      candidate.expansionOwnerNodeInstanceId === ownerNodeInstanceId)
+    .sort((left, right) => Buffer.from(left.itemKey, 'utf8').compare(Buffer.from(right.itemKey, 'utf8')));
+  const selectedChildren = allChildren.filter(child => selectedKeys.has(child.itemKey));
+  const exactSelection = ownerComplete && !!catalog &&
+    selectedChildren.length === selectedKeys.size && allChildren.length === selectedChildren.length &&
+    selectedChildren.every(child => child.catalogClaimId === catalog.claimId);
+  const children = selectedChildren.map(child => {
+    const item = child.activeItemClaimId ? projection.claimsById[child.activeItemClaimId] : undefined;
+    const terminalNodeInstanceId = child.nodeInstanceIdsByTemplateNode[wait.terminal_node];
+    const terminalGenerationId = terminalNodeInstanceId
+      ? projection.activeGenerationIdByNode[terminalNodeInstanceId]
+      : undefined;
+    const terminalGeneration = terminalGenerationId ? projection.generationsById[terminalGenerationId] : undefined;
+    return {
+      itemKey: child.itemKey,
+      workItemFingerprint: item?.active ? item.payloadFingerprint : null,
+      terminalGenerationId: terminalGeneration?.nodeGenerationId || null,
+      terminalGenerationStatus: !item?.active
+        ? 'detached' as const
+        : !terminalGeneration
+          ? 'missing' as const
+          : terminalGeneration.nodeGenerationId === completingGenerationId
+            ? 'completed' as const
+            : terminalGeneration.status,
+      nestedCatalogClaimId: child.catalogClaimId,
+      nestedCatalogProducerGenerationId: child.catalogProducerNodeGenerationId || null,
+    };
+  });
+  return {
+    ownerCompleted: ownerComplete,
+    selectionAuthoritative: exactSelection,
+    ready: exactSelection && selectedKeys.size > 0 && children.every(child => child.terminalGenerationStatus === 'completed'),
+    digest: deriveExpansionBarrierDigest({
+      expansionOwnerCheck: nestedExpansion.expansionOwnerCheck,
+      terminalNode: wait.terminal_node,
+      nestedExpansionSpecDigest: nestedExpansion.expansionSpecDigest,
+      nestedTemplateDigest: nestedExpansion.templateDigest,
+      nestedCatalogClaimId: catalog?.claimId || '',
+      children,
+      }),
+  };
+}
+
+function checkpointExpansionBarrier(
+  plan: ClaimPlan,
+  projection: InstanceProjection,
+  instance: InstanceProjection['instancesById'][string],
+  node: CompiledTemplateNode,
+  completingGenerationId?: string,
+): {
+  readonly ownerCompleted: boolean;
+  readonly selectionAuthoritative: boolean;
+  readonly ready: boolean;
+  readonly digest: string;
+} {
+  try {
+    return expansionBarrierForProjection(plan, projection, instance, node, completingGenerationId);
+  } catch (error) {
+    checkpointAuthorityFailure(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function validateCheckpointBarrierCompleteness(
+  plan: ClaimPlan,
+  projection: InstanceProjection,
+): void {
+  for (const instance of Object.values(projection.instancesById)) {
+    if (instance.status !== 'active') continue;
+    const expansion = instance.parentSubgraphInstanceId
+      ? plan.expansionPlan?.byNestedOwner[instance.expansionOwnerCheck]
+      : plan.expansionPlan?.byOwner[instance.expansionOwnerCheck];
+    if (!expansion) continue;
+    for (const nodeKey of expansion.template.templateNodeKeys) {
+      const node = expansion.template.nodesByKey[nodeKey];
+      if (!node.waitForExpansion) continue;
+      const barrier = checkpointExpansionBarrier(plan, projection, instance, node);
+      const nodeInstanceId = instance.nodeInstanceIdsByTemplateNode[nodeKey];
+      const activeGenerationId = projection.activeGenerationIdByNode[nodeInstanceId];
+      const activeGeneration = activeGenerationId
+        ? projection.generationsById[activeGenerationId]
+        : undefined;
+      if (barrier.ownerCompleted && !barrier.selectionAuthoritative) {
+        checkpointAuthorityFailure(`Wait barrier ${instance.subgraphInstanceId}.${nodeKey} has an incomplete catalog child selection`);
+      }
+      if (barrier.ready) {
+        if (!activeGeneration || activeGeneration.expansionBarrierDigest !== barrier.digest) {
+          checkpointAuthorityFailure(`Ready wait barrier ${instance.subgraphInstanceId}.${nodeKey} has no exact active generation`);
+        }
+      } else if (activeGeneration?.expansionBarrierDigest !== undefined) {
+        checkpointAuthorityFailure(`Unready wait barrier ${instance.subgraphInstanceId}.${nodeKey} has an active generation`);
+      }
+    }
+  }
+}
+
 function validateCheckpointPlanAuthority(
   event: InstanceRuntimeEvent,
   plan: ClaimPlan,
   claimProjection: ClaimProjection,
   instanceProjection: InstanceProjection,
   legacyProofWireMode = false,
+  completingGenerationId?: string,
 ): void {
   const expansionPlan = plan.expansionPlan;
   if (!expansionPlan?.active) checkpointAuthorityFailure('Checkpoint requires an active expansion plan');
@@ -803,8 +972,15 @@ function validateCheckpointPlanAuthority(
     const nestedOwner = qualifiedNestedExpansionOwner(expansion.template.name, event.templateNodeKey);
     const nestedExpansion = expansionPlan.byNestedOwner[nestedOwner];
     if (!node || event.executionConfigDigest !== node.executionConfigDigest ||
-        (nestedExpansion ? event.nestedExpansionCatalogClaimRef !== nestedExpansion.catalogClaimRef : hasOwn(asRecord, 'nestedExpansionCatalogClaimRef'))) {
+        (nestedExpansion ? event.nestedExpansionCatalogClaimRef !== nestedExpansion.catalogClaimRef : hasOwn(asRecord, 'nestedExpansionCatalogClaimRef')) ||
+        (node.waitForExpansion ? !hasOwn(asRecord, 'expansionBarrierDigest') : hasOwn(asRecord, 'expansionBarrierDigest'))) {
       checkpointAuthorityFailure('Generation activation does not match the compiled template node authority');
+    }
+    if (node.waitForExpansion) {
+      const barrier = checkpointExpansionBarrier(plan, instanceProjection, instance, node, completingGenerationId);
+      if (!barrier.ready || event.expansionBarrierDigest !== barrier.digest) {
+        checkpointAuthorityFailure('Generation activation does not match the current nested-expansion barrier');
+      }
     }
     return;
   }
@@ -1286,7 +1462,14 @@ export class ExecutionJournal {
         if (event.type === 'ProofCurrentCatalogAuthorityRecorded') {
           ensureCheckpointQuiescent(claimPrefix, instancePrefix);
         }
-        validateCheckpointPlanAuthority(event as InstanceRuntimeEvent, claimPlan, claimPrefix, instancePrefix, legacyProofWireMode);
+        const nextEvent = events[index + 1];
+        const completingGenerationId = event.type === 'NodeGenerationActivated' &&
+          event.expansionBarrierDigest !== undefined &&
+          nextEvent?.type === 'AttemptCompleted' &&
+          'nodeGenerationId' in nextEvent
+          ? nextEvent.nodeGenerationId
+          : undefined;
+        validateCheckpointPlanAuthority(event as InstanceRuntimeEvent, claimPlan, claimPrefix, instancePrefix, legacyProofWireMode, completingGenerationId);
         try {
           // Preview each event to make plan authority checks resolve against the exact
           // projection prefix; replayInstanceEvents below remains the final reducer.
@@ -1309,6 +1492,7 @@ export class ExecutionJournal {
     } catch (error) {
       throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint instance replay failed', error);
     }
+    validateCheckpointBarrierCompleteness(claimPlan, instanceProjection);
     ensureCheckpointQuiescent(claimProjection, instanceProjection);
     const allocators = reconstructCheckpointAllocators(events);
 
@@ -1527,6 +1711,34 @@ export class ExecutionJournal {
       );
     }
     return expansion;
+  }
+
+  /**
+   * Compute the readiness and semantic identity of a bounded nested
+   * expansion barrier. The selected set is derived solely from the current
+   * active catalog children of the parent owner; no caller can provide a
+   * denominator or a completion claim list.
+   */
+  private expansionBarrierForNode(
+    projection: InstanceProjection,
+    instance: InstanceProjection['instancesById'][string],
+    node: CompiledTemplateNode,
+    completingGenerationId?: string,
+  ): { readonly ready: boolean; readonly digest: string } {
+    try {
+      return expansionBarrierForProjection(
+        this.requireClaimPlan(),
+        projection,
+        instance,
+        node,
+        completingGenerationId,
+      );
+    } catch (error) {
+      throw new ClaimKernelError(
+        'INVALID_WAIT_FOR_EXPANSION',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   /** Revalidate every completed component selector against the current exact
@@ -2382,6 +2594,10 @@ export class ExecutionJournal {
         );
       });
       if (!dependenciesCompleted) continue;
+      const barrier = candidate.waitForExpansion
+        ? this.expansionBarrierForNode(staged, instance, candidate, generation.nodeGenerationId)
+        : undefined;
+      if (barrier && !barrier.ready) continue;
       const inputIds: string[] = [];
       let ready = true;
       for (const consumption of candidate.consumptions) {
@@ -2412,7 +2628,8 @@ export class ExecutionJournal {
       }
       const nodeGenerationId = deriveNodeGenerationId({ nodeInstanceId,
         incarnation: instance.incarnation, itemFingerprint: item.payloadFingerprint,
-        executionConfigDigest: candidate.executionConfigDigest, activeInputClaimIds: inputIds });
+        executionConfigDigest: candidate.executionConfigDigest, activeInputClaimIds: inputIds,
+        ...(barrier ? { expansionBarrierDigest: barrier.digest } : {}) });
       const nestedCatalogClaimRef = this.requireClaimPlan().expansionPlan!.byNestedOwner[
         qualifiedNestedExpansionOwner(expansion.template.name, nodeKey)
       ]?.catalogClaimRef;
@@ -2423,9 +2640,86 @@ export class ExecutionJournal {
         templateNodeKey: nodeKey, checkId: nodeKey, incarnation: instance.incarnation,
         itemFingerprint: item.payloadFingerprint, executionConfigDigest: candidate.executionConfigDigest,
         activeInputClaimIds: inputIds,
+        ...(barrier ? { expansionBarrierDigest: barrier.digest } : {}),
         ...(nestedCatalogClaimRef
           ? { nestedExpansionCatalogClaimRef: nestedCatalogClaimRef }
           : {}) });
+    }
+
+    // A child terminal completion may unblock a wait node in its immediate
+    // parent template. The completion is represented as a virtual terminal
+    // while deriving the barrier; the real AttemptCompleted remains the final
+    // event of this atomic managed batch.
+    if (instance.parentSubgraphInstanceId) {
+      const parent = staged.instancesById[instance.parentSubgraphInstanceId];
+      if (parent?.status === 'active') {
+        const parentExpansion = this.compiledExpansionForInstance(parent.subgraphInstanceId);
+        const parentOwnerNodeId = instance.expansionOwnerNodeInstanceId;
+        for (const parentNodeKey of parentExpansion.template.topology) {
+          const parentNode = parentExpansion.template.nodesByKey[parentNodeKey];
+          const wait = parentNode.waitForExpansion;
+          if (!wait || !parentOwnerNodeId ||
+              parent.nodeInstanceIdsByTemplateNode[wait.owner] !== parentOwnerNodeId) continue;
+          const parentNodeId = parent.nodeInstanceIdsByTemplateNode[parentNodeKey];
+          if (staged.activeGenerationIdByNode[parentNodeId]) continue;
+          const dependenciesCompleted = parentNode.dependencyNodeKeys.every(dependencyNodeKey => {
+            const dependencyNodeId = parent.nodeInstanceIdsByTemplateNode[dependencyNodeKey];
+            const dependencyGenerationId = staged.activeGenerationIdByNode[dependencyNodeId];
+            return dependencyGenerationId !== undefined &&
+              staged.generationsById[dependencyGenerationId]?.status === 'completed';
+          });
+          if (!dependenciesCompleted) continue;
+          const barrier = this.expansionBarrierForNode(
+            staged,
+            parent,
+            parentNode,
+            generation.nodeGenerationId,
+          );
+          if (!barrier.ready) continue;
+          const inputIds = parentNode.consumptions.map(consumption => {
+            const matches = Object.values(staged.claimsById)
+              .filter(claim => claim.active &&
+                claim.subgraphInstanceId === parent.subgraphInstanceId &&
+                claim.incarnation === parent.incarnation &&
+                claim.claim === consumption.claim)
+              .sort((left, right) => left.claimId.localeCompare(right.claimId));
+            if (matches.length !== 1) return undefined;
+            return matches[0].claimId;
+          });
+          if (inputIds.some(value => value === undefined)) continue;
+          const sortedInputIds = inputIds as string[];
+          sortedInputIds.sort();
+          const item = parent.activeItemClaimId
+            ? staged.claimsById[parent.activeItemClaimId]
+            : undefined;
+          if (!item?.active) continue;
+          const nodeGenerationId = deriveNodeGenerationId({
+            nodeInstanceId: parentNodeId,
+            incarnation: parent.incarnation,
+            itemFingerprint: item.payloadFingerprint,
+            executionConfigDigest: parentNode.executionConfigDigest,
+            activeInputClaimIds: sortedInputIds,
+            expansionBarrierDigest: barrier.digest,
+          });
+          stage({
+            version: 1,
+            type: 'NodeGenerationActivated',
+            eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1,
+            sessionId: parent.sessionId,
+            scope: parent.scope,
+            subgraphInstanceId: parent.subgraphInstanceId,
+            nodeInstanceId: parentNodeId,
+            nodeGenerationId,
+            templateNodeKey: parentNodeKey,
+            checkId: parentNodeKey,
+            incarnation: parent.incarnation,
+            itemFingerprint: item.payloadFingerprint,
+            executionConfigDigest: parentNode.executionConfigDigest,
+            activeInputClaimIds: sortedInputIds,
+            expansionBarrierDigest: barrier.digest,
+          });
+        }
+      }
     }
     stage({ ...attempt, type: 'AttemptCompleted',
       eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1 });
