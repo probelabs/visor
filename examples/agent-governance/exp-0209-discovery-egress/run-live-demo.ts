@@ -1643,6 +1643,10 @@ function proofJsonCommand(binary: string, args: readonly string[], workspace: st
   return { value, bytes: proofCanonicalJson(value) };
 }
 
+export function buildCatalogRevalidationRequest(candidate: JsonRecord, admissionWire: string): string {
+  return proofCanonicalJson({ version: 'proof.catalog-revalidation-request/v2', candidate, admission: JSON.parse(admissionWire) });
+}
+
 function baselineDiscoveryClaims(checkpoint: JsonRecord): { candidate: JsonRecord; admission: JsonRecord } {
   const events = array(checkpoint.events, 'baseline discovery events');
   const candidates = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && eventScopeLength(event) === 1);
@@ -1668,7 +1672,7 @@ function deriveResumeProofInputs(
   const admissionPayload = record(discovery.admission.payload, 'baseline project admission payload');
   assertInvariant('baseline project admission retains exact Proof wire', typeof admissionPayload.__proof_admission_wire === 'string' && admissionPayload.__proof_admission_wire.length > 0);
   const admissionWire = admissionPayload.__proof_admission_wire as string;
-  const revalidationRequest = `{"version":${proofCanonicalJson('proof.catalog-revalidation-request/v2')},"candidate":${proofCanonicalJson(discovery.candidate.payload)},"admission":${admissionWire}}`;
+  const revalidationRequest = buildCatalogRevalidationRequest(discovery.candidate.payload, admissionWire);
   const revalidation = proofJsonCommand(proofBinary, ['onboarding', 'revalidate'], workspace, revalidationRequest);
   const workItemsRequest = `{"version":${proofCanonicalJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(discovery.candidate.payload)},"admission":${admissionWire},"revalidation_receipt":${proofCanonicalJson(revalidation.value.receipt)}}`;
   const workItems = proofJsonCommand(proofBinary, ['onboarding', 'work-items'], workspace, workItemsRequest);

@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import * as yaml from 'js-yaml';
+import { buildCatalogRevalidationRequest } from '../../examples/agent-governance/exp-0209-discovery-egress/run-live-demo';
 import type { PRInfo } from '../../src/pr-analyzer';
 import type { GovernedProbeRunnerRequest } from '../../src/providers/governed-proof-inspect-check-provider';
 import { immutableProofCanonicalValue, proofCanonicalJson, proofGovernedResultDigest, proofPayloadFingerprint } from '../../src/providers/proof-wire';
@@ -208,7 +209,7 @@ it('runs the real pinned Proof admission, revalidation, and activation-safe Work
     expect(admission.status).toBe('ADMITTED');
     expect(admission.receipt.Version).toBe('proof.role-result-candidate-admission/v2');
     expect(Object.prototype.hasOwnProperty.call(admission.receipt, 'ProjectLineage')).toBe(true);
-    const revalidationRequest = proofCanonicalForTest({ version: 'proof.catalog-revalidation-request/v2', candidate: candidatePayload, admission });
+    const revalidationRequest = buildCatalogRevalidationRequest(candidatePayload, admissionWire);
     const revalidation = JSON.parse(invoke(['onboarding', 'revalidate'], revalidationRequest)) as Record<string, any>;
     expect(revalidation.version).toBe('proof.catalog-revalidation/v2');
     expect(revalidation.receipt.version).toBe('proof.catalog-revalidation-receipt/v2');
