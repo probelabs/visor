@@ -35,6 +35,7 @@ import {
   governedResultDigest,
   governedWireModeFromEvidence,
   immutableGovernedValue,
+  immutableProofCanonicalValue,
   proofCandidateEvidenceFingerprint,
   type GovernedWireMode,
 } from './proof-wire';
@@ -183,7 +184,7 @@ function claim(value: unknown, expectedClaim: string, label: string): CandidateC
   const payload = immutableGovernedValue(source.payload, wireMode);
   const payloadFingerprint = governedPayloadFingerprint(source.payload, wireMode);
   const nonCanonical = wireMode === 'generic' ? canonicalJson(source.payload) !== JSON.stringify(source.payload) : false;
-  if (bounded(source.payload, `${label} payload`, claimPayloadLimit(expectedClaim)) &&
+  if (bounded(source.payload, `${label} payload`, claimPayloadLimit(expectedClaim), wireMode) &&
       (nonCanonical || payloadFingerprint !== source.payloadFingerprint)) {
     invalid(`${label} payload is detached or noncanonical`);
   }
@@ -588,7 +589,7 @@ function validateStructuralInventory(value: unknown, projectID: string): PlainRe
   const inventoryPaths = value.sorted_paths as string[];
   const inputPaths = proofSorted((value.input_state as PlainRecord[]).map(row => row.path as string));
   if (!sameStringSet(inventoryPaths, inputPaths)) invalid('structural inventory input_state does not cover sorted_paths');
-  return bounded(value, 'structural inventory', PROOF_INVENTORY_OUTPUT_MAX_BYTES) as PlainRecord;
+  return bounded(value, 'structural inventory', PROOF_INVENTORY_OUTPUT_MAX_BYTES, 'proof') as PlainRecord;
 }
 
 function candidateComponents(value: unknown, projectID?: string): readonly PlainRecord[] {
@@ -827,7 +828,103 @@ export function validateProofWorkItemsProjection(
     const authorityRow = authorities.find(row => row.component_id === item.component_id);
     if (!authorityRow || authorityRow.work_item_digest !== plainDigest(workItemWire(item)) || canonicalJson(authorityRow.subject) !== canonicalJson(item.proof_component_subject)) invalid(`work-items ${item.component_id as string} is not authorized by revalidation receipt`);
   }
-  return bounded(value, 'work-items projection', PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES) as PlainRecord;
+  return bounded(value, 'work-items projection', PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES, 'proof') as PlainRecord;
+}
+
+export interface ProofCurrentCatalogAuthorityBytes {
+  readonly revalidation: PlainRecord;
+  readonly workItems: PlainRecord;
+  /** Exact compact materialization rows emitted by the admitted-catalog provider. */
+  readonly items: readonly PlainRecord[];
+  readonly components: readonly Readonly<{
+    componentId: string;
+    workItemDigest: string;
+    subject: PlainRecord;
+  }>[];
+}
+
+function decodeExactProofJsonBytes(value: unknown, label: string, limit: number): PlainRecord {
+  if (typeof value !== 'string' || value.length === 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) {
+    invalid(`${label} must be non-empty canonical base64`);
+  }
+  let bytes: Buffer;
+  try { bytes = Buffer.from(value, 'base64'); } catch { invalid(`${label} is not base64`); }
+  if (bytes.length === 0 || bytes.toString('base64') !== value || bytes.length > limit) invalid(`${label} exceeds its byte limit or is not canonical base64`);
+  let text: string;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { invalid(`${label} is not valid UTF-8`); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { invalid(`${label} is not exactly one JSON value`); }
+  if (!plain(parsed) || proofCanonicalJson(parsed) !== text) invalid(`${label} is not Proof CanonicalJSON`);
+  return immutableGovernedValue(parsed, 'proof') as PlainRecord;
+}
+
+/**
+ * Validate the two exact Proof outputs retained by a current-catalog
+ * authority record. The event stores only the original bytes; this helper is
+ * the sole parser/materializer used by reducer and journal paths.
+ */
+export function validateProofCurrentCatalogAuthorityBytes(input: {
+  readonly revalidationBytesBase64: unknown;
+  readonly workItemsBytesBase64: unknown;
+  readonly candidate: CandidateClaimInput;
+  readonly admission: CandidateClaimInput;
+}): ProofCurrentCatalogAuthorityBytes {
+  const revalidation = decodeExactProofJsonBytes(input.revalidationBytesBase64, 'revalidationBytesBase64', PROOF_REVALIDATION_OUTPUT_MAX_BYTES);
+  const workItems = decodeExactProofJsonBytes(input.workItemsBytesBase64, 'workItemsBytesBase64', PROOF_WORK_ITEMS_OUTPUT_MAX_BYTES);
+  const candidatePayload = input.candidate.payload;
+  if (!plain(candidatePayload) || typeof candidatePayload.project_id !== 'string') invalid('historical candidate project is invalid');
+  const projectID = candidatePayload.project_id;
+  validateProofCandidateAdmissionBinding(input.candidate, input.admission);
+  const inventory = revalidation.inventory;
+  if (!plain(inventory)) invalid('revalidation inventory is invalid');
+  const validatedRevalidation = validateProofCatalogRevalidationProjection(
+    revalidation,
+    inventory,
+    input.candidate,
+    input.admission,
+    projectID,
+  );
+  // The current-authority record retains Proof's complete WorkItems output.
+  // Compact `{components: ...}` materializations are activation projections,
+  // not authenticated current-output bytes and cannot be upgraded here.
+  const validatedWorkItems = validateProofWorkItemsProjection(
+    workItems,
+    validatedRevalidation,
+    inventory,
+    input.candidate,
+    input.admission,
+    projectID,
+  );
+  const receipt = validatedRevalidation.receipt;
+  const authorities = plain(receipt) && Array.isArray(receipt.component_authorities)
+    ? receipt.component_authorities
+    : undefined;
+  const items = Array.isArray(validatedWorkItems.work_items) ? validatedWorkItems.work_items : undefined;
+  if (!authorities || !items) invalid('Proof current catalog outputs lack component authorities');
+  const components = items.map(item => {
+    if (!plain(item) || typeof item.component_id !== 'string') invalid('Proof WorkItem component id is invalid');
+    const authority = authorities.find(row => plain(row) && row.component_id === item.component_id);
+    if (!authority || !plain(authority) || typeof authority.work_item_digest !== 'string' || !plain(authority.subject)) invalid(`Proof component ${item.component_id} authority is missing`);
+    return {
+      componentId: item.component_id,
+      workItemDigest: authority.work_item_digest,
+      subject: authority.subject,
+    };
+  }).sort((left, right) => compareProofStrings(left.componentId, right.componentId));
+  if (new Set(components.map(component => component.componentId)).size !== components.length) invalid('Proof current component authorities are duplicated');
+  const compactItems = items.map(item => {
+    const authority = authorities.find(row => plain(row) && row.component_id === item.component_id);
+    if (!authority || !plain(authority)) invalid(`Proof component ${String(item.component_id)} authority is missing`);
+    return { ...item, authority: { component_id: authority.component_id, work_item_digest: authority.work_item_digest, subject: authority.subject } };
+  });
+  return immutableProofCanonicalValue({
+    // Retain the decoded Proof values, not the graph-canonical validator
+    // projection: this is the in-memory view of the exact supplied bytes.
+    revalidation,
+    workItems,
+    items: compactItems,
+    components,
+  }) as ProofCurrentCatalogAuthorityBytes;
 }
 
 function validateReceipt(value: unknown, projectID: string, boundaryFingerprint: string, ids: ReadonlySet<string>, workItems: readonly PlainRecord[]): PlainRecord {

@@ -36,6 +36,7 @@ import {
   deriveNodeGenerationId,
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
+  deriveProofCurrentCatalogAuthorityId,
   immutableInstanceEvent,
   immutableInstanceProjection,
   queryReadyGenerations,
@@ -43,6 +44,7 @@ import {
   reduceInstanceEventBatch,
   replayInstanceEvents,
   projectExpansionCoverage,
+  scopePathEquals,
   type CatalogReconciliationRequestedEvent,
   type CatalogRequestAttemptStartedEvent,
   type CatalogRequestCheckScheduledEvent,
@@ -61,9 +63,11 @@ import {
   type ManagedRunCleanupStatus,
   type ManagedRunFailureCode,
   type ManagedRunTerminatedEvent,
+  type ProofCurrentCatalogAuthorityRecordedEvent,
 } from './state-machine/graph/instance-kernel';
 import {
   PROOF_ADMIT_NODE_KEY,
+  PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
   PROOF_CANDIDATE_CLAIM,
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
@@ -264,6 +268,13 @@ function assembleProofComponentInvocationAuthority(
       !catalogProducer.completedOutputClaimIds.includes(catalog.claimId) ||
       catalog.producerAttemptId !== catalogProducer.attemptId || catalog.producerFence !== catalogProducer.fence) {
     componentAuthorityFailure('component catalog is not the exact materialization parent');
+  }
+  const componentInstance = projection.instancesById[component.subgraphInstanceId];
+  if (!componentInstance || componentInstance.status !== 'active' ||
+      componentInstance.catalogClaimId !== catalog.claimId ||
+      componentInstance.catalogProducerNodeGenerationId !== catalogProducer.nodeGenerationId ||
+      componentInstance.expansionOwnerNodeInstanceId !== catalogProducer.nodeInstanceId) {
+    componentAuthorityFailure('component instance is not bound to the exact materialization source');
   }
   const catalogParents = catalog.parentClaimIds;
   if (catalogParents.length !== 4 || new Set(catalogParents).size !== 4 ||
@@ -508,6 +519,30 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
       }
       return event as unknown as InstanceRuntimeEvent;
     }
+    case 'ProofCurrentCatalogAuthorityRecorded':
+      exact([
+        'version', 'type', 'eventId', 'sessionId', 'scope',
+        'projectSubgraphInstanceId', 'sourceCatalogClaimId',
+        'previousAuthorityId', 'authorityId', 'revalidationBytesBase64',
+        'workItemsBytesBase64',
+      ]);
+      base();
+      if (typeof event.projectSubgraphInstanceId !== 'string' ||
+          typeof event.sourceCatalogClaimId !== 'string' ||
+          typeof event.previousAuthorityId !== 'string' ||
+          typeof event.authorityId !== 'string' ||
+          typeof event.revalidationBytesBase64 !== 'string' ||
+          typeof event.workItemsBytesBase64 !== 'string') {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof rebase event has invalid fields');
+      }
+      for (const field of [
+        'projectSubgraphInstanceId', 'sourceCatalogClaimId', 'previousAuthorityId', 'authorityId',
+      ] as const) {
+        if (!CHECKPOINT_SHA256.test(event[field] as string)) {
+          throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', `Proof rebase ${field} is not a SHA-256 identity`);
+        }
+      }
+      return event as unknown as ProofCurrentCatalogAuthorityRecordedEvent;
     case 'ControllerItemClaimPublished':
       exact(['version', 'type', 'eventId', 'sessionId', 'scope', 'expansionOwnerCheck', 'expansionSpecDigest', 'catalogClaimId', 'itemKey', 'subgraphInstanceId', 'incarnation', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'parentClaimIds']);
       base();
@@ -629,6 +664,35 @@ function expansionForCheckpoint(
   return expansion;
 }
 
+/**
+ * Proof current-catalog authority is accepted only for the compiled
+ * project-level discovery expansion.  Keeping this check in one helper lets
+ * live recording and checkpoint restore enforce the same plan authority.
+ */
+function proofProjectExpansionForPlan(
+  plan: ClaimPlan,
+  project: InstanceProjection['instancesById'][string],
+): CompiledExpansion {
+  if (!project || project.parentSubgraphInstanceId !== undefined || project.scope.length !== 1) {
+    checkpointAuthorityFailure('Proof current authority requires a root project instance');
+  }
+  const expansion = plan.expansionPlan?.byOwner[project.expansionOwnerCheck];
+  const materialize = expansion?.template.nodesByKey.materialize_catalog;
+  const nested = expansion
+    ? plan.expansionPlan?.byNestedOwner[qualifiedNestedExpansionOwner(expansion.template.name, 'materialize_catalog')]
+    : undefined;
+  if (!expansion || expansion.depth !== 1 || expansion.parentTemplateName !== null ||
+      expansion.parentTemplateNodeKey !== null || expansion.template.input.claim !== 'project.discovery_item@1' ||
+      expansion.catalogClaimRef !== 'project.catalog@1' || expansion.itemClaimRef !== 'project.discovery_item@1' ||
+      !materialize || materialize.check.type !== PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
+      materialize.emissions.length !== 1 || materialize.emissions[0].claim !== 'component.catalog@1' ||
+      !nested || nested.depth !== 2 || nested.catalogClaimRef !== 'component.catalog@1' ||
+      nested.itemClaimRef !== 'component.work_item@1' || nested.template.input.claim !== 'component.work_item@1') {
+    checkpointAuthorityFailure('Proof current authority is not bound to the reserved project expansion');
+  }
+  return expansion;
+}
+
 function validateCheckpointPlanAuthority(
   event: InstanceRuntimeEvent,
   plan: ClaimPlan,
@@ -662,6 +726,17 @@ function validateCheckpointPlanAuthority(
       if (!catalog || claimProjection.activeClaimIdsByRef[expansion.catalogClaimRef] !== event.catalogClaimId || catalog.claim !== expansion.catalogClaimRef || catalog.producerCheckId !== event.expansionOwnerCheck || catalog.scope.length !== 0) {
         checkpointAuthorityFailure('Root expansion catalog claim is not the exact projected authority');
       }
+    }
+    return;
+  }
+  if (event.type === 'ProofCurrentCatalogAuthorityRecorded') {
+    const project = instanceProjection.instancesById[event.projectSubgraphInstanceId];
+    proofProjectExpansionForPlan(plan, project);
+    if (!project || project.status !== 'active' ||
+        canonicalJson(project.scope) !== canonicalJson(event.scope) ||
+        event.sessionId !== project.sessionId ||
+        event.authorityId !== deriveProofCurrentCatalogAuthorityId(event)) {
+      checkpointAuthorityFailure('Proof rebase event is not bound to the exact compiled project authority');
     }
     return;
   }
@@ -916,6 +991,28 @@ function ensureCheckpointQuiescent(claimProjection: ClaimProjection, instancePro
   }
 }
 
+/**
+ * Replay uses the same event-time quiescence rule as checkpoint restore.  The
+ * check must run on the projection prefix before reducing each aggregate
+ * authority event; checking only the final replayed projection would allow a
+ * later terminal event to conceal a non-quiescent authority publication.
+ */
+function ensureReplayAuthorityEventsQuiescent(
+  events: readonly CheckpointRuntimeEvent[],
+  claimPlan: ClaimPlan,
+): void {
+  let claimPrefix = createInitialClaimProjection();
+  let instancePrefix = createInitialInstanceProjection();
+  for (const event of events) {
+    const route = routeCheckpointEvent(event);
+    if (route.claim) claimPrefix = reduceClaimEvent(claimPrefix, event as ClaimRuntimeEvent, claimPlan);
+    if (route.instance) {
+      if (event.type === 'ProofCurrentCatalogAuthorityRecorded') ensureCheckpointQuiescent(claimPrefix, instancePrefix);
+      instancePrefix = reduceInstanceEvent(instancePrefix, event as InstanceRuntimeEvent);
+    }
+  }
+}
+
 export interface JournalEntry {
   commitId: number;
   sessionId: string;
@@ -1084,6 +1181,13 @@ export class ExecutionJournal {
         const legacyProofWireMode = event.type === 'ClaimPublished' && 'nodeGenerationId' in event &&
           event.claim === PROOF_CATALOG_REVALIDATION_CLAIM && event.wireMode === 'generic' &&
           !!rawEvent && (!hasOwn(rawEvent, 'wireMode') || rawEvent.wireMode === 'generic');
+        // An aggregate Proof authority is admitted only at a globally quiescent
+        // event boundary.  Check the projection prefix here, before reducing
+        // the event, so a forged checkpoint cannot hide a pending request by
+        // terminalizing it in a later event.
+        if (event.type === 'ProofCurrentCatalogAuthorityRecorded') {
+          ensureCheckpointQuiescent(claimPrefix, instancePrefix);
+        }
         validateCheckpointPlanAuthority(event as InstanceRuntimeEvent, claimPlan, claimPrefix, instancePrefix, legacyProofWireMode);
         try {
           // Preview each event to make plan authority checks resolve against the exact
@@ -1414,6 +1518,11 @@ export class ExecutionJournal {
     if (!componentView || componentView.claim !== 'component.work_item@1') componentAuthorityFailure('component WorkItem is missing from the exact component binding');
     const component = this.instanceProjection.claimsById[componentView.claimId];
     if (!component) componentAuthorityFailure('component WorkItem projection is unavailable');
+    const componentInstance = this.instanceProjection.instancesById[component.subgraphInstanceId];
+    if (!componentInstance?.parentSubgraphInstanceId) componentAuthorityFailure('component WorkItem is not nested under a project');
+    const project = this.instanceProjection.instancesById[componentInstance.parentSubgraphInstanceId];
+    if (!project) componentAuthorityFailure('component project instance is unavailable');
+    proofProjectExpansionForPlan(this.requireClaimPlan(), project);
     if (!component.controllerCatalogClaimId) componentAuthorityFailure('component WorkItem has no catalog lineage');
     const catalog = this.instanceProjection.claimsById[component.controllerCatalogClaimId];
     if (!catalog) componentAuthorityFailure('component catalog projection is unavailable');
@@ -1729,6 +1838,69 @@ export class ExecutionJournal {
     this.instanceProjection = staged.projection;
   }
 
+  /**
+   * Record one current Proof catalog authority without rewriting any
+   * historical catalog, item, or generation. Inputs are snapshotted to bytes
+   * before validation, so a caller cannot mutate a value between identity and
+   * reducer validation. The reducer is staged before the journal is changed.
+   */
+  recordProofCurrentCatalogAuthority(input: {
+    readonly projectSubgraphInstanceId: string;
+    readonly revalidationBytes: string | Uint8Array;
+    readonly workItemsBytes: string | Uint8Array;
+  }): ProofCurrentCatalogAuthorityRecordedEvent {
+    ensureCheckpointQuiescent(this.claimProjection, this.instanceProjection);
+    const project = this.instanceProjection.instancesById[input.projectSubgraphInstanceId];
+    if (!project || project.status !== 'active' || project.scope.length !== 1) {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Proof authority requires one active project instance');
+    }
+    proofProjectExpansionForPlan(this.requireClaimPlan(), project);
+    const sourceClaims = Object.values(this.instanceProjection.claimsById).filter(claim => {
+      if (!claim.active || claim.kind !== 'generated-output' || claim.claim !== 'component.catalog@1' ||
+          claim.producerCheckId !== 'materialize_catalog' || claim.subgraphInstanceId !== project.subgraphInstanceId || !claim.nodeGenerationId ||
+          !scopePathEquals(claim.scope, project.scope)) return false;
+      const generation = this.instanceProjection.generationsById[claim.nodeGenerationId];
+      return !!generation && generation.status === 'completed' && generation.checkId === 'materialize_catalog' &&
+        generation.subgraphInstanceId === project.subgraphInstanceId && generation.templateNodeKey === 'materialize_catalog' &&
+        generation.completedOutputClaimIds.length === 1 && generation.completedOutputClaimIds[0] === claim.claimId;
+    });
+    if (sourceClaims.length !== 1) {
+      throw new ClaimKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Proof authority source catalog is ambiguous or unavailable');
+    }
+    const snapshotBytes = (value: string | Uint8Array): string => {
+      const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value);
+      return bytes.toString('base64');
+    };
+    const revalidationBytesBase64 = snapshotBytes(input.revalidationBytes);
+    const workItemsBytesBase64 = snapshotBytes(input.workItemsBytes);
+    const previousAuthorityId = this.instanceProjection.currentProofCatalogAuthorityByProject[input.projectSubgraphInstanceId]?.authorityId || sourceClaims[0].claimId;
+    const event = immutableInstanceEvent({
+      version: 1,
+      type: 'ProofCurrentCatalogAuthorityRecorded',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: project.sessionId,
+      scope: project.scope as [KeyedScopePath[number]],
+      projectSubgraphInstanceId: input.projectSubgraphInstanceId,
+      sourceCatalogClaimId: sourceClaims[0].claimId,
+      previousAuthorityId,
+      authorityId: deriveProofCurrentCatalogAuthorityId({
+        sessionId: project.sessionId,
+        scope: project.scope,
+        projectSubgraphInstanceId: input.projectSubgraphInstanceId,
+        sourceCatalogClaimId: sourceClaims[0].claimId,
+        previousAuthorityId,
+        revalidationBytesBase64,
+        workItemsBytesBase64,
+      }),
+      revalidationBytesBase64,
+      workItemsBytesBase64,
+    });
+    const projected = reduceInstanceEvent(this.instanceProjection, event);
+    this.runtimeEvents.push(event);
+    this.instanceProjection = projected;
+    return event;
+  }
+
   private stageGeneratedCompletion(
     input: { attempt: GeneratedAttemptStartedEvent; payload: unknown; executionConfigDigest?: string; proofCandidateEvidence?: ProofCandidateEvidenceV1; wireMode?: GovernedWireMode },
     prefix: readonly InstanceRuntimeEvent[] = []
@@ -1984,11 +2156,13 @@ export class ExecutionJournal {
   }
 
   replayInstanceProjection(): InstanceProjection {
+    ensureReplayAuthorityEventsQuiescent(this.runtimeEvents as readonly CheckpointRuntimeEvent[], this.requireClaimPlan());
     const projection = replayInstanceEvents(
       this.runtimeEvents.filter(event =>
         [
           'CatalogReconciliationRequested',
           'SubgraphExpanded',
+          'ProofCurrentCatalogAuthorityRecorded',
           'ControllerItemClaimPublished',
           'NodeGenerationInactivated',
           'NodeGenerationActivated',

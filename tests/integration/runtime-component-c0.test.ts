@@ -7,6 +7,8 @@ import * as yaml from 'js-yaml';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapshot-store';
 import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
+import { proofCanonicalJson } from '../../src/providers/proof-wire';
+import { deriveProofCurrentCatalogAuthorityId, reduceInstanceEvent } from '../../src/state-machine/graph/instance-kernel';
 
 const PROOF_AUTHORITY = '/Users/buger/go/src/reqforge-exp-0207a-proof-cli-admission';
 const EXP0209_PROFILE = '/Users/buger/go/src/visor-exp-0208-product-native-demo-pack/examples/agent-governance/exp-0209-discovery-egress/visor.yaml';
@@ -303,7 +305,7 @@ setTimeout(() => {
       const candidateData = {
         version: 'proof.component-catalog-candidate/v1', project_id: directInventory.authority.project_id,
         components: [
-          { id: 'alpha', responsibility: 'alpha component', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'] },
+          { id: 'alpha', responsibility: 'alpha component', owned_paths: ['alpha.go'], dependency_closure: ['alpha.go'], interfaces: [{ n: -0 }] },
           { id: 'beta', responsibility: 'beta component', owned_paths: ['beta.go'], dependency_closure: ['beta.go'] },
           { id: 'gamma', responsibility: 'gamma component', owned_paths: ['gamma.go'], dependency_closure: ['gamma.go'] },
         ],
@@ -385,16 +387,19 @@ setTimeout(() => {
         wireMode: 'generic',
       }), 'INVALID_PROOF_EVIDENCE');
       const revalidator = providers.createProofCatalogRevalidationProviderFromCapability(capability);
-      await completeManaged(revalidationGeneration.nodeGenerationId, revalidator);
+      const revalidationResult = await completeManaged(revalidationGeneration.nodeGenerationId, revalidator);
       const materializeGeneration = journal.queryReadyWork().find(value => value.checkId === 'materialize_catalog')!;
       const materializer = admittedModule.createProofAdmittedCatalogProviderFromCapability(capability);
+      const materializeExecution = journal.getGeneratedExecution(materializeGeneration.nodeGenerationId);
       await completeManaged(materializeGeneration.nodeGenerationId, materializer);
-      const componentGeneration: any = journal.queryReadyWork().find(value => value.templateNodeKey === 'inspect' && value.scope.length === 2 && journal.getGeneratedExecution(value.nodeGenerationId).claims.component?.payload.component_id === 'alpha');
+      const alphaGeneration: any = journal.queryReadyWork().find(value => value.templateNodeKey === 'inspect' && value.scope.length === 2 && journal.getGeneratedExecution(value.nodeGenerationId).claims.component?.payload.component_id === 'alpha');
+      const componentGeneration: any = journal.queryReadyWork().find(value => value.templateNodeKey === 'inspect' && value.scope.length === 2 && journal.getGeneratedExecution(value.nodeGenerationId).claims.component?.payload.component_id === 'beta');
+      expect(alphaGeneration).toBeDefined();
       expect(componentGeneration).toBeDefined();
       const authority = journal.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId);
       expect(authority.candidate).toEqual(expect.objectContaining({ version: 'proof.component-catalog-candidate/v1', project_id: directInventory.authority.project_id }));
       expect(authority.admission).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: expect.objectContaining({ Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED' }), reject_code: null }));
-      expect(authority.work_item).toEqual(expect.objectContaining({ version: 'reqproof.onboarding-component-work-item/v1', component_id: 'alpha' }));
+      expect(authority.work_item).toEqual(expect.objectContaining({ version: 'reqproof.onboarding-component-work-item/v1', component_id: 'beta' }));
       expect(authority.catalog_revalidation_receipt).toEqual(expect.objectContaining({ version: 'proof.catalog-revalidation-receipt/v2' }));
 
       // Pass A checkpoint harness: component proof_admit is Pass B, so terminalize
@@ -418,12 +423,158 @@ setTimeout(() => {
       }
       expect(c0Attempt).toBeDefined();
       expect(c0Binding).toBeDefined();
+      // The managed provider publishes a compact activation projection. The
+      // aggregate authority retains only complete Proof WorkItems bytes, so
+      // obtain that exact output from the pinned command and canonicalize it
+      // with the production Proof serializer.
+      const candidateClaim: any = materializeExecution.claims.candidate;
+      const admissionClaim: any = materializeExecution.claims.receipt;
+      const revalidationClaim: any = materializeExecution.claims.current_revalidation;
+      const admissionDecision = JSON.parse((admissionClaim.payload as any).__proof_admission_wire);
+      const workItemsRequest = (receipt: unknown) => `{"version":${proofCanonicalJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(candidateClaim.payload)},"admission":${proofCanonicalJson(admissionDecision)},"revalidation_receipt":${proofCanonicalJson(receipt)}}`;
+      const runWorkItems = (receipt: unknown) => JSON.parse(runSync(binary, ['onboarding', 'work-items'], {
+        cwd: root,
+        input: workItemsRequest(receipt),
+        encoding: 'utf8',
+        maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+      }));
+      const historicalInstances = structuredClone(journal.getInstanceProjection().instancesById);
+      const historicalNodes = structuredClone(journal.getInstanceProjection().nodesById);
+      const historicalGenerations = structuredClone(journal.getInstanceProjection().generationsById);
+      const historicalClaims = structuredClone(journal.getInstanceProjection().claimsById);
+      const beforeAuthorityProjection = journal.getInstanceProjection();
+      const eventsBeforeAuthority = journal.readRuntimeEvents();
+      const checkpointBeforeAuthority = journal.exportGraphCheckpoint(sessionId);
+      const historicalRevalidationBytes = proofCanonicalJson(revalidationResult.outcome.summary.output);
+      const historicalWorkItems = runWorkItems((revalidationClaim.payload as any).receipt);
+      const historicalWorkItemsBytes = proofCanonicalJson(historicalWorkItems);
+
+      // C2a refresh harness: the historical candidate/admission remain fixed,
+      // while one real workspace input changes before Proof revalidation.
+      writeFileSync(join(root, 'alpha.go'), 'package journal\n// alpha.go changed for C2a\n', 'utf8');
+      const refreshedRevalidation = JSON.parse(runSync(binary, ['onboarding', 'revalidate'], {
+        cwd: root,
+        input: proofJSON({ version: 'proof.catalog-revalidation-request/v2', candidate: candidateClaim.payload, admission: admissionDecision }),
+        encoding: 'utf8',
+        maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+      }));
+      const refreshedWorkItems = runWorkItems(refreshedRevalidation.receipt);
+      const revalidationBytes = proofCanonicalJson(refreshedRevalidation);
+      const workItemsBytes = proofCanonicalJson(refreshedWorkItems);
+      const projectSubgraphInstanceId = journal.getInstanceProjection().instancesById[componentGeneration.subgraphInstanceId].parentSubgraphInstanceId!;
+      const authorityEvent = journal.recordProofCurrentCatalogAuthority({ projectSubgraphInstanceId, revalidationBytes, workItemsBytes });
+      expect(Object.keys(authorityEvent).sort()).toEqual([
+        'authorityId', 'eventId', 'previousAuthorityId', 'projectSubgraphInstanceId', 'revalidationBytesBase64',
+        'scope', 'sessionId', 'sourceCatalogClaimId', 'type', 'version', 'workItemsBytesBase64',
+      ].sort());
+      expect(authorityEvent.previousAuthorityId).toBe(authorityEvent.sourceCatalogClaimId);
+      const authorityProjection: any = journal.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId];
+      expect(authorityProjection.components).toHaveLength(3);
+      expect(authorityProjection.components.map((row: any) => row.componentId)).toEqual(['alpha', 'beta', 'gamma']);
+      expect(authorityProjection.components.map((row: any) => row.comparison)).toEqual(['changed', 'unchanged', 'unchanged']);
+      expect(authorityEvent.authorityId).toBe(deriveProofCurrentCatalogAuthorityId(authorityEvent));
+      const afterAuthorityProjection = journal.getInstanceProjection();
+      expect(reduceInstanceEvent(beforeAuthorityProjection, authorityEvent)).toEqual(afterAuthorityProjection);
+      expect(afterAuthorityProjection.instancesById).toEqual(historicalInstances);
+      expect(afterAuthorityProjection.nodesById).toEqual(historicalNodes);
+      expect(afterAuthorityProjection.generationsById).toEqual(historicalGenerations);
+      expect(afterAuthorityProjection.claimsById).toEqual(historicalClaims);
+      expect(journal.readRuntimeEvents().slice(0, eventsBeforeAuthority.length)).toEqual(eventsBeforeAuthority);
+      expect(proofCanonicalJson(JSON.parse(Buffer.from(authorityEvent.revalidationBytesBase64, 'base64').toString('utf8')))).toBe(revalidationBytes);
+      expect(proofCanonicalJson(JSON.parse(Buffer.from(authorityEvent.workItemsBytesBase64, 'base64').toString('utf8')))).toBe(workItemsBytes);
+      expect(historicalRevalidationBytes).not.toBe(revalidationBytes);
+      expect(historicalWorkItemsBytes).not.toBe(workItemsBytes);
+      expect(journal.replayInstanceProjection()).toEqual(afterAuthorityProjection);
+      expect(() => reduceInstanceEvent(beforeAuthorityProjection, { ...authorityEvent, unexpected: true } as any)).toThrow();
+      const staleSource = { ...authorityEvent, sourceCatalogClaimId: '0'.repeat(64) };
+      staleSource.authorityId = deriveProofCurrentCatalogAuthorityId(staleSource);
+      expect(() => reduceInstanceEvent(beforeAuthorityProjection, staleSource)).toThrow();
+      const staleSession = { ...authorityEvent, sessionId: 'foreign-session' };
+      staleSession.authorityId = deriveProofCurrentCatalogAuthorityId(staleSession);
+      expect(() => reduceInstanceEvent(beforeAuthorityProjection, staleSession)).toThrow();
+      const beforeInvalidEvents = journal.readRuntimeEvents();
+      const beforeInvalidProjection = journal.getInstanceProjection();
+      const checkpointBeforeInvalid = journal.exportGraphCheckpoint(sessionId);
+      expect(() => journal.recordProofCurrentCatalogAuthority({ projectSubgraphInstanceId, revalidationBytes: '{', workItemsBytes })).toThrow();
+      expect(journal.readRuntimeEvents()).toEqual(beforeInvalidEvents);
+      expect(journal.getInstanceProjection()).toEqual(beforeInvalidProjection);
+      expect(journal.exportGraphCheckpoint(sessionId)).toEqual(checkpointBeforeInvalid);
+      const secondAuthorityEvent = journal.recordProofCurrentCatalogAuthority({ projectSubgraphInstanceId, revalidationBytes, workItemsBytes });
+      expect(secondAuthorityEvent.previousAuthorityId).toBe(authorityEvent.authorityId);
+      expect(reduceInstanceEvent(afterAuthorityProjection, secondAuthorityEvent)).toEqual(journal.getInstanceProjection());
+      const stalePredecessor = { ...secondAuthorityEvent, previousAuthorityId: authorityEvent.sourceCatalogClaimId };
+      stalePredecessor.authorityId = deriveProofCurrentCatalogAuthorityId(stalePredecessor);
+      expect(() => reduceInstanceEvent(afterAuthorityProjection, stalePredecessor)).toThrow();
       const checkpoint = journal.exportGraphCheckpoint(sessionId);
-      const restored = ExecutionJournal.restoreGraphCheckpoint(plan, JSON.parse(JSON.stringify(checkpoint)));
+
+      const cloneValue = (value: any): any => Array.isArray(value)
+        ? value.map(cloneValue)
+        : value && typeof value === 'object'
+          ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneValue(child)]))
+          : value;
+      const rehashCheckpoint = (value: any): any => {
+        const body = {
+          kind: value.kind,
+          version: value.version,
+          sessionId: value.sessionId,
+          graphSemanticDigest: value.graphSemanticDigest,
+          frontier: value.frontier,
+          events: value.events,
+        };
+        value.integrity = { algorithm: 'sha256', digest: createHash('sha256').update(canonicalGraphCheckpointJson(body), 'utf8').digest('hex') };
+        return value;
+      };
+      const tamperLastAuthority = (mutate: (event: any) => void): any => {
+        const tampered = cloneValue(checkpoint) as any;
+        const authorityEvents = tampered.events.filter((event: any) => event.type === 'ProofCurrentCatalogAuthorityRecorded');
+        const last = authorityEvents[authorityEvents.length - 1];
+        expect(last).toBeDefined();
+        mutate(last);
+        last.authorityId = deriveProofCurrentCatalogAuthorityId(last);
+        return rehashCheckpoint(tampered);
+      };
+      const mutateSignedZeroAuthorityBytes = (event: any, field: 'revalidationBytesBase64' | 'workItemsBytesBase64'): void => {
+        const decoded: any = JSON.parse(Buffer.from(event[field], 'base64').toString('utf8'));
+        const component = decoded.catalog?.components?.find((value: any) => value.id === 'alpha');
+        expect(component?.interfaces?.[0]?.n).toBeDefined();
+        expect(Object.is(component.interfaces[0].n, -0)).toBe(true);
+        component.interfaces[0].n = 0;
+        event[field] = Buffer.from(proofCanonicalJson(decoded), 'utf8').toString('base64');
+      };
+      // Both persisted Proof-owned payloads are authenticated semantically,
+      // not just by the outer checkpoint digest.  Rehashing a signed-zero
+      // collapse must still fail the exact candidate/revalidation binding.
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperLastAuthority(event => mutateSignedZeroAuthorityBytes(event, 'revalidationBytesBase64')))).toThrow(/authority|revalidation|strict|instance replay/i);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperLastAuthority(event => mutateSignedZeroAuthorityBytes(event, 'workItemsBytesBase64')))).toThrow(/authority|work-items|strict|instance replay/i);
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, tamperLastAuthority(event => {
+        event.sourceCatalogClaimId = '0'.repeat(64);
+      }))).toThrow(/authority|catalog|source|instance replay/i);
+
+      // The final checkpoint-level quiescence check is intentionally not
+      // sufficient: this forged prefix terminalizes a request after the
+      // aggregate event.  Restore must reject at the authority event boundary.
+      const pendingJournal = ExecutionJournal.restoreGraphCheckpoint(plan, cloneValue(checkpointBeforeAuthority));
+      const pendingRequest = pendingJournal.requestCatalogReconciliation({ sessionId, ownerCheck: 'project' });
+      const pendingAttempt = pendingJournal.startCatalogRequestAttempt(pendingRequest.requestId);
+      pendingJournal.scheduleCatalogRequestAttempt({ requestId: pendingRequest.requestId, attemptId: pendingAttempt.attemptId, fence: pendingAttempt.fence });
+      const pendingFailure = pendingJournal.failAttempt({ sessionId, checkId: 'project', scope: [], attemptId: pendingAttempt.attemptId, fence: pendingAttempt.fence, reason: 'forged-terminal-after-authority' });
+      const pendingTail = pendingJournal.readRuntimeEvents().slice(eventsBeforeAuthority.length);
+      const pendingSetup = pendingTail.slice(0, -1);
+      const forgedAuthority = { ...authorityEvent, eventId: eventsBeforeAuthority.length + pendingSetup.length + 1 };
+      const forgedTerminal = { ...pendingFailure, eventId: forgedAuthority.eventId + 1 };
+      const nonquiescent = cloneValue(checkpointBeforeAuthority) as any;
+      nonquiescent.events = [...cloneValue(eventsBeforeAuthority), ...cloneValue(pendingSetup), forgedAuthority, forgedTerminal];
+      nonquiescent.frontier = { eventCount: nonquiescent.events.length, lastEventId: nonquiescent.events.length };
+      expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, rehashCheckpoint(nonquiescent))).toThrow(/quiescent|started|pending|running/i);
+
+      const restored = ExecutionJournal.restoreGraphCheckpoint(plan, cloneValue(checkpoint));
       const restoredAuthority = restored.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId);
       expect(restoredAuthority).toEqual(authority);
+      expect(restored.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId]).toEqual(journal.getInstanceProjection().currentProofCatalogAuthorityByProject[projectSubgraphInstanceId]);
       const restoredComponentExecution = restored.getGeneratedExecution(componentGeneration.nodeGenerationId);
-      const tampered: any = JSON.parse(JSON.stringify(checkpoint));
+      const tampered: any = cloneValue(checkpoint);
       const workItemEvent = tampered.events.find((value: any) => value.type === 'ControllerItemClaimPublished' && value.claim === 'component.work_item@1' && value.payload.component_id === 'alpha');
       expect(workItemEvent).toBeDefined();
       workItemEvent.payload.authority.work_item_digest = `sha256:${'0'.repeat(64)}`;

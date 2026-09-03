@@ -7,14 +7,18 @@ import {
 } from './claim-kernel';
 import { resolveJsonPointer, type CompiledExpansion } from './instance-plan';
 import {
+  PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
+  PROOF_STRUCTURAL_INVENTORY_CLAIM,
 } from './instance-plan';
 import {
   validateGovernedProofRuntimeContextAgainstClaims,
   validateProofCandidateEvidence,
   type ProofCandidateEvidenceV1,
 } from '../../providers/governed-proof-inspect-check-provider';
+import { validateProofCurrentCatalogAuthorityBytes } from '../../providers/proof-catalog-check-providers';
+import type { CandidateClaimInput } from '../../providers/check-provider.interface';
 import {
   governedCanonicalJson,
   governedPayloadFingerprint,
@@ -253,6 +257,30 @@ export function deriveCatalogRequestId(input: {
   return sha256Canonical({ v: 1, type: 'catalog-reconciliation', ...input });
 }
 
+/** Identity of one current Proof catalog authority record. Only immutable
+ * envelope fields and exact base64 bytes enter this graph identity. */
+export function deriveProofCurrentCatalogAuthorityId(input: {
+  readonly sessionId: string;
+  readonly scope: KeyedScopePath;
+  readonly projectSubgraphInstanceId: string;
+  readonly sourceCatalogClaimId: string;
+  readonly previousAuthorityId: string;
+  readonly revalidationBytesBase64: string;
+  readonly workItemsBytesBase64: string;
+}): string {
+  return sha256Canonical({
+    v: 1,
+    domain: 'proof-current-catalog-authority/v1',
+    sessionId: input.sessionId,
+    scope: validateTaggedScopePath(input.scope),
+    projectSubgraphInstanceId: input.projectSubgraphInstanceId,
+    sourceCatalogClaimId: input.sourceCatalogClaimId,
+    previousAuthorityId: input.previousAuthorityId,
+    revalidationBytesBase64: input.revalidationBytesBase64,
+    workItemsBytesBase64: input.workItemsBytesBase64,
+  });
+}
+
 export interface ManagedRunBindingV1 {
   readonly managedRunId: string;
   readonly sessionId: string;
@@ -339,6 +367,18 @@ export interface SubgraphExpandedEvent extends InstanceEventBase {
   readonly itemKey: string;
   readonly subgraphInstanceId: string;
   readonly nodeInstanceIdsByTemplateNode: Readonly<Record<string, string>>;
+}
+
+/** One authenticated aggregate record for the current Proof catalog. */
+export interface ProofCurrentCatalogAuthorityRecordedEvent extends InstanceEventBase {
+  readonly type: 'ProofCurrentCatalogAuthorityRecorded';
+  readonly scope: LevelOneKeyedScopePath;
+  readonly projectSubgraphInstanceId: string;
+  readonly sourceCatalogClaimId: string;
+  readonly previousAuthorityId: string;
+  readonly authorityId: string;
+  readonly revalidationBytesBase64: string;
+  readonly workItemsBytesBase64: string;
 }
 
 export interface ControllerItemClaimPublishedEvent extends InstanceEventBase {
@@ -514,6 +554,7 @@ export interface CatalogRequestAttemptFailedEvent extends BoundAttemptEventBase 
 export type InstanceRuntimeEvent =
   | CatalogReconciliationRequestedEvent
   | SubgraphExpandedEvent
+  | ProofCurrentCatalogAuthorityRecordedEvent
   | ControllerItemClaimPublishedEvent
   | NodeGenerationInactivatedEvent
   | NodeGenerationActivatedEvent
@@ -645,6 +686,26 @@ export interface InstanceProjection {
   readonly claimsById: Readonly<Record<string, InstanceClaimProjection>>;
   readonly attemptBindingsById: Readonly<Record<string, string>>;
   readonly managedRunsByAttemptId: Readonly<Record<string, ManagedRunProjection>>;
+  readonly currentProofCatalogAuthorityByProject: Readonly<Record<string, ProofCurrentCatalogAuthorityProjection>>;
+}
+
+export interface ProofCurrentCatalogAuthorityComponentProjection {
+  readonly componentId: string;
+  readonly subgraphInstanceId: string;
+  readonly historicalItemClaimId: string;
+  readonly historicalItemFingerprint: string;
+  readonly currentItemFingerprint: string;
+  readonly comparison: 'unchanged' | 'changed';
+}
+
+export interface ProofCurrentCatalogAuthorityProjection {
+  readonly projectSubgraphInstanceId: string;
+  readonly sourceCatalogClaimId: string;
+  readonly previousAuthorityId: string;
+  readonly authorityId: string;
+  readonly revalidationBytesBase64: string;
+  readonly workItemsBytesBase64: string;
+  readonly components: readonly ProofCurrentCatalogAuthorityComponentProjection[];
 }
 
 export type ExpansionCoverageClass =
@@ -841,6 +902,7 @@ export function createInitialInstanceProjection(): InstanceProjection {
     claimsById: {},
     attemptBindingsById: {},
     managedRunsByAttemptId: {},
+    currentProofCatalogAuthorityByProject: {},
   });
 }
 
@@ -855,7 +917,7 @@ export function immutableInstanceEvent<T extends InstanceRuntimeEvent>(event: T)
           proofCandidateEvidence: immutableProofCandidateEvidence(event.proofCandidateEvidence),
           proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint,
         }
-        : {}),
+      : {}),
     }) as T;
   }
   return immutable;
@@ -869,7 +931,17 @@ export function immutableInstanceProjection(projection: InstanceProjection): Ins
     if (source.proofCandidateEvidence !== undefined) claim.proofCandidateEvidence = immutableProofCandidateEvidence(source.proofCandidateEvidence);
     return [claimId, Object.freeze(claim)];
   }));
-  return Object.freeze({ ...immutable, claimsById: Object.freeze(claimsById) }) as InstanceProjection;
+  const currentProofCatalogAuthorityByProject = Object.fromEntries(
+    Object.entries(projection.currentProofCatalogAuthorityByProject || {}).map(([id, authority]) => [
+      id,
+      immutableGovernedValue(authority, 'proof'),
+    ])
+  );
+  return Object.freeze({
+    ...immutable,
+    claimsById: Object.freeze(claimsById),
+    currentProofCatalogAuthorityByProject: Object.freeze(currentProofCatalogAuthorityByProject),
+  }) as InstanceProjection;
 }
 
 function ownerKey(
@@ -918,6 +990,7 @@ function mutableProjection(projection: InstanceProjection): {
   claimsById: Record<string, InstanceClaimProjection>;
   attemptBindingsById: Record<string, string>;
   managedRunsByAttemptId: Record<string, ManagedRunProjection>;
+  currentProofCatalogAuthorityByProject: Record<string, ProofCurrentCatalogAuthorityProjection>;
 } {
   return {
     lastEventId: projection.lastEventId,
@@ -931,7 +1004,28 @@ function mutableProjection(projection: InstanceProjection): {
     claimsById: { ...projection.claimsById },
     attemptBindingsById: { ...projection.attemptBindingsById },
     managedRunsByAttemptId: { ...projection.managedRunsByAttemptId },
+    currentProofCatalogAuthorityByProject: { ...(projection.currentProofCatalogAuthorityByProject || {}) },
   };
+}
+
+function currentAuthorityClaimView(claim: InstanceClaimProjection): CandidateClaimInput {
+  if (claim.kind !== 'generated-output' || claim.producerAttemptId === undefined || claim.producerFence === undefined) {
+    throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Proof authority parent is not an attempt claim');
+  }
+  return {
+    claimId: claim.claimId,
+    claim: claim.claim,
+    payload: claim.payload,
+    payloadFingerprint: claim.payloadFingerprint,
+    producerCheckId: claim.producerCheckId,
+    scope: claim.scope,
+    parentClaimIds: claim.parentClaimIds,
+    wireMode: claim.wireMode,
+    provenance: 'attempt',
+    attemptId: claim.producerAttemptId,
+    fence: claim.producerFence,
+    ...(claim.proofCandidateEvidence ? { proofAdmission: claim.proofCandidateEvidence } : {}),
+  } as CandidateClaimInput;
 }
 
 function requireInstance(
@@ -1827,6 +1921,155 @@ export function reduceInstanceEvent(
         incarnation: 0,
       };
       next.instanceIdByOwnerAndKey[indexKey] = expectedId;
+      break;
+    }
+    case 'ProofCurrentCatalogAuthorityRecorded': {
+      if (!hasExactKeys(event as unknown as Record<string, unknown>, [
+        'version', 'type', 'eventId', 'sessionId', 'scope',
+        'projectSubgraphInstanceId', 'sourceCatalogClaimId',
+        'previousAuthorityId', 'authorityId', 'revalidationBytesBase64',
+        'workItemsBytesBase64',
+      ])) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Current Proof authority event has unknown or missing fields');
+      }
+      const scope = requireKeyedScopePath(event.scope);
+      if (scope.length !== 1 || typeof event.sessionId !== 'string' || event.sessionId.length === 0 ||
+          !SHA256_PATTERN.test(event.projectSubgraphInstanceId) ||
+          !SHA256_PATTERN.test(event.sourceCatalogClaimId) ||
+          !SHA256_PATTERN.test(event.previousAuthorityId) ||
+          !SHA256_PATTERN.test(event.authorityId) ||
+          typeof event.revalidationBytesBase64 !== 'string' ||
+          typeof event.workItemsBytesBase64 !== 'string') {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Current Proof authority envelope is invalid');
+      }
+      const project = projection.instancesById[event.projectSubgraphInstanceId];
+      if (!project || project.status !== 'active' || project.sessionId !== event.sessionId ||
+          !scopePathEquals(project.scope, scope)) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Current Proof authority is not bound to its exact project');
+      }
+      const source = projection.claimsById[event.sourceCatalogClaimId];
+      const sourceGeneration = source?.nodeGenerationId
+        ? projection.generationsById[source.nodeGenerationId]
+        : undefined;
+      if (!source || !source.active || source.claim !== 'component.catalog@1' ||
+          source.kind !== 'generated-output' || source.producerCheckId !== 'materialize_catalog' ||
+          !scopePathEquals(source.scope, scope) || !sourceGeneration ||
+          sourceGeneration.status !== 'completed' || sourceGeneration.checkId !== 'materialize_catalog' ||
+          source.producerAttemptId !== sourceGeneration.attemptId || source.producerFence !== sourceGeneration.fence ||
+          !sourceGeneration.scheduled ||
+          projection.activeGenerationIdByNode[sourceGeneration.nodeInstanceId] !== sourceGeneration.nodeGenerationId ||
+          sourceGeneration.completedOutputClaimIds.length !== 1 ||
+          sourceGeneration.completedOutputClaimIds[0] !== source.claimId) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Source catalog is not the exact completed materialize_catalog output');
+      }
+      const previous = (projection.currentProofCatalogAuthorityByProject || {})[event.projectSubgraphInstanceId];
+      const expectedPrevious = previous?.authorityId || event.sourceCatalogClaimId;
+      if (event.previousAuthorityId !== expectedPrevious ||
+          (previous && previous.sourceCatalogClaimId !== event.sourceCatalogClaimId)) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Current Proof authority CAS predecessor is stale');
+      }
+      const parents = source.parentClaimIds;
+      if (parents.length !== 4 || parents.some((id, index) => id !== [...parents].sort()[index]) || new Set(parents).size !== 4) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Source catalog parent lineage is not exact');
+      }
+      const parentClaims = parents.map(id => projection.claimsById[id]);
+      if (parentClaims.some(parentClaim => !parentClaim || !parentClaim.active || !scopePathEquals(parentClaim.scope, scope))) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Source catalog has an inactive or foreign parent');
+      }
+      const candidate = parentClaims.find(parentClaim => parentClaim?.claim === PROOF_CANDIDATE_CLAIM);
+      const admission = parentClaims.find(parentClaim => parentClaim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+      const inventory = parentClaims.find(parentClaim => parentClaim?.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
+      const revalidation = parentClaims.find(parentClaim => parentClaim?.claim === PROOF_CATALOG_REVALIDATION_CLAIM);
+      if (!candidate || !admission || !inventory || !revalidation ||
+          parentClaims.filter(parentClaim => parentClaim?.claim === PROOF_CANDIDATE_CLAIM).length !== 1 ||
+          parentClaims.filter(parentClaim => parentClaim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM).length !== 1 ||
+          parentClaims.filter(parentClaim => parentClaim?.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM).length !== 1 ||
+          parentClaims.filter(parentClaim => parentClaim?.claim === PROOF_CATALOG_REVALIDATION_CLAIM).length !== 1 ||
+          candidate.producerCheckId !== 'inspect' || inventory.producerCheckId !== 'structural_inventory' ||
+          revalidation.producerCheckId !== 'revalidate_catalog' || admission.producerCheckId !== 'proof_admit' ||
+          admission.parentClaimIds.length !== 1 || admission.parentClaimIds[0] !== candidate.claimId ||
+          candidate.parentClaimIds.length !== 2 || !candidate.parentClaimIds.includes(inventory.claimId) ||
+          !project.activeItemClaimId || !candidate.parentClaimIds.includes(project.activeItemClaimId) ||
+          candidate.parentClaimIds.some((id, index) => id !== [...candidate.parentClaimIds].sort()[index]) ||
+          revalidation.parentClaimIds.length !== 3 ||
+          canonicalJson(revalidation.parentClaimIds) !== canonicalJson([inventory.claimId, candidate.claimId, admission.claimId].sort())) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Source catalog candidate/admission lineage is not exact');
+      }
+      for (const parentClaim of [candidate, admission, inventory, revalidation]) {
+        const parentGeneration = parentClaim.nodeGenerationId
+          ? projection.generationsById[parentClaim.nodeGenerationId]
+          : undefined;
+        if (parentClaim.kind !== 'generated-output' || !parentGeneration ||
+            parentGeneration.status !== 'completed' || !parentGeneration.scheduled ||
+            !parentGeneration.completedOutputClaimIds.includes(parentClaim.claimId)) {
+          throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Proof source parent is not a completed generated output');
+        }
+      }
+      let validated: ReturnType<typeof validateProofCurrentCatalogAuthorityBytes>;
+      try {
+        validated = validateProofCurrentCatalogAuthorityBytes({
+          revalidationBytesBase64: event.revalidationBytesBase64,
+          workItemsBytesBase64: event.workItemsBytesBase64,
+          candidate: currentAuthorityClaimView(candidate),
+          admission: currentAuthorityClaimView(admission),
+        });
+      } catch (error) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', `Current Proof authority bytes are invalid: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const components = Object.values(projection.instancesById)
+        .filter(instance => instance.status === 'active' && instance.parentSubgraphInstanceId === project.subgraphInstanceId)
+        .sort((left, right) => Buffer.from(left.itemKey, 'utf8').compare(Buffer.from(right.itemKey, 'utf8')));
+      if (components.length !== validated.components.length ||
+          new Set(components.map(instance => instance.itemKey)).size !== components.length ||
+          components.some(instance => instance.catalogClaimId !== source.claimId ||
+            instance.catalogProducerNodeGenerationId !== sourceGeneration.nodeGenerationId ||
+            instance.expansionOwnerNodeInstanceId !== sourceGeneration.nodeInstanceId ||
+            !instance.activeItemClaimId ||
+            projection.claimsById[instance.activeItemClaimId]?.controllerCatalogClaimId !== source.claimId ||
+            canonicalJson(projection.claimsById[instance.activeItemClaimId]?.parentClaimIds || []) !== canonicalJson([source.claimId])) ||
+          components.some(instance => Object.values(projection.generationsById).some(generation =>
+            generation.subgraphInstanceId === instance.subgraphInstanceId &&
+            (generation.status === 'ready' || generation.status === 'running')))) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Current Proof authority requires the exact quiescent component set');
+      }
+      const rows = validated.components.map(component => {
+        const instance = components.find(candidateInstance => candidateInstance.itemKey === component.componentId);
+        if (!instance?.activeItemClaimId) throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', `No active historical WorkItem for component ${component.componentId}`);
+        const item = projection.claimsById[instance.activeItemClaimId];
+        if (!item || !item.active || item.claim !== 'component.work_item@1') throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', `Historical WorkItem for component ${component.componentId} is invalid`);
+        const workItem = validated.items.find(value =>
+          !!value && typeof value === 'object' && (value as Record<string, unknown>).component_id === component.componentId);
+        if (!workItem) throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', `Current WorkItem for component ${component.componentId} is missing`);
+        const currentItemFingerprint = deriveItemFingerprint(workItem);
+        return {
+          componentId: component.componentId,
+          subgraphInstanceId: instance.subgraphInstanceId,
+          historicalItemClaimId: item.claimId,
+          historicalItemFingerprint: item.payloadFingerprint,
+          currentItemFingerprint,
+          comparison: item.payloadFingerprint === currentItemFingerprint ? 'unchanged' as const : 'changed' as const,
+        };
+      });
+      if (event.authorityId !== deriveProofCurrentCatalogAuthorityId({
+        sessionId: event.sessionId,
+        scope,
+        projectSubgraphInstanceId: event.projectSubgraphInstanceId,
+        sourceCatalogClaimId: event.sourceCatalogClaimId,
+        previousAuthorityId: event.previousAuthorityId,
+        revalidationBytesBase64: event.revalidationBytesBase64,
+        workItemsBytesBase64: event.workItemsBytesBase64,
+      })) {
+        throw new InstanceKernelError('INVALID_PROOF_CURRENT_AUTHORITY', 'Current Proof authority identity is invalid');
+      }
+      next.currentProofCatalogAuthorityByProject[event.projectSubgraphInstanceId] = immutableGovernedValue({
+        projectSubgraphInstanceId: event.projectSubgraphInstanceId,
+        sourceCatalogClaimId: event.sourceCatalogClaimId,
+        previousAuthorityId: event.previousAuthorityId,
+        authorityId: event.authorityId,
+        revalidationBytesBase64: event.revalidationBytesBase64,
+        workItemsBytesBase64: event.workItemsBytesBase64,
+        components: rows,
+      }, 'proof') as ProofCurrentCatalogAuthorityProjection;
       break;
     }
     case 'ControllerItemClaimPublished': {
