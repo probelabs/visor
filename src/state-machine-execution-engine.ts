@@ -15,7 +15,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type {
   BuiltGraphCheckpointContext,
-  GraphCheckpointBootstrap,
+  ProofCurrentCatalogCheckpointBootstrap,
+  CheckpointBootstrap,
 } from './state-machine/context/build-engine-context';
 import { projectGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 
@@ -35,11 +36,46 @@ export interface GraphCheckpointContinuationResult {
   checkpoint: GraphJournalCheckpointV1;
 }
 
-interface PreparedEngineRun {
-  readonly context: EngineContext;
-  readonly result: ExecutionResult;
-  readonly requestId?: string;
+export interface ProofCurrentCatalogCheckpointInput {
+  checkpoint: unknown;
+  projectSubgraphInstanceId: string;
+  /** Exact Proof CanonicalJSON bytes returned by Proof revalidation. */
+  revalidationBytes: string | Uint8Array;
+  /** Exact Proof CanonicalJSON bytes returned by Proof work-items materialization. */
+  workItemsBytes: string | Uint8Array;
+  config: VisorConfig;
+  prInfo: PRInfo;
+  debug?: boolean;
+  maxParallelism?: number;
+  failFast?: boolean;
 }
+
+export interface ProofCurrentCatalogCheckpointResult {
+  authorityId: string;
+  mutationEventCount: number;
+  result: ExecutionResult;
+  checkpoint: GraphJournalCheckpointV1;
+}
+
+type PreparedEngineRun =
+  | {
+      readonly kind: 'normal';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+    }
+  | {
+      readonly kind: 'graph';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+      readonly requestId: string;
+    }
+  | {
+      readonly kind: 'proof-current-catalog';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+      readonly authorityId: string;
+      readonly mutationEventCount: number;
+    };
 
 /**
  * State machine-based execution engine
@@ -309,7 +345,7 @@ export class StateMachineExecutionEngine {
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter,
     _pauseGate?: () => Promise<void>,
-    graphCheckpointBootstrap?: GraphCheckpointBootstrap
+    graphCheckpointBootstrap?: CheckpointBootstrap
   ): Promise<PreparedEngineRun> {
     if (debug) {
       logger.info('[StateMachine] Using state machine engine');
@@ -346,9 +382,6 @@ export class StateMachineExecutionEngine {
     const context = graphCheckpointBootstrap
       ? (builtContext as BuiltGraphCheckpointContext).context
       : (builtContext as EngineContext);
-    const requestId = graphCheckpointBootstrap
-      ? (builtContext as BuiltGraphCheckpointContext).requestId
-      : undefined;
 
     // Register global custom tools once per run so MCP custom transport can resolve them.
     try {
@@ -700,7 +733,18 @@ export class StateMachineExecutionEngine {
         }
       }
 
-      return { context, result, requestId };
+      if (!graphCheckpointBootstrap) return { kind: 'normal', context, result };
+      const continuation = builtContext as BuiltGraphCheckpointContext;
+      if (continuation.kind === 'graph') {
+        return { kind: 'graph', context, result, requestId: continuation.requestId };
+      }
+      return {
+        kind: 'proof-current-catalog',
+        context,
+        result,
+        authorityId: continuation.authorityId,
+        mutationEventCount: continuation.mutationEventCount,
+      };
     } finally {
       // Cleanup sandbox containers
       if (context.sandboxManager) {
@@ -722,7 +766,7 @@ export class StateMachineExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     requestedChecks?: string[],
-    graphCheckpointBootstrap?: GraphCheckpointBootstrap
+    graphCheckpointBootstrap?: CheckpointBootstrap
   ): EngineContext | BuiltGraphCheckpointContext {
     const { buildEngineContextForRun } = require('./state-machine/context/build-engine-context');
     return buildEngineContextForRun(
@@ -756,14 +800,60 @@ export class StateMachineExecutionEngine {
       undefined,
       undefined,
       {
+        kind: 'graph',
         checkpoint: input.checkpoint,
         expansionOwnerCheck: input.expansionOwnerCheck,
       }
     );
 
+    if (prepared.kind !== 'graph') {
+      throw new Error('Graph checkpoint continuation did not produce a reconciliation request');
+    }
     const checkpoint = prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId);
     return {
-      requestId: prepared.requestId!,
+      requestId: prepared.requestId,
+      result: prepared.result,
+      checkpoint,
+    };
+  }
+
+  /**
+   * Continue a quiescent Proof-backed graph checkpoint with exact Proof
+   * outputs.  The private bootstrap restores and validates the checkpoint,
+   * records the supplied bytes, and applies the journal-owned replacement
+   * batch before the runner or any provider is visible.  Only the changed
+   * component generations released by that batch are dispatched.
+   */
+  public async continueProofCurrentCatalogCheckpoint(
+    input: ProofCurrentCatalogCheckpointInput
+  ): Promise<ProofCurrentCatalogCheckpointResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      undefined,
+      {
+        kind: 'proof-current-catalog',
+        checkpoint: input.checkpoint,
+        projectSubgraphInstanceId: input.projectSubgraphInstanceId,
+        revalidationBytes: input.revalidationBytes,
+        workItemsBytes: input.workItemsBytes,
+      } satisfies ProofCurrentCatalogCheckpointBootstrap
+    );
+
+    if (prepared.kind !== 'proof-current-catalog') {
+      throw new Error('Proof checkpoint continuation did not produce an authority application');
+    }
+    const checkpoint = prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId);
+    return {
+      authorityId: prepared.authorityId,
+      mutationEventCount: prepared.mutationEventCount,
       result: prepared.result,
       checkpoint,
     };

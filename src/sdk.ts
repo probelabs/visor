@@ -12,6 +12,8 @@ import type { ExecutionContext } from './providers/check-provider.interface';
 import type {
   GraphCheckpointContinuationInput,
   GraphCheckpointContinuationResult,
+  ProofCurrentCatalogCheckpointInput,
+  ProofCurrentCatalogCheckpointResult,
 } from './state-machine-execution-engine';
 import type { GraphJournalCheckpointV1 } from './snapshot-store';
 import type {
@@ -30,6 +32,8 @@ export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
 export type {
   GraphCheckpointContinuationInput,
   GraphCheckpointContinuationResult,
+  ProofCurrentCatalogCheckpointInput,
+  ProofCurrentCatalogCheckpointResult,
   GraphJournalCheckpointV1,
   GovernedGraphAnyTerminalReceipt,
   GovernedGraphAnyTerminalReceiptDraft,

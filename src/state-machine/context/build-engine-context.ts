@@ -13,14 +13,40 @@ import { compileClaimPlan } from '../graph/claim-plan';
 
 /** Private bootstrap used only by the engine's one-shot Graph checkpoint continuation. */
 export interface GraphCheckpointBootstrap {
+  readonly kind: 'graph';
   readonly checkpoint: unknown;
   readonly expansionOwnerCheck: string;
 }
 
-export interface BuiltGraphCheckpointContext {
-  readonly context: EngineContext;
-  readonly requestId: string;
+/**
+ * Private bootstrap for a Proof catalog refresh.  The public SDK deliberately
+ * does not expose graph mutations: it supplies only the checkpoint and the
+ * exact Proof output bytes, which the journal authenticates and projects.
+ */
+export interface ProofCurrentCatalogCheckpointBootstrap {
+  readonly kind: 'proof-current-catalog';
+  readonly checkpoint: unknown;
+  readonly projectSubgraphInstanceId: string;
+  readonly revalidationBytes: string | Uint8Array;
+  readonly workItemsBytes: string | Uint8Array;
 }
+
+export type CheckpointBootstrap =
+  | GraphCheckpointBootstrap
+  | ProofCurrentCatalogCheckpointBootstrap;
+
+export type BuiltGraphCheckpointContext =
+  | {
+      readonly kind: 'graph';
+      readonly context: EngineContext;
+      readonly requestId: string;
+    }
+  | {
+      readonly kind: 'proof-current-catalog';
+      readonly context: EngineContext;
+      readonly authorityId: string;
+      readonly mutationEventCount: number;
+    };
 
 /**
  * Apply minimal criticality defaults in-place.
@@ -61,7 +87,7 @@ export function buildEngineContextForRun(
   maxParallelism?: number,
   failFast?: boolean,
   requestedChecks?: string[],
-  graphCheckpointBootstrap?: GraphCheckpointBootstrap
+  graphCheckpointBootstrap?: CheckpointBootstrap
 ): BuiltGraphCheckpointContext;
 export function buildEngineContextForRun(
   workingDirectory: string,
@@ -71,7 +97,7 @@ export function buildEngineContextForRun(
   maxParallelism?: number,
   failFast?: boolean,
   requestedChecks?: string[],
-  graphCheckpointBootstrap?: GraphCheckpointBootstrap
+  graphCheckpointBootstrap?: CheckpointBootstrap
 ): EngineContext | BuiltGraphCheckpointContext {
   // Deep clone provided config to avoid cross-run mutations between tests/runs
   const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
@@ -96,7 +122,10 @@ export function buildEngineContextForRun(
   // session after it succeeds.
   let journal: ExecutionJournal;
   let sessionId: string;
-  let requestId: string | undefined;
+  let checkpointResult:
+    | { readonly kind: 'graph'; readonly requestId: string }
+    | { readonly kind: 'proof-current-catalog'; readonly authorityId: string; readonly mutationEventCount: number }
+    | undefined;
   if (graphCheckpointBootstrap) {
     journal = ExecutionJournal.restoreGraphCheckpoint(
       claimPlan,
@@ -104,10 +133,32 @@ export function buildEngineContextForRun(
     );
     const validatedCheckpoint = graphCheckpointBootstrap.checkpoint as GraphJournalCheckpointV1;
     sessionId = validatedCheckpoint.sessionId;
-    requestId = journal.requestCatalogReconciliation({
-      sessionId,
-      ownerCheck: graphCheckpointBootstrap.expansionOwnerCheck,
-    }).requestId;
+    if (graphCheckpointBootstrap.kind === 'graph') {
+      const requestId = journal.requestCatalogReconciliation({
+        sessionId,
+        ownerCheck: graphCheckpointBootstrap.expansionOwnerCheck,
+      }).requestId;
+      checkpointResult = { kind: 'graph', requestId };
+    } else {
+      // The Proof branch is intentionally a private, unpublished journal
+      // transaction.  The journal performs the topology/quiescence gate and
+      // validates the untrusted exact bytes before any engine context is
+      // published or any provider can be launched.
+      const authority = journal.recordProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId: graphCheckpointBootstrap.projectSubgraphInstanceId,
+        revalidationBytes: graphCheckpointBootstrap.revalidationBytes,
+        workItemsBytes: graphCheckpointBootstrap.workItemsBytes,
+      });
+      const applied = journal.applyProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId: graphCheckpointBootstrap.projectSubgraphInstanceId,
+        authorityId: authority.authorityId,
+      });
+      checkpointResult = {
+        kind: 'proof-current-catalog',
+        authorityId: applied.authorityId,
+        mutationEventCount: applied.mutationEventCount,
+      };
+    }
   } else {
     sessionId = generateHumanId();
     journal = new ExecutionJournal(claimPlan);
@@ -231,9 +282,14 @@ export function buildEngineContextForRun(
   };
 
   if (graphCheckpointBootstrap) {
-    // requestCatalogReconciliation always returns a request for a valid owner;
-    // retain that exact ID without inserting a second request later.
-    return { context, requestId: requestId! };
+    // Generic continuation retains its exact request ID. Proof continuation
+    // intentionally has no request suffix; the applied authority has already
+    // released only the changed generations for LevelDispatch.
+    if (!checkpointResult) throw new Error('Checkpoint continuation result was not created');
+    if (checkpointResult.kind === 'graph') {
+      return { kind: 'graph', context, requestId: checkpointResult.requestId };
+    }
+    return { kind: 'proof-current-catalog', context, authorityId: checkpointResult.authorityId, mutationEventCount: checkpointResult.mutationEventCount };
   }
   return context;
 }
