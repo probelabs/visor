@@ -150,6 +150,7 @@ steps:
         - Are boundaries and interfaces well-defined?
 
         Flag issues where simpler solutions exist, special cases are introduced unnecessarily, or existing functionality could be reused.
+        Do not raise issues about unsupported language features - it is the linter job.
 
         ## Severity Guidelines
         Use the following severity levels appropriately:
