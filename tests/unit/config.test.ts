@@ -3,6 +3,9 @@ import { ConfigManager } from '../../src/config';
 import { VisorConfig } from '../../src/types/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
+import Ajv from 'ajv';
+import { configSchema } from '../../src/generated/config-schema';
 
 // Mock fs module
 jest.mock('fs');
@@ -124,6 +127,189 @@ checks:
   });
 
   describe('Schema Validation', () => {
+    it('recognizes proof-admit as a type but rejects it at the root policy boundary', () => {
+      const config: any = {
+        version: '1.0',
+        checks: { proof: { type: 'proof-admit' } },
+      };
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(config)).toBe(true);
+      expect(() => configManager.validateConfig(config)).toThrow('RESERVED_PROOF_ADMISSION_ROOT');
+    });
+
+    it('accepts the human-readable Graph v2 C1 fixture through generated schema and semantics', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../fixtures/graph-v2/terminal-typed-claim.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as VisorConfig;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(parsed)).toBe(true);
+      expect(validate.errors).toBeNull();
+      expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('accepts the human-readable Graph v2 C2 dynamic-instance fixture', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../fixtures/graph-v2/dynamic-component-instances.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as VisorConfig;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(parsed)).toBe(true);
+      expect(validate.errors).toBeNull();
+      expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('rejects malformed C2 references and executable template control flow prelaunch', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../fixtures/graph-v2/dynamic-component-instances.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as any;
+      parsed.checks['discover-components'].expand.template = 'missing-template';
+      expect(() => configManager.validateConfig(parsed)).toThrow('UNKNOWN_SUBGRAPH_TEMPLATE');
+
+      const routed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as any;
+      routed.subgraphs['onboard-component'].checks.inspect.on_success = {
+        run: ['summarize'],
+      };
+      expect(() => configManager.validateConfig(routed)).toThrow(
+        'UNSUPPORTED_TEMPLATE_EXECUTION'
+      );
+    });
+
+    it.each(['emits', 'consumes'])('rejects property-present empty %s before launch', field => {
+      const config: any = {
+        version: '1.0',
+        checks: { check: { type: 'noop', [field]: [] } },
+      };
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(config)).toBe(false);
+      expect(validate.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ keyword: 'minItems', params: { limit: 1 } }),
+        ])
+      );
+      expect(() => configManager.validateConfig(config)).toThrow('non-empty array');
+    });
+
+    it('rejects misspelled claim-schema keywords with a stable code', () => {
+      const config: any = {
+        version: '1.0',
+        claim_types: {
+          'fixture.ready@1': { schema: { type: 'object', propertiez: { value: {} } } },
+        },
+        checks: { producer: { type: 'noop' } },
+      };
+      expect(() => configManager.validateConfig(config)).toThrow('INVALID_CLAIM_SCHEMA');
+    });
+
+    it('rejects claim-mode OR tokens while preserving legacy OR validation', () => {
+      const config: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          a: { type: 'noop' },
+          b: { type: 'noop' },
+          c: { type: 'noop', depends_on: 'a|b' },
+        },
+      };
+      expect(() => configManager.validateConfig(config)).toThrow(
+        'UNSUPPORTED_CLAIM_OR_DEPENDENCY'
+      );
+      delete config.claim_types;
+      expect(() => configManager.validateConfig(config)).not.toThrow();
+    });
+
+    it('rejects wrong or undeclared claim versions at ConfigManager boundary', () => {
+      const config: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          producer: {
+            type: 'noop',
+            emits: [{ claim: 'fixture.ready@1', from: 'output' }],
+          },
+          consumer: {
+            type: 'noop',
+            consumes: [{ claim: 'fixture.ready@2', cardinality: 'one' }],
+          },
+        },
+      };
+      expect(() => configManager.validateConfig(config)).toThrow('undeclared claim');
+    });
+
+    it('rejects duplicate claim emitters and claim-consumption cycles at ConfigManager boundary', () => {
+      const duplicate: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          a: { type: 'noop', emits: [{ claim: 'fixture.ready@1', from: 'output' }] },
+          b: { type: 'noop', emits: [{ claim: 'fixture.ready@1', from: 'output' }] },
+        },
+      };
+      expect(() => configManager.validateConfig(duplicate)).toThrow('duplicate emitters');
+
+      const cycle: any = {
+        version: '1.0',
+        claim_types: {
+          'fixture.a@1': { schema: { type: 'object' } },
+          'fixture.b@1': { schema: { type: 'object' } },
+        },
+        checks: {
+          a: {
+            type: 'noop',
+            emits: [{ claim: 'fixture.a@1', from: 'output' }],
+            consumes: [{ claim: 'fixture.b@1', cardinality: 'one' }],
+          },
+          b: {
+            type: 'noop',
+            emits: [{ claim: 'fixture.b@1', from: 'output' }],
+            consumes: [{ claim: 'fixture.a@1', cardinality: 'one' }],
+          },
+        },
+      };
+      expect(() => configManager.validateConfig(cycle)).toThrow(
+        'Claim dependency cycle detected'
+      );
+    });
+
+    it('rejects non-root claim declarations and preserves legacy configs', () => {
+      const nonRoot: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          producer: {
+            type: 'noop',
+            forEach: true,
+            emits: [{ claim: 'fixture.ready@1', from: 'output' }],
+          },
+        },
+      };
+      expect(() => configManager.validateConfig(nonRoot)).toThrow('root-scope only');
+      expect(() =>
+        configManager.validateConfig({
+          version: '1.0',
+          checks: {
+            first: { type: 'noop' },
+            second: { type: 'noop', depends_on: 'first' },
+          },
+        })
+      ).not.toThrow();
+    });
+
     it('should validate required version field', async () => {
       const configWithoutVersion = `
 checks:

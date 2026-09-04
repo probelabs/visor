@@ -7,6 +7,7 @@ import type { ReviewSummary } from '../reviewer';
 import type { CheckExecutionStats } from './execution';
 import type { WorkspaceManager } from '../utils/workspace-manager';
 import type { SandboxManager } from '../sandbox/sandbox-manager';
+import type { ClaimPlan } from '../state-machine/graph/claim-plan';
 
 /**
  * Engine execution modes
@@ -42,7 +43,18 @@ export type EngineEvent =
   | { type: 'WaveRequested'; wave: number }
   | { type: 'LevelReady'; level: ExecutionGroup; wave: number }
   | { type: 'LevelDepleted'; level: number; wave: number }
-  | { type: 'CheckScheduled'; checkId: string; scope: ScopePath }
+  | {
+      type: 'CheckScheduled';
+      checkId: string;
+      scope: ScopePath;
+      attemptId?: string;
+      fence?: number;
+      /** Journal-derived exact claim IDs exposed only after authoritative scheduling. */
+      claimIds?: readonly string[];
+      nodeInstanceId?: string;
+      nodeGenerationId?: string;
+      requestId?: string;
+    }
   | {
       type: 'CheckCompleted';
       checkId: string;
@@ -112,6 +124,8 @@ export interface EngineContext {
   config: VisorConfig;
   dependencyGraph?: DependencyGraph;
   checks: Record<string, CheckMetadata>;
+  /** Immutable compiled Graph v2 claim bindings, when claim mode is active. */
+  claimPlan?: ClaimPlan;
   journal: ExecutionJournal;
   memory: MemoryStore;
   gitHubChecks?: GitHubCheckService;

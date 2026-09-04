@@ -1,6 +1,40 @@
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { EnvConfig, HumanInputRequest } from '../types/config';
+import type { ScopePath } from '../snapshot-store';
+import type {
+  KeyedScopePath,
+  ManagedRunBindingV1,
+} from '../state-machine/graph/instance-kernel';
+
+interface CandidateClaimInputBase {
+  readonly claimId: string;
+  readonly claim: string;
+  readonly payload: unknown;
+  readonly payloadFingerprint: string;
+  readonly producerCheckId: string;
+  readonly scope: Readonly<ScopePath> | KeyedScopePath;
+  readonly parentClaimIds: readonly string[];
+}
+
+/** Exact, immutable candidate claim view granted to a consuming provider. */
+export type CandidateClaimInput = CandidateClaimInputBase &
+  (
+    | {
+        /** Root and generated claims retain their actual producer attempt authority. */
+        readonly provenance?: 'attempt';
+        readonly attemptId: string;
+        readonly fence: number;
+      }
+    | {
+        /** Controller item claims are derived from an expansion and have no fake attempt. */
+        readonly provenance: 'controller';
+        readonly catalogClaimId: string;
+        readonly incarnation: number;
+        readonly attemptId?: never;
+        readonly fence?: never;
+      }
+  );
 
 /**
  * Configuration for a check provider
@@ -60,6 +94,14 @@ export interface ExecutionContext {
   workflowInputs?: Record<string, unknown>;
   /** Custom arguments passed from on_init 'with' directive */
   args?: Record<string, unknown>;
+  /** Exact declared candidate claims. No global/nearest output fallback is applied. */
+  claims?: Readonly<Record<string, CandidateClaimInput>>;
+  /** Journal-derived dynamic node identity; present only for generated C2 work. */
+  nodeInstanceId?: string;
+  /** Journal-derived active generation identity; present only for generated C2 work. */
+  nodeGenerationId?: string;
+  /** Exact immutable keyed scope for generated C2 work. */
+  scope?: Readonly<ScopePath> | KeyedScopePath;
   /** SDK hooks for human input and check completion */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;
@@ -105,6 +147,66 @@ export interface ExecutionContext {
   responseCapture?: (text: string) => void;
 }
 
+/** Immutable controller inputs for synchronous managed-run acquisition. */
+export interface ManagedRunStartRequest {
+  readonly prInfo: PRInfo;
+  readonly checkConfig: CheckProviderConfig;
+  readonly dependencyResults: ReadonlyMap<string, ReviewSummary>;
+  readonly executionContext: ExecutionContext;
+  readonly binding: ManagedRunBindingV1;
+}
+
+export interface ManagedRunStartedReceiptV1 {
+  readonly version: 1;
+  readonly kind: 'started';
+  readonly binding: ManagedRunBindingV1;
+}
+
+export interface ManagedRunSucceededOutcomeV1 {
+  readonly version: 1;
+  readonly kind: 'succeeded';
+  readonly binding: ManagedRunBindingV1;
+  readonly summary: ReviewSummary;
+}
+
+export interface ManagedRunFailedOutcomeV1 {
+  readonly version: 1;
+  readonly kind: 'failed';
+  readonly binding: ManagedRunBindingV1;
+}
+
+export type ManagedRunOutcomeV1 =
+  | ManagedRunSucceededOutcomeV1
+  | ManagedRunFailedOutcomeV1;
+
+export interface ManagedRunCancelReceiptV1 {
+  readonly version: 1;
+  readonly kind: 'cancelled';
+  readonly binding: ManagedRunBindingV1;
+  readonly reason: 'deadline';
+}
+
+export interface ManagedRunCleanupReceiptV1 {
+  readonly version: 1;
+  readonly kind: 'cleanup';
+  readonly binding: ManagedRunBindingV1;
+  readonly status: 'clean';
+  readonly activeChildren: 0;
+  readonly activeResources: 0;
+}
+
+/** Exact close-capable handle whose authority is snapshotted synchronously by Visor. */
+export interface ManagedAgentRun {
+  readonly binding: ManagedRunBindingV1;
+  readonly started: Promise<ManagedRunStartedReceiptV1>;
+  readonly outcome: Promise<ManagedRunOutcomeV1>;
+  readonly cancel: (
+    reason: 'deadline',
+    fence: number
+  ) => Promise<ManagedRunCancelReceiptV1>;
+  readonly close: () => Promise<ManagedRunCleanupReceiptV1>;
+}
+
 /**
  * Abstract base class for all check providers
  * Implementing classes provide specific check functionality (AI, tool, script, etc.)
@@ -141,6 +243,12 @@ export abstract class CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     context?: ExecutionContext
   ): Promise<ReviewSummary>;
+
+  /**
+   * Synchronously acquire an exact close-capable managed run. Visor validates
+   * and snapshots the returned handle before awaiting provider-controlled data.
+   */
+  startManaged?(request: ManagedRunStartRequest): ManagedAgentRun;
 
   /**
    * Get the list of configuration keys this provider supports

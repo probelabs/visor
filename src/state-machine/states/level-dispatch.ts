@@ -23,9 +23,31 @@ import type {
 import { logger } from '../../logger';
 import type { ReviewSummary, ReviewIssue } from '../../reviewer';
 import type { CheckExecutionStats } from '../../types/execution';
-import type { CheckProviderConfig } from '../../providers/check-provider.interface';
+import type {
+  CandidateClaimInput,
+  CheckProviderConfig,
+  ManagedRunOutcomeV1,
+  ManagedRunStartedReceiptV1,
+} from '../../providers/check-provider.interface';
 import type { CheckConfig } from '../../types/config';
-import { handleRouting, checkLoopBudget } from './routing';
+import type {
+  CatalogRequestAttemptStartedEvent,
+  CatalogRequestProjection,
+  GeneratedAttemptStartedEvent,
+  KeyedScopePath,
+  ManagedRunAcquisitionFailureCode,
+  ManagedRunBindingV1,
+  ManagedRunCleanupStatus,
+  ManagedRunFailureCode,
+  NodeGenerationProjection,
+} from '../graph/instance-kernel';
+import {
+  applyManagedRoutingEffects,
+  evaluateManagedRouting,
+  handleRouting,
+  checkLoopBudget,
+  type ManagedRoutingDecision,
+} from './routing';
 import {
   withActiveSpan,
   setSpanAttributes,
@@ -40,7 +62,47 @@ import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 import { applyPolicyGate } from '../dispatch/policy-gate';
 import { getDebounceManager } from '../dispatch/debounce-manager';
+import {
+  armManagedRunDeadline,
+  normalizeManagedRunCancelReceipt,
+  normalizeManagedRunCleanupReceipt,
+  normalizeManagedRunOutcome,
+  normalizeManagedRunStartedReceipt,
+  normalizeManagedRunTimeout,
+  snapshotManagedRun,
+  snapshotManagedRunStartRequest,
+  ManagedRunProtocolError,
+  type ManagedRunDeadlineSettlement,
+  type ManagedRunSnapshot,
+} from '../dispatch/managed-run';
 import { createExtendedLiquid } from '../../liquid-extensions';
+
+type GeneratedTerminalPhase =
+  | 'undecided'
+  | 'legacy'
+  | 'managed_pre_acquisition'
+  | 'managed_acquired'
+  | 'terminal';
+
+interface GeneratedAttemptTerminalLatch {
+  phase: GeneratedTerminalPhase;
+  terminalizeFailure?: (code: ManagedRunFailureCode) => Promise<void>;
+  readonly markHaltApplied: () => void;
+}
+
+type DynamicExecution =
+  | {
+      readonly kind: 'generated';
+      readonly attempt: GeneratedAttemptStartedEvent;
+      readonly checkConfig: CheckConfig;
+      readonly claims: Readonly<Record<string, CandidateClaimInput>>;
+      readonly terminalLatch: GeneratedAttemptTerminalLatch;
+    }
+  | {
+      readonly kind: 'catalog-request';
+      readonly attempt: CatalogRequestAttemptStartedEvent;
+      readonly checkConfig: CheckConfig;
+    };
 
 function isEngineerCheck(checkId: string): boolean {
   return checkId === 'engineer-task';
@@ -74,6 +136,238 @@ function startCheckProgressTelemetry(
 
 function stopCheckProgressTelemetry(timer: ReturnType<typeof setInterval> | null): void {
   if (timer) clearInterval(timer);
+}
+
+interface ManagedProviderSettlement {
+  readonly result?: ReviewSummary;
+  readonly cleanupStatus: ManagedRunCleanupStatus;
+  readonly failureCode?: ManagedRunFailureCode;
+}
+
+type DeadlineSignal =
+  | { readonly kind: 'deadline'; readonly settlement: ManagedRunDeadlineSettlement }
+  | { readonly kind: 'deadline_callback_failed' };
+
+// Capture the managed controller's Promise intrinsics at module load. Managed
+// coordination never performs a late provider/prototype/global lookup.
+const ManagedControllerPromise = Promise;
+const managedPromiseThen = Promise.prototype.then;
+
+function thenManagedPromise<T, Fulfilled = T, Rejected = never>(
+  promise: Promise<T>,
+  onFulfilled?: (value: T) => Fulfilled | PromiseLike<Fulfilled>,
+  onRejected?: (reason: unknown) => Rejected | PromiseLike<Rejected>
+): Promise<Fulfilled | Rejected> {
+  return Reflect.apply(managedPromiseThen, promise, [onFulfilled, onRejected]) as Promise<
+    Fulfilled | Rejected
+  >;
+}
+
+function raceManagedPromises<T>(promises: readonly Promise<T>[]): Promise<T> {
+  return new ManagedControllerPromise<T>((resolve, reject) => {
+    for (const promise of promises) {
+      Reflect.apply(managedPromiseThen, promise, [resolve, reject]);
+    }
+  });
+}
+
+function resolveManagedPromise(): Promise<void> {
+  return new ManagedControllerPromise(resolve => resolve());
+}
+
+function settled<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
+  return thenManagedPromise(
+    promise,
+    value => ({ status: 'fulfilled' as const, value }),
+    reason => ({ status: 'rejected' as const, reason })
+  );
+}
+
+function protocolFailure(
+  error: unknown,
+  fallback: ManagedRunFailureCode
+): ManagedRunFailureCode {
+  return error instanceof ManagedRunProtocolError ? error.code : fallback;
+}
+
+function validateManagedCleanup(
+  snapshot: ManagedRunSnapshot,
+  close: PromiseSettledResult<unknown>
+): { cleanupStatus: ManagedRunCleanupStatus; failureCode?: ManagedRunFailureCode } {
+  if (close.status === 'rejected') {
+    return {
+      cleanupStatus: 'unverified',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    };
+  }
+  try {
+    normalizeManagedRunCleanupReceipt(close.value, snapshot.binding);
+    return { cleanupStatus: 'clean' };
+  } catch (error) {
+    return {
+      cleanupStatus: 'unverified',
+      failureCode: protocolFailure(error, 'MANAGED_CLEANUP_RECEIPT_INVALID'),
+    };
+  }
+}
+
+function validateManagedCancel(
+  snapshot: ManagedRunSnapshot,
+  cancel: PromiseSettledResult<unknown>
+): ManagedRunFailureCode | undefined {
+  if (cancel.status === 'rejected') {
+    return 'MANAGED_CANCEL_FAILED';
+  }
+  try {
+    normalizeManagedRunCancelReceipt(cancel.value, snapshot.binding);
+    return undefined;
+  } catch (error) {
+    return protocolFailure(error, 'MANAGED_CANCEL_RECEIPT_INVALID');
+  }
+}
+
+async function runManagedProvider(input: {
+  readonly snapshot: ManagedRunSnapshot;
+  readonly timeoutMs: number;
+  readonly onStarted: () => void;
+  readonly onStartedObserved: () => void;
+  readonly onCancelRequested: () => void;
+}): Promise<ManagedProviderSettlement> {
+  let deadline: ReturnType<typeof armManagedRunDeadline> | undefined;
+  try {
+    const activeDeadline = armManagedRunDeadline({
+      snapshot: input.snapshot,
+      timeoutMs: normalizeManagedRunTimeout(input.timeoutMs),
+      onCancelRequested: input.onCancelRequested,
+    });
+    deadline = activeDeadline;
+    const deadlineSignal: Promise<DeadlineSignal> = thenManagedPromise(
+      activeDeadline.fired,
+      settlement => ({ kind: 'deadline' as const, settlement }),
+      () => ({ kind: 'deadline_callback_failed' as const })
+    );
+
+    const finishDeadline = async (
+      signal: DeadlineSignal,
+      ordinaryClose?: Promise<PromiseSettledResult<unknown>>
+    ): Promise<ManagedProviderSettlement> => {
+      const close = signal.kind === 'deadline'
+        ? signal.settlement.close
+        : await (ordinaryClose || settled(input.snapshot.closeOnce()));
+      const cleanup = validateManagedCleanup(input.snapshot, close);
+      if (cleanup.failureCode) return cleanup;
+      if (signal.kind === 'deadline') {
+        if (!signal.settlement.cancelRequested || !signal.settlement.cancel) {
+          return {
+            cleanupStatus: cleanup.cleanupStatus,
+            failureCode: 'MANAGED_POST_PROVIDER_FAILED',
+          };
+        }
+        const cancelFailure = validateManagedCancel(input.snapshot, signal.settlement.cancel);
+        if (cancelFailure) {
+          return { cleanupStatus: cleanup.cleanupStatus, failureCode: cancelFailure };
+        }
+        return {
+          cleanupStatus: cleanup.cleanupStatus,
+          failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+        };
+      }
+      return {
+        cleanupStatus: cleanup.cleanupStatus,
+        failureCode: 'MANAGED_POST_PROVIDER_FAILED',
+      };
+    };
+
+    const finishOrdinary = async (
+      baseFailure: ManagedRunFailureCode | undefined,
+      result?: ReviewSummary
+    ): Promise<ManagedProviderSettlement> => {
+      const close = settled(input.snapshot.closeOnce());
+      const winner = await raceManagedPromises<
+        | { readonly kind: 'close'; readonly value: PromiseSettledResult<unknown> }
+        | DeadlineSignal
+      >([
+        thenManagedPromise(close, value => ({ kind: 'close' as const, value })),
+        deadlineSignal,
+      ]);
+      if (winner.kind !== 'close') return finishDeadline(winner, close);
+      if (activeDeadline.didFire()) return finishDeadline(await deadlineSignal, close);
+
+      activeDeadline.clear();
+      const cleanup = validateManagedCleanup(input.snapshot, winner.value);
+      if (cleanup.failureCode) return cleanup;
+      return {
+        ...(baseFailure ? { failureCode: baseFailure } : { result }),
+        cleanupStatus: cleanup.cleanupStatus,
+      };
+    };
+
+    const started = await raceManagedPromises<
+      | {
+          readonly kind: 'started';
+          readonly value: PromiseSettledResult<ManagedRunStartedReceiptV1>;
+        }
+      | DeadlineSignal
+    >([
+      thenManagedPromise(
+        settled(input.snapshot.started),
+        value => ({ kind: 'started' as const, value })
+      ),
+      deadlineSignal,
+    ]);
+    if (started.kind !== 'started') return finishDeadline(started);
+    if (activeDeadline.didFire()) return finishDeadline(await deadlineSignal);
+    if (started.value.status === 'rejected') {
+      return finishOrdinary('MANAGED_STARTED_RECEIPT_INVALID');
+    }
+    try {
+      normalizeManagedRunStartedReceipt(started.value.value, input.snapshot.binding);
+      input.onStarted();
+    } catch (error) {
+      return finishOrdinary(protocolFailure(error, 'MANAGED_STARTED_RECEIPT_INVALID'));
+    }
+    try {
+      input.onStartedObserved();
+    } catch {}
+
+    const outcome = await raceManagedPromises<
+      | {
+          readonly kind: 'outcome';
+          readonly value: PromiseSettledResult<ManagedRunOutcomeV1>;
+        }
+      | DeadlineSignal
+    >([
+      thenManagedPromise(
+        settled(input.snapshot.outcome),
+        value => ({ kind: 'outcome' as const, value })
+      ),
+      deadlineSignal,
+    ]);
+    if (outcome.kind !== 'outcome') return finishDeadline(outcome);
+    if (activeDeadline.didFire()) return finishDeadline(await deadlineSignal);
+    if (outcome.value.status === 'rejected') {
+      return finishOrdinary('MANAGED_OUTCOME_FAILED');
+    }
+    try {
+      const normalized = normalizeManagedRunOutcome(outcome.value.value, input.snapshot.binding);
+      if (normalized.kind === 'failed') return finishOrdinary('MANAGED_OUTCOME_FAILED');
+      return finishOrdinary(undefined, normalized.summary);
+    } catch (error) {
+      return finishOrdinary(protocolFailure(error, 'MANAGED_OUTCOME_RECEIPT_INVALID'));
+    }
+  } catch {
+    deadline?.clear();
+    const cleanup = validateManagedCleanup(
+      input.snapshot,
+      await settled(input.snapshot.closeOnce())
+    );
+    return cleanup.failureCode
+      ? cleanup
+      : {
+          cleanupStatus: cleanup.cleanupStatus,
+          failureCode: 'MANAGED_POST_PROVIDER_FAILED',
+        };
+  }
 }
 
 /**
@@ -203,6 +497,19 @@ function buildOutputHistoryFromJournal(context: EngineContext): Map<string, unkn
   return outputHistory;
 }
 
+function buildExactClaimResults(
+  claims: Readonly<Record<string, CandidateClaimInput>>
+): Map<string, ReviewSummary> {
+  const results = new Map<string, ReviewSummary>();
+  for (const claim of Object.values(claims)) {
+    const summary: ReviewSummary = { issues: [], output: claim.payload };
+    Object.freeze(summary.issues);
+    Object.freeze(summary);
+    results.set(claim.producerCheckId, summary);
+  }
+  return results;
+}
+
 /**
  * Evaluate 'if' condition for a check
  *
@@ -214,7 +521,8 @@ async function evaluateIfCondition(
   checkId: string,
   checkConfig: CheckConfig,
   context: EngineContext,
-  state: RunState
+  state: RunState,
+  exactPreviousResults?: ReadonlyMap<string, ReviewSummary>
 ): Promise<boolean> {
   const ifExpression = checkConfig.if;
   if (!ifExpression) {
@@ -253,7 +561,9 @@ async function evaluateIfCondition(
     // avoid wrongly skipping top-level prompts like 'ask'.
     const useGlobalOutputs = hasDeps || (useGlobalOutputsFlag && waveKind === 'forward');
 
-    if (useGlobalOutputs) {
+    if (exactPreviousResults) {
+      for (const [key, result] of exactPreviousResults) previousResults.set(key, result);
+    } else if (useGlobalOutputs) {
       // Forward-run wave: allow guards to consult latest outputs from the entire
       // journal so follow-up steps (e.g., post-verified after run-review) can
       // see the outputs produced in the prior wave that scheduled this forward-run.
@@ -343,6 +653,11 @@ export async function handleLevelDispatch(
   transition: (newState: EngineState) => void,
   emitEvent: (event: EngineEvent) => void
 ): Promise<void> {
+  if (context.claimPlan?.active) {
+    await handleClaimReadyDispatch(context, state, transition, emitEvent);
+    return;
+  }
+
   // Pop next level from queue
   const level = state.levelQueue.shift();
 
@@ -431,6 +746,223 @@ export async function handleLevelDispatch(
   } else {
     logger.info('[LevelDispatch] Skipping transition to WavePlanning - already in Error state');
   }
+}
+
+/**
+ * C1 claim-mode scheduler. It drains the current wave into one ready-data queue
+ * so an exact committed claim can release its consumer without a level barrier.
+ * Claim truth remains exclusively in ExecutionJournal's projection.
+ */
+async function handleClaimReadyDispatch(
+  context: EngineContext,
+  state: RunState,
+  transition: (newState: EngineState) => void,
+  emitEvent: (event: EngineEvent) => void
+): Promise<void> {
+  const queued = state.levelQueue.flatMap(level => level.parallel);
+  state.levelQueue = [];
+  const pending = new Set(queued);
+  const running = new Map<string, Promise<void>>();
+  let managedHaltApplied = false;
+  const maxParallelism = context.maxParallelism || 10;
+  const failed = ((state as any).failedChecks ||= new Set<string>()) as Set<string>;
+
+  emitEvent({ type: 'LevelReady', level: { level: 0, parallel: queued }, wave: state.wave });
+
+  const isReady = (checkId: string): boolean => {
+    const plan = context.claimPlan!;
+    const consumes = plan.consumptionsByCheck[checkId] || [];
+    if (!context.journal.isCheckReady(checkId)) return false;
+
+    const consumedEmitters = new Set(consumes.map(input => plan.emitterByClaim[input.claim]));
+    for (const dependency of plan.effectiveDependenciesByCheck[checkId] || []) {
+      if (consumedEmitters.has(dependency)) continue;
+      if (!state.completedChecks.has(dependency)) return false;
+      if (failed.has(dependency) && !context.config.checks?.[dependency]?.continue_on_failure) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const launch = (checkId: string): void => {
+    pending.delete(checkId);
+    const startedAt = Date.now();
+    const task = (async () => {
+      try {
+        const result = await executeSingleCheck(checkId, context, state, emitEvent, transition);
+        updateStats([{ checkId, result, duration: Date.now() - startedAt }], state);
+        if (hasFatalIssues(result)) failed.add(checkId);
+        if (context.failFast && hasFatalIssues(result)) state.flags.failFastTriggered = true;
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        failed.add(checkId);
+        updateStats(
+          [{ checkId, result: { issues: [] }, error: err, duration: Date.now() - startedAt }],
+          state
+        );
+        if (context.failFast) state.flags.failFastTriggered = true;
+      } finally {
+        state.completedChecks.add(checkId);
+        running.delete(checkId);
+      }
+    })();
+    running.set(checkId, task);
+  };
+
+  const launchGenerated = (generation: NodeGenerationProjection): void => {
+    const attempt = context.journal.startGeneratedAttempt(generation.nodeGenerationId);
+    const execution = context.journal.getGeneratedExecution(generation.nodeGenerationId);
+    const key = generation.nodeGenerationId;
+    const startedAt = Date.now();
+    const generatedState: RunState = {
+      ...state,
+      levelQueue: [],
+      eventQueue: [],
+      activeDispatches: new Map(),
+      completedChecks: new Set(),
+      flags: { ...state.flags },
+      stats: new Map(),
+      forwardRunGuards: new Set(),
+      currentLevelChecks: new Set(),
+      pendingRunScopes: new Map(),
+      pendingRunArgs: new Map(),
+      allowedFailedDeps: new Map(),
+    };
+    (generatedState as any).failedChecks = new Set<string>();
+    const terminalLatch: GeneratedAttemptTerminalLatch = {
+      phase: 'undecided',
+      markHaltApplied: () => {
+        managedHaltApplied = true;
+      },
+    };
+    const task = (async () => {
+      try {
+        const result = await executeSingleCheck(
+          generation.checkId, context, generatedState, emitEvent, transition,
+          generation.scope,
+          {
+            kind: 'generated',
+            attempt,
+            checkConfig: execution.node.check,
+            claims: execution.claims,
+            terminalLatch,
+          }
+        );
+        updateStats([{ checkId: key, result, duration: Date.now() - startedAt }], state);
+      } catch (error) {
+        updateStats([{ checkId: key, result: { issues: [] },
+          error: error instanceof Error ? error : new Error(String(error)), duration: Date.now() - startedAt }], state);
+        if (terminalLatch.phase === 'managed_acquired' && terminalLatch.terminalizeFailure) {
+          await terminalLatch.terminalizeFailure('MANAGED_POST_PROVIDER_FAILED');
+        } else if (terminalLatch.phase !== 'terminal') {
+          const projected = context.journal.getInstanceProjection().generationsById[
+            attempt.nodeGenerationId
+          ];
+          if (
+            projected?.status === 'running' &&
+            projected.attemptId === attempt.attemptId &&
+            projected.fence === attempt.fence
+          ) {
+            context.journal.failGeneratedAttempt(attempt, 'PROVIDER_EXECUTION_FAILED');
+          }
+        }
+      } finally { running.delete(key); }
+    })();
+    running.set(key, task);
+  };
+
+  const launchCatalogRequest = (request: CatalogRequestProjection): void => {
+    const checkConfig = context.config.checks?.[request.expansionOwnerCheck];
+    if (!checkConfig) {
+      throw new Error(`Check configuration not found: ${request.expansionOwnerCheck}`);
+    }
+    const attempt = context.journal.startCatalogRequestAttempt(request.requestId);
+    const key = request.requestId;
+    const startedAt = Date.now();
+    const task = (async () => {
+      try {
+        await executeSingleCheck(request.expansionOwnerCheck, context, state, emitEvent, transition,
+          [], { kind: 'catalog-request', attempt,
+            checkConfig });
+      } catch (error) {
+        updateStats([{ checkId: request.expansionOwnerCheck, result: { issues: [] },
+          error: error instanceof Error ? error : new Error(String(error)),
+          duration: Date.now() - startedAt }], state);
+        const projected = context.journal.getInstanceProjection().requestsById[attempt.requestId];
+        if (
+          projected?.status === 'running' &&
+          projected.attemptId === attempt.attemptId &&
+          projected.fence === attempt.fence
+        ) {
+          context.journal.failAttempt({
+            sessionId: attempt.sessionId,
+            checkId: attempt.checkId,
+            scope: attempt.scope,
+            attemptId: attempt.attemptId,
+            fence: attempt.fence,
+            reason: 'PROVIDER_EXECUTION_FAILED',
+          });
+        }
+      } finally { running.delete(key); }
+    })();
+    running.set(key, task);
+  };
+
+  while (true) {
+    let launched = false;
+    if (!state.flags.failFastTriggered && !managedHaltApplied) {
+      for (const generation of context.journal.queryReadyWork()) {
+        if (running.size >= maxParallelism) break;
+        launchGenerated(generation);
+        launched = true;
+      }
+      for (const checkId of [...pending]) {
+        if (context.journal.queryReadyWork().length > 0) break;
+        if (running.size >= maxParallelism) break;
+        if (!isReady(checkId)) continue;
+        launch(checkId);
+        launched = true;
+      }
+    }
+
+    if (running.size > 0) {
+      await raceManagedPromises([...running.values()]);
+      continue;
+    }
+
+    if (managedHaltApplied) break;
+
+    if (context.journal.queryReadyWork().length > 0) continue;
+
+    if (!launched && pending.size > 0) {
+      // No provider is running and no exact data can make progress. Mark the
+      // blocked consumers as dependency failures without scheduling them.
+      for (const checkId of pending) {
+        const result: ReviewSummary = { issues: [] };
+        try {
+          Object.defineProperty(result, '__skipped', {
+            value: 'dependency_failed',
+            enumerable: false,
+          });
+        } catch {}
+        state.completedChecks.add(checkId);
+        failed.add(checkId);
+        updateStats([{ checkId, result }], state);
+      }
+      pending.clear();
+      continue;
+    }
+    const request = context.journal.getOldestPendingCatalogRequest();
+    if (request && context.journal.queryReadyWork().length === 0) {
+      launchCatalogRequest(request);
+      continue;
+    }
+    break;
+  }
+
+  emitEvent({ type: 'LevelDepleted', level: 0, wave: state.wave });
+  transition(state.currentState === 'Error' ? 'Error' : 'WavePlanning');
 }
 
 /**
@@ -1915,14 +2447,61 @@ async function executeSingleCheck(
   state: RunState,
   emitEvent: (event: EngineEvent) => void,
   transition: (newState: EngineState) => void,
-  scopeOverride?: Array<{ check: string; index: number }>
+  scopeOverride?: Array<{ check: string; index: number }> | KeyedScopePath,
+  dynamic?: DynamicExecution
 ): Promise<ReviewSummary> {
   // Check if this check depends on a forEach parent
-  const checkConfig = context.config.checks?.[checkId];
+  const checkConfig = dynamic?.checkConfig || context.config.checks?.[checkId];
+  const dynamicScope = (scopeOverride || []) as unknown as Array<{
+    check: string;
+    index: number;
+  }>;
+  const exactClaims =
+    dynamic?.kind === 'generated' ? dynamic.claims : Object.freeze({});
+  const exactControlResults =
+    dynamic?.kind === 'generated' ? buildExactClaimResults(exactClaims) : undefined;
+
+  if (dynamic) {
+    emitEvent({
+      type: 'CheckScheduled',
+      checkId,
+      scope: dynamicScope,
+      attemptId: dynamic.attempt.attemptId,
+      fence: dynamic.attempt.fence,
+      ...(dynamic.kind === 'generated'
+        ? {
+            nodeInstanceId: dynamic.attempt.nodeInstanceId,
+            nodeGenerationId: dynamic.attempt.nodeGenerationId,
+          }
+        : { requestId: dynamic.attempt.requestId }),
+    });
+  }
+
+  const failDynamicAttempt = (reason: string): void => {
+    if (!dynamic) return;
+    if (dynamic.kind === 'generated') {
+      context.journal.failGeneratedAttempt(dynamic.attempt, reason);
+      return;
+    }
+    context.journal.failAttempt({
+      sessionId: context.sessionId,
+      checkId,
+      scope: dynamicScope,
+      attemptId: dynamic.attempt.attemptId,
+      fence: dynamic.attempt.fence,
+      reason,
+    });
+  };
 
   // Evaluate 'if' condition before execution
   if (checkConfig?.if) {
-    const shouldRun = await evaluateIfCondition(checkId, checkConfig, context, state);
+    const shouldRun = await evaluateIfCondition(
+      checkId,
+      checkConfig,
+      context,
+      state,
+      exactControlResults
+    );
 
     if (!shouldRun) {
       // Log skip message at info level (visible without debug mode)
@@ -1964,6 +2543,8 @@ async function executeSingleCheck(
       state.stats.set(checkId, stats);
       logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=if_condition`);
 
+      failDynamicAttempt('IF_CONDITION_NOT_MET');
+
       // Store empty result in journal
       try {
         context.journal.commitEntry({
@@ -1971,7 +2552,7 @@ async function executeSingleCheck(
           checkId,
           result: emptyResult as any,
           event: context.event || 'manual',
-          scope: [],
+          scope: dynamic ? dynamicScope : [],
         });
       } catch (error) {
         logger.warn(`[LevelDispatch] Failed to commit skipped result to journal: ${error}`);
@@ -1981,7 +2562,7 @@ async function executeSingleCheck(
       emitEvent({
         type: 'CheckCompleted',
         checkId,
-        scope: [],
+        scope: dynamic ? dynamicScope : [],
         result: emptyResult,
       });
 
@@ -2023,13 +2604,14 @@ async function executeSingleCheck(
       };
       state.stats.set(checkId, stats);
       logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=policy_denied`);
+      failDynamicAttempt('POLICY_DENIED');
       try {
         context.journal.commitEntry({
           sessionId: context.sessionId,
           checkId,
           result: emptyResult as any,
           event: context.event || 'manual',
-          scope: [],
+          scope: dynamic ? dynamicScope : [],
         });
       } catch (error) {
         logger.warn(`[LevelDispatch] Failed to commit policy-denied result to journal: ${error}`);
@@ -2037,14 +2619,14 @@ async function executeSingleCheck(
       emitEvent({
         type: 'CheckCompleted',
         checkId,
-        scope: [],
+        scope: dynamic ? dynamicScope : [],
         result: emptyResult,
       });
       return emptyResult;
     }
   }
 
-  const dependencies = checkConfig?.depends_on || [];
+  const dependencies = dynamic?.kind === 'generated' ? [] : checkConfig?.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
 
   // Dependency gating with continue_on_failure and OR groups ("A|B")
@@ -2309,10 +2891,37 @@ async function executeSingleCheck(
   }
 
   // Normal execution without forEach
-  const scope: Array<{ check: string; index: number }> = scopeOverride || [];
+  const scope: Array<{ check: string; index: number }> = dynamicScope;
+
+  const providerClaims = dynamic?.kind === 'generated'
+    ? exactClaims
+    : context.claimPlan?.active
+    ? context.journal.readCheckClaims(checkId)
+    : Object.freeze({});
+  const claimAttempt = dynamic?.attempt || (context.claimPlan?.active
+    ? context.journal.startAttempt({ sessionId: context.sessionId, checkId, scope })
+    : undefined);
+  let claimAttemptFinished = false;
+  let managedBinding: ManagedRunBindingV1 | undefined;
+  let managedSettlement: ManagedProviderSettlement | undefined;
+  let managedRoutingDecision: ManagedRoutingDecision | undefined;
+  let managedControllerFailure: ManagedRunFailureCode | undefined;
+  let managedTerminalTelemetryEmitted = false;
 
   // Emit scheduled event
-  emitEvent({ type: 'CheckScheduled', checkId, scope });
+  if (!dynamic) {
+    emitEvent({
+      type: 'CheckScheduled',
+      checkId,
+      scope,
+      ...(claimAttempt
+        ? {
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+          }
+        : {}),
+    });
+  }
 
   // Track start time for duration calculation
   const startTime = Date.now();
@@ -2331,7 +2940,6 @@ async function executeSingleCheck(
 
   try {
     // Get check configuration
-    const checkConfig = context.config.checks?.[checkId];
     if (!checkConfig) {
       throw new Error(`Check configuration not found: ${checkId}`);
     }
@@ -2355,7 +2963,9 @@ async function executeSingleCheck(
     const provider = providerRegistry.getProviderOrThrow(providerType);
 
     // Build output history for template rendering
-    const outputHistory = buildOutputHistoryFromJournal(context);
+    const outputHistory = dynamic?.kind === 'generated'
+      ? new Map<string, unknown[]>()
+      : buildOutputHistoryFromJournal(context);
 
     // Resolve workflow inputs from config or context (centralized logic)
     const workflowInputs = resolveWorkflowInputs(checkConfig, context);
@@ -2454,7 +3064,9 @@ async function executeSingleCheck(
     } catch {}
 
     // Build dependency results
-    const dependencyResults = buildDependencyResults(checkId, checkConfig, context, state);
+    const dependencyResults = dynamic?.kind === 'generated'
+      ? buildExactClaimResults(exactClaims)
+      : buildDependencyResults(checkId, checkConfig, context, state);
 
     // Build PR info (use real prInfo from context if available, otherwise use defaults)
     const prInfo: any = context.prInfo || {
@@ -2479,13 +3091,28 @@ async function executeSingleCheck(
     const renderedArgs = rawPendingArgs
       ? await renderTemplateArgs(rawPendingArgs, depResultsObj, context)
       : undefined;
+    const inheritedExecutionContext = (() => {
+      if (dynamic?.kind !== 'generated') return context.executionContext;
+      const inherited = { ...(context.executionContext || {}) } as Record<string, unknown>;
+      delete inherited._parentContext;
+      delete inherited._parentState;
+      delete inherited.journal;
+      return inherited;
+    })();
     const executionContext = {
-      ...context.executionContext,
+      ...inheritedExecutionContext,
       _engineMode: context.mode,
-      _parentContext: context,
-      _parentState: state,
+      ...(dynamic?.kind === 'generated'
+        ? {}
+        : { _parentContext: context, _parentState: state }),
       // Make checks metadata available to providers that want it
       checksMeta,
+      ...(context.claimPlan?.active ? { claims: providerClaims } : {}),
+      ...(dynamic?.kind === 'generated' ? {
+        nodeInstanceId: dynamic.attempt.nodeInstanceId,
+        nodeGenerationId: dynamic.attempt.nodeGenerationId,
+        scope: Object.freeze(scope.map((part: any) => Object.freeze({ ...part }))),
+      } : {}),
       // Inject args from on_success.run with directives (merged with existing args)
       args: renderedArgs
         ? { ...((context.executionContext as any)?.args || {}), ...renderedArgs }
@@ -2551,6 +3178,18 @@ async function executeSingleCheck(
             });
           } catch {}
           try {
+            if (claimAttempt && !claimAttemptFinished) {
+              if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(dynamic.attempt, 'ASSUMPTION_NOT_MET');
+              else context.journal.failAttempt({
+                sessionId: context.sessionId,
+                checkId,
+                scope,
+                attemptId: claimAttempt.attemptId,
+                fence: claimAttempt.fence,
+                reason: 'ASSUMPTION_NOT_MET',
+              });
+              claimAttemptFinished = true;
+            }
             context.journal.commitEntry({
               sessionId: context.sessionId,
               checkId,
@@ -2565,113 +3204,237 @@ async function executeSingleCheck(
       }
     }
 
-    // Emit provider telemetry
-    try {
-      emitNdjsonFallback('visor.provider', {
-        'visor.check.id': checkId,
-        'visor.provider.type': providerType,
-      });
-    } catch {}
+    const managedGenerated = dynamic?.kind === 'generated' && typeof provider.startManaged === 'function';
+    let result: ReviewSummary;
 
-    // Execute provider with telemetry (sandbox routing if configured)
-    emitImmediateSpan(`visor.check.${checkId}.started`, {
-      'visor.check.id': checkId,
-      'visor.check.type': providerType,
-      session_id: context.sessionId,
-      wave: state.wave,
-    });
-    if (isEngineerCheck(checkId)) {
-      emitImmediateSpan('visor.engineer.started', {
-        'visor.check.id': checkId,
-        'visor.check.type': providerType,
-      });
-    }
-    const progressTimer = startCheckProgressTelemetry(checkId, providerType, {
-      session_id: context.sessionId,
-      wave: state.wave,
-    });
-    let result;
-    try {
-      result = await withActiveSpan(
-        `visor.check.${checkId}`,
-        {
-          'visor.check.id': checkId,
-          'visor.check.type': providerType,
-          session_id: context.sessionId,
-          wave: state.wave,
-        },
-        async span => {
-          // Debounce support: coalesce rapid invocations of the same step
-          if (checkConfig.debounce && checkConfig.debounce > 0) {
-            const debounceKey = checkConfig.debounce_key || checkId;
-            const debounceResult = await getDebounceManager().enqueue(
-              debounceKey,
-              checkConfig.debounce,
-              async () => {
-                const r = await executeWithSandboxRouting(
-                  checkId,
-                  checkConfig,
-                  context,
-                  prInfo,
-                  dependencyResults,
-                  checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
-                  () =>
-                    provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-                );
-                try {
-                  captureCheckOutput(span, (r as any).output);
-                } catch {}
-                return r;
-              }
-            );
-            if (debounceResult.outcome === 'debounced') {
-              logger.info(`[LevelDispatch] ${checkId}: debounced (superseded by later invocation)`);
-              return { issues: [], output: { debounced: true } };
-            }
-            // outcome === 'executed' — return the actual result
-            return debounceResult.result as any;
-          }
-          const res = await executeWithSandboxRouting(
-            checkId,
-            checkConfig,
-            context,
-            prInfo,
-            dependencyResults,
-            checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
-            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+    if (managedGenerated) {
+      const terminalLatch = dynamic.terminalLatch;
+      terminalLatch.phase = 'managed_pre_acquisition';
+      const binding = context.journal.deriveManagedRunBinding(dynamic.attempt);
+      const selectedManagedTimeout = checkConfig.timeout || checkConfig.ai?.timeout || 1800000;
+      const managedTimeoutMs = normalizeManagedRunTimeout(selectedManagedTimeout);
+      managedBinding = binding;
+
+      const failAcquisition = (failureCode: ManagedRunAcquisitionFailureCode): never => {
+        context.journal.failManagedRunAcquisition({
+          attempt: dynamic.attempt,
+          binding,
+          failureCode,
+        });
+        claimAttemptFinished = true;
+        terminalLatch.phase = 'terminal';
+        throw new Error(failureCode);
+      };
+
+      const sandboxFailure = ((): ManagedRunAcquisitionFailureCode | undefined => {
+        try {
+          const selectedSandbox = context.sandboxManager?.resolveSandbox(
+            checkConfig.sandbox || (checkConfig as { workflowInputs?: { sandbox?: string } }).workflowInputs?.sandbox,
+            context.config.sandbox as string | undefined
           );
-          try {
-            captureCheckOutput(span, (res as any).output);
-          } catch {}
-          return res;
+          return selectedSandbox ? 'MANAGED_SANDBOX_UNSUPPORTED' : undefined;
+        } catch {
+          return 'MANAGED_SANDBOX_UNSUPPORTED';
         }
-      );
-      emitImmediateSpan(`visor.check.${checkId}.completed`, {
+      })();
+      if (sandboxFailure) failAcquisition(sandboxFailure);
+      if (checkConfig.debounce && checkConfig.debounce > 0) {
+        failAcquisition('MANAGED_DEBOUNCE_UNSUPPORTED');
+      }
+
+      const snapshot = (() => {
+        try {
+          return snapshotManagedRun(
+            () =>
+              provider.startManaged!(snapshotManagedRunStartRequest({
+                prInfo,
+                checkConfig: providerConfig,
+                dependencyResults,
+                executionContext,
+                binding,
+              })),
+            binding
+          );
+        } catch (error) {
+          const code = protocolFailure(error, 'MANAGED_HANDLE_INVALID');
+          return failAcquisition(
+            code === 'MANAGED_START_FAILED' ||
+              code === 'MANAGED_BINDING_MISMATCH' ||
+              code === 'MANAGED_HANDLE_INVALID'
+              ? code
+              : 'MANAGED_HANDLE_INVALID'
+          );
+        }
+      })();
+
+      context.journal.recordManagedRunAcquired(binding);
+      terminalLatch.phase = 'managed_acquired';
+      try {
+        emitNdjsonFallback('visor.provider', {
+          'visor.check.id': checkId,
+          'visor.provider.type': providerType,
+        });
+      } catch {}
+
+      const settlementPromise = runManagedProvider({
+        snapshot,
+        timeoutMs: managedTimeoutMs,
+        onStarted: () => {
+          context.journal.recordManagedRunStarted(binding);
+        },
+        onStartedObserved: () => {
+          emitImmediateSpan(`visor.check.${checkId}.started`, {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+            session_id: context.sessionId,
+            wave: state.wave,
+          });
+          if (isEngineerCheck(checkId)) {
+            emitImmediateSpan('visor.engineer.started', {
+              'visor.check.id': checkId,
+              'visor.check.type': providerType,
+            });
+          }
+        },
+        onCancelRequested: () => {
+          context.journal.recordManagedRunCancelRequested(binding);
+        },
+      });
+      let terminalPromise: Promise<void> | undefined;
+      terminalLatch.terminalizeFailure = requestedCode => {
+        if (terminalLatch.phase === 'terminal') return resolveManagedPromise();
+        if (!terminalPromise) {
+          terminalPromise = (async () => {
+            const observed = await settlementPromise;
+            context.journal.failManagedGeneratedAttempt({
+              attempt: dynamic.attempt,
+              binding,
+              cleanupStatus: observed.cleanupStatus,
+              failureCode: observed.failureCode || requestedCode,
+            });
+            claimAttemptFinished = true;
+            terminalLatch.phase = 'terminal';
+          })();
+        }
+        return terminalPromise;
+      };
+
+      managedSettlement = await settlementPromise;
+      if (managedSettlement.failureCode || !managedSettlement.result) {
+        const code = managedSettlement.failureCode || 'MANAGED_POST_PROVIDER_FAILED';
+        await terminalLatch.terminalizeFailure(code);
+        throw new Error(code);
+      }
+      result = managedSettlement.result;
+    } else {
+      if (dynamic?.kind === 'generated') dynamic.terminalLatch.phase = 'legacy';
+
+      // Emit provider telemetry
+      try {
+        emitNdjsonFallback('visor.provider', {
+          'visor.check.id': checkId,
+          'visor.provider.type': providerType,
+        });
+      } catch {}
+
+      // Execute provider with telemetry (sandbox routing if configured)
+      emitImmediateSpan(`visor.check.${checkId}.started`, {
         'visor.check.id': checkId,
         'visor.check.type': providerType,
+        session_id: context.sessionId,
+        wave: state.wave,
       });
       if (isEngineerCheck(checkId)) {
-        emitImmediateSpan('visor.engineer.completed', {
+        emitImmediateSpan('visor.engineer.started', {
           'visor.check.id': checkId,
           'visor.check.type': providerType,
         });
       }
-    } catch (error) {
-      emitImmediateSpan(`visor.check.${checkId}.failed`, {
-        'visor.check.id': checkId,
-        'visor.check.type': providerType,
-        error: error instanceof Error ? error.message : String(error),
+      const progressTimer = startCheckProgressTelemetry(checkId, providerType, {
+        session_id: context.sessionId,
+        wave: state.wave,
       });
-      if (isEngineerCheck(checkId)) {
-        emitImmediateSpan('visor.engineer.failed', {
+      try {
+        result = await withActiveSpan(
+          `visor.check.${checkId}`,
+          {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+            session_id: context.sessionId,
+            wave: state.wave,
+          },
+          async span => {
+            // Debounce support: coalesce rapid invocations of the same step
+            if (checkConfig.debounce && checkConfig.debounce > 0) {
+              const debounceKey = checkConfig.debounce_key || checkId;
+              const debounceResult = await getDebounceManager().enqueue(
+                debounceKey,
+                checkConfig.debounce,
+                async () => {
+                  const r = await executeWithSandboxRouting(
+                    checkId,
+                    checkConfig,
+                    context,
+                    prInfo,
+                    dependencyResults,
+                    checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+                    () =>
+                      provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+                  );
+                  try {
+                    captureCheckOutput(span, (r as any).output);
+                  } catch {}
+                  return r;
+                }
+              );
+              if (debounceResult.outcome === 'debounced') {
+                logger.info(`[LevelDispatch] ${checkId}: debounced (superseded by later invocation)`);
+                return { issues: [], output: { debounced: true } };
+              }
+              return debounceResult.result as ReviewSummary;
+            }
+            const res = await executeWithSandboxRouting(
+              checkId,
+              checkConfig,
+              context,
+              prInfo,
+              dependencyResults,
+              checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+              () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+            );
+            try {
+              captureCheckOutput(span, (res as any).output);
+            } catch {}
+            return res;
+          }
+        );
+        emitImmediateSpan(`visor.check.${checkId}.completed`, {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+        });
+        if (isEngineerCheck(checkId)) {
+          emitImmediateSpan('visor.engineer.completed', {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+          });
+        }
+      } catch (error) {
+        emitImmediateSpan(`visor.check.${checkId}.failed`, {
           'visor.check.id': checkId,
           'visor.check.type': providerType,
           error: error instanceof Error ? error.message : String(error),
         });
+        if (isEngineerCheck(checkId)) {
+          emitImmediateSpan('visor.engineer.failed', {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        throw error;
+      } finally {
+        stopCheckProgressTelemetry(progressTimer);
       }
-      throw error;
-    } finally {
-      stopCheckProgressTelemetry(progressTimer);
     }
 
     // Special case: human-input style checks that intentionally pause the run
@@ -2755,7 +3518,10 @@ async function executeSingleCheck(
         const exprs = Array.isArray(guaranteeExpr) ? guaranteeExpr : [guaranteeExpr];
         for (const ex of exprs) {
           const holds = await evaluator.evaluateIfCondition(checkId, ex, {
-            previousResults: dependencyResults as any,
+            previousResults:
+              dynamic?.kind === 'generated'
+                ? buildExactClaimResults(exactClaims)
+                : dependencyResults,
             event: context.event || 'manual',
             output: enrichedResult.output,
           } as any);
@@ -2814,57 +3580,70 @@ async function executeSingleCheck(
           }
           (state as any).failedChecks.add(checkId);
         } catch {}
-        // Early exit: persist result and stop further processing to avoid
-        // undefined-state follow-on work (routing/template/per-item commits).
-        try {
-          // Record completion BEFORE storing
-          state.completedChecks.add(checkId);
-          const currentWaveCompletions = (state as any).currentWaveCompletions as
-            | Set<string>
-            | undefined;
-          if (currentWaveCompletions) currentWaveCompletions.add(checkId);
+        if (!managedBinding) {
+          if (claimAttempt && !claimAttemptFinished) {
+            if (dynamic?.kind === 'generated') {
+              context.journal.failGeneratedAttempt(dynamic.attempt, 'UNDEFINED_RESULT');
+            } else {
+              context.journal.failAttempt({
+                sessionId: context.sessionId,
+                checkId,
+                scope,
+                attemptId: claimAttempt.attemptId,
+                fence: claimAttempt.fence,
+                reason: 'UNDEFINED_RESULT',
+              });
+            }
+            claimAttemptFinished = true;
+          }
+          // Preserve the legacy early exit. Managed generated work continues
+          // into routing so its fatal summary reaches the one managed terminalizer.
+          try {
+            state.completedChecks.add(checkId);
+            const currentWaveCompletions = (state as any).currentWaveCompletions as
+              | Set<string>
+              | undefined;
+            if (currentWaveCompletions) currentWaveCompletions.add(checkId);
 
-          // Update aggregated stats for forEach parent (failed run, 0 outputs)
-          const existing = state.stats.get(checkId);
-          const aggStats: CheckExecutionStats = existing || {
-            checkName: checkId,
-            totalRuns: 0,
-            successfulRuns: 0,
-            failedRuns: 0,
-            skippedRuns: 0,
-            skipped: false,
-            totalDuration: 0,
-            issuesFound: 0,
-            issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
-          };
-          aggStats.totalRuns++;
-          aggStats.failedRuns++;
-          aggStats.outputsProduced = 0;
-          state.stats.set(checkId, aggStats);
+            const existing = state.stats.get(checkId);
+            const aggStats: CheckExecutionStats = existing || {
+              checkName: checkId,
+              totalRuns: 0,
+              successfulRuns: 0,
+              failedRuns: 0,
+              skippedRuns: 0,
+              skipped: false,
+              totalDuration: 0,
+              issuesFound: 0,
+              issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+            };
+            aggStats.totalRuns++;
+            aggStats.failedRuns++;
+            aggStats.outputsProduced = 0;
+            state.stats.set(checkId, aggStats);
 
-          // Store in journal
-          context.journal.commitEntry({
-            sessionId: context.sessionId,
+            context.journal.commitEntry({
+              sessionId: context.sessionId,
+              checkId,
+              result: enrichedResult as any,
+              event: context.event || 'manual',
+              scope: [],
+            });
+          } catch (err) {
+            logger.warn(`[LevelDispatch] Failed to persist undefined forEach result: ${err}`);
+          }
+
+          try {
+            state.activeDispatches.delete(checkId);
+          } catch {}
+          emitEvent({
+            type: 'CheckCompleted',
             checkId,
-            result: enrichedResult as any,
-            event: context.event || 'manual',
             scope: [],
+            result: enrichedResult,
           });
-        } catch (err) {
-          logger.warn(`[LevelDispatch] Failed to persist undefined forEach result: ${err}`);
+          return enrichedResult as ReviewSummary;
         }
-
-        // Clear active dispatch and emit completion event
-        try {
-          state.activeDispatches.delete(checkId);
-        } catch {}
-        emitEvent({
-          type: 'CheckCompleted',
-          checkId,
-          scope: [],
-          result: enrichedResult,
-        });
-        return enrichedResult as ReviewSummary;
       } else if (Array.isArray(output)) {
         isForEach = true;
         forEachItems = output;
@@ -2968,18 +3747,132 @@ async function executeSingleCheck(
       currentWaveCompletions.add(checkId);
     }
 
-    // Process routing (fail_if, on_success, on_fail) BEFORE storing in journal
-    // This allows routing errors to be included in the stored result
+    // Managed generated work evaluates only fail_if/failure_conditions here;
+    // its halt observer and transition are deferred until terminal commit.
     try {
       logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
     } catch {}
-    const wasHalted = await handleRouting(context, state, transition, emitEvent, {
+    const routingContext = {
       checkId,
       scope,
       result: enrichedResult,
       checkConfig: checkConfig as CheckConfig,
       success: !hasFatalIssues(enrichedResult),
-    });
+      ...(dynamic?.kind === 'generated'
+        ? { exactPreviousResults: buildExactClaimResults(exactClaims) }
+        : {}),
+    };
+    let wasHalted = false;
+    if (managedBinding) {
+      managedRoutingDecision = await evaluateManagedRouting(context, state, routingContext);
+    } else {
+      wasHalted = await handleRouting(context, state, transition, emitEvent, routingContext);
+    }
+
+    // Terminal claim processing happens only after provider output enrichment,
+    // fail_if, routing, and halt/fatal determination. ExecutionJournal owns the
+    // immutable plan and atomically commits all emissions plus completion.
+    if (claimAttempt) {
+      if (managedBinding && dynamic?.kind === 'generated') {
+        managedControllerFailure = managedRoutingDecision?.haltExecution
+          ? 'MANAGED_HALT_EXECUTION'
+          : managedRoutingDecision?.failed
+            ? 'MANAGED_FAIL_IF'
+            : hasFatalIssues(enrichedResult)
+              ? 'MANAGED_FATAL_SUMMARY'
+              : undefined;
+        if (managedControllerFailure) {
+          await dynamic.terminalLatch.terminalizeFailure?.(managedControllerFailure);
+          if (managedRoutingDecision?.haltExecution) {
+            dynamic.terminalLatch.markHaltApplied();
+          }
+        } else {
+          try {
+            context.journal.completeManagedGeneratedAttempt({
+              attempt: dynamic.attempt,
+              binding: managedBinding,
+              payload: (result as { output?: unknown }).output,
+            });
+            claimAttemptFinished = true;
+            dynamic.terminalLatch.phase = 'terminal';
+          } catch (error) {
+            managedControllerFailure = 'MANAGED_CLAIM_VALIDATION_FAILED';
+            await dynamic.terminalLatch.terminalizeFailure?.(managedControllerFailure);
+            throw error;
+          }
+        }
+        claimAttemptFinished = true;
+
+        if (managedRoutingDecision) {
+          wasHalted = applyManagedRoutingEffects(
+            checkId,
+            managedRoutingDecision,
+            transition,
+            emitEvent
+          );
+        }
+        emitImmediateSpan(
+          `visor.check.${checkId}.${managedControllerFailure ? 'failed' : 'completed'}`,
+          {
+            'visor.check.id': checkId,
+            'visor.check.type': checkConfig.type || 'ai',
+            ...(managedControllerFailure ? { error: managedControllerFailure } : {}),
+          }
+        );
+        if (isEngineerCheck(checkId)) {
+          emitImmediateSpan(
+            `visor.engineer.${managedControllerFailure ? 'failed' : 'completed'}`,
+            {
+              'visor.check.id': checkId,
+              'visor.check.type': checkConfig.type || 'ai',
+              ...(managedControllerFailure ? { error: managedControllerFailure } : {}),
+            }
+          );
+        }
+        managedTerminalTelemetryEmitted = true;
+      } else if (wasHalted || hasFatalIssues(enrichedResult)) {
+        if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(
+          dynamic.attempt,
+          wasHalted ? 'HALT_EXECUTION' : 'TERMINAL_RESULT_FAILED'
+        );
+        else context.journal.failAttempt({
+          sessionId: context.sessionId,
+          checkId,
+          scope,
+          attemptId: claimAttempt.attemptId,
+          fence: claimAttempt.fence,
+          reason: wasHalted ? 'HALT_EXECUTION' : 'TERMINAL_RESULT_FAILED',
+        });
+        claimAttemptFinished = true;
+      } else {
+        try {
+          if (dynamic?.kind === 'generated') {
+            context.journal.completeGeneratedAttempt({ attempt: dynamic.attempt, payload: (result as any).output });
+          } else context.journal.completeAttempt({
+            sessionId: context.sessionId,
+            checkId,
+            scope,
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+            payload: (result as any).output,
+          });
+          claimAttemptFinished = true;
+        } catch (error) {
+          const reason = (error as any)?.code || 'CLAIM_PUBLICATION_FAILED';
+          if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(dynamic.attempt, reason);
+          else context.journal.failAttempt({
+            sessionId: context.sessionId,
+            checkId,
+            scope,
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+            reason,
+          });
+          claimAttemptFinished = true;
+          throw error;
+        }
+      }
+    }
 
     // If execution was halted by halt_execution, commit the result (with halt issue) then return
     if (wasHalted) {
@@ -3006,6 +3899,18 @@ async function executeSingleCheck(
         });
       } catch (error) {
         logger.warn(`[LevelDispatch] Failed to commit halt result to journal: ${error}`);
+      }
+      if (managedBinding) {
+        emitEvent({
+          type: 'CheckCompleted',
+          checkId,
+          scope,
+          result: {
+            ...enrichedResult,
+            output: (result as { output?: unknown }).output,
+            content: renderedContent || (result as { content?: string }).content,
+          },
+        });
       }
       return enrichedResult;
     }
@@ -3102,6 +4007,53 @@ async function executeSingleCheck(
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     logger.error(`[LevelDispatch] Error executing check ${checkId}: ${err.message}`);
+
+    if (
+      dynamic?.kind === 'generated' &&
+      dynamic.terminalLatch.phase === 'managed_acquired' &&
+      dynamic.terminalLatch.terminalizeFailure
+    ) {
+      await dynamic.terminalLatch.terminalizeFailure('MANAGED_POST_PROVIDER_FAILED');
+      claimAttemptFinished = true;
+    } else if (claimAttempt && !claimAttemptFinished && dynamic?.kind !== 'generated') {
+      try {
+        context.journal.failAttempt({
+          sessionId: context.sessionId,
+          checkId,
+          scope,
+          attemptId: claimAttempt.attemptId,
+          fence: claimAttempt.fence,
+          reason: 'PROVIDER_EXECUTION_FAILED',
+        });
+        claimAttemptFinished = true;
+      } catch {}
+    } else if (
+      claimAttempt &&
+      !claimAttemptFinished &&
+      dynamic?.kind === 'generated' &&
+      dynamic.terminalLatch.phase !== 'terminal'
+    ) {
+      try {
+        context.journal.failGeneratedAttempt(dynamic.attempt, 'PROVIDER_EXECUTION_FAILED');
+        claimAttemptFinished = true;
+      } catch {}
+    }
+
+    if (managedBinding && !managedTerminalTelemetryEmitted) {
+      emitImmediateSpan(`visor.check.${checkId}.failed`, {
+        'visor.check.id': checkId,
+        'visor.check.type': checkConfig?.type || 'ai',
+        error: err.message,
+      });
+      if (isEngineerCheck(checkId)) {
+        emitImmediateSpan('visor.engineer.failed', {
+          'visor.check.id': checkId,
+          'visor.check.type': checkConfig?.type || 'ai',
+          error: err.message,
+        });
+      }
+      managedTerminalTelemetryEmitted = true;
+    }
 
     state.activeDispatches.delete(checkId);
 

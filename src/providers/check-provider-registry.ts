@@ -17,6 +17,10 @@ import { GitCheckoutProvider } from './git-checkout-provider';
 import { A2ACheckProvider } from './a2a-check-provider';
 import { UtcpCheckProvider } from './utcp-check-provider';
 import { CustomToolDefinition } from '../types/config';
+import {
+  ProofAdmitCheckProvider,
+  PROOF_ADMIT_PROVIDER_NAME,
+} from './proof-admit-check-provider';
 
 /**
  * Registry for managing check providers
@@ -60,6 +64,9 @@ export class CheckProviderRegistry {
     this.register(new WorkflowCheckProvider());
     this.register(new GitCheckoutProvider());
     this.register(new A2ACheckProvider());
+    // Reserved EXP-0205 provider. It is installed by the registry itself and
+    // cannot be replaced through the public register/unregister API.
+    this.registerBuiltIn(new ProofAdmitCheckProvider());
 
     // Try to register UtcpCheckProvider - it may fail if dependencies are missing
     try {
@@ -100,11 +107,22 @@ export class CheckProviderRegistry {
     }
   }
 
+  private registerBuiltIn(provider: CheckProvider): void {
+    const name = provider.getName();
+    if (this.providers.has(name)) {
+      throw new Error(`Provider '${name}' is already registered`);
+    }
+    this.providers.set(name, provider);
+  }
+
   /**
    * Register a check provider
    */
   register(provider: CheckProvider): void {
     const name = provider.getName();
+    if (name === PROOF_ADMIT_PROVIDER_NAME) {
+      throw new Error(`Provider '${name}' is reserved and cannot be registered publicly`);
+    }
     if (this.providers.has(name)) {
       throw new Error(`Provider '${name}' is already registered`);
     }
@@ -119,6 +137,9 @@ export class CheckProviderRegistry {
    * Unregister a check provider
    */
   unregister(name: string): void {
+    if (name === PROOF_ADMIT_PROVIDER_NAME) {
+      throw new Error(`Provider '${name}' is reserved and cannot be unregistered`);
+    }
     if (!this.providers.has(name)) {
       throw new Error(`Provider '${name}' not found`);
     }

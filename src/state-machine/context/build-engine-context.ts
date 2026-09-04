@@ -2,12 +2,25 @@ import type { VisorConfig, EventTrigger } from '../../types/config';
 import type { PRInfo } from '../../pr-analyzer';
 import type { EngineContext, CheckMetadata } from '../../types/engine';
 import { ExecutionJournal } from '../../snapshot-store';
+import type { GraphJournalCheckpointV1 } from '../../snapshot-store';
 import { MemoryStore } from '../../memory-store';
 import { generateHumanId } from '../../utils/human-id';
 import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
 import { WorkspaceManager } from '../../utils/workspace-manager';
 import { FairConcurrencyLimiter } from '../../utils/fair-concurrency-limiter';
+import { compileClaimPlan } from '../graph/claim-plan';
+
+/** Private bootstrap used only by the engine's one-shot Graph checkpoint continuation. */
+export interface GraphCheckpointBootstrap {
+  readonly checkpoint: unknown;
+  readonly expansionOwnerCheck: string;
+}
+
+export interface BuiltGraphCheckpointContext {
+  readonly context: EngineContext;
+  readonly requestId: string;
+}
 
 /**
  * Apply minimal criticality defaults in-place.
@@ -39,9 +52,66 @@ export function buildEngineContextForRun(
   maxParallelism?: number,
   failFast?: boolean,
   requestedChecks?: string[]
-): EngineContext {
+): EngineContext;
+export function buildEngineContextForRun(
+  workingDirectory: string,
+  config: VisorConfig,
+  prInfo: PRInfo,
+  debug?: boolean,
+  maxParallelism?: number,
+  failFast?: boolean,
+  requestedChecks?: string[],
+  graphCheckpointBootstrap?: GraphCheckpointBootstrap
+): BuiltGraphCheckpointContext;
+export function buildEngineContextForRun(
+  workingDirectory: string,
+  config: VisorConfig,
+  prInfo: PRInfo,
+  debug?: boolean,
+  maxParallelism?: number,
+  failFast?: boolean,
+  requestedChecks?: string[],
+  graphCheckpointBootstrap?: GraphCheckpointBootstrap
+): EngineContext | BuiltGraphCheckpointContext {
   // Deep clone provided config to avoid cross-run mutations between tests/runs
   const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
+
+  // Compile exact claim bindings once. Materialize effective dependencies only
+  // into the per-run clone; the caller's authored configuration remains untouched.
+  const claimPlan = compileClaimPlan(clonedConfig);
+  if (claimPlan.active) {
+    const clonedChecks = clonedConfig.checks || clonedConfig.steps || {};
+    for (const [checkId, dependencies] of Object.entries(
+      claimPlan.effectiveDependenciesByCheck
+    )) {
+      const check = clonedChecks[checkId];
+      if (check) check.depends_on = [...dependencies];
+    }
+    clonedConfig.checks = clonedChecks;
+  }
+
+  // Restore the graph prefix before creating any session-capturing service. The
+  // restore routine owns all envelope, integrity, graph, replay, quiescence,
+  // and allocator validation; the engine only reads the validated envelope
+  // session after it succeeds.
+  let journal: ExecutionJournal;
+  let sessionId: string;
+  let requestId: string | undefined;
+  if (graphCheckpointBootstrap) {
+    journal = ExecutionJournal.restoreGraphCheckpoint(
+      claimPlan,
+      graphCheckpointBootstrap.checkpoint
+    );
+    const validatedCheckpoint = graphCheckpointBootstrap.checkpoint as GraphJournalCheckpointV1;
+    sessionId = validatedCheckpoint.sessionId;
+    requestId = journal.requestCatalogReconciliation({
+      sessionId,
+      ownerCheck: graphCheckpointBootstrap.expansionOwnerCheck,
+    }).requestId;
+  } else {
+    sessionId = generateHumanId();
+    journal = new ExecutionJournal(claimPlan);
+  }
 
   // Build check metadata
   const checks: Record<string, CheckMetadata> = {};
@@ -96,15 +166,14 @@ export function buildEngineContextForRun(
     }
   }
 
-  // Initialize journal and memory
-  const journal = new ExecutionJournal();
+  // Initialize memory only after checkpoint restore and the direct owner
+  // request above. The continuation skips Init but receives this fresh store.
   const memory = MemoryStore.getInstance(clonedConfig.memory);
 
   // Create shared AI concurrency limiter if configured.
   // Uses a global singleton fair limiter: round-robin across sessions so
   // no single user/task can starve others.
   let sharedConcurrencyLimiter: any = undefined;
-  const sessionId = generateHumanId();
   if (clonedConfig.max_ai_concurrency) {
     const fairLimiter = FairConcurrencyLimiter.getInstance(clonedConfig.max_ai_concurrency);
     // Bind this engine run's session ID into acquire/release so the fair limiter
@@ -141,10 +210,11 @@ export function buildEngineContextForRun(
     };
   }
 
-  return {
+  const context: EngineContext = {
     mode: 'state-machine',
     config: clonedConfig,
     checks,
+    claimPlan,
     journal,
     memory,
     workingDirectory,
@@ -159,6 +229,13 @@ export function buildEngineContextForRun(
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
     prInfo,
   };
+
+  if (graphCheckpointBootstrap) {
+    // requestCatalogReconciliation always returns a request for a valid owner;
+    // retain that exact ID without inserting a second request later.
+    return { context, requestId: requestId! };
+  }
+  return context;
 }
 
 /**
