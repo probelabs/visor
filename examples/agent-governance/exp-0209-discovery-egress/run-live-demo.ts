@@ -2674,6 +2674,16 @@ function qualityPayloadCoordinates(payload: JsonRecord): Array<{ path: string; l
   return coordinates;
 }
 
+function qualityTextualCitation(value: string, targetPath: string, targetLine: number): boolean {
+  const citationPattern = /([A-Za-z0-9_.\\/-]+):(\d+)(?:-(\d+))?/g;
+  for (const match of value.matchAll(citationPattern)) {
+    const start = Number(match[2]);
+    const end = Number(match[3] || match[2]);
+    if (match[1] === targetPath && start <= targetLine && targetLine <= end) return true;
+  }
+  return false;
+}
+
 function qualityScanSpans(input: QualityInput): { returnLine?: number; testStart?: number; testEnd?: number } {
   const sourceFiles = input.patchedSourceFiles || input.sourceFiles;
   const http = sourceFiles?.['http.go'];
@@ -2750,12 +2760,24 @@ export function evaluateOnboardingQuality(first: QualityInput | unknown, second?
   };
   const enrichedComponentPayloads = componentPayloads.map(payload => ({ ...componentPaths(itemByComponent.get(qualityComponentId(payload))), ...payload }));
 
-  const expectedGroups = [['http.go', 'http_test.go'], ['service.go', 'service_test.go'], ['entry.go', 'store.go', 'go.mod']].map(group => group.sort());
+  const subjectPaths = new Set(SUBJECT_FILES);
   const actualGroups = baselineComponents.map(component => {
-    const paths = Array.isArray(component.owned_paths) ? component.owned_paths.map(String).sort() : [];
-    return paths;
+    const ownedSource = Array.isArray(component.owned_paths) ? component.owned_paths : component.sorted_owned_paths;
+    const closureSource = Array.isArray(component.dependency_closure) ? component.dependency_closure : component.sorted_dependency_closure;
+    const owned = Array.isArray(ownedSource) ? ownedSource.map(String) : [];
+    const closure = Array.isArray(closureSource) ? closureSource.map(String) : [];
+    return { id: qualityComponentId(component), owned, closure };
   });
-  const groupingPass = actualGroups.length === expectedGroups.length && expectedGroups.every(group => actualGroups.some(actual => canonicalValue(actual) === canonicalValue(group)));
+  const ownedPaths = actualGroups.flatMap(group => group.owned);
+  const uniqueIds = new Set(actualGroups.map(group => group.id));
+  const nonemptyIds = actualGroups.every(group => group.id.trim().length > 0);
+  const exactPartition = ownedPaths.length === subjectPaths.size && new Set(ownedPaths).size === ownedPaths.length && [...subjectPaths].every(subject => ownedPaths.includes(subject));
+  const closureCoverage = actualGroups.every(group => group.owned.length > 0 && group.owned.every(owned => group.closure.includes(owned)));
+  const colocatedTests = actualGroups.every(group => group.owned.every(owned => {
+    const source = owned.match(/^(.+)_test\.go$/)?.[1];
+    return !source || !subjectPaths.has(`${source}.go`) || group.owned.includes(`${source}.go`);
+  }));
+  const groupingPass = actualGroups.length === 3 && uniqueIds.size === 3 && nonemptyIds && exactPartition && closureCoverage && colocatedTests;
   const candidateOwnership = baselineComponents.flatMap(component => Array.isArray(component.owned_paths) ? component.owned_paths.map(String) : []);
   const itemOwnership = ownershipItemRecords.flatMap(item => (Array.isArray(item.sorted_owned_paths) ? item.sorted_owned_paths : item.owned_paths || []).map(String));
   const candidateIds = new Set(baselineComponents.map(component => qualityComponentId(component)));
@@ -2788,7 +2810,7 @@ export function evaluateOnboardingQuality(first: QualityInput | unknown, second?
   const activeDefect = qualityObjects(httpResume?.findings).some(finding => qualitySeverity(finding.severity) >= 2 && qualityLikelyConfirmed(finding) && qualityHttpDecoderSignature(finding) && !/resolved|fixed|closed|no active|remediated/i.test(qualityText(finding)));
   const spans = qualityScanSpans(input);
   const resumeCoordinates = httpResume ? qualityPayloadCoordinates(httpResume) : [];
-  const returnCitation = spans.returnLine !== undefined && resumeCoordinates.some(coordinate => coordinate.path === 'http.go' && Math.abs(coordinate.line - spans.returnLine!) <= 1);
+  const returnCitation = spans.returnLine !== undefined && (resumeCoordinates.some(coordinate => coordinate.path === 'http.go' && Math.abs(coordinate.line - spans.returnLine!) <= 1) || qualityTextualCitation(resumeText, 'http.go', spans.returnLine));
   const testCitation = spans.testStart !== undefined && spans.testEnd !== undefined && resumeCoordinates.some(coordinate => coordinate.path === 'http_test.go' && coordinate.line >= spans.testStart! && coordinate.line <= spans.testEnd!) && /TestMalformedWriteDoesNotPersist/.test(resumeText);
   const resolutionPass = !!httpResume && resolutionAssertion && !activeDefect && returnCitation && testCitation;
   const oracle = input.oracle || input.hiddenOracle || {};
@@ -2802,7 +2824,7 @@ export function evaluateOnboardingQuality(first: QualityInput | unknown, second?
     details: { baseline: baselineCoordinates.details, resumed_changed: patchedCoordinates.details },
   };
   const criteria = [
-    qualityResult('grouping', groupingPass, { expected: expectedGroups, actual: actualGroups }),
+    qualityResult('grouping', groupingPass, { expected: { group_count: 3, subject_paths: [...subjectPaths].sort(), nonempty_unique_ids: true, exact_partition: true, dependency_closure: true, conventional_test_colocation: true }, actual: actualGroups }),
     qualityResult('ownership', mappingPass, { candidate_paths: candidateOwnership, work_item_paths: itemOwnership, candidate_to_work_item: [...candidateIds].every(id => itemIds.has(id)) }),
     qualityResult('coordinates', coordinates.pass, coordinates.details),
     qualityResult('baseline_http_candidate', bugPass, { component_id: httpBaseline ? qualityComponentId(httpBaseline) : null, detected: bugPass, boundary_coordinate: bugEvidence ? qualityCoordinates(bugEvidence).find(coordinate => coordinate.path === 'http.go') : null }),

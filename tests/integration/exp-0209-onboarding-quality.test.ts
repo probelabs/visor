@@ -101,6 +101,50 @@ describe('EXP-0209 onboarding quality gate', () => {
     expect(evaluateOnboardingQuality(value).criterion_results.resume_http_resolution.pass).toBe(false);
   });
 
+  it('accepts Attempt011 grouping and textual source citations', () => {
+    const value = fixture();
+    const actualGroups = [
+      component('http', ['http.go', 'http_test.go']),
+      component('service', ['entry.go', 'go.mod', 'service.go', 'service_test.go']),
+      component('memory-store', ['store.go']),
+    ];
+    actualGroups[2].dependency_closure = ['entry.go', 'go.mod', 'store.go'];
+    value.baselineCandidate.components = actualGroups;
+    value.baselineComponentCandidates = actualGroups;
+    value.workItems = actualGroups.map(group => ({ component_id: group.id, sorted_owned_paths: group.owned_paths }));
+    const resolvedHttp = value.resumeComponentCandidates[0];
+    value.resumeComponentCandidates = [resolvedHttp, actualGroups[1], actualGroups[2]];
+    const finding: any = value.resumeComponentCandidates[0].findings[0];
+    finding.coordinates = [coordinate('http_test.go', 44)];
+    finding.text = 'Current http.go:45-50 checks malformed JSON and returns before http.go:52; the decoder has no persistence/state effect. TestMalformedWriteDoesNotPersist is named at http_test.go:44-55.';
+    const result = evaluateOnboardingQuality(value);
+    expect(result.score).toBe(7);
+    expect(result.overall_pass).toBe(true);
+    expect(result.criterion_results.resume_http_resolution.details.return_citation).toBe(true);
+  });
+
+  it('rejects a separated source/test group and a textual citation range that misses return', () => {
+    const separated: any = fixture();
+    separated.baselineComponentCandidates[0].owned_paths = ['http.go'];
+    separated.baselineComponentCandidates[0].dependency_closure = ['http.go'];
+    separated.baselineComponentCandidates[1].owned_paths.push('http_test.go');
+    separated.baselineComponentCandidates[1].dependency_closure.push('http_test.go');
+    expect(evaluateOnboardingQuality(separated).criterion_results.grouping.pass).toBe(false);
+    const citation: any = fixture();
+    const finding: any = citation.resumeComponentCandidates[0].findings[0];
+    finding.coordinates = [coordinate('http_test.go', 44)];
+    finding.text = 'Current http.go:45-49 checks malformed JSON and returns before http.go:52; the decoder has no persistence/state effect. TestMalformedWriteDoesNotPersist is named at http_test.go:44-55.';
+    const result = evaluateOnboardingQuality(citation);
+    expect(result.criterion_results.resume_http_resolution.details.return_citation).toBe(false);
+    expect(result.criterion_results.resume_http_resolution.pass).toBe(false);
+  });
+
+  it('rejects an empty component ID', () => {
+    const value: any = fixture();
+    value.baselineComponentCandidates[0].id = '';
+    expect(evaluateOnboardingQuality(value).criterion_results.grouping.pass).toBe(false);
+  });
+
   it('recognizes ordinary create verb forms only when the control wording includes still', () => {
     const value = fixture();
     value.baselineComponentCandidates[0].findings[0].text = 'Malformed JSON can still create an entry';
