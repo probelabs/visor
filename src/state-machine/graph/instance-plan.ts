@@ -14,7 +14,7 @@ import {
   sha256Canonical,
   type ClaimSchemaValidator,
 } from './claim-kernel';
-import { PROOF_ROLE_AUTHORITY_CLAIM, isGovernedProofComponentSelector } from '../../providers/governed-proof-inspect-check-provider';
+import { PROOF_ROLE_AUTHORITY_CLAIM, isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector } from '../../providers/governed-proof-inspect-check-provider';
 
 const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -148,12 +148,6 @@ function componentSelectorTemplateBindingAllowed(inputName: string | undefined, 
     (keys.length === 2 || (keys.length === 3 && consumption.cardinality === 'one')) &&
     keys.every(key => typeof key === 'string' && (key === 'claim' || key === 'as' || key === 'cardinality')) &&
     consumption.claim === 'component.work_item@1' && consumption.as === 'component';
-}
-
-function isGovernedProofSpecReviewSelector(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || !hasExactKeys(value, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'])) return false;
-  const record = value as Record<string, unknown>, subject = record.subject;
-  return record.role_id === 'spec-review' && record.stance === 'owner' && !!subject && typeof subject === 'object' && !Array.isArray(subject) && Object.getPrototypeOf(subject) === Object.prototype && hasExactKeys(subject, ['kind']) && (subject as Record<string, unknown>).kind === 'component' && validVisible(record.output_schema_id, 128) && typeof record.output_schema === 'string';
 }
 
 function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false, specReviewSelectorAllowed = false): void {

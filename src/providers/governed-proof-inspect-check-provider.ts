@@ -124,6 +124,16 @@ export function isGovernedProofComponentSelector(value: unknown): boolean {
     plain(subject) && exact(subject, ['kind']) && subject.kind === 'component' &&
     visible(value.output_schema_id, 128) && typeof value.output_schema === 'string';
 }
+/** Authored selector for the sole later component onboarding stage.  The
+ * controller supplies the component authority and the authenticated prior
+ * onboarding context at activation time. */
+export function isGovernedProofSpecReviewSelector(value: unknown): boolean {
+  if (!plain(value) || !exact(value, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'])) return false;
+  const subject = value.subject;
+  return value.role_id === 'spec-review' && value.stance === 'owner' &&
+    plain(subject) && exact(subject, ['kind']) && subject.kind === 'component' &&
+    visible(value.output_schema_id, 128) && typeof value.output_schema === 'string';
+}
 export function validateProofComponentInvocationAuthority(value: unknown): ProofComponentInvocationAuthorityV1 {
   if (!plain(value) || !exact(value, ['work_item_digest', 'subject', 'candidate', 'admission', 'work_item', 'catalog_revalidation_receipt']) || !validMaterialized(value)) fail('component authority is not closed');
   if (!wire(value.work_item_digest) || !plain(value.subject) || !exact(value.subject, ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure', 'fingerprint']) || value.subject.version !== 'proof.component-subject/v1' || typeof value.subject.project_id !== 'string' || typeof value.subject.component_id !== 'string' || !wire(value.subject.fingerprint) || !Array.isArray(value.subject.sorted_owned_paths) || !Array.isArray(value.subject.sorted_dependency_closure)) fail('component authority subject is invalid');
@@ -162,7 +172,12 @@ function decodeSchema(value: unknown): string {
 }
 function validateInvocation(value: unknown): asserts value is Record<string, unknown> {
   const hasAuthority = plain(value) && own(value, 'component_authority');
-  const keys = hasAuthority ? ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema'] : ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'];
+  const hasOnboardingStage = plain(value) && own(value, 'onboarding_stage');
+  const keys = hasOnboardingStage
+    ? ['role_id', 'stance', 'subject', 'component_authority', 'onboarding_stage', 'output_schema_id', 'output_schema']
+    : hasAuthority
+      ? ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema']
+      : ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'];
   if (!plain(value) || !exact(value, keys)) fail('invocation keys are not closed');
   if (!validMaterialized(value)) fail('invocation contains non-materialized data');
   if (!visible(value.role_id, 128) || (value.stance !== 'owner' && value.stance !== 'external-review') || !visible(value.output_schema_id, 128)) fail('invocation strings are invalid');
@@ -174,6 +189,11 @@ function validateInvocation(value: unknown): asserts value is Record<string, unk
       ((subject.kind !== 'project' && subject.kind !== 'requirement') && !(hasAuthority && subject.kind === 'component')) ||
       !visible(subject.id, 128) || !wire(subject.fingerprint)) fail('invocation subject is invalid');
   if (hasAuthority) validateProofComponentInvocationAuthority(value.component_authority);
+  if (hasOnboardingStage) {
+    if (!hasAuthority || value.role_id !== 'spec-review') fail('onboarding stage context is paired with the wrong invocation');
+    const stage = value.onboarding_stage;
+    try { proofAdmissionChild().validateOnboardingStageContext(stage); } catch { fail('onboarding stage context is invalid or exceeds its bound'); }
+  }
   const schema = decodeSchema(value.output_schema); const parsed = jsonObject(schema, 'output_schema'); if (!validMaterialized(parsed)) fail('output_schema contains non-materialized data');
 }
 export function projectGovernedProofInspectConfig(value: unknown): CheckProviderConfig {
@@ -182,7 +202,7 @@ export function projectGovernedProofInspectConfig(value: unknown): CheckProvider
   for (const key of Reflect.ownKeys(value)) if (!dataDescriptor(value, key)) fail(`config key ${String(key)} is not an enumerable data property`);
   for (const key of Object.keys(value)) { if (!(AUTHORED as readonly string[]).includes(key) && !CONTROLLER.has(key) && !GRAPH.has(key)) fail(`unknown config key ${key}`); if (GRAPH.has(key) && !validMaterialized(value[key])) fail(`graph config key ${key} is not materialized`); }
   if (value.type !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || value.profile !== PROFILE) fail('config fields are invalid');
-  if (isGovernedProofComponentSelector(value.invocation)) {
+  if (isGovernedProofComponentSelector(value.invocation) || isGovernedProofSpecReviewSelector(value.invocation)) {
     if (own(value, 'message') || own(value, 'instructions') || own(value, 'invocation_digest') || own(value, 'result_schema')) fail('component selector cannot author resolved Proof fields');
     const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
     const parsed = jsonObject(decoded, 'output_schema');
@@ -574,7 +594,7 @@ function requiresRuntimeContext(config: CheckProviderConfig): RuntimeContextKind
   // The component selector uses the controller-owned Proof authority and C0
   // itself as the runtime binding. The legacy envelope context remains for
   // already-resolved EXP-0209 checks.
-  if (isGovernedProofComponentSelector(config.invocation)) return undefined;
+  if (isGovernedProofComponentSelector(config.invocation) || isGovernedProofSpecReviewSelector(config.invocation)) return undefined;
   const consumes = config.consumes;
   if (consumes === undefined) return undefined;
   if (!Array.isArray(consumes)) fail('config consumes is not an array');
@@ -693,11 +713,14 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
     const config = projectGovernedProofInspectConfig(request.checkConfig); if (!/^[0-9a-f]{64}$/.test(request.executionConfigDigest)) fail('executionConfigDigest is invalid');
     if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0) fail('workingDirectory is invalid');
     const binding = immutableCanonicalValue(request.binding);
-    const selector = isGovernedProofComponentSelector(request.checkConfig.invocation);
+    const selector = isGovernedProofComponentSelector(request.checkConfig.invocation) || isGovernedProofSpecReviewSelector(request.checkConfig.invocation);
     const reinspectionContext = request.reinspectionContext === undefined
       ? undefined
       : validateGovernedProofComponentReinspectionContext(request.reinspectionContext);
-    if (reinspectionContext && !selector) fail('reinspection context requires a component selector');
+    if (reinspectionContext && !isGovernedProofComponentSelector(request.checkConfig.invocation)) fail('reinspection context requires a component selector');
+    const specReview = isGovernedProofSpecReviewSelector(request.checkConfig.invocation);
+    const onboardingStage = request.executionContext.proofOnboardingStageContext;
+    if (specReview !== (onboardingStage !== undefined)) fail('spec-review requires its paired controller onboarding context');
     let context: GovernedProofRuntimeContext | undefined;
     if (runtimeContextKind === 'project') {
       const invocation = config.invocation;
@@ -731,6 +754,7 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
           stance: authored.stance,
           subject: { kind: 'component', id: subject.component_id, fingerprint: subject.fingerprint },
           component_authority: authority,
+          ...(specReview ? { onboarding_stage: onboardingStage } : {}),
           output_schema_id: authored.output_schema_id,
           output_schema: authored.output_schema,
         };

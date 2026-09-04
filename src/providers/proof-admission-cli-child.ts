@@ -22,10 +22,14 @@ export const PROOF_ADMISSION_CLEANUP_FAILED = 'PROOF_ADMISSION_CLEANUP_FAILED';
 /** The exact decision wire retained beside the complete admitted receipt. */
 export const PROOF_ADMISSION_WIRE_FIELD = '__proof_admission_wire';
 /** Proof roles constants: request max includes bytes before execution; output max includes LF. */
-export const PROOF_C0_REQUEST_MAX_BYTES = 1463640;
+export const PROOF_ONBOARDING_STAGE_CONTEXT_VERSION = 'proof.onboarding-stage-context/v1';
+export const PROOF_ONBOARDING_STAGE_SPEC_REVIEW = 'spec_review';
+export const PROOF_ADMISSION_OUTPUT_MAX_BYTES = 2097152;
+export const PROOF_ONBOARDING_STAGE_MAX_BYTES = PROOF_ADMISSION_OUTPUT_MAX_BYTES;
+export const PROOF_C0_LEGACY_REQUEST_MAX_BYTES = 1463640;
+export const PROOF_C0_REQUEST_MAX_BYTES = PROOF_C0_LEGACY_REQUEST_MAX_BYTES + PROOF_ONBOARDING_STAGE_MAX_BYTES;
 export const PROOF_C0_RESPONSE_MAX_BYTES = 8388608;
 export const PROOF_ADMISSION_REQUEST_MAX_BYTES = 2162688;
-export const PROOF_ADMISSION_OUTPUT_MAX_BYTES = 2097152;
 const REQUEST_LIMIT = PROOF_ADMISSION_REQUEST_MAX_BYTES;
 const STDOUT_LIMIT = PROOF_ADMISSION_OUTPUT_MAX_BYTES;
 const STDERR_LIMIT = 65536;
@@ -42,6 +46,9 @@ const RECEIPT_ID_DOMAIN_V2 = 'proof.role-result-candidate-receipt/id/v2';
 const C0_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] as const;
 const C0_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 const C0_COMPONENT_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema'] as const;
+const C0_STAGED_COMPONENT_REQUEST_KEYS = ['role_id', 'stance', 'subject', 'component_authority', 'onboarding_stage', 'output_schema_id', 'output_schema'] as const;
+const C0_STAGED_COMPONENT_RESPONSE_KEYS = ['version', 'role_id', 'role_source', 'stance', 'subject', 'component_authority', 'onboarding_stage', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] as const;
+const ONBOARDING_STAGE_KEYS = ['version', 'stage_id', 'prior_candidate', 'prior_admission', 'prior_admission_claim_id', 'prior_admission_payload_fingerprint'] as const;
 const RECEIPT_COMMON_KEYS = ['Version', 'Status', 'CandidateID', 'ProbeResultDigest', 'ProbeCanonicalBytes', 'ClaimID', 'Claim', 'PayloadFingerprint', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'ProducerCheckID', 'ParentClaimIDs', 'Binding', 'Termination', 'receipt_id'] as const;
 const RECEIPT_V2_KEYS = [...RECEIPT_COMMON_KEYS.slice(0, 16), 'ProjectLineage', 'receipt_id'] as const;
 const CATALOG_REVALIDATION_RECEIPT_COMMON_KEYS = [
@@ -90,8 +97,113 @@ function json(value: unknown): string {
     return `\\u${code}`;
   });
 }
+function jsonValueEnd(source: string, start: number): number {
+  let index = start;
+  const first = source[index];
+  if (first === '"') {
+    index++;
+    while (index < source.length) {
+      if (source[index] === '\\') index += 2;
+      else if (source[index++] === '"') return index;
+    }
+    return -1;
+  }
+  if (first !== '{' && first !== '[') {
+    while (index < source.length && source[index] !== ',' && source[index] !== '}' && source[index] !== ']') index++;
+    return index;
+  }
+  const stack: string[] = []; let quoted = false;
+  for (; index < source.length; index++) {
+    const char = source[index];
+    if (quoted) { if (char === '\\') index++; else if (char === '"') quoted = false; continue; }
+    if (char === '"') quoted = true;
+    else if (char === '{') stack.push('}');
+    else if (char === '[') stack.push(']');
+    else if (char === stack[stack.length - 1] && stack.pop() && stack.length === 0) return index + 1;
+  }
+  return -1;
+}
+function rawObjectField(source: string, wanted: string): string | undefined {
+  let index = 0; while (/\s/.test(source[index] ?? '')) index++;
+  if (source[index++] !== '{') return undefined;
+  for (;;) {
+    while (/\s/.test(source[index] ?? '')) index++;
+    if (source[index] === '}') return undefined;
+    const keyStart = index; const keyEnd = jsonValueEnd(source, keyStart); if (keyEnd < 0) return undefined;
+    let key: unknown; try { key = JSON.parse(source.slice(keyStart, keyEnd)); } catch { return undefined; }
+    index = keyEnd; while (/\s/.test(source[index] ?? '')) index++;
+    if (source[index++] !== ':') return undefined;
+    while (/\s/.test(source[index] ?? '')) index++;
+    const valueStart = index; const valueEnd = jsonValueEnd(source, valueStart); if (valueEnd < 0) return undefined;
+    if (key === wanted) return source.slice(valueStart, valueEnd);
+    index = valueEnd; while (/\s/.test(source[index] ?? '')) index++;
+    if (source[index++] !== ',') return undefined;
+  }
+}
 function proofStructJson(fields: Readonly<Record<string, string>>): string {
   return `{${Object.entries(fields).map(([key, value]) => `${json(key)}:${value}`).join(',')}}`;
+}
+
+export type OnboardingStageContextV1 = Readonly<{
+  version: typeof PROOF_ONBOARDING_STAGE_CONTEXT_VERSION;
+  stage_id: typeof PROOF_ONBOARDING_STAGE_SPEC_REVIEW;
+  prior_candidate: Record<string, unknown> | string;
+  prior_admission: Record<string, unknown> | string;
+  prior_admission_claim_id: string;
+  prior_admission_payload_fingerprint: string;
+}>;
+
+function onboardingStageArtifactJson(value: unknown, name: string): string {
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (!plain(parsed)) fail(`${name} must be a JSON object`);
+    } catch { fail(`${name} must be a JSON object`); }
+    try { new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(value)); } catch { fail(`${name} is not valid UTF-8`); }
+    return value;
+  }
+  if (!plain(value) || !validUnicode(value)) fail(`${name} must be a JSON object`);
+  const candidate = name === 'prior_candidate' && plain((value as Record<string, unknown>).Invocation) &&
+    Object.prototype.hasOwnProperty.call(value as Record<string, unknown>, 'Publication')
+    ? proofComponentCandidateEnvelopeJson(value as Record<string, unknown>)
+    : name === 'prior_admission' && Object.prototype.hasOwnProperty.call(value as Record<string, unknown>, 'receipt')
+      ? proofV1DecisionJson(value as Record<string, unknown>)
+      : proofCanonicalJson(value);
+  if (candidate === '') fail(`${name} cannot be encoded`);
+  return candidate;
+}
+
+export function validateOnboardingStageContext(value: unknown): OnboardingStageContextV1 {
+  if (!exactUnordered(value, ONBOARDING_STAGE_KEYS) || !validUnicode(value)) fail('onboarding stage context wire shape is invalid');
+  const stage = value as Record<string, unknown>;
+  if (stage.version !== PROOF_ONBOARDING_STAGE_CONTEXT_VERSION || stage.stage_id !== PROOF_ONBOARDING_STAGE_SPEC_REVIEW ||
+      typeof stage.prior_admission_claim_id !== 'string' || !/^[0-9a-f]{64}$/.test(stage.prior_admission_claim_id) ||
+      typeof stage.prior_admission_payload_fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(stage.prior_admission_payload_fingerprint)) {
+    fail('onboarding stage context identity is invalid');
+  }
+  const candidate = onboardingStageArtifactJson(stage.prior_candidate, 'prior_candidate');
+  const admission = onboardingStageArtifactJson(stage.prior_admission, 'prior_admission');
+  if (Buffer.byteLength(candidate) + Buffer.byteLength(admission) > PROOF_ONBOARDING_STAGE_MAX_BYTES) fail('onboarding stage evidence exceeds limit');
+  return Object.freeze({
+    version: PROOF_ONBOARDING_STAGE_CONTEXT_VERSION,
+    stage_id: PROOF_ONBOARDING_STAGE_SPEC_REVIEW,
+    prior_candidate: stage.prior_candidate as Record<string, unknown> | string,
+    prior_admission: stage.prior_admission as Record<string, unknown> | string,
+    prior_admission_claim_id: stage.prior_admission_claim_id,
+    prior_admission_payload_fingerprint: stage.prior_admission_payload_fingerprint,
+  });
+}
+
+export function proofOnboardingStageContextJson(value: unknown): string {
+  const stage = validateOnboardingStageContext(value);
+  return proofStructJson({
+    version: json(stage.version),
+    stage_id: json(stage.stage_id),
+    prior_candidate: onboardingStageArtifactJson(stage.prior_candidate, 'prior_candidate'),
+    prior_admission: onboardingStageArtifactJson(stage.prior_admission, 'prior_admission'),
+    prior_admission_claim_id: json(stage.prior_admission_claim_id),
+    prior_admission_payload_fingerprint: json(stage.prior_admission_payload_fingerprint),
+  });
 }
 
 /**
@@ -297,17 +409,21 @@ function goRoleSubjectJson(value: Record<string, unknown>): string {
   return proofStructJson({ kind: json(value.kind), id: json(value.id), fingerprint: json(value.fingerprint) });
 }
 
-function componentResolvedRoleInvocationJson(value: Record<string, unknown>): string {
+function componentResolvedRoleInvocationJson(value: Record<string, unknown>, rawAuthority?: string, rawStage?: string): string {
   const subject = value.subject;
   const authority = value.component_authority;
   if (!plain(subject) || !plain(authority)) return '';
-  return proofStructJson({
+  const fields: Record<string, string> = {
     version: json(value.version),
     role_id: json(value.role_id),
     role_source: json(value.role_source),
     stance: json(value.stance),
     subject: goRoleSubjectJson(subject),
-    component_authority: goComponentAuthorityJson(authority),
+    component_authority: rawAuthority ?? goComponentAuthorityJson(authority),
+  };
+  if (Object.prototype.hasOwnProperty.call(value, 'onboarding_stage')) fields.onboarding_stage = rawStage ?? proofOnboardingStageContextJson(value.onboarding_stage);
+  return proofStructJson({
+    ...fields,
     authority: json(value.authority),
     output_schema_id: json(value.output_schema_id),
     output_schema: json(value.output_schema),
@@ -323,11 +439,15 @@ function componentRoleInvocationJson(value: Record<string, unknown>): string {
   const authority = value.component_authority as Record<string, unknown>;
   const authorityJson = goComponentAuthorityJson(authority);
   if (authorityJson === '') return '';
-  return proofStructJson({
+  const fields: Record<string, string> = {
     role_id: json(value.role_id),
     stance: json(value.stance),
     subject: goRoleSubjectJson(subject),
     component_authority: authorityJson,
+  };
+  if (Object.prototype.hasOwnProperty.call(value, 'onboarding_stage')) fields.onboarding_stage = proofOnboardingStageContextJson(value.onboarding_stage);
+  return proofStructJson({
+    ...fields,
     output_schema_id: json(value.output_schema_id),
     output_schema: json(value.output_schema),
   });
@@ -921,11 +1041,16 @@ export async function resolveProofRoleInvocation(
 ): Promise<Readonly<Record<string, unknown>>> {
   const executable = capabilityIdentity(capability);
   const component = plain(request) && Object.prototype.hasOwnProperty.call(request, 'component_authority');
-  const requestKeys = component ? C0_COMPONENT_REQUEST_KEYS : C0_REQUEST_KEYS;
+  const staged = component && Object.prototype.hasOwnProperty.call(request, 'onboarding_stage');
+  const requestKeys = staged ? C0_STAGED_COMPONENT_REQUEST_KEYS : component ? C0_COMPONENT_REQUEST_KEYS : C0_REQUEST_KEYS;
   if (process.platform === 'win32' || !executable || !workingDirectory.startsWith('/') || !exact(request, requestKeys)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   if (!sameExecutable(executable, executableStat(executable.realpath))) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  if (staged) {
+    try { validateOnboardingStageContext(request.onboarding_stage); } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
+  }
   const input = component ? componentRoleInvocationJson(request as Record<string, unknown>) : json(request);
-  if (Buffer.byteLength(input, 'utf8') > PROOF_C0_REQUEST_MAX_BYTES || !validUnicode(request)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
+  const inputLimit = staged ? PROOF_C0_REQUEST_MAX_BYTES : PROOF_C0_LEGACY_REQUEST_MAX_BYTES;
+  if (Buffer.byteLength(input, 'utf8') > inputLimit || !validUnicode(request)) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   let normalizedInput: Record<string, unknown> | undefined;
   if (component) {
     try {
@@ -947,11 +1072,23 @@ export async function resolveProofRoleInvocation(
   if (output.includes('\n') || output.includes('\r')) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
   let value: Record<string, unknown>;
   try { value = JSON.parse(output) as Record<string, unknown>; } catch { throw new Error(PROOF_ADMISSION_UNAVAILABLE); }
-  const responseKeys = component ? ['version', 'role_id', 'role_source', 'stance', 'subject', 'component_authority', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] : C0_KEYS;
+  const responseKeys = staged ? C0_STAGED_COMPONENT_RESPONSE_KEYS : component ? ['version', 'role_id', 'role_source', 'stance', 'subject', 'component_authority', 'authority', 'output_schema_id', 'output_schema', 'output_schema_digest', 'instructions', 'role_text_digest', 'invocation_digest'] : C0_KEYS;
+  let stagedMismatch = false;
+  let returnedAuthorityWire: string | undefined;
+  let returnedStageWire: string | undefined;
+  if (staged) {
+    try { validateOnboardingStageContext(value.onboarding_stage); } catch { stagedMismatch = true; }
+    const requestedStageWire = rawObjectField(input, 'onboarding_stage');
+    returnedStageWire = rawObjectField(output, 'onboarding_stage');
+    const requestedAuthorityWire = rawObjectField(input, 'component_authority');
+    returnedAuthorityWire = rawObjectField(output, 'component_authority');
+    stagedMismatch = stagedMismatch || requestedStageWire === undefined || returnedStageWire === undefined || returnedStageWire !== requestedStageWire || requestedAuthorityWire === undefined || returnedAuthorityWire === undefined || returnedAuthorityWire !== requestedAuthorityWire;
+  }
   if (
-    !exact(value, responseKeys) || (component ? componentResolvedRoleInvocationJson(value) !== output : json(value) !== output) || value.version !== 'proof.role-invocation/v1' ||
+    !exact(value, responseKeys) || (staged ? (returnedAuthorityWire === undefined || returnedStageWire === undefined || componentResolvedRoleInvocationJson(value, returnedAuthorityWire, returnedStageWire) !== output) : component ? componentResolvedRoleInvocationJson(value) !== output : json(value) !== output) || value.version !== 'proof.role-invocation/v1' ||
     value.role_id !== request.role_id || value.stance !== request.stance || !equalJson(value.subject, request.subject) ||
     (component && (!normalizedInput || proofCanonicalJson(value.component_authority) !== proofCanonicalJson(normalizedInput.component_authority))) ||
+    stagedMismatch ||
     value.output_schema_id !== request.output_schema_id || value.output_schema !== request.output_schema ||
     typeof value.instructions !== 'string' || value.instructions.length === 0
   ) throw new Error(PROOF_ADMISSION_UNAVAILABLE);

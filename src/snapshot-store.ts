@@ -88,7 +88,12 @@ import {
   proofCandidateAdmissionRequestJson,
   proofComponentCandidateEnvelopeJson,
   PROOF_ADMISSION_WIRE_FIELD,
+  PROOF_ONBOARDING_STAGE_CONTEXT_VERSION,
+  PROOF_ONBOARDING_STAGE_MAX_BYTES,
+  PROOF_ONBOARDING_STAGE_SPEC_REVIEW,
   validateProofComponentAdmissionOutcome,
+  validateOnboardingStageContext,
+  type OnboardingStageContextV1,
 } from './providers/proof-admission-cli-child';
 import {
   governedCanonicalJson,
@@ -98,10 +103,11 @@ import {
   governedProofCandidateEvidenceJson,
   proofCandidateEvidenceFingerprint,
   immutableGovernedValue,
+  immutableProofCanonicalValue,
   immutableProofCandidateEvidence,
   type GovernedWireMode,
 } from './providers/proof-wire';
-import { governedProofComponentReinspectionContextDigest, validateGovernedProofComponentReinspectionContext, validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, type GovernedProofComponentReinspectionContextV1, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
+import { governedProofComponentReinspectionContextDigest, validateGovernedProofComponentReinspectionContext, validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector, type GovernedProofComponentReinspectionContextV1, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   compareProofStrings,
   proofCatalogRevalidationReceiptIdentityJson,
@@ -2449,6 +2455,87 @@ export class ExecutionJournal {
       catalog_revalidation_receipt: currentAuthorityBytes.revalidation.receipt,
     });
 
+  }
+
+  /** Derive the exact predecessor evidence for the sole later component
+   * onboarding stage.  This is journal authority, never an inherited
+   * provider option: all three active aliases and their provenance are
+   * checked before the bounded context is frozen. */
+  getProofComponentOnboardingStageContext(nodeGenerationId: string): OnboardingStageContextV1 {
+    const execution = this.getGeneratedExecution(nodeGenerationId);
+    if (execution.generation.templateNodeKey !== 'spec_review' || execution.generation.checkId !== 'spec_review' ||
+        !isGovernedProofSpecReviewSelector(execution.node.check.invocation)) {
+      componentAuthorityFailure('onboarding stage context is reserved for spec_review');
+    }
+    const aliases = Object.keys(execution.claims).sort();
+    if (canonicalJson(aliases) !== canonicalJson(['admission', 'candidate', 'component'])) {
+      componentAuthorityFailure('spec_review inputs are not the exact component/candidate/admission aliases');
+    }
+    const internalClaim = (alias: 'component' | 'candidate' | 'admission', expected: string): InstanceClaimProjection => {
+      const view = execution.claims[alias];
+      const claim = view && this.instanceProjection.claimsById[view.claimId];
+      if (!view || !claim || !claim.active || claim.claim !== expected || view.claimId !== claim.claimId || view.claim !== claim.claim ||
+          view.payloadFingerprint !== claim.payloadFingerprint || canonicalJson(view.scope) !== canonicalJson(claim.scope)) {
+        componentAuthorityFailure(`spec_review ${alias} alias is detached from its active claim projection`);
+      }
+      return claim;
+    };
+    const component = internalClaim('component', 'component.work_item@1');
+    const candidate = internalClaim('candidate', PROOF_CANDIDATE_CLAIM);
+    const admission = internalClaim('admission', PROOF_ADMITTED_RECEIPT_CLAIM);
+    for (const claim of [component, candidate, admission]) {
+      if (canonicalJson(claim.scope) !== canonicalJson(execution.generation.scope)) componentAuthorityFailure('spec_review inputs are outside the generated scope');
+    }
+    if (candidate.producerCheckId !== 'inspect' || admission.producerCheckId !== PROOF_ADMIT_NODE_KEY) {
+      componentAuthorityFailure('spec_review predecessor producers are not inspect/proof_admit');
+    }
+    exactParentIds(admission.parentClaimIds, [candidate.claimId], 'spec_review admission');
+    if (typeof admission.nodeGenerationId !== 'string') componentAuthorityFailure('spec_review admission generation is unavailable');
+    const authority = this.getProofComponentInvocationAuthority(nodeGenerationId);
+    const request = this.getProofAdmissionRequest(admission.nodeGenerationId);
+    const extracted = extractProofAdmissionCandidate(request);
+    if (extracted.candidateRaw.length === 0 || proofComponentCandidateEnvelopeJson(extracted.candidate) !== extracted.candidateRaw.toString('utf8')) {
+      componentAuthorityFailure('spec_review prior candidate bytes are not retained exactly');
+    }
+    const invocation = extracted.candidate.Invocation;
+    const subject = extracted.candidate.Subject;
+    const expectedSubject = { kind: 'component', id: authority.subject.component_id, fingerprint: authority.subject.fingerprint };
+    if (!isRecord(invocation) || !isRecord(subject) || canonicalJson(subject) !== canonicalJson(expectedSubject) ||
+        !isRecord(invocation.subject) || canonicalJson(invocation.subject) !== canonicalJson(expectedSubject) ||
+        !isRecord(invocation.component_authority) || governedCanonicalJson(invocation.component_authority, 'proof') !== governedCanonicalJson(authority, 'proof')) {
+      componentAuthorityFailure('spec_review prior candidate subject or authority is detached');
+    }
+    let admissionWire: string;
+    try {
+      const payload = admission.payload;
+      if (!isRecord(payload) || typeof payload[PROOF_ADMISSION_WIRE_FIELD] !== 'string') throw new Error('missing admission wire');
+      admissionWire = payload[PROOF_ADMISSION_WIRE_FIELD];
+      JSON.parse(admissionWire);
+    } catch (error) {
+      componentAuthorityFailure(`spec_review admission wire is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const admissionView = generatedClaimView(admission, 'spec_review admission');
+    try {
+      validateProofComponentCandidateAdmissionBinding(generatedClaimView(candidate, 'spec_review candidate'), admissionView);
+    } catch (error) {
+      componentAuthorityFailure(`spec_review predecessor admission is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const publication = extracted.candidate.Publication;
+    if (!isRecord(publication) || publication.ClaimID !== candidate.claimId || publication.Claim !== candidate.claim ||
+        publication.PayloadFingerprint !== candidate.payloadFingerprint || canonicalJson(publication.ParentClaimIDs) !== canonicalJson(candidate.parentClaimIds)) {
+      componentAuthorityFailure('spec_review prior candidate coordinates are detached from the active claim');
+    }
+    const context = {
+      version: PROOF_ONBOARDING_STAGE_CONTEXT_VERSION,
+      stage_id: PROOF_ONBOARDING_STAGE_SPEC_REVIEW,
+      prior_candidate: extracted.candidateRaw.toString('utf8'),
+      prior_admission: admissionWire,
+      prior_admission_claim_id: admission.claimId,
+      prior_admission_payload_fingerprint: admission.payloadFingerprint,
+    };
+    if (Buffer.byteLength(extracted.candidateRaw) + Buffer.byteLength(admissionWire) > PROOF_ONBOARDING_STAGE_MAX_BYTES) componentAuthorityFailure('spec_review context exceeds bounded exact-artifact envelope');
+    try { return validateOnboardingStageContext(immutableProofCanonicalValue(context)); }
+    catch (error) { componentAuthorityFailure(`spec_review context is invalid: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   /** Derive the bounded prior-inspection context only for an authenticated

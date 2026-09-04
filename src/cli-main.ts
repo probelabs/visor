@@ -39,7 +39,7 @@ import {
   resolveProofRoleInvocation,
 } from './providers/proof-admission-cli-child';
 import type { VisorConfig } from './types/config';
-import { isGovernedProofComponentSelector } from './providers/governed-proof-inspect-check-provider';
+import { isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector } from './providers/governed-proof-inspect-check-provider';
 import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 import { publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
 import { compileClaimPlan } from './state-machine/graph/claim-plan';
@@ -57,7 +57,7 @@ async function projectProofAuthority(config: VisorConfig, capability: object, cw
       governedNodes++;
       const node = value as any;
       const invocation = node.invocation;
-      if (isGovernedProofComponentSelector(invocation)) return;
+      if (isGovernedProofComponentSelector(invocation) || isGovernedProofSpecReviewSelector(invocation)) return;
       if (!invocation || typeof invocation !== 'object' || Reflect.ownKeys(invocation).length !== PROOF_INVOCATION_KEYS.length || !PROOF_INVOCATION_KEYS.every(key => Object.prototype.hasOwnProperty.call(invocation, key))) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed invocation is not closed');
       const request = Object.fromEntries(PROOF_INVOCATION_KEYS.map(key => [key, invocation[key]]));
       const authority = await resolveProofRoleInvocation(capability, request, cwd) as any;

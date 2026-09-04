@@ -111,6 +111,8 @@ export interface ExecutionContext {
   /** Controller-owned, activation-time Proof component authority. It is never
    * read from authored config or a caller-provided provider option. */
   proofComponentAuthority?: import('./governed-proof-inspect-check-provider').ProofComponentInvocationAuthorityV1;
+  /** Controller-only Proof P1 context for the exact spec-review stage. */
+  proofOnboardingStageContext?: import('./proof-admission-cli-child').OnboardingStageContextV1;
   /** SDK hooks for human input and check completion */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;

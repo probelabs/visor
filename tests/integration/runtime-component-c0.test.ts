@@ -21,6 +21,7 @@ import {
 } from '../../src/state-machine/graph/instance-kernel';
 
 const PROOF_AUTHORITY = '/Users/buger/go/src/reqforge-exp-0207a-proof-cli-admission';
+const PROOF_P1_COMMIT = '543994bd68f2b6d6217749c4c19be737021b993a';
 const EXP0209_PROFILE = '/Users/buger/go/src/visor-exp-0208-product-native-demo-pack/examples/agent-governance/exp-0209-discovery-egress/visor.yaml';
 const PROFILE = 'luna-xhigh-readonly-v1';
 const SCHEMA = Buffer.from('{"type":"object","additionalProperties":false}', 'utf8').toString('base64');
@@ -113,13 +114,13 @@ function rederiveCatalogRevalidationReceiptID(receipt: any): void {
 
 function bare(seed: string): string { return createHash('sha256').update(seed).digest('hex'); }
 
-function pinnedProofBinary(execFileSync: ExecFileSync): string {
+function pinnedProofBinary(execFileSync: ExecFileSync, revision = 'HEAD'): string {
   const configured = process.env.VISOR_PROOF_ADMISSION_BIN;
-  if (configured) return configured;
-  const binary = join(tmpdir(), `visor-runtime-c0-proof-${process.pid}`);
+  if (configured && revision === 'HEAD') return configured;
+  const binary = join(tmpdir(), `visor-runtime-c0-proof-${revision.slice(0, 12)}-${process.pid}`);
   if (existsSync(binary)) return binary;
   const source = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-proof-source-'));
-  const archive = execFileSync('git', ['-C', PROOF_AUTHORITY, 'archive', 'HEAD'], { maxBuffer: 256 * 1024 * 1024 });
+  const archive = execFileSync('git', ['-C', PROOF_AUTHORITY, 'archive', revision], { maxBuffer: 256 * 1024 * 1024 });
   execFileSync('tar', ['-xf', '-', '-C', source], { input: archive, stdio: ['pipe', 'pipe', 'pipe'] });
   execFileSync('go', ['build', '-o', binary, './cmd/proof'], {
     cwd: source,
@@ -200,6 +201,23 @@ function expectErrorCode(action: () => unknown, code: string): void {
   } catch (error) {
     expect((error as { code?: string }).code).toBe(code);
   }
+}
+
+function stagedPriorCandidate(request: Record<string, unknown>, resolved: Record<string, unknown>, authority: Record<string, unknown>): Record<string, unknown> {
+  const payload = '{"findings":[]}';
+  const payloadBytes = Buffer.from(payload, 'utf8');
+  const scope = [{ Kind: 'keyed', ExpansionOwnerCheck: 'discover', Key: 'alpha', SubgraphInstanceID: bare('stage-subgraph') }];
+  const binding = { ManagedRunID: bare('stage-managed'), SessionID: 'runtime-stage', CheckID: 'inspect', Scope: scope, NodeInstanceID: bare('stage-node'), NodeGenerationID: bare('stage-generation'), AttemptID: bare('stage-attempt'), Fence: 1 };
+  const subject = request.subject;
+  const publication = { Version: 1, Type: 'ClaimPublished', SessionID: binding.SessionID, CheckID: binding.CheckID, Scope: scope, NodeInstanceID: binding.NodeInstanceID, NodeGenerationID: binding.NodeGenerationID, AttemptID: binding.AttemptID, Fence: binding.Fence, ClaimID: '6'.repeat(64), Claim: 'proof.candidate@1', PayloadFingerprint: createHash('sha256').update(payloadBytes).digest('hex'), ProducerCheckID: 'inspect', Payload: payloadBytes.toString('base64'), ParentClaimIDs: ['7'.repeat(64)] };
+  const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: binding.SessionID, Scope: scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
+  return {
+    Version: 'proof.role-result-candidate-envelope/v1', Invocation: { role_id: request.role_id, stance: request.stance, subject, component_authority: authority, output_schema_id: request.output_schema_id, output_schema: request.output_schema },
+    InvocationDigest: resolved.invocation_digest, RoleID: request.role_id, Stance: request.stance, Subject: subject,
+    AttestationVersion: 'probe.governed-codex-attestation/v2', ExecutionSource: 'caller', ProbeInvocationDigest: resolved.invocation_digest,
+    IdentityVersion: 'probe.governed-result-identity/v1', IdentitySource: 'probe-host-schema-valid-json', ResultDigest: domainDigest('probe.governed-result-identity/data/v1', payload), CanonicalBytes: payloadBytes.length, ProbeResultBytes: payloadBytes.toString('base64'), VisorPayloadBytes: payloadBytes.toString('base64'),
+    Publication: publication, Binding: binding, Termination: termination,
+  };
 }
 
 describe('runtime component C0 authority seam', () => {
@@ -291,6 +309,85 @@ setTimeout(() => {
       const pid = Number(readFileSync(delayedPid, 'utf8'));
       expect(() => process.kill(-pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
       await delayedRun.close();
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  }, 180000);
+
+  it('runs pinned Proof P1 staged C0 before the fake Probe and rejects bad stage wires', async () => {
+    jest.resetModules();
+    jest.doMock('child_process', () => jest.requireActual('child_process'));
+    jest.doMock('node:child_process', () => jest.requireActual('node:child_process'));
+    const [child, governed] = await Promise.all([
+      import('../../src/providers/proof-admission-cli-child'),
+      import('../../src/providers/governed-proof-inspect-check-provider'),
+    ]);
+    const runSync = jest.requireActual<typeof import('node:child_process')>('node:child_process').execFileSync;
+    const binary = pinnedProofBinary(runSync, PROOF_P1_COMMIT);
+    const capability = child.createProofAdmissionCapability(binary);
+    const repository = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-stage-'));
+    const root = join(repository, 'project'); mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: journalservice\n', 'utf8');
+    for (const name of ['alpha.go', 'beta.go', 'gamma.go']) writeFileSync(join(root, name), `package journal\n// ${name}\n`, 'utf8');
+    runSync('git', ['init', '-q'], { cwd: repository });
+    runSync('git', ['config', 'user.email', 'runtime-stage@example.invalid'], { cwd: repository });
+    runSync('git', ['config', 'user.name', 'Runtime Stage'], { cwd: repository });
+    runSync('git', ['add', '.'], { cwd: repository });
+    runSync('git', ['commit', '-qm', 'fixture'], { cwd: repository });
+    try {
+      const authority = makeAuthority(runSync, binary, root);
+      const priorRequest: Record<string, unknown> = {
+        role_id: 'onboard', stance: 'owner', subject: { kind: 'component', id: 'alpha', fingerprint: (authority.subject as Record<string, unknown>).fingerprint },
+        component_authority: authority, output_schema_id: 'proof.findings/v1', output_schema: SCHEMA,
+      };
+      const priorResolved = await child.resolveProofRoleInvocation(capability, priorRequest, root);
+      const priorCandidate = stagedPriorCandidate(priorRequest, priorResolved as Record<string, unknown>, authority);
+      const priorAdmissionWire = String(runSync(binary, ['admit-candidate'], {
+        cwd: root, input: child.proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: priorCandidate }), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+      })).trimEnd();
+      expect(JSON.parse(priorAdmissionWire).status).toBe('ADMITTED');
+      const stage = {
+        version: 'proof.onboarding-stage-context/v1', stage_id: 'spec_review',
+        prior_candidate: child.proofComponentCandidateEnvelopeJson(priorCandidate), prior_admission: priorAdmissionWire,
+        prior_admission_claim_id: 'e'.repeat(64), prior_admission_payload_fingerprint: 'f'.repeat(64),
+      };
+      const selector = {
+        type: 'governed-proof-inspect', profile: PROFILE,
+        invocation: { role_id: 'spec-review', stance: 'owner', subject: { kind: 'component' }, output_schema_id: 'proof.findings/v1', output_schema: SCHEMA },
+        consumes: [{ claim: 'component.work_item@1', as: 'component' }, { claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'admission' }],
+      };
+      const c0Request = { role_id: 'spec-review', stance: priorRequest.stance, subject: priorRequest.subject, component_authority: priorRequest.component_authority, onboarding_stage: stage, output_schema_id: priorRequest.output_schema_id, output_schema: priorRequest.output_schema };
+      const expectedResolved = await child.resolveProofRoleInvocation(capability, c0Request, root);
+      let captured: any; let runnerCalls = 0;
+      const factory = (request: any) => {
+        runnerCalls++;
+        return { answer: () => {
+          captured = request;
+          const data = {}; const bytes = canonicalJson(data); const digest = governed.governedResultDigest(data); const d = 'a'.repeat(64);
+          return { data, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: PROFILE, requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(bytes, 'utf8') } };
+        }, cancel: () => undefined, close: () => undefined };
+      };
+      const compactAuthority = { component_id: 'alpha', work_item_digest: authority.work_item_digest, subject: authority.subject };
+      const start = (provider: any, context: unknown) => provider.startManaged({
+        prInfo: {} as any, checkConfig: selector, dependencyResults: new Map(),
+        executionContext: { claims: { component: { claimId: '1'.repeat(64), claim: 'component.work_item@1', payload: { component_id: 'alpha', authority: compactAuthority } } }, proofComponentAuthority: authority, proofOnboardingStageContext: context },
+        binding: binding(), executionConfigDigest: '2'.repeat(64), workingDirectory: root,
+      });
+      const provider = governed.createGovernedProofInspectProviderForFocusedTest(factory as any, capability);
+      const run = start(provider, stage);
+      await expect(run.started).resolves.toMatchObject({ kind: 'started' });
+      await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded-proof-candidate' });
+      expect(runnerCalls).toBe(1);
+      expect(captured.invocation.onboarding_stage).toEqual(stage);
+      expect(child.proofOnboardingStageContextJson(captured.invocation.onboarding_stage)).toBe(child.proofOnboardingStageContextJson(stage));
+      expect(captured.invocationDigest).toBe(expectedResolved.invocation_digest);
+      await expect(run.close()).resolves.toMatchObject({ status: 'clean' });
+
+      const malformedContext = start(provider, { ...stage, unexpected: true });
+      await expect(malformedContext.outcome).rejects.toThrow();
+      await malformedContext.close();
+      expect(runnerCalls).toBe(1);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }

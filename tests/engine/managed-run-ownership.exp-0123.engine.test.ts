@@ -59,7 +59,7 @@ import {
   type GovernedProbeRunnerRequest,
 } from '../../src/providers/governed-proof-inspect-check-provider';
 import { createProofAdmitProviderForFocusedTest } from '../../src/providers/proof-admit-check-provider';
-import { goCompatibleProofJson } from '../../src/providers/proof-admission-cli-child';
+import { goCompatibleProofJson, proofV1AdmissionReceiptID, proofV1DecisionJson } from '../../src/providers/proof-admission-cli-child';
 import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { ExecutionJournal } from '../../src/snapshot-store';
@@ -856,16 +856,175 @@ describe('EXP-0123 managed graph-run ownership', () => {
   });
 
   it('does not smuggle proof admission authority into an ordinary managed provider', async () => {
+    callerExecutionContext.proofComponentAuthority = { forged: true } as any;
+    callerExecutionContext.proofOnboardingStageContext = { forged: true } as any;
+    engine.setExecutionContext(callerExecutionContext);
     const run = engine.executeGroupedChecks(prInfo, ['discover-components'], undefined, fixtureConfig(), 'table', false, 1);
     await until(() => controls.length === 1, 'ordinary managed acquisition');
     const control = controls[0];
     expect(control.request.checkConfig.type).toBe(MANAGED_PROVIDER);
     expect(control.request.proofAdmissionRequest).toBeUndefined();
+    expect(control.request.executionContext.proofComponentAuthority).toBeUndefined();
+    expect(control.request.executionContext.proofOnboardingStageContext).toBeUndefined();
     control.started.resolve(startedReceipt(control.request.binding));
     control.outcome.resolve(successOutcome(control.request.binding, { issues: [], output: { id: 'A', findings: ['ordinary'] } }));
     await until(() => control.closeCalls === 1, 'ordinary managed close');
     control.close.resolve(cleanupReceipt(control.request.binding));
     await run;
+  });
+
+  it('injects journal authority only when the staged spec-review node becomes ready', async () => {
+    const registryDescriptor = Object.getOwnPropertyDescriptor(registry as any, 'providers')!;
+    const providerMap = registryDescriptor.value as Map<string, CheckProvider>;
+    const priorInspect = providerMap.get('governed-proof-inspect');
+    const priorAdmission = providerMap.get('proof-admit');
+    const stageRequests: ManagedRunStartRequest[] = [];
+    const stageOutcome = deferred<ManagedRunOutcomeV1>();
+    const schema = Buffer.from('{"type":"object"}', 'utf8').toString('base64');
+    const authoritySubject = {
+      version: 'proof.component-subject/v1', project_id: 'fixture', component_id: 'A',
+      sorted_owned_paths: ['packages/a'], sorted_dependency_closure: ['packages/a'],
+      fingerprint: `sha256:${'2'.repeat(64)}`,
+    };
+    const authority = {
+      work_item_digest: `sha256:${'1'.repeat(64)}`,
+      subject: authoritySubject,
+      candidate: { id: 'candidate' }, admission: { id: 'admission' },
+      work_item: { version: 'proof.component-work-item/v1', project_id: 'fixture', component_id: 'A', sorted_owned_paths: ['packages/a'], sorted_dependency_closure: ['packages/a'], proof_path_mapping: { paths: ['packages/a'], risk_tier: 'low', enforcement: 'required' }, proof_input_state: [], proof_component_subject: authoritySubject },
+      catalog_revalidation_receipt: { version: 'proof.catalog-revalidation-receipt/v1', decision: 'accepted', project_id: 'fixture', project_fingerprint: `sha256:${'7'.repeat(64)}`, boundary_fingerprint: `sha256:${'8'.repeat(64)}`, inventory_claim_id: `sha256:${'9'.repeat(64)}`, catalog_claim_id: `sha256:${'a'.repeat(64)}`, admission_candidate_id: `sha256:${'b'.repeat(64)}`, admission_result_digest: `sha256:${'c'.repeat(64)}`, admission_receipt_id: `sha256:${'d'.repeat(64)}`, component_authorities: [{ component_id: 'A', work_item_digest: `sha256:${'1'.repeat(64)}`, subject: authoritySubject }], receipt_id: '' },
+    } as any;
+    const compactAuthority = {
+      component_id: 'A', work_item_digest: authority.work_item_digest, subject: authority.subject,
+    };
+    const invocation = (role_id: string) => ({
+      role_id, stance: 'owner', subject: { kind: 'component' },
+        output_schema_id: 'reqproof.component-onboarding/v1', output_schema: schema,
+    });
+      const candidateEvidence = () => {
+      const data = { component_id: 'A', decision: 'accept' };
+      const digest = governedResultDigest(data);
+      const resolvedInvocation = {
+        ...invocation('onboard'),
+        subject: { kind: 'component', id: 'A', fingerprint: authority.subject.fingerprint },
+        component_authority: authority,
+      };
+      const invocationDigest = `sha256:${'3'.repeat(64)}`;
+      const attestationDigest = '4'.repeat(64);
+      return {
+        version: 'visor.proof-candidate-evidence/v1',
+        role: { invocation: resolvedInvocation, invocationDigest },
+        probe: {
+          attestation: {
+            version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+            requested: { profileDigest: attestationDigest, cwdDigest: attestationDigest, probeToolsDigest: attestationDigest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+            observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: attestationDigest, permissionProfileDigest: attestationDigest, filesystem: 'restricted-read-root', network: 'restricted' },
+            executionContext: { source: 'caller', invocationDigest },
+            dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'5'.repeat(64)}`, promptBytes: 0 },
+            evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+          },
+          resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(data), 'utf8') },
+        },
+      };
+    };
+    class StagedGovernedProvider extends CheckProvider {
+      getName() { return 'governed-proof-inspect'; }
+      getDescription() { return 'staged engine fixture'; }
+      async validateConfig() { return true; }
+      async isAvailable() { return true; }
+      getRequirements() { return []; }
+      getSupportedConfigKeys() { return ['type']; }
+      async execute() { throw new Error('STAGED_EXECUTE_MUST_NOT_RUN'); }
+      startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
+        stageRequests.push(request);
+        const started = Promise.resolve(startedReceipt(request.binding));
+        const outcome = request.binding.checkId === 'inspect'
+          ? Promise.resolve({ version: 1, kind: 'succeeded-proof-candidate', binding: request.binding, summary: { issues: [], output: { component_id: 'A', decision: 'accept' } }, proofCandidateEvidence: candidateEvidence(), wireMode: 'generic' } as any)
+          : stageOutcome.promise;
+        return { binding: request.binding, started, outcome, cancel: async () => cancelReceipt(request.binding), close: async () => cleanupReceipt(request.binding) };
+      }
+    }
+    class StagedAdmissionProvider extends CheckProvider {
+      getName() { return 'proof-admit'; }
+      getDescription() { return 'staged admission fixture'; }
+      async validateConfig() { return true; }
+      async isAvailable() { return true; }
+      getRequirements() { return []; }
+      getSupportedConfigKeys() { return ['type']; }
+      async execute() { throw new Error('STAGED_ADMIT_EXECUTE_MUST_NOT_RUN'); }
+      startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
+        const candidate = request.executionContext.claims?.candidate as any;
+        const evidence = candidate?.proofAdmission as any;
+        const wireScope = request.binding.scope.map(part => ({ Kind: 'keyed', ExpansionOwnerCheck: part.expansionOwnerCheck, Key: part.key, SubgraphInstanceID: part.subgraphInstanceId }));
+        const binding = { ManagedRunID: request.binding.managedRunId, SessionID: request.binding.sessionId, CheckID: request.binding.checkId, Scope: wireScope, NodeInstanceID: request.binding.nodeInstanceId, NodeGenerationID: request.binding.nodeGenerationId, AttemptID: request.binding.attemptId, Fence: request.binding.fence };
+        const receipt: any = { Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED', CandidateID: `sha256:${'6'.repeat(64)}`, ProbeResultDigest: evidence.probe.resultIdentity.resultDigest, ProbeCanonicalBytes: evidence.probe.resultIdentity.canonicalBytes, ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, InvocationDigest: evidence.role.invocationDigest, RoleID: 'onboard', Stance: 'owner', Subject: evidence.role.invocation.subject, ProducerCheckID: 'inspect', ParentClaimIDs: candidate.parentClaimIds, Binding: binding, Termination: { Version: 1, Type: 'ManagedRunTerminated', SessionID: binding.SessionID, Scope: wireScope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null }, receipt_id: '' };
+        receipt.receipt_id = proofV1AdmissionReceiptID(receipt);
+        const decision = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt, reject_code: null };
+        const output = { ...receipt, __proof_admission_wire: proofV1DecisionJson(decision) };
+        return { binding: request.binding, started: Promise.resolve(startedReceipt(request.binding)), outcome: Promise.resolve(successOutcome(request.binding, { issues: [], output })), cancel: async () => cancelReceipt(request.binding), close: async () => cleanupReceipt(request.binding) };
+      }
+    }
+    const stagedConfig = () => {
+      const config: any = fixtureConfig();
+      config.claim_types['component.catalog@1'].schema.additionalProperties = true;
+      config.claim_types['component.catalog@1'].schema.properties.components.items.additionalProperties = true;
+      Object.assign(config.claim_types, {
+        'component.work_item@1': { schema: { type: 'object', additionalProperties: true } },
+        'proof.candidate@1': { schema: { type: 'object', additionalProperties: true } },
+        'proof.admitted_receipt@1': { schema: { type: 'object', additionalProperties: true } },
+        'proof.component_spec_review_candidate@1': { schema: { type: 'object', additionalProperties: true } },
+        'proof.component_spec_review_admitted_receipt@1': { schema: { type: 'object', additionalProperties: true } },
+      });
+      config.checks['discover-components'].expand.item_claim = 'component.work_item@1';
+      config.subgraphs['onboard-component'] = {
+        input: { name: 'component', claim: 'component.work_item@1' },
+        checks: {
+          inspect: { type: 'governed-proof-inspect', profile: 'luna-xhigh-readonly-v1', invocation: invocation('onboard'), consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }] },
+          proof_admit: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
+          spec_review: { type: 'governed-proof-inspect', profile: 'luna-xhigh-readonly-v1', invocation: invocation('spec-review'), consumes: [{ claim: 'component.work_item@1', as: 'component' }, { claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'admission' }], emits: [{ claim: 'proof.component_spec_review_candidate@1', from: 'output' }] },
+          spec_review_admit: { type: 'proof-admit', consumes: [{ claim: 'proof.component_spec_review_candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.component_spec_review_admitted_receipt@1', from: 'output' }] },
+          verify: { type: MANAGED_PROVIDER, consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }, { claim: 'proof.component_spec_review_candidate@1', as: 'spec_candidate' }, { claim: 'proof.component_spec_review_admitted_receipt@1', as: 'spec_receipt' }] },
+        },
+      };
+      return config;
+    };
+    const originalBuild = (engine as any).buildEngineContext.bind(engine);
+    const forged = { forged: true } as any;
+    let derivedStageContext: unknown;
+    callerExecutionContext.proofComponentAuthority = forged;
+    callerExecutionContext.proofOnboardingStageContext = forged;
+    engine.setExecutionContext(callerExecutionContext);
+    jest.spyOn(engine as any, 'buildEngineContext').mockImplementation((...args: unknown[]) => {
+      const built = originalBuild(...args);
+      built.journal.getProofComponentInvocationAuthority = jest.fn(() => authority);
+      const deriveStageContext = built.journal.getProofComponentOnboardingStageContext.bind(built.journal);
+      built.journal.getProofComponentOnboardingStageContext = jest.fn((id: string) => {
+        derivedStageContext = deriveStageContext(id);
+        return derivedStageContext;
+      });
+      return built;
+    });
+    providerMap.set('governed-proof-inspect', new StagedGovernedProvider());
+    providerMap.set('proof-admit', new StagedAdmissionProvider());
+    catalogs = [[{ id: 'A', path: 'packages/a', authority: compactAuthority } as any]];
+    try {
+      const run = engine.executeGroupedChecks(prInfo, ['discover-components'], undefined, stagedConfig(), 'table', false, 1);
+      await until(() => stageRequests.some(request => request.binding.checkId === 'spec_review'), 'staged spec-review acquisition');
+      const inspect = stageRequests.find(request => request.binding.checkId === 'inspect')!;
+      const specReview = stageRequests.find(request => request.binding.checkId === 'spec_review')!;
+      expect(inspect.executionContext.proofComponentAuthority).toEqual(authority);
+      expect(inspect.executionContext.proofOnboardingStageContext).toBeUndefined();
+      expect(specReview.executionContext.proofComponentAuthority).toEqual(authority);
+      expect(specReview.executionContext.proofOnboardingStageContext).toEqual(derivedStageContext);
+      expect((specReview.executionContext.proofOnboardingStageContext as any).prior_candidate).not.toBe('{}');
+      expect(specReview.executionContext.proofComponentAuthority).not.toBe(forged);
+      expect(specReview.executionContext.proofOnboardingStageContext).not.toBe(forged);
+      stageOutcome.resolve({ version: 1, kind: 'failed', binding: specReview.binding });
+      await run;
+    } finally {
+      if (priorInspect) providerMap.set('governed-proof-inspect', priorInspect); else providerMap.delete('governed-proof-inspect');
+      if (priorAdmission) providerMap.set('proof-admit', priorAdmission); else providerMap.delete('proof-admit');
+      Object.defineProperty(registry as any, 'providers', registryDescriptor);
+    }
   });
 
   it('replays only journal facts without crossing live collaborator boundaries', async () => {
@@ -3037,7 +3196,7 @@ describe('EXP-0205 explicit proof admission node', () => {
       expect(inspectStartLatched).toBe(true);
       expect(providerLookups).toContain('governed-proof-inspect');
       expect(providerLookups).toContain('proof-admit');
-      for (const [label, count] of Object.entries(sentinels.counts)) expect(count).toBe(0);
+      for (const [, count] of Object.entries(sentinels.counts)) expect(count).toBe(0);
     } finally {
       let cleanupError: unknown;
       const cleanup = (action: () => void) => { try { action(); } catch (error) { cleanupError ??= error; } };

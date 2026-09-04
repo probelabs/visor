@@ -8,6 +8,7 @@ import {
   governedResultDigest,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
 import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import { ExecutionJournal } from '../../../src/snapshot-store';
 
 const binding: any = Object.freeze({
   managedRunId: 'managed', sessionId: 'session', checkId: 'inspect',
@@ -69,6 +70,21 @@ function componentSelector(): any {
   };
 }
 
+function specReviewSelector(): any {
+  return {
+    type: 'governed-proof-inspect', profile: 'luna-xhigh-readonly-v1',
+    invocation: {
+      role_id: 'spec-review', stance: 'owner', subject: { kind: 'component' },
+      output_schema_id: 'proof.findings/v1', output_schema: Buffer.from('{"type":"object"}', 'utf8').toString('base64'),
+    },
+    consumes: [
+      { claim: 'component.work_item@1', as: 'component' },
+      { claim: 'proof.candidate@1', as: 'candidate' },
+      { claim: 'proof.admitted_receipt@1', as: 'admission' },
+    ],
+  };
+}
+
 describe('governed Proof inspect provider', () => {
   it('is sealed unavailable in the product registry shape', async () => {
     const provider = new GovernedProofInspectCheckProvider();
@@ -120,6 +136,32 @@ describe('governed Proof inspect provider', () => {
       expect(() => projectGovernedProofInspectConfig({ ...selector, [field]: 'forged' })).toThrow('component selector');
     }
     expect(() => projectGovernedProofInspectConfig({ ...selector, invocation: { ...selector.invocation, subject: { kind: 'component', id: 'forged', fingerprint: `sha256:${'a'.repeat(64)}` } } })).toThrow();
+  });
+
+  it('accepts the closed spec-review selector but requires its paired controller context before runner creation', () => {
+    const selector = specReviewSelector();
+    expect(projectGovernedProofInspectConfig(selector)).toEqual(expect.objectContaining({ invocation: selector.invocation }));
+    const factory = jest.fn(() => ({ answer: jest.fn(), cancel: jest.fn(), close: jest.fn() }));
+    const provider = createGovernedProofInspectProviderForFocusedTest(factory);
+    expect(() => provider.startManaged({ ...request(), checkConfig: selector })).toThrow('paired controller onboarding context');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('derives stage artifacts from internal claim IDs, not projected view metadata', () => {
+    const scope = [{ kind: 'keyed', expansionOwnerCheck: 'expand', key: 'A', subgraphInstanceId: 'a'.repeat(64) }];
+    const candidateId = 'b'.repeat(64); const admissionId = 'c'.repeat(64);
+    const claim = (claimId: string, type: string, producerCheckId: string, parentClaimIds: string[] = [], extra: any = {}) => ({ claimId, claim: type, payload: {}, payloadFingerprint: 'e'.repeat(64), producerCheckId, parentClaimIds, scope, active: true, kind: 'generated-output', producerAttemptId: 'attempt', producerFence: 1, wireMode: 'generic', ...extra });
+    const componentClaim: any = claim('1'.repeat(64), 'component.work_item@1', 'materialize_catalog'); componentClaim.kind = 'controller-item';
+    const candidateClaim: any = claim(candidateId, 'proof.candidate@1', 'inspect');
+    const admissionClaim: any = claim(admissionId, 'proof.admitted_receipt@1', 'proof_admit', [candidateId], { payload: { __proof_admission_wire: '{"status":"ADMITTED"}' }, nodeGenerationId: 'admission-generation' });
+    const view = (value: any) => ({ claimId: value.claimId, claim: value.claim, payload: value.payload, payloadFingerprint: value.payloadFingerprint, producerCheckId: value.producerCheckId, parentClaimIds: value.parentClaimIds, scope, wireMode: value.wireMode });
+    const journal: any = Object.create(ExecutionJournal.prototype);
+    journal.instanceProjection = { claimsById: { [componentClaim.claimId]: componentClaim, [candidateId]: candidateClaim, [admissionId]: admissionClaim } };
+    journal.getGeneratedExecution = jest.fn(() => ({ generation: { templateNodeKey: 'spec_review', checkId: 'spec_review', scope }, node: { check: { invocation: specReviewSelector().invocation } }, claims: { component: view(componentClaim), candidate: view(candidateClaim), admission: view(admissionClaim) } }));
+    journal.getProofComponentInvocationAuthority = jest.fn(() => ({ subject: { component_id: 'A', fingerprint: `sha256:${'d'.repeat(64)}` } }));
+    journal.getProofAdmissionRequest = jest.fn(() => 'invalid');
+    expect(() => journal.getProofComponentOnboardingStageContext('stage-generation')).toThrow();
+    expect(journal.getProofAdmissionRequest).toHaveBeenCalledWith('admission-generation');
   });
 
   it('rejects a fully resolved authored component subject outside the selector form', () => {
