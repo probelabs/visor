@@ -49,6 +49,7 @@ module.exports = {
   maxWorkers: process.env.CI ? 1 : '50%',
   // Use child processes on CI for better memory reclamation
   workerThreads: process.env.CI ? false : true,
-  // Recycle workers if they retain too much memory
-  workerIdleMemoryLimit: process.env.CI ? '256MB' : undefined,
+  // CI uses maxWorkers: 1, so memory recycling adds no value — disable to avoid
+  // false SIGABRT kills on memory-constrained GitHub Actions runners (7GB total)
+  workerIdleMemoryLimit: undefined,
 };

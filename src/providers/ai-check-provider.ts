@@ -1220,7 +1220,7 @@ export class AICheckProvider extends CheckProvider {
       } catch {}
     }
 
-    // 5. Resolve environment variable placeholders in MCP server env configs
+    // 5. Resolve environment variable placeholders in MCP server env configs and headers
     // Supports ${VAR} and ${{ env.VAR }} syntax
     for (const serverConfig of Object.values(mcpServers)) {
       if (serverConfig.env) {
@@ -1233,6 +1233,15 @@ export class AICheckProvider extends CheckProvider {
           }
         }
         serverConfig.env = resolvedEnv;
+      }
+      // Resolve env vars in headers (e.g. Authorization: "Bearer ${TOKEN}")
+      const headers = (serverConfig as any).headers;
+      if (headers && typeof headers === 'object') {
+        for (const [key, value] of Object.entries(headers)) {
+          if (typeof value === 'string') {
+            headers[key] = String(EnvironmentResolver.resolveValue(value));
+          }
+        }
       }
     }
 

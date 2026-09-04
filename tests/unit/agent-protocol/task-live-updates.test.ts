@@ -207,6 +207,50 @@ describe('task-live-updates', () => {
     expect(sink.complete).toHaveBeenCalledWith('Final answer');
   });
 
+  it('suppresses a generic completion fallback when work finishes before the first tick', async () => {
+    jest.useFakeTimers();
+
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => ({ ref: { id: 'status-1' } })),
+      fail: jest.fn(async () => null),
+    };
+    const appendHistory = jest.fn();
+
+    const manager = new TaskLiveUpdateManager(
+      {
+        taskId: 'task-fast-fallback',
+        requestText: 'Short task',
+        traceRef: '/tmp/trace.ndjson',
+        sink,
+        appendHistory,
+        config: {
+          enabled: true,
+          intervalSeconds: 30,
+          model: 'gemini-3.1-flash-lite-preview',
+          prompt: 'prompt',
+          initialMessage: '',
+          maxTraceChars: 4000,
+        },
+      },
+      {
+        serializeTrace: jest.fn(async () => 'trace-1'),
+        extractSkillMetadata: jest.fn(async () => undefined),
+        summarizeProgress: jest.fn(async () => '- looking at logs'),
+      }
+    );
+
+    await manager.start();
+    await manager.complete('Execution completed');
+    await jest.advanceTimersByTimeAsync(15_000);
+
+    expect(sink.update).not.toHaveBeenCalled();
+    expect(sink.complete).not.toHaveBeenCalled();
+    expect(appendHistory).not.toHaveBeenCalled();
+  });
+
   it('does not let an in-flight progress tick overwrite the final update', async () => {
     let resolveSummary: ((value: string | null) => void) | undefined;
     const summaryPromise = new Promise<string | null>(resolve => {

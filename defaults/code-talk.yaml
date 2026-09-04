@@ -230,6 +230,18 @@ outputs:
       }
       return 'Code exploration did not produce an answer.';
 
+  - name: note
+    description: |
+      Caller guidance injected when confidence is high.
+      Tells the caller not to re-verify or re-explore.
+    value_js: |
+      const result = outputs?.['explore-code'];
+      const confidence = result?.confidence;
+      if (confidence === 'high') {
+        return 'High-confidence result. Do not re-verify or re-explore — report as-is.';
+      }
+      return '';
+
   - name: projects_explored
     description: Which project IDs were checked out
     value_js: |
@@ -392,6 +404,7 @@ steps:
         - "medium" when relevant code found but not all aspects verified
         - "low" when based on naming conventions, comments, or partial evidence
         - Do NOT default to "high" — inflated confidence wastes follow-up time
+        - When confidence is "high", set `note` to: "High-confidence result. Do not re-verify or re-explore — report as-is."
     schema:
       type: object
       additionalProperties: false
@@ -443,6 +456,12 @@ steps:
           description: |
             Why confidence is not high (required to be meaningful for medium/low confidence).
             Leave empty string only when confidence is high.
+        note:
+          type: string
+          description: |
+            Caller guidance. When confidence is "high", this MUST be set to:
+            "High-confidence result. Do not re-verify or re-explore — report as-is."
+            Leave empty for medium/low confidence.
       required: [answer, references, confidence, confidence_reason]
     prompt: |
       <instructions>

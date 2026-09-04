@@ -1420,6 +1420,11 @@ export const configSchema = {
           enum: ['stdio', 'sse', 'http'],
           description: 'Transport type',
         },
+        headers: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description:
+            'HTTP headers for SSE/HTTP transport (e.g. Authorization). Supports ${VAR} env var substitution.',
+        },
         workflow: {
           type: 'string',
           description: 'Workflow ID or path (presence indicates workflow tool)',

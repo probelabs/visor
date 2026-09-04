@@ -129,9 +129,11 @@ export class StateMachineExecutionEngine {
       logger.info('Analyzing local git repository...');
       const repositoryInfo = await gitAnalyzer.analyzeRepository();
 
-      // When a conversation context is present (TUI, SDK chat, Telegram, etc.),
+      // When a conversation context is present (TUI, SDK chat, Slack, MCP, etc.),
       // git is not required — these are chat/assistant workflows, not code reviews.
-      const hasConversation = !!(this.executionContext as any)?.conversation;
+      const hasConversation =
+        !!(this.executionContext as any)?.conversation ||
+        this.webhookContextHasConversation((options as any)?.webhookContext);
       if (!repositoryInfo.isGitRepository && !hasConversation) {
         return this.createErrorResult(
           repositoryInfo,
@@ -1179,6 +1181,31 @@ export class StateMachineExecutionEngine {
   ): import('./reviewer').ReviewSummary {
     const { convertToReviewSummary } = require('./state-machine/execution/summary');
     return (convertToReviewSummary as any)(groupedResults as any, statistics as any) as any;
+  }
+
+  private webhookContextHasConversation(webhookContext: unknown): boolean {
+    try {
+      const webhookData = (webhookContext as any)?.webhookData;
+      if (!(webhookData instanceof Map)) return false;
+
+      for (const payload of webhookData.values()) {
+        const value = payload as Record<string, unknown>;
+        if (
+          value?.conversation ||
+          value?.slack_conversation ||
+          value?.mcp_conversation ||
+          value?.telegram_conversation ||
+          value?.teams_conversation ||
+          value?.whatsapp_conversation ||
+          value?.email_conversation
+        ) {
+          return true;
+        }
+      }
+    } catch {
+      // Conversation detection is best effort; fall back to the normal git gate.
+    }
+    return false;
   }
 
   /**

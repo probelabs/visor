@@ -151,7 +151,7 @@ export function createWorkflowToolDefinition(
     }
 
     const filteredRequired = baseRequired
-      ? baseRequired.filter((r: string) => !argsOverrides[r])
+      ? baseRequired.filter((r: string) => !(r in argsOverrides))
       : undefined;
 
     inputSchema = {
