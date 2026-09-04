@@ -59,7 +59,7 @@ import {
   type GovernedProbeRunnerRequest,
 } from '../../src/providers/governed-proof-inspect-check-provider';
 import { createProofAdmitProviderForFocusedTest } from '../../src/providers/proof-admit-check-provider';
-import { goCompatibleProofJson, proofV1AdmissionReceiptID, proofV1DecisionJson } from '../../src/providers/proof-admission-cli-child';
+import { extractProofAdmissionCandidate, goCompatibleProofJson, proofV1AdmissionReceiptID, proofV1DecisionJson } from '../../src/providers/proof-admission-cli-child';
 import { canonicalJson, sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { ExecutionJournal } from '../../src/snapshot-store';
@@ -952,11 +952,14 @@ describe('EXP-0123 managed graph-run ownership', () => {
       getSupportedConfigKeys() { return ['type']; }
       async execute() { throw new Error('STAGED_ADMIT_EXECUTE_MUST_NOT_RUN'); }
       startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
-        const candidate = request.executionContext.claims?.candidate as any;
-        const evidence = candidate?.proofAdmission as any;
-        const wireScope = request.binding.scope.map(part => ({ Kind: 'keyed', ExpansionOwnerCheck: part.expansionOwnerCheck, Key: part.key, SubgraphInstanceID: part.subgraphInstanceId }));
-        const binding = { ManagedRunID: request.binding.managedRunId, SessionID: request.binding.sessionId, CheckID: request.binding.checkId, Scope: wireScope, NodeInstanceID: request.binding.nodeInstanceId, NodeGenerationID: request.binding.nodeGenerationId, AttemptID: request.binding.attemptId, Fence: request.binding.fence };
-        const receipt: any = { Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED', CandidateID: `sha256:${'6'.repeat(64)}`, ProbeResultDigest: evidence.probe.resultIdentity.resultDigest, ProbeCanonicalBytes: evidence.probe.resultIdentity.canonicalBytes, ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, InvocationDigest: evidence.role.invocationDigest, RoleID: 'onboard', Stance: 'owner', Subject: evidence.role.invocation.subject, ProducerCheckID: 'inspect', ParentClaimIDs: candidate.parentClaimIds, Binding: binding, Termination: { Version: 1, Type: 'ManagedRunTerminated', SessionID: binding.SessionID, Scope: wireScope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null }, receipt_id: '' };
+        const extracted = extractProofAdmissionCandidate(request.proofAdmissionRequest as string);
+        const candidateRaw = extracted.candidateRaw;
+        const admittedCandidate = extracted.candidate;
+        const publication = admittedCandidate.Publication as Record<string, any>;
+        const candidateLength = Buffer.alloc(8);
+        candidateLength.writeBigUInt64BE(BigInt(candidateRaw.length));
+        const candidateId = `sha256:${createHash('sha256').update('proof.role-result-candidate-envelope/id/v1').update(Buffer.from([0])).update(candidateLength).update(candidateRaw).digest('hex')}`;
+        const receipt: any = { Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED', CandidateID: candidateId, ProbeResultDigest: admittedCandidate.ResultDigest, ProbeCanonicalBytes: admittedCandidate.CanonicalBytes, ClaimID: publication.ClaimID, Claim: publication.Claim, PayloadFingerprint: publication.PayloadFingerprint, InvocationDigest: admittedCandidate.InvocationDigest, RoleID: admittedCandidate.RoleID, Stance: admittedCandidate.Stance, Subject: admittedCandidate.Subject, ProducerCheckID: publication.ProducerCheckID, ParentClaimIDs: publication.ParentClaimIDs, Binding: admittedCandidate.Binding, Termination: admittedCandidate.Termination, receipt_id: '' };
         receipt.receipt_id = proofV1AdmissionReceiptID(receipt);
         const decision = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt, reject_code: null };
         const output = { ...receipt, __proof_admission_wire: proofV1DecisionJson(decision) };

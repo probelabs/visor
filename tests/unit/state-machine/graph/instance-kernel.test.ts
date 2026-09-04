@@ -41,6 +41,10 @@ import {
   type SubgraphTombstonedEvent,
 } from '../../../../src/state-machine/graph/instance-kernel';
 import { PROOF_CANDIDATE_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM } from '../../../../src/state-machine/graph/instance-plan';
+import { governedResultDigest, validateProofCandidateEvidence } from '../../../../src/providers/governed-proof-inspect-check-provider';
+import { validateProofComponentCandidateAdmissionBinding } from '../../../../src/providers/proof-catalog-check-providers';
+import { proofCandidateEvidenceFingerprint } from '../../../../src/providers/proof-wire';
+import { proofComponentCandidateEnvelopeJson, proofV1AdmissionReceiptID, proofV1DecisionJson } from '../../../../src/providers/proof-admission-cli-child';
 
 const sessionId = 'session-1';
 const expansionOwnerCheck = 'discover-components';
@@ -286,6 +290,56 @@ function candidateEvidence(payload: unknown): any {
   return { version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest }, probe: { attestation, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(canonicalJson(payload), 'utf8') } } };
 }
 
+function stagedKernelFixture() {
+  const base = managedFixture();
+  const componentOwner = JSON.stringify(['discover-project', 'materialize_catalog']);
+  const scope = base.attempt.scope.map(part => ({ ...part, expansionOwnerCheck: componentOwner })) as KeyedScopePath;
+  const instance = base.projection.instancesById[base.attempt.nodeGenerationId
+    ? base.projection.generationsById[base.attempt.nodeGenerationId].subgraphInstanceId
+    : ''];
+  if (!instance) throw new Error('fixture instance missing');
+  const subject = { version: 'proof.component-subject/v1', project_id: 'fixture', component_id: 'A', sorted_owned_paths: ['packages/a'], sorted_dependency_closure: ['packages/a'], fingerprint: `sha256:${'a'.repeat(64)}` };
+  const authority = { work_item_digest: `sha256:${'b'.repeat(64)}`, subject, candidate: { id: 'candidate' }, admission: { id: 'admission' }, work_item: { version: 'proof.component-work-item/v1', project_id: 'fixture', component_id: 'A', sorted_owned_paths: ['packages/a'], sorted_dependency_closure: ['packages/a'], proof_path_mapping: { paths: ['packages/a'], risk_tier: 'low', enforcement: 'required' }, proof_input_state: [], proof_component_subject: subject }, catalog_revalidation_receipt: { version: 'proof.catalog-revalidation-receipt/v1', decision: 'accepted', project_id: 'fixture', project_fingerprint: `sha256:${'1'.repeat(64)}`, boundary_fingerprint: `sha256:${'2'.repeat(64)}`, inventory_claim_id: `sha256:${'3'.repeat(64)}`, catalog_claim_id: `sha256:${'4'.repeat(64)}`, admission_candidate_id: `sha256:${'5'.repeat(64)}`, admission_result_digest: `sha256:${'6'.repeat(64)}`, admission_receipt_id: `sha256:${'7'.repeat(64)}`, component_authorities: [], receipt_id: '' } };
+  const componentPayload = { component_id: 'A', proof_component_subject: subject, authority: { component_id: 'A', work_item_digest: authority.work_item_digest, subject } };
+  const component = { ...base.projection.claimsById[instance.activeItemClaimId!], claim: 'component.work_item@1', payload: componentPayload, payloadFingerprint: sha256Canonical(componentPayload), producerCheckId: componentOwner, scope } as any;
+  const priorPayload = { component_id: 'A', decision: 'accept' };
+  const priorInvocation = { role_id: 'onboard', stance: 'owner', subject: { kind: 'component', id: 'A', fingerprint: subject.fingerprint }, component_authority: authority, output_schema_id: 'reqproof.component-onboarding/v1', output_schema: Buffer.from('{"type":"object"}').toString('base64') };
+  const evidence = (payload: unknown, invocation: Record<string, unknown>) => {
+    const resultDigest = governedResultDigest(payload);
+    const invocationDigest = `sha256:${'c'.repeat(64)}`;
+    const digest = 'd'.repeat(64);
+    return { version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest }, probe: { attestation: { version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: digest, cwdDigest: digest, probeToolsDigest: digest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: digest, permissionProfileDigest: digest, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${digest}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest, canonicalBytes: Buffer.byteLength(canonicalJson(payload), 'utf8') } } };
+  };
+  const priorEvidence = evidence(priorPayload, priorInvocation);
+  const priorAttemptId = `e${'1'.repeat(63)}`;
+  const priorCandidateFingerprint = proofCandidateEvidenceFingerprint(priorEvidence);
+  const priorCandidate = { claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(priorPayload), producerCheckId: 'inspect', scope, attemptId: priorAttemptId, fence: 1, parentClaimIds: [component.claimId], proofCandidateEvidenceFingerprint: priorCandidateFingerprint }), claim: PROOF_CANDIDATE_CLAIM, payload: priorPayload, payloadFingerprint: sha256Canonical(priorPayload), producerCheckId: 'inspect', producerAttemptId: priorAttemptId, producerFence: 1, parentClaimIds: [component.claimId], wireMode: 'generic', scope, active: true, kind: 'generated-output', subgraphInstanceId: instance.subgraphInstanceId, incarnation: instance.incarnation, nodeGenerationId: `e${'3'.repeat(63)}`, proofCandidateEvidence: priorEvidence, proofCandidateEvidenceFingerprint: priorCandidateFingerprint } as any;
+  const priorBinding = { ManagedRunID: `e${'4'.repeat(63)}`, SessionID: sessionId, CheckID: 'inspect', Scope: scope.map(part => ({ Kind: 'keyed', ExpansionOwnerCheck: part.expansionOwnerCheck, Key: part.key, SubgraphInstanceID: part.subgraphInstanceId })), NodeInstanceID: `e${'5'.repeat(63)}`, NodeGenerationID: priorCandidate.nodeGenerationId, AttemptID: priorAttemptId, Fence: 1 };
+  const priorTermination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: sessionId, Scope: priorBinding.Scope, Binding: priorBinding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
+  const priorEnvelope = { Version: 'proof.role-result-candidate-envelope/v1', Invocation: priorInvocation, InvocationDigest: priorEvidence.role.invocationDigest, RoleID: 'onboard', Stance: 'owner', Subject: priorInvocation.subject, AttestationVersion: priorEvidence.probe.attestation.version, ExecutionSource: 'caller', ProbeInvocationDigest: priorEvidence.probe.attestation.executionContext.invocationDigest, IdentityVersion: priorEvidence.probe.resultIdentity.version, IdentitySource: priorEvidence.probe.resultIdentity.source, ResultDigest: priorEvidence.probe.resultIdentity.resultDigest, CanonicalBytes: priorEvidence.probe.resultIdentity.canonicalBytes, ProbeResultBytes: Buffer.from(canonicalJson(priorPayload)).toString('base64'), VisorPayloadBytes: Buffer.from(canonicalJson(priorPayload)).toString('base64'), Publication: { Version: 1, Type: 'ClaimPublished', SessionID: sessionId, CheckID: 'inspect', Scope: priorBinding.Scope, NodeInstanceID: priorBinding.NodeInstanceID, NodeGenerationID: priorBinding.NodeGenerationID, AttemptID: priorBinding.AttemptID, Fence: 1, ClaimID: priorCandidate.claimId, Claim: priorCandidate.claim, PayloadFingerprint: priorCandidate.payloadFingerprint, ProducerCheckID: 'inspect', Payload: Buffer.from(canonicalJson(priorPayload)).toString('base64'), ParentClaimIDs: [component.claimId] }, Binding: priorBinding, Termination: priorTermination };
+  const priorCandidateWire = proofComponentCandidateEnvelopeJson(priorEnvelope);
+  const receipt: any = { Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED', CandidateID: `sha256:${'f'.repeat(64)}`, ProbeResultDigest: priorEvidence.probe.resultIdentity.resultDigest, ProbeCanonicalBytes: priorEvidence.probe.resultIdentity.canonicalBytes, ClaimID: priorCandidate.claimId, Claim: priorCandidate.claim, PayloadFingerprint: priorCandidate.payloadFingerprint, InvocationDigest: priorEvidence.role.invocationDigest, RoleID: 'onboard', Stance: 'owner', Subject: priorInvocation.subject, ProducerCheckID: 'inspect', ParentClaimIDs: [component.claimId], Binding: priorBinding, Termination: priorTermination, receipt_id: '' };
+  receipt.receipt_id = proofV1AdmissionReceiptID(receipt);
+  const priorAdmissionWire = proofV1DecisionJson({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt, reject_code: null });
+  const priorAdmission = { claimId: `f${'1'.repeat(63)}`, claim: 'proof.admitted_receipt@1', payload: { ...receipt, __proof_admission_wire: priorAdmissionWire }, payloadFingerprint: sha256Canonical({ ...receipt, __proof_admission_wire: priorAdmissionWire }), producerCheckId: 'proof_admit', producerAttemptId: `f${'2'.repeat(63)}`, producerFence: 1, parentClaimIds: [priorCandidate.claimId], wireMode: 'generic', scope, active: true, kind: 'generated-output', subgraphInstanceId: instance.subgraphInstanceId, incarnation: instance.incarnation, nodeGenerationId: `f${'3'.repeat(63)}` } as any;
+  const stage = { version: 'proof.onboarding-stage-context/v1', stage_id: 'spec_review', prior_candidate: priorCandidateWire, prior_admission: priorAdmissionWire, prior_admission_claim_id: priorAdmission.claimId, prior_admission_payload_fingerprint: priorAdmission.payloadFingerprint };
+  const stageInvocation = { ...priorInvocation, role_id: 'spec-review', onboarding_stage: stage };
+  const stagePayload = { component_id: 'A', decision: 'review' };
+  const stageEvidence = evidence(stagePayload, stageInvocation);
+  const stageNodeInstanceId = deriveNodeInstanceId({ subgraphInstanceId: instance.subgraphInstanceId, templateNodeKey: 'spec_review' });
+  const stageGenerationId = deriveNodeGenerationId({ nodeInstanceId: stageNodeInstanceId, incarnation: instance.incarnation, itemFingerprint: instance.activeItemClaimId ? base.projection.claimsById[instance.activeItemClaimId].payloadFingerprint : '', executionConfigDigest: sha256Canonical({ check: 'spec_review' }), activeInputClaimIds: [component.claimId, priorCandidate.claimId, priorAdmission.claimId].sort() });
+  const stageAttemptId = `f${'4'.repeat(63)}`;
+  const stageBinding = { managedRunId: deriveManagedRunId({ sessionId, checkId: 'spec_review', scope, nodeInstanceId: stageNodeInstanceId, nodeGenerationId: stageGenerationId, attemptId: stageAttemptId, fence: 1 }), sessionId, checkId: 'spec_review', scope, nodeInstanceId: stageNodeInstanceId, nodeGenerationId: stageGenerationId, attemptId: stageAttemptId, fence: 1 };
+  const parentClaimIds = [component.claimId, priorCandidate.claimId, priorAdmission.claimId].sort();
+  const stageClaimId = sha256Canonical({ claim: 'proof.component_spec_review_candidate@1', payloadFingerprint: sha256Canonical(stagePayload), producerCheckId: 'spec_review', scope, attemptId: stageAttemptId, fence: 1, parentClaimIds, proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(stageEvidence) });
+  const stageGeneration = { nodeGenerationId: stageGenerationId, nodeInstanceId: stageNodeInstanceId, subgraphInstanceId: instance.subgraphInstanceId, templateNodeKey: 'spec_review', checkId: 'spec_review', scope, incarnation: instance.incarnation, itemFingerprint: base.projection.claimsById[instance.activeItemClaimId!].payloadFingerprint, executionConfigDigest: sha256Canonical({ check: 'spec_review' }), activeInputClaimIds: parentClaimIds, status: 'running', attemptId: stageAttemptId, fence: 1, scheduled: true, completedOutputClaimIds: [] } as any;
+  const event = { version: 1, type: 'ClaimPublished', eventId: base.projection.lastEventId + 2, sessionId, scope, checkId: 'spec_review', attemptId: stageAttemptId, fence: 1, nodeInstanceId: stageNodeInstanceId, nodeGenerationId: stageGenerationId, claimId: stageClaimId, claim: 'proof.component_spec_review_candidate@1', payload: stagePayload, payloadFingerprint: sha256Canonical(stagePayload), producerCheckId: 'spec_review', parentClaimIds, wireMode: 'generic', proofCandidateEvidence: stageEvidence, proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(stageEvidence) } as any;
+  const completed = { ...event, type: 'AttemptCompleted', eventId: event.eventId + 1 } as any;
+  const terminal = { version: 1, type: 'ManagedRunTerminated', eventId: base.projection.lastEventId + 1, sessionId, scope, binding: stageBinding, cleanupStatus: 'clean', controllerDecision: 'completed', failureCode: null } as any;
+  const projection = { ...base.projection, instancesById: { ...base.projection.instancesById, [instance.subgraphInstanceId]: { ...instance, scope, expansionOwnerCheck: componentOwner } }, claimsById: { ...base.projection.claimsById, [component.claimId]: component, [priorCandidate.claimId]: priorCandidate, [priorAdmission.claimId]: priorAdmission }, nodesById: { ...base.projection.nodesById, [stageNodeInstanceId]: { nodeInstanceId: stageNodeInstanceId, subgraphInstanceId: instance.subgraphInstanceId, templateNodeKey: 'spec_review', scope } }, generationsById: { ...base.projection.generationsById, [stageGenerationId]: stageGeneration }, activeGenerationIdByNode: { ...base.projection.activeGenerationIdByNode, [stageNodeInstanceId]: stageGenerationId }, attemptBindingsById: { ...base.projection.attemptBindingsById, [stageAttemptId]: stageGenerationId }, managedRunsByAttemptId: { ...base.projection.managedRunsByAttemptId, [stageAttemptId]: { binding: stageBinding, status: 'started' } } } as InstanceProjection;
+  return { projection, event, completed, terminal, parentClaimIds, priorCandidate, priorAdmission, stageClaimId };
+}
+
 function managedEnvelope(binding: ManagedRunBindingV1, eventId: number) {
   return {
     version: 1 as const,
@@ -478,6 +532,20 @@ describe('Graph v2 C2 instance kernel', () => {
     const tamperedPayload = { '10': 'ten', '2': 'two' };
     const tampered = { ...candidate, payload: tamperedPayload, payloadFingerprint: sha256Canonical(tamperedPayload), claimId: sha256Canonical({ claim: PROOF_CANDIDATE_CLAIM, payloadFingerprint: sha256Canonical(tamperedPayload), producerCheckId: started.checkId, scope: started.scope, attemptId: started.attemptId, fence: started.fence, parentClaimIds: [...activation.activeInputClaimIds].sort(), proofCandidateEvidenceFingerprint: sha256Canonical(evidence) }) } as GeneratedClaimPublishedEvent;
     expectKernelError(() => reduceInstanceEventBatch(managed, [terminated, tampered, completed]), 'INVALID_PROOF_EVIDENCE');
+  });
+
+  it('publishes a staged candidate only with its distinct three-parent lineage', () => {
+    const fixture = stagedKernelFixture();
+    expect(() => validateProofCandidateEvidence(fixture.event.proofCandidateEvidence)).not.toThrow();
+    expect(() => validateProofComponentCandidateAdmissionBinding({ ...fixture.priorCandidate, proofAdmission: fixture.priorCandidate.proofCandidateEvidence, provenance: 'attempt', attemptId: fixture.priorCandidate.producerAttemptId, fence: fixture.priorCandidate.producerFence }, fixture.priorAdmission)).not.toThrow();
+    const live = reduceInstanceEventBatch(fixture.projection, [fixture.terminal, fixture.event, fixture.completed]);
+    const staged = live.claimsById[fixture.stageClaimId];
+    expect(staged.parentClaimIds).toEqual(fixture.parentClaimIds);
+    expect(fixture.priorAdmission.parentClaimIds).toEqual([fixture.priorCandidate.claimId]);
+    expect(staged.claimId).not.toBe(fixture.priorCandidate.claimId);
+    expect(live.generationsById[fixture.event.nodeGenerationId].completedOutputClaimIds).toEqual([fixture.stageClaimId]);
+    const detached = { ...fixture.event, parentClaimIds: fixture.parentClaimIds.slice(1) } as any;
+    expectKernelError(() => reduceInstanceEventBatch(fixture.projection, [fixture.terminal, detached, fixture.completed]), 'INVALID_PARENT_CLAIMS');
   });
 
   it('requires a clean managed terminal before direct Proof revalidation publication', () => {

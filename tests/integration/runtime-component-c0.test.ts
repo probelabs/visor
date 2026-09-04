@@ -360,12 +360,15 @@ setTimeout(() => {
       const c0Request = { role_id: 'spec-review', stance: priorRequest.stance, subject: priorRequest.subject, component_authority: priorRequest.component_authority, onboarding_stage: stage, output_schema_id: priorRequest.output_schema_id, output_schema: priorRequest.output_schema };
       const expectedResolved = await child.resolveProofRoleInvocation(capability, c0Request, root);
       let captured: any; let runnerCalls = 0;
+      const stagedOutput = {};
+      const stagedOutputBytes = canonicalJson(stagedOutput);
+      const stagedOutputDigest = governed.governedResultDigest(stagedOutput);
       const factory = (request: any) => {
         runnerCalls++;
         return { answer: () => {
           captured = request;
-          const data = {}; const bytes = canonicalJson(data); const digest = governed.governedResultDigest(data); const d = 'a'.repeat(64);
-          return { data, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: PROFILE, requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: digest, canonicalBytes: Buffer.byteLength(bytes, 'utf8') } };
+          const d = 'a'.repeat(64);
+          return { data: stagedOutput, runtimeAttestation: { version: 'probe.governed-codex-attestation/v2', profileId: PROFILE, requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' }, executionContext: { source: 'caller', invocationDigest: request.invocationDigest }, dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${d}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } }, resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: stagedOutputDigest, canonicalBytes: Buffer.byteLength(stagedOutputBytes, 'utf8') } };
         }, cancel: () => undefined, close: () => undefined };
       };
       const compactAuthority = { component_id: 'alpha', work_item_digest: authority.work_item_digest, subject: authority.subject };
@@ -383,6 +386,25 @@ setTimeout(() => {
       expect(child.proofOnboardingStageContextJson(captured.invocation.onboarding_stage)).toBe(child.proofOnboardingStageContextJson(stage));
       expect(captured.invocationDigest).toBe(expectedResolved.invocation_digest);
       await expect(run.close()).resolves.toMatchObject({ status: 'clean' });
+
+      const priorBinding = priorCandidate.Binding as Record<string, any>;
+      const priorPublication = priorCandidate.Publication as Record<string, any>;
+      const stagedScope = structuredClone(priorBinding.Scope);
+      const stagedBinding = { ...priorBinding, ManagedRunID: bare('stage-current-managed'), CheckID: 'spec_review', Scope: stagedScope, NodeInstanceID: bare('stage-current-node'), NodeGenerationID: bare('stage-current-generation'), AttemptID: bare('stage-current-attempt') };
+      const stagedInvocation = { ...(priorCandidate.Invocation as Record<string, unknown>), role_id: 'spec-review', onboarding_stage: stage };
+      const stagedParents = [priorPublication.ParentClaimIDs[0], priorPublication.ClaimID, stage.prior_admission_claim_id].sort();
+      const stagedBytes = Buffer.from(stagedOutputBytes, 'utf8');
+      const stagedPublication = { ...priorPublication, SessionID: stagedBinding.SessionID, CheckID: 'spec_review', Scope: stagedScope, NodeInstanceID: stagedBinding.NodeInstanceID, NodeGenerationID: stagedBinding.NodeGenerationID, AttemptID: stagedBinding.AttemptID, ClaimID: bare('stage-current-claim'), Claim: 'proof.component_spec_review_candidate@1', PayloadFingerprint: createHash('sha256').update(stagedBytes).digest('hex'), ProducerCheckID: 'spec_review', Payload: stagedBytes.toString('base64'), ParentClaimIDs: stagedParents };
+      const stagedTermination = { ...(priorCandidate.Termination as Record<string, unknown>), SessionID: stagedBinding.SessionID, Scope: stagedScope, Binding: stagedBinding };
+      const stagedCandidate = { ...priorCandidate, Invocation: stagedInvocation, InvocationDigest: expectedResolved.invocation_digest, RoleID: 'spec-review', ProbeInvocationDigest: expectedResolved.invocation_digest, ResultDigest: stagedOutputDigest, CanonicalBytes: stagedBytes.length, ProbeResultBytes: stagedBytes.toString('base64'), VisorPayloadBytes: stagedBytes.toString('base64'), Publication: stagedPublication, Binding: stagedBinding, Termination: stagedTermination };
+      const stagedCandidateWire = child.proofComponentCandidateEnvelopeJson(stagedCandidate);
+      const stagedAdmissionRequest = child.proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: stagedCandidate });
+      expect(child.extractProofAdmissionCandidate(stagedAdmissionRequest).candidateRaw).toEqual(Buffer.from(stagedCandidateWire, 'utf8'));
+      const stagedAdmissionWire = String(runSync(binary, ['admit-candidate'], {
+        cwd: root, input: stagedAdmissionRequest, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+      })).trimEnd();
+      expect(child.validateProofComponentAdmissionOutcome(stagedCandidateWire, stagedAdmissionWire)).toMatchObject({ subject: priorRequest.subject, scope: [{ kind: 'keyed', expansion_owner_check: 'discover', key: 'alpha' }] });
 
       const malformedContext = start(provider, { ...stage, unexpected: true });
       await expect(malformedContext.outcome).rejects.toThrow();
@@ -406,7 +428,7 @@ setTimeout(() => {
     ]);
     expect(existsSync(PROOF_AUTHORITY)).toBe(true);
     const runSync = jest.requireActual<typeof import('node:child_process')>('node:child_process').execFileSync;
-    const binary = pinnedProofBinary(runSync);
+    const binary = pinnedProofBinary(runSync, PROOF_P1_COMMIT);
     const capability = child.createProofAdmissionCapability(binary);
     const repository = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-journal-'));
     const root = join(repository, 'nested-project');
@@ -450,9 +472,30 @@ setTimeout(() => {
       config.subgraphs['onboard-component'].checks.proof_admit = {
         type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }],
       };
-      config.subgraphs['onboard-component'].checks.verify = {
-        type: 'noop', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' }],
+      config.subgraphs['onboard-component'].checks.inspect.invocation.role_id = 'onboard';
+      config.subgraphs['onboard-component'].checks.spec_review = {
+        type: 'governed-proof-inspect', profile: PROFILE,
+        invocation: { role_id: 'spec-review', stance: 'owner', subject: { kind: 'component' }, output_schema_id: 'reqproof.component-onboarding/v1', output_schema: c0Schema },
+        consumes: [{ claim: 'component.work_item@1', as: 'component' }, { claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'admission' }],
+        emits: [{ claim: 'proof.component_spec_review_candidate@1', from: 'output' }],
       };
+      config.subgraphs['onboard-component'].checks.spec_review_admit = {
+        type: 'proof-admit', consumes: [{ claim: 'proof.component_spec_review_candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.component_spec_review_admitted_receipt@1', from: 'output' }],
+      };
+      config.subgraphs['onboard-component'].checks.verify = {
+        type: 'noop', consumes: [
+          { claim: 'proof.candidate@1', as: 'candidate' }, { claim: 'proof.admitted_receipt@1', as: 'receipt' },
+          { claim: 'proof.component_spec_review_candidate@1', as: 'spec_candidate' }, { claim: 'proof.component_spec_review_admitted_receipt@1', as: 'spec_receipt' },
+        ],
+      };
+      config.claim_types['proof.component_spec_review_candidate@1'] = JSON.parse(JSON.stringify(config.claim_types['proof.candidate@1']));
+      config.claim_types['proof.component_spec_review_admitted_receipt@1'] = JSON.parse(JSON.stringify(config.claim_types['proof.admitted_receipt@1']));
+      const stagedReceiptSchema = config.claim_types['proof.component_spec_review_admitted_receipt@1'].schema;
+      stagedReceiptSchema.properties.Claim = { const: 'proof.component_spec_review_candidate@1' };
+      stagedReceiptSchema.properties.RoleID = { const: 'spec-review' };
+      stagedReceiptSchema.properties.ProducerCheckID = { const: 'spec_review' };
+      stagedReceiptSchema.properties.Binding.properties.CheckID = { const: 'spec_review' };
+      stagedReceiptSchema.properties.Termination.properties.Binding.properties.CheckID = { const: 'spec_review' };
       const plan = compileClaimPlan(config);
       const journal = new ExecutionJournal(plan);
       const sessionId = 'runtime-c0-journal-session';
@@ -463,10 +506,13 @@ setTimeout(() => {
         const binding = journal.deriveManagedRunBinding(attempt);
         journal.recordManagedRunAcquired(binding);
         journal.recordManagedRunStarted(binding);
+        const managedExtra = execution.node.check.type === 'proof-admit' && extra.proofAdmissionRequest === undefined
+          ? { ...extra, proofAdmissionRequest: journal.getProofAdmissionRequest(nodeGenerationId) }
+          : extra;
         const run = provider.startManaged({
           prInfo: {} as any, checkConfig: execution.node.check, dependencyResults,
-          executionContext: { claims: execution.claims, ...(execution.node.check.invocation?.subject?.kind === 'component' ? { proofComponentAuthority: journal.getProofComponentInvocationAuthority(nodeGenerationId) } : {}) }, binding,
-          executionConfigDigest: execution.node.executionConfigDigest, workingDirectory: root, ...extra,
+          executionContext: { claims: execution.claims, ...(execution.node.check.invocation?.subject?.kind === 'component' ? { proofComponentAuthority: journal.getProofComponentInvocationAuthority(nodeGenerationId) } : {}), ...(managedExtra.proofOnboardingStageContext ? { proofOnboardingStageContext: managedExtra.proofOnboardingStageContext } : {}) }, binding,
+          executionConfigDigest: execution.node.executionConfigDigest, workingDirectory: root, ...managedExtra,
         });
         await expect(run.started).resolves.toMatchObject({ kind: 'started' });
         const outcome: any = await run.outcome;
@@ -638,9 +684,36 @@ setTimeout(() => {
         payload: baselineAlphaAdmissionOutcome.summary.output,
         executionConfigDigest: baselineAlphaAdmissionExecution.node.executionConfigDigest,
       });
+      const alphaSpecReview = journal.queryReadyWork().find(value =>
+        value.checkId === 'spec_review' && value.scope.length === 2 && value.subgraphInstanceId === alphaGeneration.subgraphInstanceId
+      )!;
+      expect(alphaSpecReview).toBeDefined();
+      const alphaStageContext = journal.getProofComponentOnboardingStageContext(alphaSpecReview.nodeGenerationId);
+      expect(child.proofComponentCandidateEnvelopeJson(JSON.parse(alphaStageContext.prior_candidate))).toBe(alphaStageContext.prior_candidate);
+      const alphaSpecReviewResult = await completeManaged(alphaSpecReview.nodeGenerationId, replacementC0Provider, new Map(), {
+        proofOnboardingStageContext: alphaStageContext,
+      });
+      expect(alphaSpecReviewResult.outcome.kind).toBe('succeeded-proof-candidate');
+      const alphaSpecReviewAdmission = journal.queryReadyWork().find(value =>
+        value.checkId === 'spec_review_admit' && value.scope.length === 2 && value.subgraphInstanceId === alphaGeneration.subgraphInstanceId
+      )!;
+      expect(alphaSpecReviewAdmission).toBeDefined();
+      const alphaSpecReviewAdmissionResult = await completeManaged(
+        alphaSpecReviewAdmission.nodeGenerationId,
+        admissionProvider,
+        new Map([['spec_review', { issues: [], output: alphaSpecReviewResult.outcome.summary.output }]]),
+      );
+      expect(alphaSpecReviewAdmissionResult.outcome.summary.output).toEqual(expect.objectContaining({ Claim: 'proof.component_spec_review_candidate@1' }));
       const baselineAlphaVerify = journal.queryReadyWork().find(value =>
         value.checkId === 'verify' && value.scope.length === 2 && value.subgraphInstanceId === alphaGeneration.subgraphInstanceId
       )!;
+      expect(baselineAlphaVerify).toBeDefined();
+      const baselineAlphaVerifyExecution = journal.getGeneratedExecution(baselineAlphaVerify.nodeGenerationId);
+      expect(Object.keys(baselineAlphaVerifyExecution.claims).sort()).toEqual(['candidate', 'receipt', 'spec_candidate', 'spec_receipt']);
+      expect(baselineAlphaVerifyExecution.claims.spec_candidate.claim).toBe('proof.component_spec_review_candidate@1');
+      expect(baselineAlphaVerifyExecution.claims.spec_candidate.producerCheckId).toBe('spec_review');
+      expect(baselineAlphaVerifyExecution.claims.spec_receipt.claim).toBe('proof.component_spec_review_admitted_receipt@1');
+      expect(baselineAlphaVerifyExecution.claims.spec_receipt.producerCheckId).toBe('spec_review_admit');
       const baselineAlphaVerifyAttempt = journal.startGeneratedAttempt(baselineAlphaVerify.nodeGenerationId);
       journal.scheduleGeneratedAttempt(baselineAlphaVerifyAttempt);
       journal.completeGeneratedAttempt({ attempt: baselineAlphaVerifyAttempt, payload: {} });
@@ -1022,6 +1095,11 @@ setTimeout(() => {
       const stalePredecessor = { ...secondAuthorityEvent, previousAuthorityId: authorityEvent.sourceCatalogClaimId };
       stalePredecessor.authorityId = deriveProofCurrentCatalogAuthorityId(stalePredecessor);
       expect(() => reduceInstanceEvent(afterAuthorityProjection, stalePredecessor)).toThrow();
+      const checkpointReadyFrontier = journal.queryReadyWork().map(value => value.nodeGenerationId).sort();
+      const stagedCandidateCheckpointClaim = journal.getInstanceProjection().claimsById[baselineAlphaVerifyExecution.claims.spec_candidate.claimId];
+      const stagedReceiptCheckpointClaim = journal.getInstanceProjection().claimsById[baselineAlphaVerifyExecution.claims.spec_receipt.claimId];
+      expect(stagedCandidateCheckpointClaim.proofCandidateEvidence).toBeDefined();
+      expect((stagedReceiptCheckpointClaim.payload as any).__proof_admission_wire).toEqual(expect.any(String));
       const checkpoint = journal.exportGraphCheckpoint(sessionId);
       const canonicalCheckpointBytes = canonicalGraphCheckpointJson(checkpoint);
       const restoredFromCanonicalCheckpoint = ExecutionJournal.restoreGraphCheckpoint(
@@ -1034,6 +1112,13 @@ setTimeout(() => {
       ).toString('utf8'));
       expect(Object.is(canonicalRestoredAuthorityBytes.catalog.components.find((value: any) => value.id === 'alpha').interfaces[0].n, -0)).toBe(true);
       const canonicalRestoredProjection = restoredFromCanonicalCheckpoint.getInstanceProjection();
+      expect(restoredFromCanonicalCheckpoint.queryReadyWork().map(value => value.nodeGenerationId).sort()).toEqual(checkpointReadyFrontier);
+      expect(canonicalRestoredProjection.claimsById[stagedCandidateCheckpointClaim.claimId].proofCandidateEvidence)
+        .toEqual(stagedCandidateCheckpointClaim.proofCandidateEvidence);
+      expect(canonicalRestoredProjection.claimsById[stagedCandidateCheckpointClaim.claimId].wireMode)
+        .toBe(stagedCandidateCheckpointClaim.wireMode);
+      expect((canonicalRestoredProjection.claimsById[stagedReceiptCheckpointClaim.claimId].payload as any).__proof_admission_wire)
+        .toBe((stagedReceiptCheckpointClaim.payload as any).__proof_admission_wire);
       const canonicalRestoredAlphaClaim = canonicalRestoredProjection.claimsById[canonicalRestoredProjection.instancesById[alphaGeneration.scope[1].subgraphInstanceId].activeItemClaimId!];
       expect(canonicalRestoredAlphaClaim.wireMode).toBe('proof');
       expect(Object.is((canonicalRestoredAlphaClaim.payload as any).proof_path_mapping?.risk_tier, -0)).toBe(true);

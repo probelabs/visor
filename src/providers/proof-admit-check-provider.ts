@@ -1,10 +1,12 @@
 import type { PRInfo } from '../pr-analyzer';
 import { CheckProvider, type CheckProviderConfig, type ExecutionContext, type ManagedAgentRun, type ManagedRunStartRequest } from './check-provider.interface';
 import type { ReviewSummary } from '../reviewer';
-import { immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue } from '../state-machine/graph/claim-kernel';
 import { PROOF_ADMIT_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
+import { governedCanonicalJson } from './proof-wire';
 import {
   createProofAdmissionCliChildForFocusedTest,
+  extractProofAdmissionCandidate,
   proofAdmissionCapabilityValid,
   PROOF_ADMISSION_UNAVAILABLE,
   startProofAdmissionCliChild,
@@ -22,6 +24,25 @@ type ProofAdmissionChildRequest = Readonly<{
   proofAdmissionRequest: string;
 }>;
 
+type AdmissionProtocol = Readonly<{
+  checkId: 'proof_admit' | 'spec_review_admit';
+  dependency: 'inspect' | 'spec_review';
+  candidateClaim: 'proof.candidate@1' | 'proof.component_spec_review_candidate@1';
+  candidateProducer: 'inspect' | 'spec_review';
+  receiptClaim: 'proof.admitted_receipt@1' | 'proof.component_spec_review_admitted_receipt@1';
+}>;
+
+const LEGACY_PROTOCOL: AdmissionProtocol = Object.freeze({
+  checkId: 'proof_admit',
+  dependency: 'inspect', candidateClaim: 'proof.candidate@1', candidateProducer: 'inspect',
+  receiptClaim: 'proof.admitted_receipt@1',
+});
+const STAGED_PROTOCOL: AdmissionProtocol = Object.freeze({
+  checkId: 'spec_review_admit',
+  dependency: 'spec_review', candidateClaim: 'proof.component_spec_review_candidate@1', candidateProducer: 'spec_review',
+  receiptClaim: 'proof.component_spec_review_admitted_receipt@1',
+});
+
 function plain(value: unknown): value is PlainRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value) &&
     (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
@@ -29,10 +50,58 @@ function plain(value: unknown): value is PlainRecord {
 
 function exactOwnKeys(value: object, expected: readonly string[]): boolean {
   const keys = Reflect.ownKeys(value);
-  return keys.length === expected.length && keys.every((key, index) => key === expected[index] && typeof key === 'string' && (() => {
+  return keys.length === expected.length && keys.every(key => typeof key === 'string' && expected.includes(key) && (() => {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return !!descriptor && 'value' in descriptor && descriptor.enumerable;
   })());
+}
+
+function exactConsume(value: unknown): value is PlainRecord {
+  return plain(value) && (exactOwnKeys(value, ['claim', 'as']) ||
+    (exactOwnKeys(value, ['claim', 'as', 'cardinality']) && value.cardinality === 'one'));
+}
+
+function admissionProtocol(config: CheckProviderConfig): AdmissionProtocol {
+  const consumes = config.consumes;
+  const emits = config.emits;
+  if (!Array.isArray(consumes) || consumes.length !== 1 || !exactConsume(consumes[0]) || !Array.isArray(emits) || emits.length !== 1 ||
+      !plain(emits[0]) || !exactOwnKeys(emits[0], ['claim', 'from']) || emits[0].from !== 'output') {
+    invalid('admission protocol bindings are not closed');
+  }
+  const staged = consumes[0].claim === STAGED_PROTOCOL.candidateClaim && emits[0].claim === STAGED_PROTOCOL.receiptClaim;
+  const protocol = staged ? STAGED_PROTOCOL : LEGACY_PROTOCOL;
+  if (consumes[0].claim !== protocol.candidateClaim || consumes[0].as !== 'candidate' || emits[0].claim !== protocol.receiptClaim) {
+    invalid('admission protocol claim bindings are invalid');
+  }
+  return protocol;
+}
+
+function lowerScope(value: unknown): unknown {
+  return Array.isArray(value) ? value.map(part => plain(part) ? {
+    kind: part.Kind, expansionOwnerCheck: part.ExpansionOwnerCheck, key: part.Key, subgraphInstanceId: part.SubgraphInstanceID,
+  } : null) : undefined;
+}
+
+function candidateMatchesExecutionClaim(candidate: PlainRecord, extracted: ReturnType<typeof extractProofAdmissionCandidate>, binding: ManagedRunStartRequest['binding']): boolean {
+  const wire = extracted.candidate;
+  const publication = wire.Publication as PlainRecord;
+  const wireBinding = wire.Binding as PlainRecord;
+  const termination = wire.Termination as PlainRecord;
+  const terminationBinding = termination.Binding as PlainRecord;
+  let payloadText: string;
+  try {
+    const payloadBytes = Buffer.from(String(wire.ProbeResultBytes), 'base64');
+    payloadText = new TextDecoder('utf-8', { fatal: true }).decode(payloadBytes);
+    JSON.parse(payloadText);
+  } catch { return false; }
+  const sameAdmissionScope = binding.sessionId === wireBinding.SessionID && canonicalJson(binding.scope) === canonicalJson(lowerScope(wireBinding.Scope));
+  const matches = candidate.claimId === publication.ClaimID && candidate.payloadFingerprint === publication.PayloadFingerprint &&
+    candidate.wireMode === extracted.wireMode && governedCanonicalJson(candidate.payload, extracted.wireMode) === payloadText && candidate.producerCheckId === publication.ProducerCheckID &&
+    canonicalJson(candidate.parentClaimIds) === canonicalJson(publication.ParentClaimIDs) && canonicalJson(candidate.scope) === canonicalJson(lowerScope(publication.Scope)) &&
+    candidate.attemptId === publication.AttemptID && candidate.fence === publication.Fence && sameAdmissionScope &&
+    canonicalJson(publication.Scope) === canonicalJson(wireBinding.Scope) && canonicalJson(terminationBinding) === canonicalJson(wireBinding) &&
+    termination.SessionID === wireBinding.SessionID && canonicalJson(termination.Scope) === canonicalJson(wireBinding.Scope);
+  return matches;
 }
 
 function proofAdmissionChildRequest(request: ManagedRunStartRequest): ProofAdmissionChildRequest {
@@ -49,6 +118,8 @@ function proofAdmissionChildRequest(request: ManagedRunStartRequest): ProofAdmis
   if (controllerAi !== undefined && (!plain(controllerAi) || !exactOwnKeys(controllerAi, ['timeout', 'debug']) || typeof controllerAi.timeout !== 'number' || typeof controllerAi.debug !== 'boolean')) {
     invalid('provider config contains unauthorised ai options');
   }
+  const protocol = admissionProtocol(request.checkConfig);
+  if (request.binding.checkId !== protocol.checkId) invalid('admission binding check is invalid');
 
   const dependencies = request.dependencyResults as unknown;
   if (!dependencies || typeof dependencies !== 'object' || typeof Reflect.get(dependencies, 'size') !== 'number' || typeof Reflect.get(dependencies, 'keys') !== 'function') {
@@ -60,15 +131,25 @@ function proofAdmissionChildRequest(request: ManagedRunStartRequest): ProofAdmis
   } catch {
     invalid('dependency results cannot be inspected');
   }
-  if (dependencyKeys.length !== 1 || dependencyKeys[0] !== 'inspect' || Reflect.get(dependencies, 'size') !== 1) {
+  if (dependencyKeys.length !== 1 || dependencyKeys[0] !== protocol.dependency || Reflect.get(dependencies, 'size') !== 1) {
     invalid('proof admission requires exactly the inspect dependency');
   }
 
   const claims = request.executionContext && request.executionContext.claims;
   if (!plain(claims) || !exactOwnKeys(claims, ['candidate'])) invalid('candidate claim alias is invalid');
   const candidate = claims.candidate;
-  if (!plain(candidate) || candidate.claim !== 'proof.candidate@1' || candidate.producerCheckId !== 'inspect' || candidate.provenance !== 'attempt' || typeof candidate.attemptId !== 'string' || !Number.isSafeInteger(candidate.fence)) {
+  if (!plain(candidate) || candidate.claim !== protocol.candidateClaim || candidate.producerCheckId !== protocol.candidateProducer || candidate.provenance !== 'attempt' || typeof candidate.attemptId !== 'string' || !Number.isSafeInteger(candidate.fence)) {
     invalid('candidate claim authority is invalid');
+  }
+  try {
+    const extracted = extractProofAdmissionCandidate(request.proofAdmissionRequest);
+    const invocation = extracted.candidate.Invocation as Record<string, unknown>;
+    const staged = Object.prototype.hasOwnProperty.call(invocation, 'onboarding_stage');
+    if (staged !== (protocol === STAGED_PROTOCOL) || extracted.candidate.Publication.CheckID !== protocol.candidateProducer || extracted.candidate.Publication.Claim !== protocol.candidateClaim || !candidateMatchesExecutionClaim(candidate, extracted, request.binding)) {
+      invalid('candidate evidence protocol is detached');
+    }
+  } catch {
+    invalid('candidate evidence is invalid');
   }
   if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0 || !request.workingDirectory.startsWith('/') || typeof request.proofAdmissionRequest !== 'string' || request.proofAdmissionRequest.length === 0) {
     throw new Error(PROOF_ADMISSION_UNAVAILABLE);

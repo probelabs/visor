@@ -61,6 +61,8 @@ const CATALOG_REVALIDATION_RECEIPT_V2_KEYS = [
   ...CATALOG_REVALIDATION_RECEIPT_COMMON_KEYS.slice(0, 11), 'project_lineage', 'receipt_id',
 ] as const;
 const CANDIDATE_ENVELOPE_KEYS = ['Version', 'Invocation', 'InvocationDigest', 'RoleID', 'Stance', 'Subject', 'AttestationVersion', 'ExecutionSource', 'ProbeInvocationDigest', 'IdentityVersion', 'IdentitySource', 'ResultDigest', 'CanonicalBytes', 'ProbeResultBytes', 'VisorPayloadBytes', 'Publication', 'Binding', 'Termination'] as const;
+const STAGED_CANDIDATE_CHECK = 'spec_review';
+const STAGED_CANDIDATE_CLAIM = 'proof.component_spec_review_candidate@1';
 type ExecutableStat = Readonly<{
   realpath: string; dev: number; ino: number; mode: number; uid: number; gid: number; size: number;
   mtimeMs: number; ctimeMs: number; digest: string;
@@ -434,10 +436,10 @@ function componentResolvedRoleInvocationJson(value: Record<string, unknown>, raw
   });
 }
 
-function componentRoleInvocationJson(value: Record<string, unknown>): string {
+function componentRoleInvocationJson(value: Record<string, unknown>, rawAuthority?: string, rawStage?: string): string {
   const subject = value.subject as Record<string, unknown>;
   const authority = value.component_authority as Record<string, unknown>;
-  const authorityJson = goComponentAuthorityJson(authority);
+  const authorityJson = rawAuthority ?? goComponentAuthorityJson(authority);
   if (authorityJson === '') return '';
   const fields: Record<string, string> = {
     role_id: json(value.role_id),
@@ -445,7 +447,7 @@ function componentRoleInvocationJson(value: Record<string, unknown>): string {
     subject: goRoleSubjectJson(subject),
     component_authority: authorityJson,
   };
-  if (Object.prototype.hasOwnProperty.call(value, 'onboarding_stage')) fields.onboarding_stage = proofOnboardingStageContextJson(value.onboarding_stage);
+  if (Object.prototype.hasOwnProperty.call(value, 'onboarding_stage')) fields.onboarding_stage = rawStage ?? proofOnboardingStageContextJson(value.onboarding_stage);
   return proofStructJson({
     ...fields,
     output_schema_id: json(value.output_schema_id),
@@ -456,15 +458,19 @@ function componentRoleInvocationJson(value: Record<string, unknown>): string {
 /** Serialize the candidate envelope exactly as the Proof child receives it.
  * Component invocations carry Proof-owned RawMessage values inside their
  * authority; the generic JSON serializer would turn nested -0 into 0. */
-export function proofComponentCandidateEnvelopeJson(value: Record<string, unknown>): string {
+function proofComponentCandidateEnvelopeJsonWithRaw(value: Record<string, unknown>, rawAuthority?: string, rawStage?: string): string {
   const invocation = value.Invocation;
   if (!plain(invocation) || !Object.prototype.hasOwnProperty.call(invocation, 'component_authority')) return json(value);
   const fields: Record<string, string> = {};
   for (const key of CANDIDATE_ENVELOPE_KEYS) {
-    if (key === 'Invocation') fields[key] = componentRoleInvocationJson(invocation);
+    if (key === 'Invocation') fields[key] = componentRoleInvocationJson(invocation, rawAuthority, rawStage);
     else fields[key] = json(value[key]);
   }
   return proofStructJson(fields);
+}
+
+export function proofComponentCandidateEnvelopeJson(value: Record<string, unknown>): string {
+  return proofComponentCandidateEnvelopeJsonWithRaw(value);
 }
 
 /** Serialize the complete candidate-admission request without erasing
@@ -537,13 +543,18 @@ function parseRequest(request: string): { raw: Buffer } & ProofAdmissionCandidat
   validateCandidateShape(candidate, wireMode);
   const marker = request.indexOf('"candidate":');
   const start = marker + '"candidate":'.length;
-  const encoded = proofComponentCandidateEnvelopeJson(candidate);
-  if (marker < 0 || request.slice(start, start + encoded.length) !== encoded || request.slice(start + encoded.length) !== '}') fail('candidate wire is not canonical');
+  const end = jsonValueEnd(request, start);
+  const rawCandidate = end < 0 ? '' : request.slice(start, end);
+  const rawInvocation = rawObjectField(rawCandidate, 'Invocation');
+  const encoded = proofComponentCandidateEnvelopeJsonWithRaw(candidate,
+    rawInvocation ? rawObjectField(rawInvocation, 'component_authority') : undefined,
+    rawInvocation ? rawObjectField(rawInvocation, 'onboarding_stage') : undefined);
+  if (marker < 0 || rawCandidate !== encoded || request.slice(end) !== '}') fail('candidate wire is not canonical');
   // Keep the RawMessage boundary exact.  The candidate has already been
   // checked against Proof's serializer above, but its bytes must still come
   // from the request itself rather than from JSON.parse/JSON.stringify.
   const byteStart = Buffer.byteLength(request.slice(0, start), 'utf8');
-  const byteLength = Buffer.byteLength(encoded, 'utf8');
+  const byteLength = Buffer.byteLength(rawCandidate, 'utf8');
   return { raw, candidate, candidateRaw: raw.subarray(byteStart, byteStart + byteLength), wireMode };
 }
 
@@ -566,24 +577,40 @@ function b64(value: unknown): Buffer {
 }
 function validateCandidateShape(candidate: Record<string, unknown>, wireMode: GovernedWireMode): void {
   const invocation = candidate.Invocation as Record<string, unknown>;
-  const invocationKeys = Object.prototype.hasOwnProperty.call(invocation, 'component_authority')
-    ? ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema']
+  const hasAuthority = Object.prototype.hasOwnProperty.call(invocation, 'component_authority');
+  const staged = Object.prototype.hasOwnProperty.call(invocation, 'onboarding_stage');
+  const invocationKeys = staged
+    ? ['role_id', 'stance', 'subject', 'component_authority', 'onboarding_stage', 'output_schema_id', 'output_schema']
+    : hasAuthority
+      ? ['role_id', 'stance', 'subject', 'component_authority', 'output_schema_id', 'output_schema']
     : ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'];
-  if (!exact(invocation, invocationKeys) || !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || !exact(candidate.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(invocation.subject, candidate.Subject)) fail('invocation wire shape is invalid');
+  if (!exact(invocation, invocationKeys) || !exact(invocation.subject, ['kind', 'id', 'fingerprint']) || !exact(candidate.Subject, ['kind', 'id', 'fingerprint']) || !equalCanonicalJson(invocation.subject, candidate.Subject) || (staged && (!hasAuthority || invocation.role_id !== 'spec-review' || invocation.subject.kind !== 'component'))) fail('invocation wire shape is invalid');
+  if (hasAuthority && goComponentAuthorityJson(invocation.component_authority as Record<string, unknown>) === '') fail('component authority wire shape is invalid');
+  if (staged) {
+    try { validateOnboardingStageContext(invocation.onboarding_stage); } catch { fail('onboarding stage wire shape is invalid'); }
+  }
+  const expectedCheck = staged ? STAGED_CANDIDATE_CHECK : 'inspect';
+  const expectedClaim = staged ? STAGED_CANDIDATE_CLAIM : 'proof.candidate@1';
   const scope = (value: unknown): void => {
     if (!Array.isArray(value) || value.length < 1 || value.length > 2 || value.some(part => !exact(part, ['Kind', 'ExpansionOwnerCheck', 'Key', 'SubgraphInstanceID']))) fail('scope wire shape is invalid');
   };
   const publication = candidate.Publication as Record<string, unknown>;
   if (!exact(publication, ['Version', 'Type', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence', 'ClaimID', 'Claim', 'PayloadFingerprint', 'ProducerCheckID', 'Payload', 'ParentClaimIDs'])) fail('publication wire shape is invalid');
+  if (publication.CheckID !== expectedCheck || publication.Claim !== expectedClaim || publication.ProducerCheckID !== expectedCheck) fail('candidate publication protocol is invalid');
   scope(publication.Scope);
   const binding = candidate.Binding as Record<string, unknown>;
   if (!exact(binding, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence'])) fail('binding wire shape is invalid');
+  if (binding.CheckID !== expectedCheck) fail('candidate binding protocol is invalid');
   scope(binding.Scope);
   const termination = candidate.Termination as Record<string, unknown>;
   if (!exact(termination, ['Version', 'Type', 'SessionID', 'Scope', 'Binding', 'CleanupStatus', 'ControllerDecision', 'FailureCode']) || termination.FailureCode !== null) fail('termination wire shape is invalid');
   scope(termination.Scope);
   const terminationBinding = termination.Binding as Record<string, unknown>;
   if (!exact(terminationBinding, ['ManagedRunID', 'SessionID', 'CheckID', 'Scope', 'NodeInstanceID', 'NodeGenerationID', 'AttemptID', 'Fence'])) fail('termination binding wire shape is invalid');
+  if (terminationBinding.CheckID !== expectedCheck) fail('candidate termination protocol is invalid');
+  const parents = publication.ParentClaimIDs;
+  if (!Array.isArray(parents) || parents.some(id => typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id)) || parents.some((id, index) => index > 0 && parents[index - 1] >= id)) fail('candidate parents are invalid');
+  if (staged) validateStagedCandidateLineage(candidate, invocation.onboarding_stage as Record<string, unknown>);
   scope(terminationBinding.Scope);
   const probe = b64(candidate.ProbeResultBytes);
   if (candidate.CanonicalBytes !== probe.length || candidate.ProbeResultBytes !== candidate.VisorPayloadBytes || candidate.ProbeResultBytes !== publication.Payload) fail('candidate bytes are not bound');
@@ -592,6 +619,32 @@ function validateCandidateShape(candidate: Record<string, unknown>, wireMode: Go
     const payload = JSON.parse(payloadText);
     if (!validUnicode(payload) || governedCanonicalJson(payload, wireMode) !== payloadText) fail('candidate payload is not canonical');
   } catch { fail('candidate payload is not valid UTF-8 JSON'); }
+}
+
+function validateStagedCandidateLineage(candidate: Record<string, unknown>, stage: Record<string, unknown>): void {
+  const priorRaw = stage.prior_candidate;
+  const priorText = typeof priorRaw === 'string' ? priorRaw : plain(priorRaw) ? proofComponentCandidateEnvelopeJson(priorRaw) : '';
+  let prior: Record<string, unknown>;
+  let admission: Record<string, unknown>;
+  try { prior = JSON.parse(priorText) as Record<string, unknown>; admission = JSON.parse(typeof stage.prior_admission === 'string' ? stage.prior_admission : json(stage.prior_admission)) as Record<string, unknown>; } catch { fail('staged candidate predecessor evidence is invalid'); }
+  const priorInvocation = prior.Invocation as Record<string, unknown>;
+  const priorPublication = prior.Publication as Record<string, unknown>;
+  const currentPublication = candidate.Publication as Record<string, unknown>;
+  const currentBinding = candidate.Binding as Record<string, unknown>;
+  const priorBinding = prior.Binding as Record<string, unknown>;
+  if (!plain(admission) || admission.status !== 'ADMITTED' || !plain(admission.receipt) ||
+      !plain(priorInvocation) || Object.prototype.hasOwnProperty.call(priorInvocation, 'onboarding_stage') || priorInvocation.role_id !== 'onboard' ||
+      !plain(priorPublication) || !plain(priorBinding) || priorPublication.CheckID !== 'inspect' || priorPublication.Claim !== 'proof.candidate@1' ||
+      !equalCanonicalJson(prior.Subject, candidate.Subject) || !equalCanonicalJson(priorInvocation.subject, candidate.Subject) ||
+      !equalCanonicalJson(priorBinding.Scope, currentBinding.Scope) || !equalCanonicalJson(priorPublication.Scope, currentPublication.Scope) ||
+      priorBinding.SessionID !== currentBinding.SessionID || currentBinding.ManagedRunID === priorBinding.ManagedRunID ||
+      currentBinding.NodeInstanceID === priorBinding.NodeInstanceID || currentBinding.NodeGenerationID === priorBinding.NodeGenerationID ||
+      currentBinding.AttemptID === priorBinding.AttemptID || currentPublication.ClaimID === priorPublication.ClaimID ||
+      typeof priorPublication.ClaimID !== 'string' || !/^[0-9a-f]{64}$/.test(priorPublication.ClaimID) ||
+      typeof stage.prior_admission_claim_id !== 'string' || stage.prior_admission_claim_id === priorPublication.ClaimID ||
+      !currentPublication.ParentClaimIDs.includes(priorPublication.ClaimID) || !currentPublication.ParentClaimIDs.includes(stage.prior_admission_claim_id as string)) {
+    fail('staged candidate predecessor lineage is invalid');
+  }
 }
 function equalJson(left: unknown, right: unknown): boolean { return json(left) === json(right); }
 function equalCanonicalJson(left: unknown, right: unknown): boolean { return canonicalJson(left) === canonicalJson(right); }

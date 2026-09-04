@@ -37,6 +37,7 @@ import type { CheckConfig } from '../../types/config';
 import {
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_ADMIT_PROVIDER_TYPE,
   PROOF_PROJECT_RECONCILE_NODE_KEY,
   PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
   PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
@@ -3328,7 +3329,8 @@ async function executeSingleCheck(
               binding,
               executionConfigDigest: context.journal.getGeneratedExecution(dynamic!.attempt.nodeGenerationId).node.executionConfigDigest,
               workingDirectory: controllerWorkingDirectory(context),
-              ...(checkId === 'proof_admit'
+              ...((checkId === 'proof_admit' || checkId === 'spec_review_admit') &&
+                providerType === PROOF_ADMIT_PROVIDER_TYPE && checkConfig.type === PROOF_ADMIT_PROVIDER_TYPE
                 ? { proofAdmissionRequest: context.journal.getProofAdmissionRequest(dynamic!.attempt.nodeGenerationId) }
                 : {}),
               ...(checkId === 'inspect' && providerType === GOVERNED_PROOF_INSPECT_PROVIDER_NAME && isGovernedProofComponentSelector(checkConfig.invocation)

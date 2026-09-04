@@ -74,6 +74,8 @@ import {
   PROOF_ADMIT_NODE_KEY,
   PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
   PROOF_CANDIDATE_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM,
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
@@ -82,6 +84,10 @@ import {
   PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
   PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
 } from './state-machine/graph/instance-plan';
+
+function isGovernedCandidateClaim(claim: string): boolean {
+  return claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM;
+}
 import {
   extractProofAdmissionCandidate,
   goCompatibleProofJson,
@@ -367,7 +373,7 @@ function generatedClaimView(claim: InstanceClaimProjection, label: string): Cand
     provenance: 'attempt',
     attemptId: claim.producerAttemptId,
     fence: claim.producerFence,
-    ...(claim.proofCandidateEvidence ? { proofAdmission: claim.proofCandidateEvidence } : {}),
+    ...(isGovernedCandidateClaim(claim.claim) && claim.proofCandidateEvidence ? { proofAdmission: claim.proofCandidateEvidence } : {}),
   } as CandidateClaimInput;
 }
 
@@ -543,39 +549,155 @@ function assembleProofComponentInvocationAuthority(
  * same component instance. This is deliberately optional while the child
  * inspect is pre-admission; once proof_admit has completed, absence is a
  * terminal lineage error rather than an invitation to search globally. */
-function validateComponentChildAdmission(
+type ComponentAdmissionProtocol = 'legacy' | 'spec_review';
+
+/** Validate one of the two closed component candidate/admission protocols.
+ * Stage names and claim mappings intentionally live here rather than in a
+ * registry: the journal must reject a cross-wired candidate before any
+ * descendant can become ready. */
+function validateComponentAdmissionProtocol(
   projection: InstanceProjection,
   subgraphInstanceId: string,
+  protocol: ComponentAdmissionProtocol,
   requireCompleted: boolean,
+  candidateRequest: (nodeGenerationId: string) => string,
 ): void {
   const generations = Object.values(projection.generationsById).filter(generation => generation.subgraphInstanceId === subgraphInstanceId);
-  const inspectGenerations = generations.filter(generation => generation.templateNodeKey === 'inspect' && generation.status === 'completed');
-  if (inspectGenerations.length === 0) {
+  const candidateClaimName = protocol === 'spec_review' ? PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM : PROOF_CANDIDATE_CLAIM;
+  const candidateNode = protocol === 'spec_review' ? 'spec_review' : 'inspect';
+  const admissionNode = protocol === 'spec_review' ? 'spec_review_admit' : PROOF_ADMIT_NODE_KEY;
+  const receiptClaimName = protocol === 'spec_review' ? PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM : PROOF_ADMITTED_RECEIPT_CLAIM;
+  const candidateGenerations = generations.filter(generation => generation.templateNodeKey === candidateNode && generation.status === 'completed');
+  if (candidateGenerations.length === 0) {
     if (requireCompleted) componentAuthorityFailure('component admission has no completed inspect candidate');
     return;
   }
-  if (inspectGenerations.length !== 1) componentAuthorityFailure('component inspect candidate lineage is ambiguous');
-  const inspect = inspectGenerations[0];
-  const candidateClaims = inspect.completedOutputClaimIds.map(claimId => projection.claimsById[claimId]).filter(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+  if (candidateGenerations.length !== 1) componentAuthorityFailure('component candidate lineage is ambiguous');
+  const candidateGeneration = candidateGenerations[0];
+  const candidateClaims = candidateGeneration.completedOutputClaimIds.map(claimId => projection.claimsById[claimId]).filter(claim => claim?.claim === candidateClaimName);
   if (candidateClaims.length !== 1) componentAuthorityFailure('component inspect has no unique candidate output');
-  const admitGenerations = generations.filter(generation => generation.templateNodeKey === PROOF_ADMIT_NODE_KEY && generation.status === 'completed');
+  const candidate = candidateClaims[0];
+  if (candidate.producerCheckId !== candidateNode || candidate.nodeGenerationId !== candidateGeneration.nodeGenerationId ||
+      !candidate.proofCandidateEvidence || candidateGeneration.completedOutputClaimIds.length !== 1 ||
+      !candidateGeneration.scheduled || !candidateGeneration.activeInputClaimIds.every(id => candidate.parentClaimIds.includes(id)) ||
+      canonicalJson(candidate.parentClaimIds) !== canonicalJson([...candidateGeneration.activeInputClaimIds].sort())) {
+    componentAuthorityFailure('component candidate is detached from its exact generated inputs');
+  }
+  const admitGenerations = generations.filter(generation => generation.templateNodeKey === admissionNode && generation.status === 'completed');
   if (admitGenerations.length === 0) {
     if (requireCompleted) componentAuthorityFailure('component admission has not completed');
     return;
   }
   if (admitGenerations.length !== 1) componentAuthorityFailure('component admission lineage is ambiguous');
   const admissionGeneration = admitGenerations[0];
-  const candidate = candidateClaims[0];
   if (admissionGeneration.activeInputClaimIds.length !== 1 || admissionGeneration.activeInputClaimIds[0] !== candidate.claimId) {
     componentAuthorityFailure('component admission does not consume the exact child candidate');
   }
-  const admissionClaims = admissionGeneration.completedOutputClaimIds.map(claimId => projection.claimsById[claimId]).filter(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+  const admissionClaims = admissionGeneration.completedOutputClaimIds.map(claimId => projection.claimsById[claimId]).filter(claim => claim?.claim === receiptClaimName);
   if (admissionClaims.length !== 1) componentAuthorityFailure('component admission has no unique receipt output');
-  try {
-    validateProofComponentCandidateAdmissionBinding(generatedClaimView(candidate, 'component candidate'), generatedClaimView(admissionClaims[0], 'component admission'));
-  } catch (error) {
-    componentAuthorityFailure(`component admission is detached from its resolved C0 invocation: ${error instanceof Error ? error.message : String(error)}`);
+  if (admissionGeneration.completedOutputClaimIds.length !== 1 || admissionGeneration.checkId !== admissionNode ||
+      admissionGeneration.completedOutputClaimIds[0] !== admissionClaims[0].claimId ||
+      admissionClaims[0].producerCheckId !== admissionNode || admissionClaims[0].nodeGenerationId !== admissionGeneration.nodeGenerationId ||
+      !admissionGeneration.scheduled || canonicalJson(admissionClaims[0].parentClaimIds) !== canonicalJson([candidate.claimId])) {
+    componentAuthorityFailure('component admission receipt is detached from its exact candidate');
   }
+  if (protocol === 'legacy') {
+    try {
+      validateProofComponentCandidateAdmissionBinding(generatedClaimView(candidate, 'component candidate'), generatedClaimView(admissionClaims[0], 'component admission'));
+    } catch (error) {
+      componentAuthorityFailure(`component admission is detached from its resolved C0 invocation: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const admissionPayload = admissionClaims[0].payload;
+  const admissionWire = isRecord(admissionPayload) && typeof admissionPayload[PROOF_ADMISSION_WIRE_FIELD] === 'string'
+    ? admissionPayload[PROOF_ADMISSION_WIRE_FIELD] : undefined;
+  let validated: ReturnType<typeof validateProofComponentAdmissionOutcome> | undefined;
+  try {
+    if (!admissionWire) throw new Error('admission wire is missing');
+    const extracted = extractProofAdmissionCandidate(candidateRequest(admissionGeneration.nodeGenerationId));
+    validated = validateProofComponentAdmissionOutcome(extracted.candidateRaw, admissionWire);
+    const receipt = JSON.parse(admissionWire).receipt as Record<string, unknown>;
+    const expectedPayload = { ...receipt, [PROOF_ADMISSION_WIRE_FIELD]: admissionWire };
+    if (!isRecord(admissionPayload) || canonicalJson(admissionPayload) !== canonicalJson(expectedPayload) ||
+        canonicalJson(extracted.candidate.Publication) !== canonicalJson({
+          ...extracted.candidate.Publication,
+          ClaimID: candidate.claimId,
+          Claim: candidate.claim,
+          PayloadFingerprint: candidate.payloadFingerprint,
+          ParentClaimIDs: candidate.parentClaimIds,
+        })) {
+      throw new Error('published admission payload is detached from the validated receipt');
+    }
+    const evidence = candidate.proofCandidateEvidence;
+    if (validated.resultDigest !== evidence.probe.resultIdentity.resultDigest ||
+        canonicalJson(validated.subject) !== canonicalJson(evidence.role.invocation.subject) ||
+        validated.scope.length !== candidate.scope.length ||
+        validated.scope.some((segment, index) => canonicalJson(segment) !== canonicalJson({
+          kind: candidate.scope[index].kind,
+          expansion_owner_check: candidate.scope[index].expansionOwnerCheck,
+          key: candidate.scope[index].key,
+          subgraph_instance_id: candidate.scope[index].subgraphInstanceId,
+        }))) throw new Error('validated admission projection is detached');
+  } catch (error) {
+    componentAuthorityFailure(`${protocol} admission receipt is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!validated) componentAuthorityFailure(`${protocol} admission receipt was not validated`);
+  if (protocol !== 'spec_review') return;
+  const stageCandidate = candidate;
+  const stageParents = stageCandidate.parentClaimIds.map(id => projection.claimsById[id]);
+  const component = stageParents.find(claim => claim?.claim === 'component.work_item@1');
+  const priorCandidate = stageParents.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+  const priorAdmission = stageParents.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+  if (stageParents.length !== 3 || !component || !priorCandidate || !priorAdmission ||
+      new Set(stageCandidate.parentClaimIds).size !== 3 ||
+      canonicalJson(stageCandidate.parentClaimIds) !== canonicalJson([...stageCandidate.parentClaimIds].sort()) ||
+      stageParents.some(claim => !claim || !claim.active || canonicalJson(claim.scope) !== canonicalJson(stageCandidate.scope)) ||
+      component.kind !== 'controller-item' || component.parentClaimIds.length !== 1 ||
+      priorCandidate.kind !== 'generated-output' || priorCandidate.producerCheckId !== 'inspect' ||
+      priorAdmission.kind !== 'generated-output' || priorAdmission.producerCheckId !== PROOF_ADMIT_NODE_KEY ||
+      canonicalJson(priorAdmission.parentClaimIds) !== canonicalJson([priorCandidate.claimId])) {
+    componentAuthorityFailure('spec_review candidate parents are not the exact WorkItem/candidate/admission lineage');
+  }
+  const invocation = stageCandidate.proofCandidateEvidence.role.invocation as Record<string, unknown>;
+  const stage = invocation.onboarding_stage;
+  if (!isRecord(stage) || typeof stage.prior_candidate !== 'string' || typeof stage.prior_admission !== 'string' ||
+      stage.prior_admission_claim_id !== priorAdmission.claimId || stage.prior_admission_payload_fingerprint !== priorAdmission.payloadFingerprint) {
+    componentAuthorityFailure('spec_review onboarding context is detached from its admitted predecessor');
+  }
+  try {
+    const priorEnvelope = JSON.parse(stage.prior_candidate) as Record<string, unknown>;
+    const publication = priorEnvelope.Publication as Record<string, unknown>;
+    if (proofComponentCandidateEnvelopeJson(priorEnvelope) !== stage.prior_candidate ||
+        publication.ClaimID !== priorCandidate.claimId || publication.Claim !== priorCandidate.claim ||
+        publication.PayloadFingerprint !== priorCandidate.payloadFingerprint ||
+        canonicalJson(publication.ParentClaimIDs) !== canonicalJson(priorCandidate.parentClaimIds)) {
+      componentAuthorityFailure('spec_review prior candidate wire is detached from its parent claim');
+    }
+    const admissionPayload = priorAdmission.payload;
+    if (!isRecord(admissionPayload) || admissionPayload[PROOF_ADMISSION_WIRE_FIELD] !== stage.prior_admission) {
+      componentAuthorityFailure('spec_review prior admission wire is detached from its parent claim');
+    }
+  } catch (error) {
+    if (error instanceof ClaimKernelError) throw error;
+    componentAuthorityFailure(`spec_review predecessor wire is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(component.payload) || !isRecord(component.payload.proof_component_subject) ||
+      !isRecord(component.payload.authority) || !isRecord(invocation.subject) || !isRecord(invocation.component_authority) ||
+      canonicalJson(invocation.subject) !== canonicalJson({ kind: 'component', id: component.payload.component_id, fingerprint: (component.payload.proof_component_subject as Record<string, unknown>).fingerprint }) ||
+      invocation.component_authority && (!isRecord(invocation.component_authority.subject) || canonicalJson(invocation.component_authority.subject) !== canonicalJson(component.payload.proof_component_subject) || invocation.component_authority.work_item_digest !== component.payload.authority.work_item_digest)) {
+    componentAuthorityFailure('spec_review component authority is detached from its WorkItem parent');
+  }
+}
+
+function validateComponentChildAdmission(
+  projection: InstanceProjection,
+  subgraphInstanceId: string,
+  requireCompleted: boolean,
+  candidateRequest: (nodeGenerationId: string) => string,
+): void {
+  validateComponentAdmissionProtocol(projection, subgraphInstanceId, 'legacy', requireCompleted, candidateRequest);
+  const hasStage = Object.values(projection.generationsById).some(generation => generation.subgraphInstanceId === subgraphInstanceId && (generation.templateNodeKey === 'spec_review' || generation.templateNodeKey === 'spec_review_admit'));
+  if (hasStage) validateComponentAdmissionProtocol(projection, subgraphInstanceId, 'spec_review', false, candidateRequest);
 }
 
 function checkpointWrap(
@@ -611,7 +733,7 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
   // derivable only from its validated governed evidence invocation.
   if (event.type === 'ClaimPublished' && eventHasNodeDiscriminator(event) && !hasOwn(event, 'wireMode')) {
     let wireMode: GovernedWireMode = 'generic';
-    if (event.claim === PROOF_CANDIDATE_CLAIM) {
+    if (isGovernedCandidateClaim(event.claim)) {
       try {
         wireMode = governedWireModeFromEvidence(validateProofCandidateEvidence(event.proofCandidateEvidence));
       } catch (error) {
@@ -778,8 +900,8 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
     case 'ClaimPublished': {
       const node = eventHasNodeDiscriminator(event);
       if (eventHasRequestDiscriminator(event)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'ClaimPublished cannot carry requestId');
-      const sidecar = event.claim === PROOF_CANDIDATE_CLAIM && hasOwn(event, 'proofCandidateEvidence');
-      if (event.claim === PROOF_CANDIDATE_CLAIM && (!sidecar || !hasOwn(event, 'proofCandidateEvidenceFingerprint')) || event.claim !== PROOF_CANDIDATE_CLAIM && (hasOwn(event, 'proofCandidateEvidence') || hasOwn(event, 'proofCandidateEvidenceFingerprint'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof evidence sidecar fields are not paired or reserved');
+      const sidecar = isGovernedCandidateClaim(event.claim) && hasOwn(event, 'proofCandidateEvidence');
+      if (isGovernedCandidateClaim(event.claim) && (!sidecar || !hasOwn(event, 'proofCandidateEvidenceFingerprint')) || !isGovernedCandidateClaim(event.claim) && (hasOwn(event, 'proofCandidateEvidence') || hasOwn(event, 'proofCandidateEvidenceFingerprint'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof evidence sidecar fields are not paired or reserved');
       const evidenceKeys = sidecar ? ['proofCandidateEvidence', 'proofCandidateEvidenceFingerprint'] : [];
       const keys = node
         ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', 'wireMode', ...evidenceKeys]
@@ -1145,14 +1267,14 @@ function validateCheckpointPlanAuthority(
     const expansion = expansionForCheckpoint(plan, instanceProjection.instancesById[generation.subgraphInstanceId].expansionOwnerCheck, !!instanceProjection.instancesById[generation.subgraphInstanceId].parentSubgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
     if (!node || !node.emissions.some(emission => emission.claim === event.claim)) checkpointAuthorityFailure('Generated claim is not declared by its compiled template node');
-    const sidecar = event.claim === PROOF_CANDIDATE_CLAIM;
+    const sidecar = isGovernedCandidateClaim(event.claim);
     const compiledWireMode = compiledManagedProofWireMode(generation, node);
     if (event.wireMode !== 'generic' && event.wireMode !== 'proof') checkpointAuthorityFailure('Generated claim wire mode is invalid');
     if (compiledWireMode === 'proof' && event.wireMode !== 'proof' &&
         !(legacyProofWireMode && event.wireMode === 'generic' && event.claim === PROOF_CATALOG_REVALIDATION_CLAIM)) {
       checkpointAuthorityFailure('Proof catalog publication is not using its compiled Proof wire mode');
     }
-    if (compiledWireMode !== 'proof' && event.claim !== PROOF_CANDIDATE_CLAIM && event.wireMode !== 'generic') checkpointAuthorityFailure('Proof wire mode is reserved for governed evidence');
+    if (compiledWireMode !== 'proof' && !isGovernedCandidateClaim(event.claim) && event.wireMode !== 'generic') checkpointAuthorityFailure('Proof wire mode is reserved for governed evidence');
     if (compiledWireMode === 'proof') {
       const managed = generation.attemptId ? instanceProjection.managedRunsByAttemptId[generation.attemptId] : undefined;
       if (!managed || managed.status !== 'terminated' || managed.cleanupStatus !== 'clean' || managed.controllerDecision !== 'completed' || managed.failureCode !== undefined) {
@@ -1168,16 +1290,17 @@ function validateCheckpointPlanAuthority(
       }
     }
     if (sidecar) {
-      if (generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
+      const stagedCandidate = event.claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM;
+      if ((stagedCandidate ? generation.templateNodeKey !== 'spec_review' : generation.templateNodeKey !== 'inspect') || node.check.type !== 'governed-proof-inspect' || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidence') || !hasOwn(event as unknown as Record<string, unknown>, 'proofCandidateEvidenceFingerprint') || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
         checkpointAuthorityFailure('Generated proof candidate evidence is not bound to the compiled inspect authority');
       }
       try {
         const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
         if (event.wireMode !== governedWireModeFromEvidence(evidence)) checkpointAuthorityFailure('Generated claim wire mode is detached from governed invocation');
         const candidatePayload = governedCanonicalJson(event.payload, event.wireMode);
-        const selector = isGovernedProofComponentSelector(node.check.invocation);
+        const selector = stagedCandidate ? isGovernedProofSpecReviewSelector(node.check.invocation) : isGovernedProofComponentSelector(node.check.invocation);
         const invocation = evidence.role.invocation as Record<string, unknown>;
-        const selectorBound = selector && invocation.role_id === 'onboard' && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
+        const selectorBound = selector && invocation.role_id === (stagedCandidate ? 'spec-review' : 'onboard') && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && (!stagedCandidate || invocation.onboarding_stage !== undefined) && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
         if ((!selector && (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation))) || (selector && !selectorBound) || evidence.probe.resultIdentity.resultDigest !== governedResultDigest(event.payload, event.wireMode) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(candidatePayload, 'utf8')) {
           checkpointAuthorityFailure('Generated proof candidate evidence is detached from compiled inspect or payload authority');
         }
@@ -1951,15 +2074,23 @@ export class ExecutionJournal {
       if (instance.status !== 'active') continue;
       const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
       const node = expansion.template.nodesByKey[generation.templateNodeKey];
-      if (!node || node.check.type !== 'governed-proof-inspect' || !isGovernedProofComponentSelector(node.check.invocation)) continue;
+      const componentInspect = node && node.check.type === 'governed-proof-inspect' && isGovernedProofComponentSelector(node.check.invocation);
+      const stagedInspect = node && generation.templateNodeKey === 'spec_review' && node.check.type === 'governed-proof-inspect' && isGovernedProofSpecReviewSelector(node.check.invocation);
+      if (!componentInspect && !stagedInspect) continue;
       const authority = this.getProofComponentInvocationAuthority(generation.nodeGenerationId);
       const output = generation.completedOutputClaimIds
         .map(claimId => this.instanceProjection.claimsById[claimId])
-        .find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+        .find(claim => claim?.claim === (stagedInspect ? PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM : PROOF_CANDIDATE_CLAIM));
       if (!output?.proofCandidateEvidence) componentAuthorityFailure('completed component inspect has no Proof evidence');
       const invocation = output.proofCandidateEvidence.role.invocation as Record<string, unknown>;
       if (!invocation.component_authority || governedCanonicalJson(invocation.component_authority, 'proof') !== governedCanonicalJson(authority, 'proof')) {
         componentAuthorityFailure('completed component inspect authority is detached from exact lineage');
+      }
+      if (stagedInspect) {
+        const expectedStage = this.getProofComponentOnboardingStageContext(generation.nodeGenerationId);
+        if (canonicalJson(invocation.onboarding_stage) !== canonicalJson(expectedStage)) componentAuthorityFailure('completed spec_review context is detached from exact lineage');
+        validateComponentAdmissionProtocol(this.instanceProjection, instance.subgraphInstanceId, 'spec_review', false, nodeGenerationId => this.getProofAdmissionRequest(nodeGenerationId));
+        continue;
       }
       const expectedReinspection = this.getProofComponentReinspectionContext(generation.nodeGenerationId);
       const actualReinspection = output.proofCandidateEvidence.reinspectionContext;
@@ -1967,7 +2098,7 @@ export class ExecutionJournal {
           (expectedReinspection && (!actualReinspection || canonicalJson(expectedReinspection) !== canonicalJson(actualReinspection) || output.proofCandidateEvidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(expectedReinspection)))) {
         componentAuthorityFailure('completed component reinspection context is detached from exact lineage');
       }
-      validateComponentChildAdmission(this.instanceProjection, instance.subgraphInstanceId, false);
+      validateComponentChildAdmission(this.instanceProjection, instance.subgraphInstanceId, false, nodeGenerationId => this.getProofAdmissionRequest(nodeGenerationId));
     }
     for (const generation of Object.values(this.instanceProjection.generationsById)) {
       if (generation.status !== 'completed' || generation.templateNodeKey !== PROOF_PROJECT_RECONCILE_NODE_KEY) continue;
@@ -2367,7 +2498,7 @@ export class ExecutionJournal {
         parentClaimIds: claim.parentClaimIds,
         wireMode: claim.wireMode,
         ...provenance,
-        ...(claim.claim === PROOF_CANDIDATE_CLAIM && claim.proofCandidateEvidence && claim.proofCandidateEvidenceFingerprint
+        ...(isGovernedCandidateClaim(claim.claim) && claim.proofCandidateEvidence && claim.proofCandidateEvidenceFingerprint
           ? { proofAdmission: claim.proofCandidateEvidence }
           : {}),
       });
@@ -2603,10 +2734,13 @@ export class ExecutionJournal {
   /** Project the exact controller-owned candidate envelope consumed by Proof. */
   getProofAdmissionRequest(nodeGenerationId: string): string {
     const execution = this.getGeneratedExecution(nodeGenerationId);
-    if (execution.generation.templateNodeKey !== PROOF_ADMIT_NODE_KEY || execution.generation.checkId !== PROOF_ADMIT_NODE_KEY) {
+    const staged = execution.generation.templateNodeKey === 'spec_review_admit' && execution.generation.checkId === 'spec_review_admit';
+    if ((!staged && (execution.generation.templateNodeKey !== PROOF_ADMIT_NODE_KEY || execution.generation.checkId !== PROOF_ADMIT_NODE_KEY)) ||
+        (staged && execution.generation.templateNodeKey !== 'spec_review_admit')) {
       throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof admission is reserved for proof_admit');
     }
-    const candidateClaim = Object.values(execution.claims).find(claim => claim.claim === PROOF_CANDIDATE_CLAIM);
+    const expectedCandidateClaim = staged ? PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM : PROOF_CANDIDATE_CLAIM;
+    const candidateClaim = Object.values(execution.claims).find(claim => claim.claim === expectedCandidateClaim);
     const evidence = candidateClaim?.proofAdmission;
     if (!candidateClaim || !evidence) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof candidate evidence is missing');
     const wireMode = governedWireModeFromEvidence(evidence);
@@ -2617,14 +2751,14 @@ export class ExecutionJournal {
     const proofAttempts = this.runtimeEvents.filter(event =>
       event.type === 'AttemptStarted' && 'nodeGenerationId' in event &&
       event.nodeGenerationId === execution.generation.nodeGenerationId &&
-      event.checkId === PROOF_ADMIT_NODE_KEY && event.attemptId === execution.generation.attemptId &&
+      event.checkId === (staged ? 'spec_review_admit' : PROOF_ADMIT_NODE_KEY) && event.attemptId === execution.generation.attemptId &&
       event.fence === execution.generation.fence
     );
     if (proofAttempts.length !== 1) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Proof admission attempt is ambiguous');
     const proofAttemptIndex = this.runtimeEvents.indexOf(proofAttempts[0]);
     const publications = this.runtimeEvents.filter(event =>
       event.type === 'ClaimPublished' &&
-      event.claim === PROOF_CANDIDATE_CLAIM && event.claimId === candidateClaim.claimId &&
+      event.claim === expectedCandidateClaim && event.claimId === candidateClaim.claimId &&
       event.attemptId === candidateClaim.attemptId && event.fence === candidateClaim.fence
     ) as GeneratedClaimPublishedEvent[];
     if (publications.length !== 1) throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate publication is ambiguous');
@@ -2677,12 +2811,16 @@ export class ExecutionJournal {
       throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Candidate termination binding is detached');
     }
     const invocation = evidence.role.invocation as Record<string, any>;
+    if (staged && invocation.onboarding_stage === undefined) {
+      throw new ClaimKernelError('INVALID_PROOF_ADMISSION_PROJECTION', 'Staged Proof candidate has no onboarding stage context');
+    }
     const subject = invocation.subject as Record<string, any>;
     const invocationWire = {
       role_id: invocation.role_id,
       stance: invocation.stance,
       subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
       ...(invocation.component_authority !== undefined ? { component_authority: invocation.component_authority } : {}),
+      ...(staged ? { onboarding_stage: invocation.onboarding_stage } : {}),
       output_schema_id: invocation.output_schema_id,
       output_schema: invocation.output_schema,
     };
@@ -3230,7 +3368,8 @@ export class ExecutionJournal {
     const instance = before.instancesById[generation.subgraphInstanceId];
     const expansion = this.compiledExpansionForInstance(instance.subgraphInstanceId);
     const node = expansion.template.nodesByKey[generation.templateNodeKey];
-    const candidateEmissions = node.emissions.filter(emission => emission.claim === PROOF_CANDIDATE_CLAIM);
+    const candidateEmissions = node.emissions.filter(emission => isGovernedCandidateClaim(emission.claim));
+    const stagedCandidateEmission = candidateEmissions.some(emission => emission.claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM);
     const compiledWireMode = compiledManagedProofWireMode(generation, node);
     if (compiledWireMode === 'proof' || candidateEmissions.length > 0) {
       const terminal = prefix.filter(event => event.type === 'ManagedRunTerminated') as readonly any[];
@@ -3245,16 +3384,18 @@ export class ExecutionJournal {
     );
     const nestedExpansion = this.requireClaimPlan().expansionPlan!.byNestedOwner[nestedOwner];
     if (candidateEmissions.length > 0) {
-      if (input.executionConfigDigest !== generation.executionConfigDigest || generation.templateNodeKey !== 'inspect' || node.check.type !== 'governed-proof-inspect' || input.proofCandidateEvidence === undefined) {
+      if (input.executionConfigDigest !== generation.executionConfigDigest ||
+          (stagedCandidateEmission ? generation.templateNodeKey !== 'spec_review' : generation.templateNodeKey !== 'inspect') ||
+          node.check.type !== 'governed-proof-inspect' || input.proofCandidateEvidence === undefined) {
         throw new ClaimKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate completion requires governed inspect authority and an evidence sidecar');
       }
       try {
         const evidence = validateProofCandidateEvidence(input.proofCandidateEvidence);
         const candidateWireMode = governedWireModeFromEvidence(evidence);
         if (input.wireMode !== undefined && input.wireMode !== candidateWireMode) throw new Error('wire mode is detached from governed invocation');
-        const selector = isGovernedProofComponentSelector(node.check.invocation);
+        const selector = stagedCandidateEmission ? isGovernedProofSpecReviewSelector(node.check.invocation) : isGovernedProofComponentSelector(node.check.invocation);
         const invocation = evidence.role.invocation as Record<string, unknown>;
-        const selectorBound = selector && invocation.role_id === 'onboard' && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
+        const selectorBound = selector && invocation.role_id === (stagedCandidateEmission ? 'spec-review' : 'onboard') && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && (!stagedCandidateEmission || invocation.onboarding_stage !== undefined) && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
         if ((!selector && (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation))) || (selector && !selectorBound)) {
           throw new Error('evidence invocation is detached from compiled inspect config');
         }
@@ -3268,7 +3409,9 @@ export class ExecutionJournal {
             throw new Error('component invocation subject is detached from the exact WorkItem authority');
           }
         }
-        const expectedReinspection = selector ? this.getProofComponentReinspectionContext(generation.nodeGenerationId) : undefined;
+        const expectedStage = stagedCandidateEmission ? this.getProofComponentOnboardingStageContext(generation.nodeGenerationId) : undefined;
+        if (stagedCandidateEmission && canonicalJson((invocation as Record<string, unknown>).onboarding_stage) !== canonicalJson(expectedStage)) throw new Error('onboarding stage context is detached from the exact journal lineage');
+        const expectedReinspection = selector && !stagedCandidateEmission ? this.getProofComponentReinspectionContext(generation.nodeGenerationId) : undefined;
         const actualReinspection = evidence.reinspectionContext;
         if ((expectedReinspection === undefined) !== (actualReinspection === undefined) ||
             (expectedReinspection && (!actualReinspection || canonicalJson(expectedReinspection) !== canonicalJson(actualReinspection) || evidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(expectedReinspection)))) {
@@ -3312,7 +3455,7 @@ export class ExecutionJournal {
       : undefined;
     for (const emission of node.emissions) {
       this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
-      const proofCandidateEmission = emission.claim === PROOF_CANDIDATE_CLAIM;
+      const proofCandidateEmission = isGovernedCandidateClaim(emission.claim);
       const wireMode: GovernedWireMode = proofCandidateEmission ? (candidateWireMode || 'generic') : compiledWireMode;
       const immutablePayload = immutableGovernedValue(payload, wireMode);
       const payloadFingerprint = governedPayloadFingerprint(payload, wireMode);
@@ -3332,10 +3475,10 @@ export class ExecutionJournal {
         claimId: sha256Canonical({ claim: emission.claim, payloadFingerprint,
           producerCheckId: attempt.checkId, scope: attempt.scope, attemptId: attempt.attemptId,
           fence: attempt.fence, parentClaimIds,
-          ...(emission.claim === PROOF_CANDIDATE_CLAIM
+          ...(isGovernedCandidateClaim(emission.claim)
             ? { proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(input.proofCandidateEvidence) }
             : {}) }),
-        ...(emission.claim === PROOF_CANDIDATE_CLAIM
+        ...(isGovernedCandidateClaim(emission.claim)
           ? { proofCandidateEvidence: immutableProofCandidateEvidence(input.proofCandidateEvidence), proofCandidateEvidenceFingerprint: proofCandidateEvidenceFingerprint(input.proofCandidateEvidence) }
           : {}),
       };
@@ -3519,10 +3662,17 @@ export class ExecutionJournal {
     stage({ ...attempt, type: 'AttemptCompleted',
       eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1 });
     const completedProjection = reduceInstanceEventBatch(before, events);
-    if (generation.templateNodeKey === PROOF_ADMIT_NODE_KEY) {
+    if (generation.templateNodeKey === PROOF_ADMIT_NODE_KEY || generation.templateNodeKey === 'spec_review_admit') {
       const inspectNode = expansion.template.nodesByKey.inspect;
-      if (inspectNode && inspectNode.check.type === 'governed-proof-inspect' && isGovernedProofComponentSelector(inspectNode.check.invocation)) {
-        validateComponentChildAdmission(completedProjection, instance.subgraphInstanceId, true);
+      if (inspectNode && inspectNode.check.type === 'governed-proof-inspect' &&
+          (isGovernedProofComponentSelector(inspectNode.check.invocation) || isGovernedProofSpecReviewSelector(inspectNode.check.invocation))) {
+        validateComponentAdmissionProtocol(
+          completedProjection,
+          instance.subgraphInstanceId,
+          generation.templateNodeKey === 'spec_review_admit' ? 'spec_review' : 'legacy',
+          true,
+          nodeGenerationId => this.getProofAdmissionRequest(nodeGenerationId),
+        );
       }
     }
     return {

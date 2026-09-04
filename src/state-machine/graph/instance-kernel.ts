@@ -10,6 +10,7 @@ import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_ADMIT_NODE_KEY,
   PROOF_CANDIDATE_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_PROJECT_RECONCILE_NODE_KEY,
   PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
@@ -20,8 +21,12 @@ import {
   validateProofCandidateEvidence,
   type ProofCandidateEvidenceV1,
 } from '../../providers/governed-proof-inspect-check-provider';
-import { validateProofCurrentCatalogAuthorityBytes } from '../../providers/proof-catalog-check-providers';
+import {
+  validateProofComponentCandidateAdmissionBinding,
+  validateProofCurrentCatalogAuthorityBytes,
+} from '../../providers/proof-catalog-check-providers';
 import type { CandidateClaimInput } from '../../providers/check-provider.interface';
+import { PROOF_ADMISSION_WIRE_FIELD, proofComponentCandidateEnvelopeJson, validateOnboardingStageContext } from '../../providers/proof-admission-cli-child';
 import {
   governedCanonicalJson,
   governedPayloadFingerprint,
@@ -32,6 +37,10 @@ import {
   proofCandidateEvidenceFingerprint,
   type GovernedWireMode,
 } from '../../providers/proof-wire';
+
+function isGovernedCandidateClaim(claim: string): boolean {
+  return claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM;
+}
 
 export interface IndexedScopeSegment {
   readonly kind: 'indexed';
@@ -2388,8 +2397,12 @@ function reduceGeneratedLifecycle(
         throw new InstanceKernelError('MANAGED_TERMINAL_REQUIRED', 'Proof publications require a clean managed terminal');
       }
     }
-    if (event.claim === PROOF_CANDIDATE_CLAIM) {
-      if (generation.templateNodeKey !== 'inspect' || event.checkId !== 'inspect' || event.proofCandidateEvidence === undefined || typeof event.proofCandidateEvidenceFingerprint !== 'string' || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
+    if (isGovernedCandidateClaim(event.claim)) {
+      const stagedCandidate = event.claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM;
+      if ((stagedCandidate
+        ? generation.templateNodeKey !== 'spec_review' || event.checkId !== 'spec_review'
+        : generation.templateNodeKey !== 'inspect' || event.checkId !== 'inspect') ||
+          event.proofCandidateEvidence === undefined || typeof event.proofCandidateEvidenceFingerprint !== 'string' || event.proofCandidateEvidenceFingerprint !== proofCandidateEvidenceFingerprint(event.proofCandidateEvidence)) {
         throw new InstanceKernelError('INVALID_PROOF_EVIDENCE', 'Proof candidate publication requires its exact evidence sidecar');
       }
       try {
@@ -2399,16 +2412,56 @@ function reduceGeneratedLifecycle(
           .map(claimId => projection.claimsById[claimId])
           .filter((claim): claim is NonNullable<typeof claim> => claim !== undefined);
         if (parentClaims.length !== generation.activeInputClaimIds.length) throw new Error('activated parent claim is missing');
-        validateGovernedProofRuntimeContextAgainstClaims(evidence, parentClaims, {
-          managedRunId: 'kernel-validation',
-          sessionId: event.sessionId,
-          checkId: event.checkId,
-          scope: event.scope,
-          nodeInstanceId: event.nodeInstanceId,
-          nodeGenerationId: event.nodeGenerationId,
-          attemptId: event.attemptId,
-          fence: event.fence,
-        });
+        if (stagedCandidate) {
+          const invocation = evidence.role.invocation as Record<string, unknown>;
+          if (invocation.role_id !== 'spec-review' || invocation.stance !== 'owner' ||
+              invocation.onboarding_stage === undefined || !invocation.component_authority) throw new Error('staged candidate invocation is not the exact spec-review selector');
+          const component = parentClaims.find(claim => claim.claim === 'component.work_item@1');
+          const candidate = parentClaims.find(claim => claim.claim === PROOF_CANDIDATE_CLAIM);
+          const admission = parentClaims.find(claim => claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+          if (parentClaims.length !== 3 || !component || !candidate || !admission ||
+              new Set(parentClaims.map(claim => claim.claimId)).size !== 3 ||
+              parentClaims.some(claim => !claim.active || claim.subgraphInstanceId !== generation.subgraphInstanceId || canonicalJson(claim.scope) !== canonicalJson(generation.scope)) ||
+              component.kind !== 'controller-item' || candidate.kind !== 'generated-output' || admission.kind !== 'generated-output' ||
+              component.parentClaimIds.length !== 1 || admission.parentClaimIds.length !== 1 || admission.parentClaimIds[0] !== candidate.claimId ||
+              candidate.producerCheckId !== 'inspect' || admission.producerCheckId !== PROOF_ADMIT_NODE_KEY) throw new Error('staged candidate parent lineage is invalid');
+          const componentInstance = projection.instancesById[generation.subgraphInstanceId];
+          let componentOwner: unknown;
+          try { componentOwner = JSON.parse(component.producerCheckId); } catch { componentOwner = undefined; }
+          if (!Array.isArray(componentOwner) || componentOwner.length !== 2 || typeof componentOwner[0] !== 'string' || componentOwner[0].length === 0 || componentOwner[1] !== 'materialize_catalog' || component.producerCheckId !== componentInstance?.expansionOwnerCheck) throw new Error('staged component owner is not the exact materialize_catalog expansion');
+          const stage = validateOnboardingStageContext(invocation.onboarding_stage);
+          if (typeof stage.prior_candidate !== 'string' || typeof stage.prior_admission !== 'string' ||
+              stage.prior_admission_claim_id !== admission.claimId || stage.prior_admission_payload_fingerprint !== admission.payloadFingerprint) throw new Error('staged candidate predecessor context is detached');
+          const priorEnvelope = JSON.parse(stage.prior_candidate) as Record<string, unknown>;
+          const publication = priorEnvelope.Publication as Record<string, unknown>;
+          const admissionPayload = admission.payload as Record<string, unknown>;
+          if (proofComponentCandidateEnvelopeJson(priorEnvelope) !== stage.prior_candidate ||
+              publication?.ClaimID !== candidate.claimId || publication.Claim !== candidate.claim ||
+              publication.PayloadFingerprint !== candidate.payloadFingerprint ||
+              canonicalJson(publication.ParentClaimIDs) !== canonicalJson(candidate.parentClaimIds) ||
+              admissionPayload[PROOF_ADMISSION_WIRE_FIELD] !== stage.prior_admission) throw new Error('staged candidate predecessor wire is detached');
+          const componentPayload = component.payload as Record<string, unknown>;
+          const componentSubject = componentPayload.proof_component_subject as Record<string, unknown>;
+          const compactAuthority = componentPayload.authority as Record<string, unknown>;
+          const invocationSubject = invocation.subject as Record<string, unknown>;
+          const invocationAuthority = invocation.component_authority as Record<string, unknown>;
+          if (!componentPayload || !componentSubject || !compactAuthority || !invocationSubject || !invocationAuthority ||
+              canonicalJson(invocationSubject) !== canonicalJson({ kind: 'component', id: componentPayload.component_id, fingerprint: componentSubject.fingerprint }) ||
+              !invocationAuthority.subject || canonicalJson(invocationAuthority.subject) !== canonicalJson(componentSubject) ||
+              invocationAuthority.work_item_digest !== compactAuthority.work_item_digest) throw new Error('staged candidate component authority is detached');
+          validateProofComponentCandidateAdmissionBinding(currentAuthorityClaimView(candidate), currentAuthorityClaimView(admission));
+        } else {
+          validateGovernedProofRuntimeContextAgainstClaims(evidence, parentClaims, {
+            managedRunId: 'kernel-validation',
+            sessionId: event.sessionId,
+            checkId: event.checkId,
+            scope: event.scope,
+            nodeInstanceId: event.nodeInstanceId,
+            nodeGenerationId: event.nodeGenerationId,
+            attemptId: event.attemptId,
+            fence: event.fence,
+          });
+        }
         const payloadJson = governedCanonicalJson(event.payload, event.wireMode);
         const identity = event.proofCandidateEvidence.probe.resultIdentity;
         if (identity.resultDigest !== governedResultDigest(event.payload, event.wireMode) || identity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) throw new Error('result identity is detached from canonical claim payload');
@@ -2427,7 +2480,7 @@ function reduceGeneratedLifecycle(
       attemptId: event.attemptId,
       fence: event.fence,
       parentClaimIds: [...event.parentClaimIds].sort(),
-      ...(event.claim === PROOF_CANDIDATE_CLAIM ? { proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint as string } : {}),
+      ...(isGovernedCandidateClaim(event.claim) ? { proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint as string } : {}),
     };
     const claimId = sha256Canonical(claimIdentity);
     if (claimId !== event.claimId || projection.claimsById[event.claimId]) {
@@ -2449,7 +2502,7 @@ function reduceGeneratedLifecycle(
       subgraphInstanceId: instance.subgraphInstanceId,
       incarnation: generation.incarnation,
       nodeGenerationId: generation.nodeGenerationId,
-      ...(event.claim === PROOF_CANDIDATE_CLAIM ? {
+      ...(isGovernedCandidateClaim(event.claim) ? {
         proofCandidateEvidence: immutableProofCandidateEvidence(event.proofCandidateEvidence),
         proofCandidateEvidenceFingerprint: event.proofCandidateEvidenceFingerprint,
       } : {}),

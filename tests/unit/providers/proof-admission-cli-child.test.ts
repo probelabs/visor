@@ -13,6 +13,8 @@ import {
   PROOF_C0_REQUEST_MAX_BYTES,
   PROOF_ONBOARDING_STAGE_MAX_BYTES,
   proofOnboardingStageContextJson,
+  proofCandidateAdmissionRequestJson,
+  proofComponentCandidateEnvelopeJson,
   createProofAdmissionCliChildForFocusedTest,
   extractProofAdmissionCandidate,
   proofExecutableAvailable,
@@ -166,11 +168,11 @@ function request(candidate: Record<string, unknown>) {
 
 function managedRequest(candidateClaim: Record<string, unknown> = {
   claimId: '6'.repeat(64), claim: 'proof.candidate@1', payload: { a: 1 },
-  payloadFingerprint: '7'.repeat(64), producerCheckId: 'inspect', scope: binding.scope,
+  payloadFingerprint: '7'.repeat(64), producerCheckId: 'inspect', scope: binding.scope, wireMode: 'generic',
   parentClaimIds: ['8'.repeat(64)], provenance: 'attempt', attemptId: binding.attemptId, fence: binding.fence,
 }): any {
   return {
-    prInfo: {}, checkConfig: { type: 'proof-admit' },
+    prInfo: {}, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
     dependencyResults: new Map([['inspect', { output: { a: 1 } }]]),
     executionContext: { claims: { candidate: candidateClaim } }, binding,
     executionConfigDigest: '6'.repeat(64), workingDirectory: '/tmp',
@@ -199,7 +201,9 @@ function wireDigest(domain: string, value: string): string {
 
 function admissionDecision(order: 'legacy' | 'canonical' | 'permuted', value = candidate()): string {
   const publication = value.Publication as Record<string, unknown>;
-  const candidateBytes = goCompatibleProofJson(value);
+  const candidateBytes = Object.prototype.hasOwnProperty.call(value.Invocation, 'component_authority')
+    ? proofComponentCandidateEnvelopeJson(value)
+    : goCompatibleProofJson(value);
   const subject = value.Subject as Record<string, unknown>;
   const bindingValue = value.Binding as Record<string, unknown>;
   const terminationValue = value.Termination as Record<string, unknown>;
@@ -250,6 +254,42 @@ function stagedRequest(stage = onboardingStage()): Record<string, unknown> {
 
 function stagedResponse(requestValue: Record<string, unknown>, stage: unknown = requestValue.onboarding_stage): Record<string, unknown> {
   return { version: 'proof.role-invocation/v1', role_id: requestValue.role_id, role_source: 'fixture', stance: requestValue.stance, subject: requestValue.subject, component_authority: requestValue.component_authority, onboarding_stage: stage, authority: {}, output_schema_id: requestValue.output_schema_id, output_schema: requestValue.output_schema, output_schema_digest: `sha256:${'a'.repeat(64)}`, instructions: 'fixture instructions', role_text_digest: `sha256:${'b'.repeat(64)}`, invocation_digest: `sha256:${'c'.repeat(64)}` };
+}
+
+function stagedCandidate(): Record<string, unknown> {
+  const prior = candidate();
+  const authority = componentAuthority();
+  const subject = authority.subject;
+  const componentInvocation = { role_id: 'onboard', stance: 'owner', subject: { kind: 'component', id: 'alpha', fingerprint: (subject as Record<string, unknown>).fingerprint }, component_authority: authority, output_schema_id: 'reqproof.component-onboarding/v1', output_schema: Buffer.from('{"type":"object"}').toString('base64') };
+  Object.assign(prior, { Invocation: componentInvocation, Subject: componentInvocation.subject });
+  const priorWire = proofComponentCandidateEnvelopeJson(prior);
+  const priorAdmission = admissionDecision('legacy', prior);
+  const stage = onboardingStage(priorWire, priorAdmission);
+  const value = JSON.parse(JSON.stringify(prior)) as Record<string, unknown>;
+  const binding = value.Binding as Record<string, unknown>;
+  const publication = value.Publication as Record<string, unknown>;
+  const termination = value.Termination as Record<string, unknown>;
+  const invocation = { ...componentInvocation, role_id: 'spec-review', onboarding_stage: stage };
+  Object.assign(value, { Invocation: invocation, RoleID: 'spec-review', Subject: invocation.subject });
+  Object.assign(binding, { ManagedRunID: 'c'.repeat(64), CheckID: 'spec_review', NodeInstanceID: 'd'.repeat(64), NodeGenerationID: 'e'.repeat(64), AttemptID: 'f'.repeat(64) });
+  Object.assign(publication, { ClaimID: 'b'.repeat(64), Claim: 'proof.component_spec_review_candidate@1', CheckID: 'spec_review', ProducerCheckID: 'spec_review', NodeInstanceID: binding.NodeInstanceID, NodeGenerationID: binding.NodeGenerationID, AttemptID: binding.AttemptID, ParentClaimIDs: ['6'.repeat(64), 'a'.repeat(64)] });
+  Object.assign(termination, { Scope: binding.Scope, Binding: { ...binding, Scope: binding.Scope } });
+  return value;
+}
+
+function stagedManagedRequest(): any {
+  const value = stagedCandidate();
+  return {
+    ...managedRequest({
+      claimId: 'b'.repeat(64), claim: 'proof.component_spec_review_candidate@1', payload: { a: 1 },
+      payloadFingerprint: '7'.repeat(64), producerCheckId: 'spec_review', scope: binding.scope, wireMode: 'generic',
+      parentClaimIds: ['6'.repeat(64), 'a'.repeat(64)], provenance: 'attempt', attemptId: 'f'.repeat(64), fence: 1,
+    }),
+    binding: { ...binding, checkId: 'spec_review_admit' },
+    checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.component_spec_review_candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.component_spec_review_admitted_receipt@1', from: 'output' }] },
+    dependencyResults: new Map([['spec_review', { output: { stage: true } }]]),
+    proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: value }),
+  };
 }
 
 async function c0RequestLimitCase(staged: boolean, plusOne: boolean): Promise<void> {
@@ -531,6 +571,94 @@ describe('Proof admission CLI child', () => {
         expect(label).toBeTruthy();
       }
     });
+  });
+
+  it('accepts compiled admission bindings and rejects their closed-shape drift before spawn', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const compiledLegacy = { ...managedRequest(), checkConfig: { type: 'proof-admit', consumes: [{ as: 'candidate', claim: 'proof.candidate@1', cardinality: 'one' }], emits: [{ from: 'output', claim: 'proof.admitted_receipt@1' }] } };
+      const compiledStaged = { ...stagedManagedRequest(), checkConfig: { type: 'proof-admit', consumes: [{ cardinality: 'one', as: 'candidate', claim: 'proof.component_spec_review_candidate@1' }], emits: [{ claim: 'proof.component_spec_review_admitted_receipt@1', from: 'output' }] } };
+      for (const [input, decision] of [[compiledLegacy, admissionDecision('legacy')], [compiledStaged, admissionDecision('legacy', stagedCandidate())]] as const) {
+        const child = fakeChild(42200 + spawn.mock.calls.length); const group = mockProcessGroup(child); spawn.mockReturnValueOnce(child);
+        (child.stdin.end as jest.Mock).mockImplementation((_wire: string, _encoding: string, callback: () => void) => { child.stdout.emit('data', Buffer.from(`${decision}\n`, 'utf8')); callback(); group.setAlive(false); completeFakeChild(child); });
+        const run = module.createProofAdmitProviderForFocusedTest(path).startManaged(input);
+        child.emit('spawn'); await expect(run.started).resolves.toMatchObject({ kind: 'started' }); await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded' }); await expect(run.close()).resolves.toMatchObject({ status: 'clean' }); group.kill.mockRestore();
+      }
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const invalids = [
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, consumes: [{ claim: 'proof.candidate@1', as: 'candidate', cardinality: undefined }] } },
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, consumes: [{ claim: 'proof.candidate@1', as: 'candidate', extra: true }] } },
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, consumes: [...compiledLegacy.checkConfig.consumes, { claim: 'proof.candidate@1', as: 'other' }] } },
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, emits: [...compiledLegacy.checkConfig.emits, { claim: 'other@1', from: 'output' }] } },
+        { ...compiledLegacy, proofAdmissionRequest: compiledStaged.proofAdmissionRequest },
+      ];
+      for (const input of invalids) expect(() => module.createProofAdmitProviderForFocusedTest(path).startManaged(input)).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+      expect(spawn).toHaveBeenCalledTimes(2);
+    }));
+  });
+
+  it('admits only the sealed spec-review candidate protocol', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const child = fakeChild(42006); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+      const input = stagedManagedRequest();
+      const decision = admissionDecision('legacy', stagedCandidate());
+      (child.stdin.end as jest.Mock).mockImplementation((_wire: string, _encoding: string, callback: () => void) => {
+        child.stdout.emit('data', Buffer.from(`${decision}\n`, 'utf8')); callback(); group.setAlive(false); completeFakeChild(child);
+      });
+      try {
+        const run = module.createProofAdmitProviderForFocusedTest(path).startManaged(input);
+        child.emit('spawn');
+        await expect(run.started).resolves.toMatchObject({ kind: 'started', binding: input.binding });
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded', summary: { output: expect.objectContaining({ Claim: 'proof.component_spec_review_candidate@1' }) } });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
+      } finally { group.kill.mockRestore(); }
+    }));
+  });
+
+  it('rejects sealed spec-review protocol drift before child spawn', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const cases: Array<[string, any]> = [
+        ['dependency', { dependencyResults: new Map([['inspect', {}]]) }],
+        ['alias', { executionContext: { claims: { candidate: stagedManagedRequest().executionContext.claims.candidate, other: {} } } }],
+        ['producer', { executionContext: { claims: { candidate: { ...stagedManagedRequest().executionContext.claims.candidate, producerCheckId: 'inspect' } } } }],
+        ['type', { checkConfig: { type: 'managed' } }],
+      ];
+      const malformed = stagedCandidate();
+      (malformed.Publication as Record<string, unknown>).ParentClaimIDs = ['a'.repeat(64), '6'.repeat(64)];
+      cases.push(['parents', { proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: malformed }) }]);
+      const substitution = stagedCandidate();
+      (substitution.Publication as Record<string, unknown>).ClaimID = 'c'.repeat(64);
+      cases.push(['same-protocol substitution', { proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: substitution }) }]);
+      const detached = stagedCandidate();
+      (detached.Invocation as Record<string, unknown>).onboarding_stage = { ...(detached.Invocation as Record<string, unknown>).onboarding_stage as Record<string, unknown>, prior_admission_claim_id: 'c'.repeat(64) };
+      cases.push(['predecessor evidence', { proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: detached }) }]);
+      for (const [label, change] of cases) {
+        expect(() => module.createProofAdmitProviderForFocusedTest(path).startManaged({ ...stagedManagedRequest(), ...change })).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+        expect(label).toBeTruthy();
+      }
+      expect(spawn).not.toHaveBeenCalled();
+    }));
+  });
+
+  it('rejects legacy signed-zero payload substitution before child spawn', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const wireValue = stagedCandidate();
+      const invocation = wireValue.Invocation as Record<string, unknown>;
+      delete invocation.onboarding_stage;
+      Object.assign(invocation, { role_id: 'onboard', output_schema_id: 'proof.component-catalog-candidate@1' });
+      wireValue.RoleID = 'onboard';
+      const bindingValue = wireValue.Binding as Record<string, unknown>;
+      Object.assign(bindingValue, { CheckID: 'inspect' });
+      const publication = wireValue.Publication as Record<string, unknown>;
+      Object.assign(publication, { CheckID: 'inspect', Claim: 'proof.candidate@1', ProducerCheckID: 'inspect' });
+      const termination = wireValue.Termination as Record<string, unknown>;
+      Object.assign(termination, { Binding: { ...bindingValue, Scope: bindingValue.Scope } });
+      const payload = Buffer.from('{"a":-0}', 'utf8').toString('base64');
+      Object.assign(wireValue, { ProbeResultBytes: payload, VisorPayloadBytes: payload, CanonicalBytes: Buffer.from('{"a":-0}', 'utf8').length });
+      const claim = { ...managedRequest().executionContext.claims.candidate, claimId: publication.ClaimID, payload: { a: 0 }, wireMode: 'proof' };
+      const input = { ...managedRequest(claim), proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: wireValue }) };
+      expect(() => module.createProofAdmitProviderForFocusedTest(path).startManaged(input)).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+      expect(spawn).not.toHaveBeenCalled();
+    }));
   });
 
   it('accepts the controller map shell and reaches the child without serializing dependencies', async () => {
