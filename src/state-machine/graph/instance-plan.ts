@@ -24,6 +24,9 @@ const CONTROLLER_TIMEOUT_MAX = 2147483647;
 /** Reserved EXP-0205 admission profile identifiers. */
 export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
 export const PROOF_ADMITTED_RECEIPT_CLAIM = 'proof.admitted_receipt@1';
+/** Reserved only for the opt-in staged component spec-review profile. */
+export const PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM = 'proof.component_spec_review_candidate@1';
+export const PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM = 'proof.component_spec_review_admitted_receipt@1';
 /** Reserved only for the opt-in discovery-admission egress suffix. */
 export const PROOF_CATALOG_REVALIDATION_CLAIM = 'proof.catalog_revalidation@1';
 export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
@@ -147,7 +150,13 @@ function componentSelectorTemplateBindingAllowed(inputName: string | undefined, 
     consumption.claim === 'component.work_item@1' && consumption.as === 'component';
 }
 
-function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false): void {
+function isGovernedProofSpecReviewSelector(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || !hasExactKeys(value, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'])) return false;
+  const record = value as Record<string, unknown>, subject = record.subject;
+  return record.role_id === 'spec-review' && record.stance === 'owner' && !!subject && typeof subject === 'object' && !Array.isArray(subject) && Object.getPrototypeOf(subject) === Object.prototype && hasExactKeys(subject, ['kind']) && (subject as Record<string, unknown>).kind === 'component' && validVisible(record.output_schema_id, 128) && typeof record.output_schema === 'string';
+}
+
+function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false, specReviewSelectorAllowed = false): void {
   const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
   if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
   if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
@@ -161,6 +170,15 @@ function validateGovernedInspectConfig(name: string, check: CheckConfig, compone
     let selectorSchema: unknown;
     try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'component selector output schema is not JSON'); }
     if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'component selector output schema is invalid');
+    return;
+  }
+  if (specReviewSelectorAllowed && isGovernedProofSpecReviewSelector(record.invocation)) {
+    if (['message', 'instructions', 'invocation_digest', 'result_schema'].some(key => hasOwn(record, key))) rejectReservedProfile(name, 'spec-review selector cannot author resolved Proof fields');
+    const selectorInvocation = record.invocation as Record<string, unknown>;
+    const decodedSelectorSchema = decodeGovernedSchema(selectorInvocation.output_schema);
+    let selectorSchema: unknown;
+    try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'spec-review selector output schema is not JSON'); }
+    if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'spec-review selector output schema is invalid');
     return;
   }
   if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
@@ -321,6 +339,10 @@ function claimList(check: CheckConfig, field: 'emits' | 'consumes'): string[] {
   return (check[field] || []).map(declaration => declaration.claim).sort();
 }
 
+function claimBindings(check: CheckConfig): string[] {
+  return (check.consumes || []).map(declaration => JSON.stringify([declaration.claim, declaration.as])).sort();
+}
+
 function validateCatalogEgressConfig(
   templateName: string,
   nodeKey: string,
@@ -356,10 +378,14 @@ function validateReservedProofAdmissionTemplate(
   nodeKeys: readonly string[],
   resolvedChecks: Readonly<Record<string, CheckConfig>>,
   consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
   topology: readonly string[],
   authority: ExpansionCompileAuthority
 ): void {
-  const triggered = nodeKeys.some(nodeKey => {
+  const stagedClaims = [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM];
+  const reservedClaims = [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM, PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM, ...stagedClaims];
+  const staged = nodeKeys.includes('spec_review') || nodeKeys.includes('spec_review_admit') || stagedClaims.some(claim => nodeKeys.some(nodeKey => claimList(resolvedChecks[nodeKey], 'emits').includes(claim) || claimList(resolvedChecks[nodeKey], 'consumes').includes(claim)));
+  const triggered = staged || nodeKeys.some(nodeKey => {
     const check = resolvedChecks[nodeKey];
     return (
       check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
@@ -368,10 +394,10 @@ function validateReservedProofAdmissionTemplate(
       check.type === PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE ||
       check.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE ||
       claimList(check, 'emits').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM || claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM
+        claim => reservedClaims.includes(claim)
       ) ||
       claimList(check, 'consumes').some(
-        claim => claim === PROOF_CANDIDATE_CLAIM || claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CATALOG_REVALIDATION_CLAIM || claim === PROOF_STRUCTURAL_INVENTORY_CLAIM || claim === PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM
+        claim => reservedClaims.includes(claim)
       )
     );
   });
@@ -383,14 +409,16 @@ function validateReservedProofAdmissionTemplate(
   if (!hasOwn(authority.claimTypes, PROOF_ADMITTED_RECEIPT_CLAIM)) {
     rejectReservedProfile(name, `missing ${PROOF_ADMITTED_RECEIPT_CLAIM} declaration`);
   }
+  if (staged) for (const claim of stagedClaims) if (!hasOwn(authority.claimTypes, claim)) rejectReservedProfile(name, `missing ${claim} declaration`);
   if (
-    inputClaim === PROOF_CANDIDATE_CLAIM ||
-    inputClaim === PROOF_ADMITTED_RECEIPT_CLAIM
+    reservedClaims.includes(inputClaim)
   ) {
     rejectReservedProfile(name, 'a reserved claim cannot be the template input');
   }
 
   const hasCatalogEgress = nodeKeys.includes('revalidate_catalog') || nodeKeys.includes('materialize_catalog');
+  if (staged && hasCatalogEgress) rejectReservedProfile(name, 'staged component profile cannot use catalog egress');
+  if (staged && (inputName !== 'component' || inputClaim !== 'component.work_item@1')) rejectReservedProfile(name, 'staged component profile requires the component work item input');
   const hasProjectReconciliation = nodeKeys.includes(PROOF_PROJECT_RECONCILE_NODE_KEY);
   const expectedNodes = hasCatalogEgress
     ? [
@@ -402,7 +430,7 @@ function validateReservedProofAdmissionTemplate(
         'materialize_catalog',
         ...(hasProjectReconciliation ? [PROOF_PROJECT_RECONCILE_NODE_KEY] : []),
       ]
-    : ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
+    : staged ? ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit', 'verify'] : ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
   const expectedNodeKeys = [...expectedNodes].sort();
   if (nodeKeys.length !== expectedNodeKeys.length || nodeKeys.some((key, index) => key !== expectedNodeKeys[index])) {
     rejectReservedProfile(name, `expected exactly the nodes ${expectedNodes.join(', ')}`);
@@ -414,7 +442,8 @@ function validateReservedProofAdmissionTemplate(
   for (const nodeKey of nodeKeys) {
     const check = resolvedChecks[nodeKey];
     if (hasOwn(check, 'expand') && nodeKey !== 'materialize_catalog') rejectReservedProfile(name, `${nodeKey} cannot use check.expand`);
-    if (nodeKey !== PROOF_ADMIT_NODE_KEY && check.type === PROOF_ADMIT_PROVIDER_TYPE) {
+    const admissionNode = nodeKey === PROOF_ADMIT_NODE_KEY || (staged && nodeKey === 'spec_review_admit');
+    if (!admissionNode && check.type === PROOF_ADMIT_PROVIDER_TYPE) {
       rejectReservedProfile(name, `provider type ${PROOF_ADMIT_PROVIDER_TYPE} is only valid at ${PROOF_ADMIT_NODE_KEY}`);
     }
   }
@@ -451,16 +480,42 @@ function validateReservedProofAdmissionTemplate(
     rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must consume only ${PROOF_CANDIDATE_CLAIM}`);
   }
 
+  if (staged) {
+    const expectedDependencies: Readonly<Record<string, readonly string[]>> = {
+      inspect: [], [PROOF_ADMIT_NODE_KEY]: ['inspect'], spec_review: ['inspect', PROOF_ADMIT_NODE_KEY],
+      spec_review_admit: ['spec_review'], verify: ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit'],
+    };
+    for (const [nodeKey, expected] of Object.entries(expectedDependencies)) {
+      if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) rejectReservedProfile(name, `staged profile has unexpected dependencies for ${nodeKey}`);
+    }
+    const specReview = resolvedChecks.spec_review;
+    if (specReview.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) rejectReservedProfile(name, 'spec_review must use the governed Proof inspect provider');
+    if (!isGovernedProofSpecReviewSelector(specReview.invocation)) rejectReservedProfile(name, 'spec_review must use the builtin spec-review component invocation selector');
+    validateGovernedInspectConfig(name, specReview, false, true);
+    if (claimList(specReview, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM) rejectReservedProfile(name, `spec_review must emit only ${PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM}`);
+    if (claimBindings(specReview).join('\0') !== [
+      ['component.work_item@1', 'component'], [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'admission'],
+    ].map(value => JSON.stringify(value)).sort().join('\0')) rejectReservedProfile(name, 'spec_review must consume the component work item, original candidate, and admission with exact bindings');
+    const specReviewAdmit = resolvedChecks.spec_review_admit;
+    if (specReviewAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE) rejectReservedProfile(name, `spec_review_admit must have type ${PROOF_ADMIT_PROVIDER_TYPE}`);
+    if (claimList(specReviewAdmit, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM) rejectReservedProfile(name, `spec_review_admit must emit only ${PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM}`);
+    if (claimBindings(specReviewAdmit).join('\0') !== JSON.stringify([PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'candidate'])) rejectReservedProfile(name, `spec_review_admit must consume only ${PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM} as candidate`);
+  }
+
   const verify = resolvedChecks.verify;
   if (verify.type === PROOF_ADMIT_PROVIDER_TYPE) {
     rejectReservedProfile(name, 'verify cannot use the proof admission provider');
   }
   if (
     claimList(verify, 'emits').length !== 0 ||
-    claimList(verify, 'consumes').join('\0') !==
-      [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')
+    (staged
+      ? claimBindings(verify).join('\0') !== [
+          [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'receipt'],
+          [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'spec_candidate'], [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, 'spec_receipt'],
+        ].map(value => JSON.stringify(value)).sort().join('\0')
+      : claimList(verify, 'consumes').join('\0') !== [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0'))
   ) {
-    rejectReservedProfile(name, 'verify must consume both reserved claims and emit none');
+    rejectReservedProfile(name, staged ? 'verify must consume both candidate/admission pairs and emit none' : 'verify must consume both reserved claims and emit none');
   }
 
   // Keep this assertion close to the profile so future changes cannot make
@@ -660,7 +715,7 @@ function compileTemplate(
       );
     }
     if (check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
-      validateGovernedInspectConfig(name, check, componentSelectorTemplateBindingAllowed(inputName, inputClaim, check));
+      validateGovernedInspectConfig(name, check, componentSelectorTemplateBindingAllowed(inputName, inputClaim, check), nodeKey === 'spec_review');
     }
     for (const field of ['emits', 'consumes'] as const) {
       if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {
@@ -794,6 +849,7 @@ function compileTemplate(
     nodeKeys,
     resolvedChecks,
     consumptionsByNode,
+    dependencies,
     topology,
     authority
   );

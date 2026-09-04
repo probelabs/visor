@@ -4,6 +4,8 @@ import {
   PROOF_ADMIT_PROVIDER_TYPE,
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM,
   qualifiedNestedExpansionOwner,
   resolveJsonPointer,
 } from '../../../../src/state-machine/graph/instance-plan';
@@ -107,6 +109,50 @@ function proofAdmissionConfig(): any {
       ],
     },
   };
+  return value;
+}
+
+function stagedProofAdmissionConfig(): any {
+  const value = proofAdmissionConfig();
+  value.claim_types['component.work_item@1'] = { schema: { type: 'object' } };
+  value.subgraphs['onboard-component'].input.claim = 'component.work_item@1';
+  value.checks.discover.expand.item_claim = 'component.work_item@1';
+  Object.assign(value.claim_types, {
+    [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM]: { schema: { type: 'object' } },
+    [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM]: { schema: { type: 'object' } },
+  });
+  const checks = value.subgraphs['onboard-component'].checks;
+  checks.inspect.consumes = [{ claim: 'component.work_item@1', as: 'component' }];
+  checks.inspect.invocation = {
+    role_id: 'onboard',
+    stance: 'owner',
+    subject: { kind: 'component' },
+    output_schema_id: 'proof-result',
+    output_schema: checks.inspect.invocation.output_schema,
+  };
+  delete checks.inspect.message;
+  delete checks.inspect.instructions;
+  delete checks.inspect.invocation_digest;
+  delete checks.inspect.result_schema;
+  checks.spec_review = {
+    ...checks.inspect,
+    invocation: { ...checks.inspect.invocation, role_id: 'spec-review' },
+    consumes: [
+      { claim: 'component.work_item@1', as: 'component' },
+      { claim: PROOF_CANDIDATE_CLAIM, as: 'candidate' },
+      { claim: PROOF_ADMITTED_RECEIPT_CLAIM, as: 'admission' },
+    ],
+    emits: [{ claim: PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, from: 'output' }],
+  };
+  checks.spec_review_admit = {
+    ...checks.proof_admit,
+    consumes: [{ claim: PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, as: 'candidate' }],
+    emits: [{ claim: PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, from: 'output' }],
+  };
+  checks.verify.consumes.push(
+    { claim: PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, as: 'spec_candidate' },
+    { claim: PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, as: 'spec_receipt' },
+  );
   return value;
 }
 
@@ -217,6 +263,49 @@ describe('Graph v2 C2 expansion plan', () => {
     expect(template.emitterByClaim).toMatchObject({
       [PROOF_CANDIDATE_CLAIM]: 'inspect', [PROOF_ADMITTED_RECEIPT_CLAIM]: 'proof_admit',
     });
+  });
+
+  it('compiles the exact staged component profile and producer/parent bindings', () => {
+    const template = compileClaimPlan(stagedProofAdmissionConfig()).expansionPlan.byOwner.discover.template;
+    expect(template.templateNodeKeys).toEqual(['inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify']);
+    expect(template.topology).toEqual(template.templateNodeKeys);
+    expect(template.emitterByClaim).toMatchObject({
+      [PROOF_CANDIDATE_CLAIM]: 'inspect',
+      [PROOF_ADMITTED_RECEIPT_CLAIM]: 'proof_admit',
+      [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM]: 'spec_review',
+      [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM]: 'spec_review_admit',
+    });
+    expect(template.nodesByKey.spec_review.check.invocation).toMatchObject({ role_id: 'spec-review', stance: 'owner', subject: { kind: 'component' } });
+    expect(template.nodesByKey.spec_review.consumptions.map(value => value.claim).sort()).toEqual(['component.work_item@1', PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort());
+    expect(template.nodesByKey.spec_review.dependencyNodeKeys).toEqual(['inspect', 'proof_admit']);
+    expect(template.nodesByKey.spec_review_admit.dependencyNodeKeys).toEqual(['spec_review']);
+    expect(template.nodesByKey.verify.dependencyNodeKeys).toEqual(['inspect', 'proof_admit', 'spec_review', 'spec_review_admit']);
+  });
+
+  it.each([
+    ['wrong spec_review provider', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.type = 'noop'; }],
+    ['wrong spec_review invocation', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.invocation.role_id = 'onboard'; }],
+    ['wrong candidate alias', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.consumes[1].as = 'wrong_candidate'; }],
+    ['wrong admission alias', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.consumes[2].as = 'wrong_admission'; }],
+    ['missing predecessor input', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.consumes.shift(); }],
+    ['extra predecessor input', (value: any) => { value.claim_types['fixture.extra@1'] = { schema: { type: 'object' } }; value.subgraphs['onboard-component'].checks.inspect.emits.push({ claim: 'fixture.extra@1', from: 'output' }); value.subgraphs['onboard-component'].checks.spec_review.consumes.push({ claim: 'fixture.extra@1', as: 'extra' }); }],
+    ['wrong predecessor input', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.consumes[1].claim = PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM; value.claim_types[PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM] = { schema: { type: 'object' } }; }],
+    ['wrong stage emission', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review.emits[0].claim = PROOF_CANDIDATE_CLAIM; }],
+    ['wrong stage-admit provider', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review_admit.type = 'noop'; }],
+    ['wrong stage-admit consume', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review_admit.consumes[0] = { claim: 'component.work_item@1', as: 'component' }; }],
+    ['wrong stage-admit emission', (value: any) => { value.claim_types['fixture.extra@1'] = { schema: { type: 'object' } }; value.subgraphs['onboard-component'].checks.spec_review_admit.emits.push({ claim: 'fixture.extra@1', from: 'output' }); }],
+    ['wrong stage candidate alias', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review_admit.consumes[0].as = 'wrong_candidate'; }],
+    ['wrong stage receipt alias', (value: any) => { value.subgraphs['onboard-component'].checks.verify.consumes.find((item: any) => item.claim === PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM).as = 'wrong_receipt'; }],
+    ['missing stage claim declaration', (value: any) => { delete value.claim_types[PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM]; }],
+    ['malformed verify inputs', (value: any) => { value.subgraphs['onboard-component'].checks.verify.consumes.pop(); }],
+    ['staged catalog egress', (value: any) => { value.subgraphs['onboard-component'].checks.revalidate_catalog = { type: 'proof-catalog-revalidate' }; }],
+    ['missing staged node', (value: any) => { const checks = value.subgraphs['onboard-component'].checks; delete checks.spec_review_admit; checks.verify.consumes = checks.verify.consumes.filter((item: any) => item.claim !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM); }],
+    ['extra staged node', (value: any) => { value.subgraphs['onboard-component'].checks.extra = { type: 'noop' }; }],
+    ['staged topology drift', (value: any) => { value.subgraphs['onboard-component'].checks.spec_review_admit.depends_on = ['inspect']; }],
+  ])('rejects staged profile with %s', (_name, mutate) => {
+    const value = stagedProofAdmissionConfig();
+    mutate(value);
+    expect(() => compileClaimPlan(value)).toThrow(InstancePlanError);
   });
 
   it('rejects a fully resolved authored component subject outside the selector placement', () => {
