@@ -2646,9 +2646,14 @@ function qualityBugConcepts(value: unknown): { decode: boolean; control: boolean
   const text = qualityText(value);
   return {
     decode: /malformed|decode|invalid json|extra json/i.test(text),
-    control: /fall(?:s|ing)?[-\s]*through|missing return|continues?|no return|unreturned|\b(?:can|may|does)\s+still\b/i.test(text),
+    control: /fall(?:s|ing)?[-\s]*through|missing return|continues?|no return|unreturned|\b(?:do|does|did)\s+not\s+return\b|\b(?:can|may|does)\s+still\b/i.test(text),
     effect: /persist|mutat|\bcreat(?:e|es|ed|ing)\b|state|effect|dispatch/i.test(text),
   };
+}
+
+function qualityHttpDecoderSignature(value: JsonRecord): boolean {
+  const concepts = qualityBugConcepts(value);
+  return concepts.decode && concepts.control && concepts.effect && qualityHasCoordinate(value, coordinate => coordinate.path === 'http.go');
 }
 
 function qualityHasCoordinate(value: unknown, predicate: (coordinate: { path: string; line: number }) => boolean): boolean {
@@ -2773,8 +2778,8 @@ export function evaluateOnboardingQuality(first: QualityInput | unknown, second?
   const xssFalsePositive = allBaselinePayloads.some(payload => qualityObjects(payload.findings).some(finding => qualitySeverity(finding.severity) >= 3 && /xss|cross.?site|html injection|script injection|unsanitized html/i.test(qualityText(finding))));
   const xssPass = !xssFalsePositive;
   const resumeText = qualityText(httpResume || '');
-  const resolutionAssertion = /(?:malformed|decode|invalid json|rejected)[\s\S]{0,180}(?:no|without|does not|never|zero|none)[\s\S]{0,100}(?:persist|state|effect|dispatch|mutation)|(?:no|without|does not|never|zero|none)[\s\S]{0,100}(?:persist|state|effect|dispatch|mutation)[\s\S]{0,180}(?:malformed|decode|invalid json|rejected)/i.test(resumeText);
-  const activeDefect = qualityObjects(httpResume?.findings).some(finding => qualitySeverity(finding.severity) >= 2 && qualityLikelyConfirmed(finding) && Object.values(qualityBugConcepts(finding)).some(Boolean) && !/resolved|fixed|closed|no active|remediated/i.test(qualityText(finding)));
+  const resolutionAssertion = /(?:malformed|decode|invalid json|rejected)[\s\S]{0,180}(?:no|without|does not|do not|did not|never|zero|none)[\s\S]{0,100}(?:persist|state|effect|dispatch|mutation)|(?:no|without|does not|do not|did not|never|zero|none)[\s\S]{0,100}(?:persist|state|effect|dispatch|mutation)[\s\S]{0,180}(?:malformed|decode|invalid json|rejected)/i.test(resumeText);
+  const activeDefect = qualityObjects(httpResume?.findings).some(finding => qualitySeverity(finding.severity) >= 2 && qualityLikelyConfirmed(finding) && qualityHttpDecoderSignature(finding) && !/resolved|fixed|closed|no active|remediated/i.test(qualityText(finding)));
   const spans = qualityScanSpans(input);
   const resumeCoordinates = httpResume ? qualityPayloadCoordinates(httpResume) : [];
   const returnCitation = spans.returnLine !== undefined && resumeCoordinates.some(coordinate => coordinate.path === 'http.go' && Math.abs(coordinate.line - spans.returnLine!) <= 1);

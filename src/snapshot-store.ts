@@ -101,7 +101,7 @@ import {
   immutableProofCandidateEvidence,
   type GovernedWireMode,
 } from './providers/proof-wire';
-import { validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
+import { governedProofComponentReinspectionContextDigest, validateGovernedProofComponentReinspectionContext, validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, type GovernedProofComponentReinspectionContextV1, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   compareProofStrings,
   proofCatalogRevalidationReceiptIdentityJson,
@@ -1955,6 +1955,12 @@ export class ExecutionJournal {
       if (!invocation.component_authority || governedCanonicalJson(invocation.component_authority, 'proof') !== governedCanonicalJson(authority, 'proof')) {
         componentAuthorityFailure('completed component inspect authority is detached from exact lineage');
       }
+      const expectedReinspection = this.getProofComponentReinspectionContext(generation.nodeGenerationId);
+      const actualReinspection = output.proofCandidateEvidence.reinspectionContext;
+      if ((expectedReinspection === undefined) !== (actualReinspection === undefined) ||
+          (expectedReinspection && (!actualReinspection || canonicalJson(expectedReinspection) !== canonicalJson(actualReinspection) || output.proofCandidateEvidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(expectedReinspection)))) {
+        componentAuthorityFailure('completed component reinspection context is detached from exact lineage');
+      }
       validateComponentChildAdmission(this.instanceProjection, instance.subgraphInstanceId, false);
     }
     for (const generation of Object.values(this.instanceProjection.generationsById)) {
@@ -2208,7 +2214,7 @@ export class ExecutionJournal {
     }
     if (effectiveAuthorityBytes) {
       const childIds = children.map(child => child.itemKey).sort(compareProofStrings);
-      const currentItemIds = effectiveAuthorityBytes.items.map(item => item.component_id).sort(compareProofStrings);
+      const currentItemIds = effectiveAuthorityBytes.items.map(item => item.component_id as string).sort(compareProofStrings);
       const currentAuthorityIds = effectiveAuthorityBytes.components.map(component => component.componentId).sort(compareProofStrings);
       if (currentItemIds.length !== childIds.length ||
           currentAuthorityIds.length !== childIds.length ||
@@ -2443,6 +2449,68 @@ export class ExecutionJournal {
       catalog_revalidation_receipt: currentAuthorityBytes.revalidation.receipt,
     });
 
+  }
+
+  /** Derive the bounded prior-inspection context only for an authenticated
+   * replacement generation. The inactive generation and its claims remain in
+   * the journal, so no caller-supplied history can participate. */
+  getProofComponentReinspectionContext(nodeGenerationId: string): GovernedProofComponentReinspectionContextV1 | undefined {
+    const generation = this.instanceProjection.generationsById[nodeGenerationId];
+    if (!generation || generation.templateNodeKey !== 'inspect' || generation.checkId !== 'inspect') return undefined;
+    const expansion = this.compiledExpansionForInstance(generation.subgraphInstanceId);
+    const node = expansion.template.nodesByKey.inspect;
+    if (!node || node.check.type !== 'governed-proof-inspect' || !isGovernedProofComponentSelector(node.check.invocation)) return undefined;
+    if (generation.incarnation <= 1) return undefined;
+    const instance = this.instanceProjection.instancesById[generation.subgraphInstanceId];
+    const currentItem = generation.activeInputClaimIds.map(id => this.instanceProjection.claimsById[id]).find(claim => claim?.claim === 'component.work_item@1');
+    if (!instance || !currentItem) componentAuthorityFailure('replacement inspect lacks its current WorkItem');
+    const previous = Object.values(this.instanceProjection.generationsById).filter(value =>
+      value.nodeInstanceId === generation.nodeInstanceId && value.templateNodeKey === 'inspect' && value.checkId === 'inspect' &&
+      value.incarnation === generation.incarnation - 1 && value.status === 'inactive');
+    if (previous.length !== 1) componentAuthorityFailure('replacement inspect lacks one prior superseded generation');
+    const priorGeneration = previous[0];
+    const priorActivation = this.runtimeEvents.findIndex(event => event.type === 'NodeGenerationActivated' && event.nodeGenerationId === priorGeneration.nodeGenerationId);
+    const currentActivation = this.runtimeEvents.findIndex(event => event.type === 'NodeGenerationActivated' && event.nodeGenerationId === generation.nodeGenerationId);
+    if (priorActivation < 0 || currentActivation <= priorActivation || this.runtimeEvents.slice(priorActivation + 1, currentActivation).some(event => event.type === 'NodeGenerationActivated' && event.nodeInstanceId === generation.nodeInstanceId && event.nodeGenerationId !== generation.nodeGenerationId)) componentAuthorityFailure('replacement inspect generations are not immediately adjacent');
+    const priorCandidates = priorGeneration.completedOutputClaimIds.map(id => this.instanceProjection.claimsById[id]).filter(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+    if (priorGeneration.status !== 'inactive' || priorCandidates.length !== 1) componentAuthorityFailure('prior inspect has no unique candidate output');
+    const priorCandidate = priorCandidates[0];
+    if (!priorCandidate.proofCandidateEvidence) componentAuthorityFailure('prior candidate has no governed evidence');
+    const priorEvidence = validateProofCandidateEvidence(priorCandidate.proofCandidateEvidence);
+    const admissions = Object.values(this.instanceProjection.claimsById).filter(claim =>
+      claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM && claim.producerCheckId === PROOF_ADMIT_NODE_KEY &&
+      canonicalJson(claim.scope) === canonicalJson(priorCandidate.scope) && canonicalJson(claim.parentClaimIds) === canonicalJson([priorCandidate.claimId]) &&
+      claim.nodeGenerationId !== undefined && this.instanceProjection.generationsById[claim.nodeGenerationId]?.incarnation === priorGeneration.incarnation &&
+      this.instanceProjection.generationsById[claim.nodeGenerationId]?.subgraphInstanceId === priorGeneration.subgraphInstanceId &&
+      this.instanceProjection.generationsById[claim.nodeGenerationId]?.status === 'inactive');
+    if (admissions.length !== 1) componentAuthorityFailure('prior candidate has no unique admitted receipt');
+    const priorAdmission = admissions[0];
+    try { validateProofComponentCandidateAdmissionBinding(generatedClaimView(priorCandidate, 'prior candidate'), generatedClaimView(priorAdmission, 'prior admission')); }
+    catch (error) { componentAuthorityFailure(`prior candidate admission is invalid: ${error instanceof Error ? error.message : String(error)}`); }
+    const historicalItem = priorGeneration.activeInputClaimIds.map(id => this.instanceProjection.claimsById[id]).find(claim => claim?.claim === 'component.work_item@1');
+    if (!historicalItem || historicalItem.subgraphInstanceId !== currentItem.subgraphInstanceId || !isRecord(historicalItem.payload) || !isRecord(currentItem.payload) || historicalItem.payload.component_id !== currentItem.payload.component_id || currentItem.payload.component_id !== instance.itemKey) componentAuthorityFailure('replacement WorkItem lineage is detached');
+    const rows = (payload: Record<string, unknown>): Array<Record<string, unknown>> => {
+      if (!Array.isArray(payload.proof_input_state) || !Array.isArray(payload.sorted_dependency_closure)) componentAuthorityFailure('replacement WorkItem input state is unavailable');
+      const closure = payload.sorted_dependency_closure;
+      if (closure.some(path => typeof path !== 'string') || rowsSeen(closure as string[])) componentAuthorityFailure('replacement WorkItem closure is invalid');
+      const seen = new Set<string>();
+      return (payload.proof_input_state as unknown[]).map(row => {
+        if (!isRecord(row) || typeof row.path !== 'string' || seen.has(row.path) || !closure.includes(row.path)) componentAuthorityFailure('replacement WorkItem input state is detached');
+        seen.add(row.path); return row;
+      });
+    };
+    const rowsSeen = (paths: string[]): boolean => paths.some((path, index) => index > 0 && Buffer.from(paths[index - 1], 'utf8').compare(Buffer.from(path, 'utf8')) >= 0);
+    const historicalRows = rows(historicalItem.payload); const currentRows = rows(currentItem.payload);
+    const historicalByPath = new Map(historicalRows.map(row => [row.path as string, canonicalJson(row)]));
+    const changedPaths = currentRows.filter(row => historicalByPath.get(row.path as string) !== canonicalJson(row)).map(row => row.path as string).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+    return validateGovernedProofComponentReinspectionContext({
+      version: 'visor.proof-component-reinspection-context/v1', component_id: currentItem.payload.component_id,
+      changed_paths: changedPaths,
+      historical_work_item: { claim_id: historicalItem.claimId, payload_fingerprint: historicalItem.payloadFingerprint },
+      current_work_item: { claim_id: currentItem.claimId, payload_fingerprint: currentItem.payloadFingerprint },
+      prior_candidate: { claim_id: priorCandidate.claimId, payload_fingerprint: priorCandidate.payloadFingerprint, result_digest: priorEvidence.probe.resultIdentity.resultDigest, payload: priorCandidate.payload },
+      prior_admission: { claim_id: priorAdmission.claimId, payload_fingerprint: priorAdmission.payloadFingerprint },
+    });
   }
 
   /** Project the exact controller-owned candidate envelope consumed by Proof. */
@@ -3112,6 +3180,12 @@ export class ExecutionJournal {
           if (subject.id !== authority.subject.component_id || subject.fingerprint !== authority.subject.fingerprint) {
             throw new Error('component invocation subject is detached from the exact WorkItem authority');
           }
+        }
+        const expectedReinspection = selector ? this.getProofComponentReinspectionContext(generation.nodeGenerationId) : undefined;
+        const actualReinspection = evidence.reinspectionContext;
+        if ((expectedReinspection === undefined) !== (actualReinspection === undefined) ||
+            (expectedReinspection && (!actualReinspection || canonicalJson(expectedReinspection) !== canonicalJson(actualReinspection) || evidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(expectedReinspection)))) {
+          throw new Error('reinspection context is detached from the exact journal generation');
         }
         const payloadJson = governedCanonicalJson(payload, candidateWireMode);
         if (evidence.probe.resultIdentity.resultDigest !== governedResultDigest(payload, candidateWireMode) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(payloadJson, 'utf8')) {

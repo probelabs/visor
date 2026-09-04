@@ -95,9 +95,13 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
     if (typeof request.message !== 'string' || request.message.length === 0 || Buffer.byteLength(request.message, 'utf8') > 32768) {
       throw new Error('GOVERNED_PROOF_INVALID: message is invalid');
     }
-    this.userMessage = request.context
-      ? `${request.message}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`
-      : request.message;
+    const runtime = request.context
+      ? `\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`
+      : '';
+    const reinspection = request.reinspectionContext
+      ? `\n\nBound reinspection context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.reinspectionContext)}\n\nCompare current source with the prior candidate and account for every prior finding as retained or resolved; cite changed implementation lines and relevant regression-test function names and line numbers.`
+      : '';
+    this.userMessage = `${request.message}${runtime}${reinspection}`;
     const governedCodexProfile = profileFor(root);
     const options: ExactProbeAgentOptions = {
       provider: 'codex',

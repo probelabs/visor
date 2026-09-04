@@ -40,6 +40,7 @@ const PROFILE = 'luna-xhigh-readonly-v1';
 export const COMPONENT_WORK_ITEM_CLAIM = 'component.work_item@1';
 export const PROOF_ROLE_AUTHORITY_CLAIM = 'proof.component_role_authority@1';
 export const GOVERNED_PROOF_CONTEXT_VERSION = 'visor.proof-runtime-context/v1';
+export const GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION = 'visor.proof-component-reinspection-context/v1';
 export const PROJECT_DISCOVERY_CLAIM = 'project.discovery_item@1';
 export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
 export const GOVERNED_PROOF_PROJECT_CONTEXT_VERSION = 'visor.proof-project-discovery-context/v1';
@@ -223,6 +224,16 @@ export interface GovernedProofRuntimeContextV1 {
   readonly authority: GovernedProofRuntimeContextClaimV1;
 }
 
+export interface GovernedProofComponentReinspectionContextV1 {
+  readonly version: typeof GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION;
+  readonly component_id: string;
+  readonly changed_paths: readonly string[];
+  readonly historical_work_item: { readonly claim_id: string; readonly payload_fingerprint: string };
+  readonly current_work_item: { readonly claim_id: string; readonly payload_fingerprint: string };
+  readonly prior_candidate: { readonly claim_id: string; readonly payload_fingerprint: string; readonly result_digest: string; readonly payload: unknown };
+  readonly prior_admission: { readonly claim_id: string; readonly payload_fingerprint: string };
+}
+
 export interface GovernedProofProjectDiscoveryContextV1 {
   readonly version: typeof GOVERNED_PROOF_PROJECT_CONTEXT_VERSION;
   readonly project: GovernedProofRuntimeContextClaimV1;
@@ -230,6 +241,31 @@ export interface GovernedProofProjectDiscoveryContextV1 {
 }
 
 export type GovernedProofRuntimeContext = GovernedProofRuntimeContextV1 | GovernedProofProjectDiscoveryContextV1;
+
+function proofPathCompare(left: string, right: string): number { return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')); }
+export function validateGovernedProofComponentReinspectionContext(value: unknown): GovernedProofComponentReinspectionContextV1 {
+  if (!plain(value) || !exact(value, ['version', 'component_id', 'changed_paths', 'historical_work_item', 'current_work_item', 'prior_candidate', 'prior_admission']) || !validMaterialized(value) || value.version !== GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION || !visible(value.component_id, 256) || !Array.isArray(value.changed_paths)) fail('reinspection context header is invalid');
+  if (Buffer.byteLength(canonicalJson(value), 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('reinspection context exceeds bounded byte limit');
+  const paths = value.changed_paths as string[];
+  if (paths.length === 0 || paths.some(path => !visible(path, 4096)) || paths.some((path, index) => index > 0 && proofPathCompare(paths[index - 1], path) >= 0)) fail('reinspection context paths are not sorted and nonempty');
+  const ref = (entry: unknown, keys: readonly string[]): Record<string, unknown> => {
+    if (!plain(entry) || !exact(entry, keys) || !validMaterialized(entry)) fail('reinspection context claim reference is invalid');
+    if (!bare(entry.claim_id) || !bare(entry.payload_fingerprint)) fail('reinspection context claim reference identity is invalid');
+    return entry;
+  };
+  const historical = ref(value.historical_work_item, ['claim_id', 'payload_fingerprint']);
+  const current = ref(value.current_work_item, ['claim_id', 'payload_fingerprint']);
+  const candidate = ref(value.prior_candidate, ['claim_id', 'payload_fingerprint', 'result_digest', 'payload']);
+  if (!wire(candidate.result_digest) || JSON.stringify(candidate.payload) !== canonicalJson(candidate.payload) || sha256Canonical(candidate.payload) !== candidate.payload_fingerprint) fail('reinspection context candidate is detached');
+  const admission = ref(value.prior_admission, ['claim_id', 'payload_fingerprint']);
+  if (historical.claim_id === current.claim_id || candidate.claim_id === admission.claim_id) fail('reinspection context identities are not distinct');
+  return immutableCanonicalValue(value as unknown as GovernedProofComponentReinspectionContextV1);
+}
+
+export function governedProofComponentReinspectionContextDigest(value: GovernedProofComponentReinspectionContextV1): string {
+  const context = validateGovernedProofComponentReinspectionContext(value);
+  return `sha256:${sha256Canonical(context)}`;
+}
 
 /**
  * Candidate evidence remains v1 for wire compatibility; the optional context
@@ -242,6 +278,8 @@ export interface ProofCandidateEvidenceV1 {
   readonly probe: { readonly attestation: Record<string, unknown>; readonly resultIdentity: Record<string, unknown> };
   readonly context?: GovernedProofRuntimeContext;
   readonly contextDigest?: string;
+  readonly reinspectionContext?: GovernedProofComponentReinspectionContextV1;
+  readonly reinspectionContextDigest?: string;
 }
 export interface GovernedProbeRunnerRequest {
   readonly message: string;
@@ -255,6 +293,9 @@ export interface GovernedProbeRunnerRequest {
   /** Sealed runtime context; present only for the canonical onboarding profiles. */
   readonly context?: GovernedProofRuntimeContext;
   readonly contextDigest?: string;
+  /** Controller-derived only; caller execution context is never consulted. */
+  readonly reinspectionContext?: GovernedProofComponentReinspectionContextV1;
+  readonly reinspectionContextDigest?: string;
 }
 export interface GovernedProbeDispatchPreview {
   readonly source: 'probe-host-tools-call';
@@ -481,6 +522,11 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   const inventoryClaims = parentClaims.filter(claim => claim.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
   const invocation = evidence.role.invocation;
   if (plain(invocation) && own(invocation, 'component_authority')) {
+    if (evidence.reinspectionContext !== undefined || evidence.reinspectionContextDigest !== undefined) {
+      if (!evidence.reinspectionContext || typeof evidence.reinspectionContextDigest !== 'string') fail('reinspection context fields are not paired');
+      const reinspection = validateGovernedProofComponentReinspectionContext(evidence.reinspectionContext);
+      if (evidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(reinspection)) fail('reinspection context digest is detached');
+    }
     if (contextClaims.length !== 1 || projectClaims.length !== 0 || inventoryClaims.length !== 0) fail('component invocation authority requires exactly one WorkItem parent');
     const authority = validateProofComponentInvocationAuthority(invocation.component_authority);
     const invocationSubject = invocation.subject as Record<string, unknown>;
@@ -515,7 +561,7 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
     return;
   }
   if (contextClaims.length !== 1 || !evidence.context || evidence.contextDigest === undefined) fail('runtime context is missing');
-  const context = evidence.context;
+  const context = evidence.context as GovernedProofRuntimeContextV1;
   const parent = contextClaims[0];
   if (context.component.claimId !== parent.claimId || context.component.claim !== parent.claim || context.component.payloadFingerprint !== parent.payloadFingerprint || canonicalJson(parent.scope) !== canonicalJson(context.component.scope) || canonicalJson(parent.payload) !== canonicalJson(context.component.payload)) fail('runtime context component is stale or foreign');
   const authority = projectEmbeddedAuthority(parent.payload, binding.scope);
@@ -556,6 +602,7 @@ function evidenceFromResult(
   config: CheckProviderConfig,
   result: { data: unknown; runtimeAttestation: Record<string, unknown>; resultIdentity: Record<string, unknown> },
   context?: GovernedProofRuntimeContext,
+  reinspectionContext?: GovernedProofComponentReinspectionContextV1,
   dispatchPreview?: GovernedProbeDispatchPreview
 ): ProofCandidateEvidenceV1 {
   validateRunnerResult(result);
@@ -565,7 +612,7 @@ function evidenceFromResult(
   if (wireMode === 'generic' && JSON.stringify(result.data) !== dataBytes.toString('utf8')) fail('runner data is not canonical JSON');
   const identity = result.resultIdentity; if (!plain(identity) || !exact(identity, ['version', 'source', 'resultDigest', 'canonicalBytes']) || identity.version !== 'probe.governed-result-identity/v1' || identity.source !== 'probe-host-schema-valid-json' || identity.resultDigest !== (wireMode === 'proof' ? governedWireResultDigest(result.data, wireMode) : governedResultDigest(result.data)) || identity.canonicalBytes !== dataBytes.length || typeof identity.canonicalBytes !== 'number' || !Number.isSafeInteger(identity.canonicalBytes) || identity.canonicalBytes < 0) fail('result identity invalid');
   const digest = config.invocation_digest as string;
-  const att = validateAttestation(result.runtimeAttestation, digest, context ? dispatchPreview : undefined);
+  const att = validateAttestation(result.runtimeAttestation, digest, context || reinspectionContext ? dispatchPreview : undefined);
   const invocation = config.invocation as Record<string, unknown>;
   // A resolved component invocation carries Proof-owned RawMessage evidence
   // even when its component result uses the generic candidate wire. Freeze
@@ -573,14 +620,15 @@ function evidenceFromResult(
   // project/requirement evidence remains graph-canonical.
   if (context) {
     const projected = validateRuntimeContextShape(context);
-    return immutableProofCandidateEvidence({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity }, context: projected, contextDigest: governedProofRuntimeContextDigest(projected) });
+    return immutableProofCandidateEvidence({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity }, context: projected, contextDigest: governedProofRuntimeContextDigest(projected), ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) });
   }
-  return immutableProofCandidateEvidence({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity } });
+  return immutableProofCandidateEvidence({ version: 'visor.proof-candidate-evidence/v1', role: { invocation, invocationDigest: digest }, probe: { attestation: att, resultIdentity: identity }, ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) });
 }
 export function validateProofCandidateEvidence(value: unknown): ProofCandidateEvidenceV1 {
   if (!plain(value) || value.version !== 'visor.proof-candidate-evidence/v1') fail('evidence header is invalid');
   const hasContext = own(value, 'context') || own(value, 'contextDigest');
-  const expectedKeys = hasContext ? ['version', 'role', 'probe', 'context', 'contextDigest'] : ['version', 'role', 'probe'];
+  const hasReinspectionContext = own(value, 'reinspectionContext') || own(value, 'reinspectionContextDigest');
+  const expectedKeys = ['version', 'role', 'probe', ...(hasContext ? ['context', 'contextDigest'] : []), ...(hasReinspectionContext ? ['reinspectionContext', 'reinspectionContextDigest'] : [])];
   if (!exact(value, expectedKeys)) fail('evidence context fields are not paired');
   const role = value.role;
   if (!plain(role) || !exact(role, ['invocation', 'invocationDigest'])) fail('evidence role is invalid');
@@ -598,6 +646,12 @@ export function validateProofCandidateEvidence(value: unknown): ProofCandidateEv
     const context = validateRuntimeContextShape(value.context);
     if (value.contextDigest !== governedProofRuntimeContextDigest(context)) fail('evidence runtime context digest is detached');
   }
+  let reinspectionContext: GovernedProofComponentReinspectionContextV1 | undefined;
+  if (hasReinspectionContext) {
+    if (!value.reinspectionContext || typeof value.reinspectionContextDigest !== 'string') fail('evidence reinspection context fields are not paired');
+    reinspectionContext = validateGovernedProofComponentReinspectionContext(value.reinspectionContext);
+    if (value.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(reinspectionContext)) fail('evidence reinspection context digest is detached');
+  }
   let canonical: string;
   try { canonical = governedProofCandidateEvidenceJson(value); } catch { fail('evidence is not canonical JSON'); }
   if (Buffer.byteLength(canonical, 'utf8') > 262144) fail('evidence exceeds canonical byte limit');
@@ -612,6 +666,7 @@ export function validateProofCandidateEvidence(value: unknown): ProofCandidateEv
       resultIdentity: identity,
     },
     ...(hasContext ? { context: validateRuntimeContextShape(value.context), contextDigest: value.contextDigest as string } : {}),
+    ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: value.reinspectionContextDigest as string } : {}),
   };
   return immutableProofCandidateEvidence(evidence);
 }
@@ -638,6 +693,11 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
     const config = projectGovernedProofInspectConfig(request.checkConfig); if (!/^[0-9a-f]{64}$/.test(request.executionConfigDigest)) fail('executionConfigDigest is invalid');
     if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0) fail('workingDirectory is invalid');
     const binding = immutableCanonicalValue(request.binding);
+    const selector = isGovernedProofComponentSelector(request.checkConfig.invocation);
+    const reinspectionContext = request.reinspectionContext === undefined
+      ? undefined
+      : validateGovernedProofComponentReinspectionContext(request.reinspectionContext);
+    if (reinspectionContext && !selector) fail('reinspection context requires a component selector');
     let context: GovernedProofRuntimeContext | undefined;
     if (runtimeContextKind === 'project') {
       const invocation = config.invocation;
@@ -648,7 +708,6 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       context = projectGovernedProofRuntimeContext(request.executionContext?.claims, binding);
     }
     const contextDigest = context ? governedProofRuntimeContextDigest(context) : undefined;
-    const selector = isGovernedProofComponentSelector(request.checkConfig.invocation);
     if (selector && !this.capability) fail(PROOF_ADMISSION_UNAVAILABLE);
     let cancelled = false, closed = false;
     const c0Cancellation = new AbortController();
@@ -661,6 +720,7 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       if (selector) {
         const authority = validateProofComponentInvocationAuthority(request.executionContext.proofComponentAuthority);
         const subject = authority.subject;
+        if (reinspectionContext && reinspectionContext.component_id !== subject.component_id) fail('reinspection context component is detached from authority');
         const componentClaim = request.executionContext.claims && (request.executionContext.claims as Record<string, unknown>).component;
         if (!plain(componentClaim) || !plain(componentClaim.payload) || !plain(componentClaim.payload.authority)) fail('activated WorkItem authority is missing');
         const expectedCompact = { component_id: subject.component_id, work_item_digest: authority.work_item_digest, subject };
@@ -686,11 +746,11 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
         effective = immutableProofCanonicalValue(resolvedConfig) as CheckProviderConfig;
       }
       const invocation = effective.invocation as Record<string, unknown>;
-      const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}) };
+      const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}), ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) };
       runnerRequest = selector ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;
       runner = this.factory(runnerRequest);
       if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
-      if (runtimeContextRequired && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');
+      if ((runtimeContextRequired || reinspectionContext) && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');
       return { config: effective, runner, request: runnerRequest };
     };
     const answer = Promise.resolve()
@@ -698,11 +758,11 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
         acquisition = acquire();
         return acquisition;
       })
-      .then(({ config: effective, runner: acquired, request: effectiveRequest }) => Promise.resolve(runtimeContextRequired ? acquired.preview!(effectiveRequest) : undefined)
+      .then(({ config: effective, runner: acquired, request: effectiveRequest }) => Promise.resolve(runtimeContextRequired || reinspectionContext ? acquired.preview!(effectiveRequest) : undefined)
         .then(preview => Promise.resolve(acquired.answer(effectiveRequest)).then(value => ({ value, preview, effective }))))
       .then(({ value, preview, effective }) => {
         const validated = validateRunnerResult(value);
-        const evidence = evidenceFromResult(effective, validated, context, preview);
+        const evidence = evidenceFromResult(effective, validated, context, reinspectionContext, preview);
         const wireMode = governedWireModeFromEvidence(evidence);
         const output = immutableGovernedValue(validated.data, wireMode);
         return Object.freeze({ version: 1 as const, kind: 'succeeded-proof-candidate' as const, binding, summary: Object.freeze({ issues: [], output }), proofCandidateEvidence: evidence, wireMode });

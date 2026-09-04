@@ -270,6 +270,7 @@ export function snapshotManagedRunStartRequest(
 ): ManagedRunStartRequest {
   const hasProofAdmissionRequest = request.proofAdmissionRequest !== undefined;
   const hasProofProjectReconciliationRequest = request.proofProjectReconciliationRequest !== undefined;
+  const hasReinspectionContext = request.reinspectionContext !== undefined;
   const proofAdmission = request.checkConfig.type === 'proof-admit';
   const proofProjectReconciliation = request.checkConfig.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE;
 
@@ -294,6 +295,9 @@ export function snapshotManagedRunStartRequest(
     ...(hasProofAdmissionRequest ? { proofAdmissionRequest: request.proofAdmissionRequest } : {}),
     ...(hasProofProjectReconciliationRequest
       ? { proofProjectReconciliationRequest: request.proofProjectReconciliationRequest }
+      : {}),
+    ...(hasReinspectionContext
+      ? { reinspectionContext: copyAndFreezePlainData(request.reinspectionContext, copies) }
       : {}),
   };
   return Object.freeze(snapshot);

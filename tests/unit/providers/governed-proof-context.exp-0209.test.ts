@@ -5,12 +5,14 @@ import {
   GOVERNED_PROOF_PROJECT_CONTEXT_VERSION,
   governedProofRuntimeContextDigest,
   governedProofRuntimePrompt,
+  governedProofComponentReinspectionContextDigest,
   governedResultDigest,
   PROJECT_DISCOVERY_CLAIM,
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
   PROOF_ROLE_AUTHORITY_CLAIM,
   projectGovernedProofProjectDiscoveryContext,
   projectGovernedProofRuntimeContext,
+  validateGovernedProofComponentReinspectionContext,
   validateGovernedProofRuntimeContextAgainstClaims,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
 import type { CandidateClaimInput, CheckProviderConfig } from '../../../src/providers/check-provider.interface';
@@ -159,6 +161,17 @@ function projectResult(request: any): any {
   };
 }
 
+function reinspectionContext(): any {
+  const payload = { finding: 'prior & resolved' };
+  return {
+    version: 'visor.proof-component-reinspection-context/v1', component_id: 'http-adapter', changed_paths: ['http.go'],
+    historical_work_item: { claim_id: '1'.repeat(64), payload_fingerprint: '2'.repeat(64) },
+    current_work_item: { claim_id: '3'.repeat(64), payload_fingerprint: '4'.repeat(64) },
+    prior_candidate: { claim_id: '5'.repeat(64), payload_fingerprint: sha256Canonical(payload), result_digest: `sha256:${'6'.repeat(64)}`, payload },
+    prior_admission: { claim_id: '7'.repeat(64), payload_fingerprint: '8'.repeat(64) },
+  };
+}
+
 describe('EXP-0209 governed component context', () => {
   it('projects distinct dynamically expanded WorkItems into distinct immutable runner contexts', async () => {
     const captured: any[] = [];
@@ -216,6 +229,19 @@ describe('EXP-0209 governed component context', () => {
     await expect(provider.startManaged(startRequest(scopeA, claims(scopeA, 'http-adapter'), factory)).outcome)
       .rejects.toThrow(/dispatch|GOVERNED_PROOF_INVALID/i);
   });
+
+  it('validates reinspection context canonically and rejects candidate tampering or empty deltas', () => {
+    const context = reinspectionContext();
+    expect(validateGovernedProofComponentReinspectionContext(context)).toEqual(context);
+    expect(governedProofComponentReinspectionContextDigest(context)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(() => validateGovernedProofComponentReinspectionContext({ ...context, changed_paths: [] })).toThrow(/reinspection|sorted|nonempty/i);
+    expect(() => validateGovernedProofComponentReinspectionContext({ ...context, prior_candidate: { ...context.prior_candidate, payload: { finding: 'tampered' } } })).toThrow(/candidate|detached/i);
+    const oversizedPayload = { finding: 'x'.repeat(131072) };
+    expect(() => validateGovernedProofComponentReinspectionContext({
+      ...context,
+      prior_candidate: { ...context.prior_candidate, payload: oversizedPayload, payload_fingerprint: sha256Canonical(oversizedPayload) },
+    })).toThrow(/byte|bounded/i);
+  });
 });
 
 describe('EXP-0209 governed project discovery context', () => {
@@ -240,6 +266,22 @@ describe('EXP-0209 governed project discovery context', () => {
     expect(effectiveUserMessage).toContain('go.mod');
     expect(captured[0].contextDigest).toBe(governedProofRuntimeContextDigest(captured[0].context));
     expect(outcome.proofCandidateEvidence.contextDigest).toBe(captured[0].contextDigest);
+    await run.close();
+  });
+
+  it('strips caller-injected reinspection context before constructing a project runner', async () => {
+    const captured: any[] = [];
+    const factory = jest.fn((request: any) => {
+      captured.push(request);
+      return { preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'e'.repeat(64)}`, promptBytes: Buffer.byteLength(`${request.message}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`) }), answer: (value: any) => projectResult(value), cancel: () => undefined, close: () => undefined };
+    });
+    const provider = createGovernedProofInspectProviderForFocusedTest(factory as any);
+    const run = provider.startManaged({
+      ...startRequest(scopeA, projectDiscoveryClaims(scopeA), factory), checkConfig: projectInspectConfig(),
+      executionContext: { claims: projectDiscoveryClaims(scopeA), reinspectionContext: reinspectionContext() } as any,
+    });
+    await run.outcome;
+    expect(captured[0]).not.toHaveProperty('reinspectionContext');
     await run.close();
   });
 

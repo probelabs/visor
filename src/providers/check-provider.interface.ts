@@ -171,6 +171,8 @@ export interface ManagedRunStartRequest {
   readonly proofAdmissionRequest?: string;
   /** Controller-injected, exact Proof whole-project reconciliation request. */
   readonly proofProjectReconciliationRequest?: string;
+  /** Controller-derived prior component inspection context, for replacement generations only. */
+  readonly reinspectionContext?: import('./governed-proof-inspect-check-provider').GovernedProofComponentReinspectionContextV1;
 }
 
 export interface ManagedRunStartedReceiptV1 {

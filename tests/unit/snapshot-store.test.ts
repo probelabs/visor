@@ -2142,6 +2142,23 @@ describe('managed-run authority snapshots', () => {
     expect(snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-admit' }, proofAdmissionRequest: '{}' }).proofAdmissionRequest).toBe('{}');
   });
 
+  it('snapshots and freezes the controller-derived reinspection context', () => {
+    const reinspectionContext: any = {
+      version: 'visor.proof-component-reinspection-context/v1', component_id: 'alpha', changed_paths: ['alpha.go'],
+      historical_work_item: { claim_id: '1'.repeat(64), payload_fingerprint: '2'.repeat(64) },
+      current_work_item: { claim_id: '3'.repeat(64), payload_fingerprint: '4'.repeat(64) },
+      prior_candidate: { claim_id: '5'.repeat(64), payload_fingerprint: '6'.repeat(64), result_digest: `sha256:${'7'.repeat(64)}`, payload: { finding: '& < prior' } },
+      prior_admission: { claim_id: '8'.repeat(64), payload_fingerprint: '9'.repeat(64) },
+    };
+    const request: any = { prInfo: {}, checkConfig: { type: 'managed' }, dependencyResults: new Map(), executionContext: {}, binding: helperManagedBinding(), reinspectionContext };
+    const snapshot = snapshotManagedRunStartRequest(request);
+    expect(snapshot.reinspectionContext).not.toBe(reinspectionContext);
+    expect(snapshot.reinspectionContext).toEqual(reinspectionContext);
+    expectDeeplyFrozen(snapshot.reinspectionContext);
+    reinspectionContext.prior_candidate.payload.finding = 'mutated';
+    expect((snapshot.reinspectionContext as any).prior_candidate.payload.finding).toBe('& < prior');
+  });
+
   it('requires the reconciliation request only for the exact Proof project reconciler', () => {
     const base: any = { prInfo: {}, dependencyResults: new Map(), executionContext: {}, binding: helperManagedBinding() };
     expect(() => snapshotManagedRunStartRequest({ ...base, checkConfig: { type: 'proof-project-reconcile' } })).toThrow('PROOF_PROJECT_RECONCILIATION_REQUEST_AUTHORITY_MISMATCH');

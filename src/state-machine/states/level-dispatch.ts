@@ -3161,6 +3161,7 @@ async function executeSingleCheck(
       delete inherited._parentContext;
       delete inherited._parentState;
       delete inherited.journal;
+      delete inherited.reinspectionContext;
       return inherited;
     })();
     const executionContext = {
@@ -3322,6 +3323,9 @@ async function executeSingleCheck(
               workingDirectory: controllerWorkingDirectory(context),
               ...(checkId === 'proof_admit'
                 ? { proofAdmissionRequest: context.journal.getProofAdmissionRequest(dynamic!.attempt.nodeGenerationId) }
+                : {}),
+              ...(checkId === 'inspect' && providerType === GOVERNED_PROOF_INSPECT_PROVIDER_NAME && isGovernedProofComponentSelector(checkConfig.invocation)
+                ? (() => { const reinspectionContext = context.journal.getProofComponentReinspectionContext(dynamic!.attempt.nodeGenerationId); return reinspectionContext ? { reinspectionContext } : {}; })()
                 : {}),
               ...(checkId === PROOF_PROJECT_RECONCILE_NODE_KEY &&
                 providerType === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE &&

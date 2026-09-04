@@ -67,12 +67,38 @@ describe('EXP-0209 onboarding quality gate', () => {
     expect(result.criterion_results.hidden_oracle.details.patched_passed).toBe(true);
   });
 
+  it('accepts the retained Attempt010 HTTP decoder finding wording', () => {
+    const value = fixture();
+    value.baselineComponentCandidates[0].findings[0] = {
+      id: 'F-HTTP-DECODER-001',
+      severity: 'medium',
+      title: 'A valid JSON draft followed by another JSON value makes the second decode fail the EOF check at http.go:45 and sets decodeErr at http.go:46. writeEntry emits a 400 response at http.go:48-50 but does not return. It then calls Service.Create at http.go:51, which can pass validation at service.go:49-58, commit the entry at store.go:36-46, and invoke the notifier at service.go:63-65. The client can receive an invalid-JSON result while journal state changes.',
+      calibration: 'confirmed',
+      confidence: 0.99,
+      coordinates: [coordinate('http.go', 45), coordinate('http.go', 48), coordinate('http.go', 51), coordinate('service.go', 59), coordinate('store.go', 42)],
+    };
+    expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(true);
+  });
+
   it.each(['can', 'may', 'does'])('recognizes %s as control-flow evidence only with decode and effect evidence', (controlWord) => {
     const value = fixture();
     value.baselineComponentCandidates[0].findings[0].text = `Malformed JSON ${controlWord} still fall through to a persisted state effect.`;
     expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(true);
     value.baselineComponentCandidates[0].findings[0].text = `The request ${controlWord} fall through.`;
     expect(evaluateOnboardingQuality(value).criterion_results.baseline_http_candidate.pass).toBe(false);
+  });
+
+  it('accepts Attempt010 wording, ignores an unrelated notifier persistence finding, and rejects an unresolved decoder signature', () => {
+    const value = fixture();
+    value.resumeComponentCandidates[0].findings[0].text = 'Attempt010: malformed JSON decode did not return at the HTTP boundary; persistence/state effect is now prevented; added return; TestMalformedWriteDoesNotPersist.';
+    expect(evaluateOnboardingQuality(value).criterion_results.resume_http_resolution.pass).toBe(true);
+    value.resumeComponentCandidates[0].findings.push({ severity: 'medium', confidence: 0.95, likelihood: 'confirmed', text: 'Notifier persistence has no delivery isolation.', coordinates: [coordinate('service.go', 64)] });
+    expect(evaluateOnboardingQuality(value).criterion_results.resume_http_resolution.pass).toBe(true);
+    value.resumeComponentCandidates[0].findings[0].severity = 'medium';
+    value.resumeComponentCandidates[0].findings[0].confidence = 0.95;
+    value.resumeComponentCandidates[0].findings[0].likelihood = 'confirmed';
+    value.resumeComponentCandidates[0].findings[0].text = 'Malformed JSON decode did not return at the HTTP boundary; persistence/state effect remains; TestMalformedWriteDoesNotPersist.';
+    expect(evaluateOnboardingQuality(value).criterion_results.resume_http_resolution.pass).toBe(false);
   });
 
   it('recognizes ordinary create verb forms only when the control wording includes still', () => {

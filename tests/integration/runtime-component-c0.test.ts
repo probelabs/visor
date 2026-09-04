@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapshot-store';
-import { canonicalJson } from '../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue } from '../../src/state-machine/graph/claim-kernel';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { proofCanonicalJson, proofTopLevelJson } from '../../src/providers/proof-wire';
 import { goCompatibleProofJson } from '../../src/providers/proof-admission-cli-child';
@@ -343,10 +343,11 @@ setTimeout(() => {
       rootCheck.instructions = resolvedRoot.instructions;
       rootCheck.invocation_digest = resolvedRoot.invocation_digest;
       rootCheck.result_schema = Buffer.from(rootInvocation.output_schema, 'base64').toString('utf8');
-      const c0Schema = Buffer.from(JSON.stringify({ type: 'object', additionalProperties: false, required: ['component_id', 'status'], properties: { component_id: { type: 'string' }, status: { const: 'ok' } } }), 'utf8').toString('base64');
+      const c0CandidateSchema = config.claim_types['proof.candidate@1'].schema.oneOf.find((schema: any) => schema.properties?.requirements);
+      const c0Schema = Buffer.from(JSON.stringify(c0CandidateSchema), 'utf8').toString('base64');
       config.subgraphs['onboard-component'].checks.inspect = {
         type: 'governed-proof-inspect', profile: PROFILE,
-        invocation: { role_id: 'onboard', stance: 'owner', subject: { kind: 'component' }, output_schema_id: 'proof.findings/v1', output_schema: c0Schema },
+        invocation: { role_id: 'onboard', stance: 'owner', subject: { kind: 'component' }, output_schema_id: 'reqproof.component-onboarding/v1', output_schema: c0Schema },
         consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'proof.candidate@1', from: 'output' }],
       };
       config.subgraphs['onboard-component'].checks.proof_admit = {
@@ -366,7 +367,8 @@ setTimeout(() => {
         journal.recordManagedRunAcquired(binding);
         journal.recordManagedRunStarted(binding);
         const run = provider.startManaged({
-          prInfo: {} as any, checkConfig: execution.node.check, dependencyResults, executionContext: { claims: execution.claims }, binding,
+          prInfo: {} as any, checkConfig: execution.node.check, dependencyResults,
+          executionContext: { claims: execution.claims, ...(execution.node.check.invocation?.subject?.kind === 'component' ? { proofComponentAuthority: journal.getProofComponentInvocationAuthority(nodeGenerationId) } : {}) }, binding,
           executionConfigDigest: execution.node.executionConfigDigest, workingDirectory: root, ...extra,
         });
         await expect(run.started).resolves.toMatchObject({ kind: 'started' });
@@ -396,6 +398,7 @@ setTimeout(() => {
         ],
       };
       const discovery = governed.createGovernedProofInspectProviderForFocusedTest(() => ({
+        preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'a'.repeat(64)}`, promptBytes: 17 }),
         answer: (request: GovernedProbeRunnerRequest) => {
           const candidateText = proofJSON(candidateData);
           const candidateBytes = Buffer.from(candidateText, 'utf8');
@@ -481,6 +484,70 @@ setTimeout(() => {
       const componentGeneration: any = journal.queryReadyWork().find(value => value.templateNodeKey === 'inspect' && value.scope.length === 2 && journal.getGeneratedExecution(value.nodeGenerationId).claims.component?.payload.component_id === 'beta');
       expect(alphaGeneration).toBeDefined();
       expect(componentGeneration).toBeDefined();
+      let replacementC0Request: any;
+      const replacementC0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: any) => ({
+        preview: () => ({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'c'.repeat(64)}`, promptBytes: 0 }),
+        answer: () => {
+          replacementC0Request = request;
+          const subject = request.invocation.component_authority.subject;
+          const coordinate = (path: string) => ({ path, line: 1 });
+          const data = immutableCanonicalValue({
+            schema: 'reqproof.component-onboarding/v1', project: subject.project_id, shard: subject.component_id,
+            reviewedFiles: subject.sorted_owned_paths.map((path: string) => ({ path, coordinates: [coordinate(path)] })),
+            requirements: ['STK', 'SYS', 'SW', 'INT'].map((kind, index) => ({ id: `${kind}-${subject.component_id}-${index + 1}`, text: `${kind} evidence`, coordinates: [coordinate(subject.sorted_owned_paths[0])] })),
+            interfaces: [{ name: `${subject.component_id}-boundary`, coordinates: [coordinate(subject.sorted_owned_paths[0])] }],
+            findings: [{ id: `finding-${subject.component_id}`, severity: 'info', title: 'No blocking finding', calibration: 'confirmed', confidence: 1, coordinates: [coordinate(subject.sorted_owned_paths[0])] }],
+            unknowns: [], repositoryMutated: false, commandsExecuted: false, checklistCompleted: false,
+          });
+          const bytes = canonicalJson(data);
+          const d = 'a'.repeat(64);
+          return {
+            data,
+            runtimeAttestation: {
+              version: 'probe.governed-codex-attestation/v2', profileId: PROFILE,
+              requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
+              observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' },
+              executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
+              dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'c'.repeat(64)}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+            },
+            resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: governed.governedResultDigest(data), canonicalBytes: Buffer.byteLength(bytes, 'utf8') },
+          };
+        }, cancel: () => undefined, close: () => undefined,
+      }), capability);
+      const baselineAlphaInspectResult = await completeManaged(alphaGeneration.nodeGenerationId, replacementC0Provider);
+      const baselineAlphaAdmission = journal.queryReadyWork().find(value =>
+        value.checkId === 'proof_admit' && value.scope.length === 2 && value.subgraphInstanceId === alphaGeneration.subgraphInstanceId
+      )!;
+      const baselineAlphaAdmissionExecution = journal.getGeneratedExecution(baselineAlphaAdmission.nodeGenerationId);
+      const baselineAlphaAdmissionAttempt = journal.startGeneratedAttempt(baselineAlphaAdmission.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(baselineAlphaAdmissionAttempt);
+      const baselineAlphaAdmissionBinding = journal.deriveManagedRunBinding(baselineAlphaAdmissionAttempt);
+      journal.recordManagedRunAcquired(baselineAlphaAdmissionBinding);
+      journal.recordManagedRunStarted(baselineAlphaAdmissionBinding);
+      const baselineAlphaAdmissionProvider = admitModule.createProofAdmitProviderFromCapability(capability);
+      const baselineAlphaAdmissionRun = baselineAlphaAdmissionProvider.startManaged({
+        prInfo: {} as any, checkConfig: baselineAlphaAdmissionExecution.node.check,
+        dependencyResults: new Map([['inspect', { issues: [], output: baselineAlphaInspectResult.outcome.summary.output }]]),
+        executionContext: { claims: baselineAlphaAdmissionExecution.claims }, binding: baselineAlphaAdmissionBinding,
+        executionConfigDigest: baselineAlphaAdmissionExecution.node.executionConfigDigest, workingDirectory: root,
+        proofAdmissionRequest: journal.getProofAdmissionRequest(baselineAlphaAdmission.nodeGenerationId),
+      });
+      await expect(baselineAlphaAdmissionRun.started).resolves.toMatchObject({ kind: 'started' });
+      const baselineAlphaAdmissionOutcome: any = await baselineAlphaAdmissionRun.outcome;
+      expect(baselineAlphaAdmissionOutcome.kind).toBe('succeeded');
+      await expect(baselineAlphaAdmissionRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
+      journal.completeManagedGeneratedAttempt({
+        attempt: baselineAlphaAdmissionAttempt, binding: baselineAlphaAdmissionBinding,
+        payload: baselineAlphaAdmissionOutcome.summary.output,
+        executionConfigDigest: baselineAlphaAdmissionExecution.node.executionConfigDigest,
+      });
+      const baselineAlphaVerify = journal.queryReadyWork().find(value =>
+        value.checkId === 'verify' && value.scope.length === 2 && value.subgraphInstanceId === alphaGeneration.subgraphInstanceId
+      )!;
+      const baselineAlphaVerifyAttempt = journal.startGeneratedAttempt(baselineAlphaVerify.nodeGenerationId);
+      journal.scheduleGeneratedAttempt(baselineAlphaVerifyAttempt);
+      journal.completeGeneratedAttempt({ attempt: baselineAlphaVerifyAttempt, payload: {} });
+      expect(journal.getProofComponentReinspectionContext(componentGeneration.nodeGenerationId)).toBeUndefined();
       const authority = journal.getProofComponentInvocationAuthority(componentGeneration.nodeGenerationId);
       expect(authority.candidate).toEqual(expect.objectContaining({ version: 'proof.component-catalog-candidate/v1', project_id: directInventory.authority.project_id }));
       expect(authority.admission).toEqual(expect.objectContaining({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: expect.objectContaining({ Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED' }), reject_code: null }));
@@ -665,6 +732,14 @@ setTimeout(() => {
       expect(readyAfterApply[0].fence).toBeUndefined();
       expect(readyAfterApply[0].attemptId).toBeUndefined();
       const changedAuthority = journal.getProofComponentInvocationAuthority(readyAfterApply[0].nodeGenerationId);
+      const reinspectionContext = journal.getProofComponentReinspectionContext(readyAfterApply[0].nodeGenerationId);
+      expect(reinspectionContext).toEqual(expect.objectContaining({
+        version: 'visor.proof-component-reinspection-context/v1',
+        component_id: 'alpha',
+        changed_paths: ['alpha.go'],
+      }));
+      expect(reinspectionContext?.prior_candidate).toEqual(expect.objectContaining({ claim_id: expect.any(String), payload_fingerprint: expect.any(String), result_digest: expect.stringMatching(/^sha256:/) }));
+      expect(reinspectionContext?.prior_admission).toEqual(expect.objectContaining({ claim_id: expect.any(String), payload_fingerprint: expect.any(String) }));
       expect(changedAuthority.work_item).toEqual(expect.objectContaining({ component_id: 'alpha' }));
       expect(changedAuthority.catalog_revalidation_receipt).toEqual(expect.objectContaining({ version: 'proof.catalog-revalidation-receipt/v2' }));
       expect(journal.readRuntimeEvents().slice(0, beforeApplyEvents.length)).toEqual(beforeApplyEvents);
@@ -758,26 +833,6 @@ setTimeout(() => {
       // boundary before exporting the checkpoint.  The answer itself is
       // still a deterministic focused Probe answer; the subprocess and its
       // authenticated Proof candidate are real.
-      let replacementC0Request: any;
-      const replacementC0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: any) => ({
-        answer: () => {
-          replacementC0Request = request;
-          const data = { component_id: request.invocation.subject.id, status: 'ok' };
-          const bytes = canonicalJson(data);
-          const d = 'a'.repeat(64);
-          return {
-            data,
-            runtimeAttestation: {
-              version: 'probe.governed-codex-attestation/v2', profileId: PROFILE,
-              requested: { profileDigest: d, cwdDigest: d, probeToolsDigest: d, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' },
-              observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: d, permissionProfileDigest: d, filesystem: 'restricted-read-root', network: 'restricted' },
-              executionContext: { source: 'caller', invocationDigest: request.invocationDigest },
-              dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'c'.repeat(64)}`, promptBytes: 0 }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
-            },
-            resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: governed.governedResultDigest(data), canonicalBytes: Buffer.byteLength(bytes, 'utf8') },
-          };
-        }, cancel: () => undefined, close: () => undefined,
-      }), capability);
       const replacementExecution = journal.getGeneratedExecution(readyAfterApply[0].nodeGenerationId);
       const replacementRun = replacementC0Provider.startManaged({
         prInfo: {} as any,
@@ -791,6 +846,7 @@ setTimeout(() => {
         binding: { ...binding(), nodeGenerationId: readyAfterApply[0].nodeGenerationId, nodeInstanceId: readyAfterApply[0].nodeInstanceId },
         executionConfigDigest: replacementExecution.node.executionConfigDigest,
         workingDirectory: root,
+        reinspectionContext,
       });
       await expect(replacementRun.started).resolves.toMatchObject({ kind: 'started' });
       const replacementOutcome: any = await replacementRun.outcome;
@@ -798,6 +854,8 @@ setTimeout(() => {
       await expect(replacementRun.close()).resolves.toMatchObject({ status: 'clean', activeChildren: 0, activeResources: 0 });
       expect(replacementC0Request?.invocation.subject).toEqual({ kind: 'component', id: 'alpha', fingerprint: changedAuthority.subject.fingerprint });
       expect(replacementC0Request?.invocation.component_authority).toEqual(changedAuthority);
+      expect(replacementC0Request?.reinspectionContext).toEqual(reinspectionContext);
+      expect(replacementOutcome.proofCandidateEvidence.reinspectionContext).toEqual(reinspectionContext);
       // The unchanged components never enter the runner.  Leave the next
       // changed-stage generation terminal for checkpoint export.
       const preReplacementLifecycleEvents = journal.readRuntimeEvents();
@@ -1195,7 +1253,8 @@ setTimeout(() => {
       appliedControllerEvent.payload.authority.work_item_digest = `sha256:${'1'.repeat(64)}`;
       expect(() => ExecutionJournal.restoreGraphCheckpoint(plan, rehashCheckpoint(tamperedAppliedPayload))).toThrow(/authority|item|mutation|instance replay/i);
       let c0Request: GovernedProbeRunnerRequest | undefined;
-      const c0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => ({
+      const c0Provider = governed.createGovernedProofInspectProviderForFocusedTest((request: GovernedProbeRunnerRequest) => {
+        return ({
         answer: () => {
           c0Request = request;
           const data = { component_id: (request.invocation.subject as any).id, status: 'ok' };
@@ -1212,7 +1271,8 @@ setTimeout(() => {
             resultIdentity: { version: 'probe.governed-result-identity/v1', source: 'probe-host-schema-valid-json', resultDigest: governed.governedResultDigest(data), canonicalBytes: Buffer.byteLength(bytes, 'utf8') },
           };
         }, cancel: () => undefined, close: () => undefined,
-      }), capability);
+        });
+      }, capability);
       const c0Run = c0Provider.startManaged({ prInfo: {} as any, checkConfig: restoredComponentExecution.node.check, dependencyResults: new Map(), executionContext: { claims: restoredComponentExecution.claims, proofComponentAuthority: restoredAuthority }, binding: c0Binding!, executionConfigDigest: restoredComponentExecution.node.executionConfigDigest, workingDirectory: root });
       await expect(c0Run.started).resolves.toMatchObject({ kind: 'started' });
       await expect(c0Run.outcome).resolves.toMatchObject({ kind: 'succeeded-proof-candidate' });
