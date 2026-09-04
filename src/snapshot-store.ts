@@ -1505,6 +1505,28 @@ function ensureCheckpointQuiescent(claimProjection: ClaimProjection, instancePro
   }
 }
 
+/** Final checkpoint frontiers may retain unscheduled ready work, but no
+ * in-flight lifecycle or partially scheduled generation.  Proof authority
+ * recording/application continues to use the stricter event-time gate above. */
+function ensureCheckpointExportable(claimProjection: ClaimProjection, instanceProjection: InstanceProjection): void {
+  if (Object.values(claimProjection.attempts).some(attempt => attempt.status === 'started')) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a started root or catalog attempt');
+  }
+  if (Object.values(instanceProjection.requestsById).some(request => request.status === 'pending' || request.status === 'running')) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a pending or running catalog request');
+  }
+  if (Object.values(instanceProjection.generationsById).some(generation =>
+    generation.status === 'running' ||
+    (generation.status === 'ready' && (generation.scheduled || generation.attemptId !== undefined || generation.fence !== undefined)))) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a scheduled or running generation');
+  }
+  if (Object.values(instanceProjection.managedRunsByAttemptId).some(run =>
+    run.status === 'acquired' || run.status === 'started' || run.status === 'cancel_requested' ||
+    (run.status === 'terminated' && run.cleanupStatus !== 'clean'))) {
+    throw new GraphJournalCheckpointError('CHECKPOINT_NOT_QUIESCENT', 'Checkpoint contains a nonterminal managed run');
+  }
+}
+
 /**
  * Replay uses the same event-time quiescence rule as checkpoint restore.  The
  * check must run on the projection prefix before reducing each aggregate
@@ -1665,6 +1687,7 @@ export class ExecutionJournal {
     if (events.some(event => event.sessionId !== sessionId)) {
       throw new GraphJournalCheckpointError('CHECKPOINT_SESSION_MISMATCH', 'Runtime event session differs from export session');
     }
+    ensureCheckpointExportable(this.claimProjection, this.instanceProjection);
     const body = {
       kind: 'visor.graph-journal-checkpoint' as const,
       version: 1 as const,
@@ -1814,7 +1837,7 @@ export class ExecutionJournal {
       throw checkpointWrap('INVALID_CHECKPOINT_PREFIX', 'Checkpoint instance replay failed', error);
     }
     validateCheckpointBarrierCompleteness(claimPlan, instanceProjection);
-    ensureCheckpointQuiescent(claimProjection, instanceProjection);
+    ensureCheckpointExportable(claimProjection, instanceProjection);
     const allocators = reconstructCheckpointAllocators(events);
 
     const restored = new ExecutionJournal(claimPlan);

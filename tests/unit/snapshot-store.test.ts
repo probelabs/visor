@@ -1118,6 +1118,7 @@ describe('snapshot-store (journal + context view)', () => {
       failureCode: 'MANAGED_HANDLE_INVALID',
     });
     expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+    expect(() => journal.exportGraphCheckpoint('c2-session')).not.toThrow();
     expectErrorCode(
       () => journal.failGeneratedAttempt(attempt, 'PROVIDER_EXECUTION_FAILED'),
       'STALE_FENCE'
@@ -1268,6 +1269,28 @@ describe('snapshot-store (journal + context view)', () => {
     ]);
     expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
     expect(JSON.stringify(journal.readRuntimeEvents())).not.toContain('activeResources');
+    expect(() => journal.exportGraphCheckpoint('c2-session')).not.toThrow();
+  });
+
+  it('rejects an unverified managed cleanup at the checkpoint boundary', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    journal.recordManagedRunAcquired(binding);
+    journal.recordManagedRunStarted(binding);
+    journal.failManagedGeneratedAttempt({
+      attempt,
+      binding,
+      cleanupStatus: 'unverified',
+      failureCode: 'MANAGED_CLOSE_FAILED',
+    });
+    expectErrorCode(
+      () => journal.exportGraphCheckpoint('c2-session'),
+      'CHECKPOINT_NOT_QUIESCENT'
+    );
   });
 
   it('publishes a managed completion only with its clean terminal in one batch', () => {
@@ -1370,8 +1393,8 @@ describe('Graph-v2 journal checkpoints', () => {
     return checkpoint;
   }
 
-  function checkpointWithEvents(source: ExecutionJournal, events: readonly any[]): JsonCheckpoint {
-    const checkpoint = JSON.parse(JSON.stringify(source.exportGraphCheckpoint('c2-session')));
+  function checkpointWithEvents(source: ExecutionJournal, events: readonly any[], baseCheckpoint?: JsonCheckpoint): JsonCheckpoint {
+    const checkpoint = JSON.parse(JSON.stringify(baseCheckpoint || source.exportGraphCheckpoint('c2-session')));
     checkpoint.events = JSON.parse(JSON.stringify(events));
     checkpoint.frontier = { eventCount: events.length, lastEventId: events.length };
     return rehash(checkpoint);
@@ -1563,10 +1586,18 @@ describe('Graph-v2 journal checkpoints', () => {
     );
   });
 
-  it('accepts an empty checkpoint and rejects every non-quiescent frontier class', () => {
+  it('accepts empty and ready-only frontiers while rejecting every in-flight class', () => {
     const empty = new ExecutionJournal(compileClaimPlan(c2Config())).exportGraphCheckpoint('empty');
     const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), JSON.parse(JSON.stringify(empty)));
     expect(restored.readRuntimeEvents()).toEqual([]);
+    const readyJournal = c2Journal();
+    publishCatalog(readyJournal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const readyCheckpoint = readyJournal.exportGraphCheckpoint('c2-session');
+    const readyRestore = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), JSON.parse(JSON.stringify(readyCheckpoint)));
+    expect(readyRestore.getInstanceProjection()).toEqual(readyJournal.getInstanceProjection());
+    expect((readyRestore as any).nextFence).toBe((readyJournal as any).nextFence);
+    expect((readyRestore as any).attemptOrdinals).toEqual((readyJournal as any).attemptOrdinals);
+    expect(readyRestore.exportGraphCheckpoint('c2-session')).toEqual(readyCheckpoint);
     const cases: Array<[string, () => ExecutionJournal]> = [
       ['root attempt', () => {
         const journal = c2Journal();
@@ -1576,11 +1607,6 @@ describe('Graph-v2 journal checkpoints', () => {
       ['pending request', () => {
         const journal = c2Journal();
         journal.requestCatalogReconciliation({ sessionId: 'c2-session', ownerCheck: 'discover' });
-        return journal;
-      }],
-      ['ready generation', () => {
-        const journal = c2Journal();
-        publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
         return journal;
       }],
       ['running generation', () => {
@@ -1624,9 +1650,8 @@ describe('Graph-v2 journal checkpoints', () => {
       }],
     ];
     for (const [name, build] of cases) {
-      const checkpoint = build().exportGraphCheckpoint('c2-session');
       expectErrorCode(
-        () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), JSON.parse(JSON.stringify(checkpoint))),
+        () => build().exportGraphCheckpoint('c2-session'),
         'CHECKPOINT_NOT_QUIESCENT'
       );
       void name;
@@ -1654,8 +1679,9 @@ describe('Graph-v2 journal checkpoints', () => {
   ])('rejects an atomic managed-terminal cut (%s)', (_name, buildCut) => {
     const source = c2Journal();
     publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    const baseCheckpoint = source.exportGraphCheckpoint('c2-session');
     const cut = buildCut(source);
-    const checkpoint = checkpointWithEvents(source, source.readRuntimeEvents().slice(0, cut));
+    const checkpoint = checkpointWithEvents(source, source.readRuntimeEvents().slice(0, cut), baseCheckpoint);
     expectErrorCode(
       () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), checkpoint),
       'INVALID_CHECKPOINT_PREFIX'
