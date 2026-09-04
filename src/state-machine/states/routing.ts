@@ -200,6 +200,7 @@ interface RoutingContext {
   result: ReviewSummary;
   checkConfig: CheckConfig;
   success: boolean; // true if no fatal issues
+  exactPreviousResults?: ReadonlyMap<string, ReviewSummary>;
 }
 
 /**
@@ -291,7 +292,14 @@ export async function handleRouting(
   logger.info(`[Routing] Evaluating routing for check: ${checkId}, success: ${success}`);
 
   // Step 1: Evaluate fail_if and failure_conditions
-  const failureResult = await evaluateFailIf(checkId, result, checkConfig, context, state);
+  const failureResult = await evaluateFailIf(
+    checkId,
+    result,
+    checkConfig,
+    context,
+    state,
+    routingContext.exactPreviousResults
+  );
 
   // Step 1.5: Check if we need to halt execution immediately
   if (failureResult.haltExecution) {
@@ -654,7 +662,8 @@ async function evaluateFailIf(
   result: ReviewSummary,
   checkConfig: CheckConfig,
   context: EngineContext,
-  state: RunState
+  state: RunState,
+  exactPreviousResults?: ReadonlyMap<string, ReviewSummary>
 ): Promise<FailureEvaluationResult> {
   const config = context.config;
 
@@ -672,24 +681,28 @@ async function evaluateFailIf(
 
   // Build outputs record from state
   const outputsRecord: Record<string, ReviewSummary> = {};
-  for (const [key] of state.stats.entries()) {
-    // Try to get the actual result from context.journal if available
-    try {
-      const snapshotId = context.journal.beginSnapshot();
-      const contextView = new (require('../../snapshot-store').ContextView)(
-        context.journal,
-        context.sessionId,
-        snapshotId,
-        [],
-        context.event
-      );
-      const journalResult = contextView.get(key);
-      if (journalResult) {
-        outputsRecord[key] = journalResult as ReviewSummary;
+  if (exactPreviousResults) {
+    for (const [key, value] of exactPreviousResults) outputsRecord[key] = value;
+  } else {
+    for (const [key] of state.stats.entries()) {
+      // Try to get the actual result from context.journal if available
+      try {
+        const snapshotId = context.journal.beginSnapshot();
+        const contextView = new (require('../../snapshot-store').ContextView)(
+          context.journal,
+          context.sessionId,
+          snapshotId,
+          [],
+          context.event
+        );
+        const journalResult = contextView.get(key);
+        if (journalResult) {
+          outputsRecord[key] = journalResult as ReviewSummary;
+        }
+      } catch {
+        // Fallback to empty result
+        outputsRecord[key] = { issues: [] };
       }
-    } catch {
-      // Fallback to empty result
-      outputsRecord[key] = { issues: [] };
     }
   }
 

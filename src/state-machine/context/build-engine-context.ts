@@ -8,6 +8,7 @@ import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
 import { WorkspaceManager } from '../../utils/workspace-manager';
 import { FairConcurrencyLimiter } from '../../utils/fair-concurrency-limiter';
+import { compileClaimPlan } from '../graph/claim-plan';
 
 /**
  * Apply minimal criticality defaults in-place.
@@ -42,6 +43,20 @@ export function buildEngineContextForRun(
 ): EngineContext {
   // Deep clone provided config to avoid cross-run mutations between tests/runs
   const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
+
+  // Compile exact claim bindings once. Materialize effective dependencies only
+  // into the per-run clone; the caller's authored configuration remains untouched.
+  const claimPlan = compileClaimPlan(clonedConfig);
+  if (claimPlan.active) {
+    const clonedChecks = clonedConfig.checks || clonedConfig.steps || {};
+    for (const [checkId, dependencies] of Object.entries(
+      claimPlan.effectiveDependenciesByCheck
+    )) {
+      const check = clonedChecks[checkId];
+      if (check) check.depends_on = [...dependencies];
+    }
+    clonedConfig.checks = clonedChecks;
+  }
 
   // Build check metadata
   const checks: Record<string, CheckMetadata> = {};
@@ -97,7 +112,7 @@ export function buildEngineContextForRun(
   }
 
   // Initialize journal and memory
-  const journal = new ExecutionJournal();
+  const journal = new ExecutionJournal(claimPlan);
   const memory = MemoryStore.getInstance(clonedConfig.memory);
 
   // Create shared AI concurrency limiter if configured.
@@ -145,6 +160,7 @@ export function buildEngineContextForRun(
     mode: 'state-machine',
     config: clonedConfig,
     checks,
+    claimPlan,
     journal,
     memory,
     workingDirectory,

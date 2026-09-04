@@ -1,0 +1,628 @@
+import type {
+  CheckConfig,
+  ClaimConsumptionConfig,
+  ClaimEmissionConfig,
+  ClaimTypeConfig,
+  ExpansionConfig,
+  SubgraphConfig,
+  VisorConfig,
+} from '../../types/config';
+import {
+  immutableCanonicalValue,
+  sha256Canonical,
+  type ClaimSchemaValidator,
+} from './claim-kernel';
+
+const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
+const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+export class InstancePlanError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'InstancePlanError';
+    this.code = code;
+  }
+}
+
+export interface CompiledJsonPointer {
+  readonly source: string;
+  readonly tokens: readonly string[];
+}
+
+export interface CompiledTemplateNode {
+  readonly templateNodeKey: string;
+  readonly check: CheckConfig;
+  readonly emissions: readonly ClaimEmissionConfig[];
+  readonly consumptions: readonly Required<ClaimConsumptionConfig>[];
+  readonly dependencyNodeKeys: readonly string[];
+  readonly executionConfigDigest: string;
+}
+
+export interface CompiledSubgraphTemplate {
+  readonly name: string;
+  readonly input: Readonly<{ name: string; claim: string }>;
+  readonly templateDigest: string;
+  readonly templateNodeKeys: readonly string[];
+  readonly topology: readonly string[];
+  readonly reverseTopology: readonly string[];
+  readonly sourceNodeKeys: readonly string[];
+  readonly nodesByKey: Readonly<Record<string, CompiledTemplateNode>>;
+  readonly emitterByClaim: Readonly<Record<string, string>>;
+  readonly dependentsByNode: Readonly<Record<string, readonly string[]>>;
+}
+
+export interface CompiledExpansion {
+  readonly expansionOwnerCheck: string;
+  readonly catalogClaimRef: string;
+  readonly catalogValidator: ClaimSchemaValidator;
+  readonly templateName: string;
+  readonly templateDigest: string;
+  readonly expansionSpecDigest: string;
+  readonly itemsPointer: CompiledJsonPointer;
+  readonly keyPointer: CompiledJsonPointer;
+  readonly itemClaimRef: string;
+  readonly itemValidator: ClaimSchemaValidator;
+  readonly template: CompiledSubgraphTemplate;
+  readonly graphSemanticDigest: string;
+}
+
+export interface ExpansionPlan {
+  readonly active: boolean;
+  readonly graphSemanticDigest: string;
+  readonly byOwner: Readonly<Record<string, CompiledExpansion>>;
+  readonly templatesByName: Readonly<Record<string, CompiledSubgraphTemplate>>;
+}
+
+export interface ExpansionCompileAuthority {
+  readonly claimTypes: Readonly<Record<string, ClaimTypeConfig>>;
+  readonly validatorsByClaim: Readonly<Record<string, ClaimSchemaValidator>>;
+  readonly rootEmitterByClaim: Readonly<Record<string, string>>;
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function frozenRecord<T>(record: Record<string, T>): Readonly<Record<string, T>> {
+  return Object.freeze(record);
+}
+
+function requireNonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new InstancePlanError('INVALID_EXPANSION_CONFIG', `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+/** Strict RFC 6901 syntax compilation; no executable selector language is accepted. */
+export function compileJsonPointer(pointer: unknown, field: string): CompiledJsonPointer {
+  if (typeof pointer !== 'string' || (pointer !== '' && !pointer.startsWith('/'))) {
+    throw new InstancePlanError(
+      'INVALID_JSON_POINTER',
+      `${field} must be an RFC 6901 JSON Pointer`
+    );
+  }
+  const tokens = pointer === '' ? [] : pointer.slice(1).split('/');
+  const decoded = tokens.map(token => {
+    if (/~(?:[^01]|$)/.test(token)) {
+      throw new InstancePlanError(
+        'INVALID_JSON_POINTER',
+        `${field} contains an invalid RFC 6901 escape`
+      );
+    }
+    return token.replace(/~1/g, '/').replace(/~0/g, '~');
+  });
+  return Object.freeze({ source: pointer, tokens: Object.freeze(decoded) });
+}
+
+/** Resolve a previously compiled pointer without coercion or fallback lookup. */
+export function resolveJsonPointer(value: unknown, pointer: CompiledJsonPointer): unknown {
+  let current = value;
+  for (const token of pointer.tokens) {
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(token)) {
+        throw new InstancePlanError(
+          'JSON_POINTER_NOT_FOUND',
+          `Pointer ${pointer.source} does not resolve exactly`
+        );
+      }
+      const index = Number(token);
+      if (!Number.isSafeInteger(index) || index >= current.length) {
+        throw new InstancePlanError(
+          'JSON_POINTER_NOT_FOUND',
+          `Pointer ${pointer.source} does not resolve exactly`
+        );
+      }
+      current = current[index];
+      continue;
+    }
+    if (
+      !current ||
+      typeof current !== 'object' ||
+      !hasOwn(current as object, token)
+    ) {
+      throw new InstancePlanError(
+        'JSON_POINTER_NOT_FOUND',
+        `Pointer ${pointer.source} does not resolve exactly`
+      );
+    }
+    current = (current as Record<string, unknown>)[token];
+  }
+  return current;
+}
+
+function dependencyTokens(check: CheckConfig, checkId: string): string[] {
+  const raw = check.depends_on;
+  const tokens = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const orToken = tokens.find(token => token.includes('|'));
+  if (orToken) {
+    throw new InstancePlanError(
+      'UNSUPPORTED_TEMPLATE_OR_DEPENDENCY',
+      `Template check "${checkId}" uses unsupported OR dependency token "${orToken}"`
+    );
+  }
+  return tokens;
+}
+
+function hasRouting(check: CheckConfig): boolean {
+  return ['on_init', 'on_success', 'on_fail', 'on_finish'].some(field => {
+    if (!hasOwn(check, field)) return false;
+    const value = check[field as keyof CheckConfig];
+    return value !== undefined && value !== null;
+  });
+}
+
+function resolvedTemplateCheck(check: CheckConfig): CheckConfig {
+  const consumptions = (check.consumes || []).map(consumption => ({
+    ...consumption,
+    cardinality: 'one' as const,
+  }));
+  return immutableCanonicalValue<CheckConfig>({
+    ...check,
+    type: check.type || 'ai',
+    ...(check.consumes ? { consumes: consumptions } : {}),
+  });
+}
+
+function topologicalOrder(
+  templateName: string,
+  dependencies: Readonly<Record<string, readonly string[]>>
+): readonly string[] {
+  const remaining = new Map(
+    Object.entries(dependencies).map(([node, values]) => [node, new Set(values)])
+  );
+  const order: string[] = [];
+  while (remaining.size > 0) {
+    const ready = [...remaining.entries()]
+      .filter(([, values]) => values.size === 0)
+      .map(([node]) => node)
+      .sort();
+    if (ready.length === 0) {
+      throw new InstancePlanError(
+        'TEMPLATE_CYCLE',
+        `Subgraph template "${templateName}" contains a dependency cycle`
+      );
+    }
+    for (const node of ready) {
+      remaining.delete(node);
+      order.push(node);
+    }
+    for (const values of remaining.values()) {
+      for (const node of ready) values.delete(node);
+    }
+  }
+  return Object.freeze(order);
+}
+
+function compileTemplate(
+  name: string,
+  authored: SubgraphConfig,
+  authority: ExpansionCompileAuthority
+): CompiledSubgraphTemplate {
+  if (!authored || typeof authored !== 'object' || Array.isArray(authored)) {
+    throw new InstancePlanError('INVALID_SUBGRAPH_TEMPLATE', `Subgraph "${name}" must be an object`);
+  }
+  const inputName = requireNonEmptyString(authored.input?.name, `subgraphs.${name}.input.name`);
+  if (!BINDING_NAME_PATTERN.test(inputName)) {
+    throw new InstancePlanError(
+      'INVALID_TEMPLATE_BINDING',
+      `Subgraph "${name}" input name "${inputName}" is not a canonical binding name`
+    );
+  }
+  const inputClaim = requireNonEmptyString(
+    authored.input?.claim,
+    `subgraphs.${name}.input.claim`
+  );
+  if (!CLAIM_REF_PATTERN.test(inputClaim) || !hasOwn(authority.claimTypes, inputClaim)) {
+    throw new InstancePlanError(
+      'UNKNOWN_TEMPLATE_CLAIM',
+      `Subgraph "${name}" references undeclared input claim "${inputClaim}"`
+    );
+  }
+  if (!authored.checks || typeof authored.checks !== 'object' || Array.isArray(authored.checks)) {
+    throw new InstancePlanError(
+      'INVALID_SUBGRAPH_TEMPLATE',
+      `Subgraph "${name}" requires a checks map`
+    );
+  }
+  const nodeKeys = Object.keys(authored.checks).sort();
+  if (nodeKeys.length === 0 || nodeKeys.some(node => node.length === 0)) {
+    throw new InstancePlanError(
+      'INVALID_SUBGRAPH_TEMPLATE',
+      `Subgraph "${name}" requires at least one named check`
+    );
+  }
+
+  const resolvedChecks: Record<string, CheckConfig> = {};
+  const emitterByClaim: Record<string, string> = {};
+  const consumptionsByNode: Record<string, readonly Required<ClaimConsumptionConfig>[]> = {};
+  let consumesTemplateInput = false;
+
+  for (const nodeKey of nodeKeys) {
+    const check = authored.checks[nodeKey];
+    if (!check || typeof check !== 'object' || Array.isArray(check)) {
+      throw new InstancePlanError(
+        'INVALID_TEMPLATE_CHECK',
+        `Template check "${name}.${nodeKey}" must be an object`
+      );
+    }
+    if (check.forEach || check.type === 'workflow' || hasOwn(check, 'expand') || hasRouting(check)) {
+      throw new InstancePlanError(
+        'UNSUPPORTED_TEMPLATE_EXECUTION',
+        `Template check "${name}.${nodeKey}" cannot use forEach, workflow, nested expansion, or lifecycle routing`
+      );
+    }
+    for (const field of ['emits', 'consumes'] as const) {
+      if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {
+        throw new InstancePlanError(
+          'EMPTY_TEMPLATE_CLAIM_DECLARATION',
+          `Template check "${name}.${nodeKey}" declares ${field}, which must be a non-empty array`
+        );
+      }
+    }
+
+    const resolved = resolvedTemplateCheck(check);
+    const seenClaims = new Set<string>();
+    const seenBindings = new Set<string>();
+    const consumptions = (resolved.consumes || []).map(consumption => {
+      if (
+        !CLAIM_REF_PATTERN.test(consumption.claim) ||
+        !hasOwn(authority.claimTypes, consumption.claim)
+      ) {
+        throw new InstancePlanError(
+          'UNKNOWN_TEMPLATE_CLAIM',
+          `Template check "${name}.${nodeKey}" consumes undeclared claim "${consumption.claim}"`
+        );
+      }
+      if (consumption.cardinality !== 'one') {
+        throw new InstancePlanError(
+          'UNSUPPORTED_TEMPLATE_CARDINALITY',
+          `Template check "${name}.${nodeKey}" supports cardinality one only`
+        );
+      }
+      const binding = requireNonEmptyString(
+        consumption.as,
+        `subgraphs.${name}.checks.${nodeKey}.consumes.as`
+      );
+      if (!BINDING_NAME_PATTERN.test(binding)) {
+        throw new InstancePlanError(
+          'INVALID_TEMPLATE_BINDING',
+          `Template check "${name}.${nodeKey}" has invalid binding "${binding}"`
+        );
+      }
+      if (seenClaims.has(consumption.claim) || seenBindings.has(binding)) {
+        throw new InstancePlanError(
+          'DUPLICATE_TEMPLATE_CONSUMPTION',
+          `Template check "${name}.${nodeKey}" has a duplicate claim or binding`
+        );
+      }
+      if (consumption.claim === inputClaim) {
+        consumesTemplateInput = true;
+        if (binding !== inputName) {
+          throw new InstancePlanError(
+            'INVALID_TEMPLATE_BINDING',
+            `Template input claim "${inputClaim}" must bind as "${inputName}"`
+          );
+        }
+      }
+      seenClaims.add(consumption.claim);
+      seenBindings.add(binding);
+      return Object.freeze({
+        claim: consumption.claim,
+        cardinality: 'one' as const,
+        as: binding,
+      });
+    });
+    consumptionsByNode[nodeKey] = Object.freeze(consumptions);
+
+    for (const emission of resolved.emits || []) {
+      if (!CLAIM_REF_PATTERN.test(emission.claim) || !hasOwn(authority.claimTypes, emission.claim)) {
+        throw new InstancePlanError(
+          'UNKNOWN_TEMPLATE_CLAIM',
+          `Template check "${name}.${nodeKey}" emits undeclared claim "${emission.claim}"`
+        );
+      }
+      if (emission.from !== 'output') {
+        throw new InstancePlanError(
+          'UNSUPPORTED_TEMPLATE_CLAIM_SOURCE',
+          `Template check "${name}.${nodeKey}" uses an unsupported claim source`
+        );
+      }
+      if (emission.claim === inputClaim) {
+        throw new InstancePlanError(
+          'FORGED_CONTROLLER_ITEM_CLAIM',
+          `Template check "${name}.${nodeKey}" cannot emit controller input claim "${inputClaim}"`
+        );
+      }
+      const existing = emitterByClaim[emission.claim];
+      if (existing) {
+        throw new InstancePlanError(
+          'DUPLICATE_TEMPLATE_EMITTER',
+          `Template claim "${emission.claim}" has duplicate emitters "${existing}" and "${nodeKey}"`
+        );
+      }
+      emitterByClaim[emission.claim] = nodeKey;
+    }
+    resolvedChecks[nodeKey] = resolved;
+  }
+  if (!consumesTemplateInput) {
+    throw new InstancePlanError(
+      'UNUSED_TEMPLATE_INPUT',
+      `Subgraph "${name}" has no check consuming its input claim "${inputClaim}"`
+    );
+  }
+
+  const dependencies: Record<string, readonly string[]> = {};
+  for (const nodeKey of nodeKeys) {
+    const effective = new Set(dependencyTokens(resolvedChecks[nodeKey], `${name}.${nodeKey}`));
+    for (const dependency of effective) {
+      if (!hasOwn(resolvedChecks, dependency)) {
+        throw new InstancePlanError(
+          'UNKNOWN_TEMPLATE_CHECK',
+          `Template check "${name}.${nodeKey}" depends on unknown check "${dependency}"`
+        );
+      }
+    }
+    for (const consumption of consumptionsByNode[nodeKey]) {
+      if (consumption.claim === inputClaim) continue;
+      const emitter = emitterByClaim[consumption.claim];
+      if (!emitter) {
+        throw new InstancePlanError(
+          'MISSING_TEMPLATE_EMITTER',
+          `Template claim "${consumption.claim}" consumed by "${name}.${nodeKey}" has no template emitter`
+        );
+      }
+      effective.add(emitter);
+    }
+    dependencies[nodeKey] = Object.freeze([...effective].sort());
+  }
+  const topology = topologicalOrder(name, dependencies);
+  const dependentsByNode: Record<string, readonly string[]> = {};
+  for (const nodeKey of nodeKeys) {
+    dependentsByNode[nodeKey] = Object.freeze(
+      nodeKeys.filter(candidate => dependencies[candidate].includes(nodeKey)).sort()
+    );
+  }
+
+  const input = Object.freeze({ name: inputName, claim: inputClaim });
+  const resolvedTemplate = immutableCanonicalValue({
+    name,
+    input,
+    checks: resolvedChecks,
+  });
+  const templateDigest = sha256Canonical({ v: 1, template: resolvedTemplate });
+  const nodesByKey: Record<string, CompiledTemplateNode> = {};
+  for (const nodeKey of nodeKeys) {
+    const check = resolvedChecks[nodeKey];
+    const executionConfigDigest = sha256Canonical({
+      v: 1,
+      templateDigest,
+      templateNodeKey: nodeKey,
+      resolvedCheck: check,
+    });
+    nodesByKey[nodeKey] = Object.freeze({
+      templateNodeKey: nodeKey,
+      check,
+      emissions: Object.freeze([...(check.emits || [])]),
+      consumptions: consumptionsByNode[nodeKey],
+      dependencyNodeKeys: dependencies[nodeKey],
+      executionConfigDigest,
+    });
+  }
+
+  return Object.freeze({
+    name,
+    input,
+    templateDigest,
+    templateNodeKeys: Object.freeze(nodeKeys),
+    topology,
+    reverseTopology: Object.freeze([...topology].reverse()),
+    sourceNodeKeys: Object.freeze(nodeKeys.filter(node => dependencies[node].length === 0)),
+    nodesByKey: frozenRecord(nodesByKey),
+    emitterByClaim: frozenRecord(emitterByClaim),
+    dependentsByNode: frozenRecord(dependentsByNode),
+  });
+}
+
+function resolvedRootChecks(checks: Record<string, CheckConfig>): Readonly<Record<string, CheckConfig>> {
+  const resolved: Record<string, CheckConfig> = {};
+  for (const checkId of Object.keys(checks).sort()) {
+    resolved[checkId] = immutableCanonicalValue({
+      ...checks[checkId],
+      type: checks[checkId].type || 'ai',
+    });
+  }
+  return frozenRecord(resolved);
+}
+
+/** Compile all dynamic-instance authority once, before any provider can launch. */
+export function compileExpansionPlan(
+  config: Partial<VisorConfig>,
+  authority: ExpansionCompileAuthority
+): ExpansionPlan {
+  const checks = config.checks || config.steps || {};
+  const subgraphs = config.subgraphs;
+  const owners = Object.entries(checks).filter(([, check]) => hasOwn(check, 'expand'));
+  const hasSubgraphs = hasOwn(config, 'subgraphs');
+  if (!hasSubgraphs && owners.length === 0) {
+    return Object.freeze({
+      active: false,
+      graphSemanticDigest: sha256Canonical({ v: 1, active: false }),
+      byOwner: frozenRecord<CompiledExpansion>({}),
+      templatesByName: frozenRecord<CompiledSubgraphTemplate>({}),
+    });
+  }
+  if (
+    !subgraphs ||
+    typeof subgraphs !== 'object' ||
+    Array.isArray(subgraphs) ||
+    Object.keys(subgraphs).length === 0 ||
+    owners.length === 0
+  ) {
+    throw new InstancePlanError(
+      'INCOMPLETE_EXPANSION_CONFIG',
+      'Graph v2 C2 requires both a non-empty subgraphs map and a check-local expand block'
+    );
+  }
+
+  const templatesByName: Record<string, CompiledSubgraphTemplate> = {};
+  for (const name of Object.keys(subgraphs).sort()) {
+    requireNonEmptyString(name, 'subgraph name');
+    templatesByName[name] = compileTemplate(name, subgraphs[name], authority);
+  }
+
+  const precompiled: Array<{
+    owner: string;
+    expansion: ExpansionConfig;
+    template: CompiledSubgraphTemplate;
+    itemsPointer: CompiledJsonPointer;
+    keyPointer: CompiledJsonPointer;
+    expansionSpecDigest: string;
+  }> = [];
+  for (const [owner, check] of owners.sort(([a], [b]) => a.localeCompare(b))) {
+    const expansion = check.expand;
+    if (!expansion || typeof expansion !== 'object' || Array.isArray(expansion)) {
+      throw new InstancePlanError(
+        'INVALID_EXPANSION_CONFIG',
+        `Check "${owner}" expand must be an object`
+      );
+    }
+    const catalogClaim = requireNonEmptyString(expansion.claim, `checks.${owner}.expand.claim`);
+    if (!CLAIM_REF_PATTERN.test(catalogClaim) || !authority.validatorsByClaim[catalogClaim]) {
+      throw new InstancePlanError(
+        'UNKNOWN_EXPANSION_CLAIM',
+        `Check "${owner}" expands undeclared catalog claim "${catalogClaim}"`
+      );
+    }
+    const matchingEmissions = (check.emits || []).filter(emission => emission.claim === catalogClaim);
+    if (matchingEmissions.length !== 1 || authority.rootEmitterByClaim[catalogClaim] !== owner) {
+      throw new InstancePlanError(
+        'INVALID_EXPANSION_OWNER',
+        `Check "${owner}" must be the sole emitter of expanded claim "${catalogClaim}"`
+      );
+    }
+    const itemClaim = requireNonEmptyString(
+      expansion.item_claim,
+      `checks.${owner}.expand.item_claim`
+    );
+    if (!CLAIM_REF_PATTERN.test(itemClaim) || !authority.validatorsByClaim[itemClaim]) {
+      throw new InstancePlanError(
+        'UNKNOWN_ITEM_CLAIM',
+        `Check "${owner}" references undeclared item claim "${itemClaim}"`
+      );
+    }
+    if (authority.rootEmitterByClaim[itemClaim]) {
+      throw new InstancePlanError(
+        'FORGED_CONTROLLER_ITEM_CLAIM',
+        `Item claim "${itemClaim}" is controller-owned and cannot have a root emitter`
+      );
+    }
+    const templateName = requireNonEmptyString(
+      expansion.template,
+      `checks.${owner}.expand.template`
+    );
+    const template = templatesByName[templateName];
+    if (!template) {
+      throw new InstancePlanError(
+        'UNKNOWN_SUBGRAPH_TEMPLATE',
+        `Check "${owner}" references unknown subgraph template "${templateName}"`
+      );
+    }
+    if (template.input.claim !== itemClaim) {
+      throw new InstancePlanError(
+        'ITEM_CLAIM_MISMATCH',
+        `Check "${owner}" item claim "${itemClaim}" does not match template input "${template.input.claim}"`
+      );
+    }
+    const itemsPointer = compileJsonPointer(
+      expansion.items_pointer,
+      `checks.${owner}.expand.items_pointer`
+    );
+    const keyPointer = compileJsonPointer(
+      expansion.key_pointer,
+      `checks.${owner}.expand.key_pointer`
+    );
+    const expansionSpecDigest = sha256Canonical({
+      v: 1,
+      expansionOwnerCheck: owner,
+      catalogClaimRef: catalogClaim,
+      templateName,
+      templateDigest: template.templateDigest,
+      itemsPointer: itemsPointer.source,
+      keyPointer: keyPointer.source,
+      itemClaimRef: itemClaim,
+    });
+    precompiled.push({
+      owner,
+      expansion,
+      template,
+      itemsPointer,
+      keyPointer,
+      expansionSpecDigest,
+    });
+  }
+
+  const graphSemanticDigest = sha256Canonical({
+    v: 1,
+    claimTypes: authority.claimTypes,
+    checks: resolvedRootChecks(checks),
+    subgraphs: Object.fromEntries(
+      Object.entries(templatesByName).map(([name, template]) => [
+        name,
+        {
+          input: template.input,
+          checks: Object.fromEntries(
+            template.templateNodeKeys.map(node => [node, template.nodesByKey[node].check])
+          ),
+        },
+      ])
+    ),
+  });
+  const byOwner: Record<string, CompiledExpansion> = {};
+  for (const compiled of precompiled) {
+    const expansion = compiled.expansion;
+    byOwner[compiled.owner] = Object.freeze({
+      expansionOwnerCheck: compiled.owner,
+      catalogClaimRef: expansion.claim,
+      catalogValidator: authority.validatorsByClaim[expansion.claim],
+      templateName: expansion.template,
+      templateDigest: compiled.template.templateDigest,
+      expansionSpecDigest: compiled.expansionSpecDigest,
+      itemsPointer: compiled.itemsPointer,
+      keyPointer: compiled.keyPointer,
+      itemClaimRef: expansion.item_claim,
+      itemValidator: authority.validatorsByClaim[expansion.item_claim],
+      template: compiled.template,
+      graphSemanticDigest,
+    });
+  }
+
+  return Object.freeze({
+    active: true,
+    graphSemanticDigest,
+    byOwner: frozenRecord(byOwner),
+    templatesByName: frozenRecord(templatesByName),
+  });
+}

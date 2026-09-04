@@ -37,6 +37,7 @@ export class StateMachineRunner {
   private state: RunState;
   private debugServer?: DebugVisualizerServer;
   private hasRun = false;
+  private runActive = false;
 
   constructor(context: EngineContext, debugServer?: DebugVisualizerServer) {
     this.context = context;
@@ -82,6 +83,7 @@ export class StateMachineRunner {
    */
   async run(): Promise<ExecutionResult> {
     this.hasRun = true;
+    this.runActive = true;
     try {
       // Emit initial state transition event
       this.emitEvent({ type: 'StateTransition', from: 'Init', to: 'Init' });
@@ -124,7 +126,23 @@ export class StateMachineRunner {
       };
       this.emitEvent({ type: 'Shutdown', error: serializedError });
       throw error;
+    } finally {
+      this.runActive = false;
     }
+  }
+
+  requestCatalogReconciliation(ownerCheck: string) {
+    if (!this.runActive) {
+      const error = new Error('Catalog reconciliation requires an active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return this.context.journal.requestCatalogReconciliation({
+      sessionId: this.context.sessionId,
+      ownerCheck,
+    });
   }
 
   /**
@@ -231,17 +249,46 @@ export class StateMachineRunner {
    * M4: Streams events to debug visualizer for time-travel debugging
    */
   private emitEvent(event: EngineEvent): void {
-    this.state.historyLog.push(event);
+    // In Graph v2 claim mode the ordered journal is authoritative. Scheduling
+    // must be committed and projected before any mutable history, EventBus,
+    // telemetry, hook, or debug-view observation.
+    let eventForObservers = event;
+    if (event.type === 'CheckScheduled' && this.context.claimPlan?.active) {
+      if (!event.attemptId || event.fence === undefined) {
+        throw new Error(`Claim-mode CheckScheduled for ${event.checkId} lacks attempt authority`);
+      }
+      const scheduled = event.nodeGenerationId
+        ? this.context.journal.scheduleGeneratedAttempt({
+            nodeGenerationId: event.nodeGenerationId,
+            attemptId: event.attemptId,
+            fence: event.fence,
+          })
+        : event.requestId
+          ? this.context.journal.scheduleCatalogRequestAttempt({
+              requestId: event.requestId,
+              attemptId: event.attemptId,
+              fence: event.fence,
+            })
+          : this.context.journal.scheduleCheck({
+              sessionId: this.context.sessionId,
+              checkId: event.checkId,
+              scope: event.scope,
+              attemptId: event.attemptId,
+              fence: event.fence,
+            });
+      eventForObservers = { ...event, claimIds: scheduled.claimIds };
+    }
+    this.state.historyLog.push(eventForObservers);
 
     // Queue events that require processing by WavePlanning
-    if (event.type === 'ForwardRunRequested' || event.type === 'WaveRetry') {
-      this.state.eventQueue.push(event);
+    if (eventForObservers.type === 'ForwardRunRequested' || eventForObservers.type === 'WaveRetry') {
+      this.state.eventQueue.push(eventForObservers);
     }
 
     // M4: Stream event to debug visualizer for live monitoring
     if (this.debugServer) {
       try {
-        this.streamEventToDebugServer(event);
+        this.streamEventToDebugServer(eventForObservers);
       } catch (_err) {
         // Ignore debug server errors
       }
@@ -258,21 +305,21 @@ export class StateMachineRunner {
           runId: this.context.sessionId,
           workflowId: (this.context as any).workflowId,
           wave: this.state.wave,
-          payload: event,
+          payload: eventForObservers,
         };
         void bus.emit(envelope);
       }
     } catch {}
 
     // Call onCheckComplete hook for TUI streaming updates
-    if (event.type === 'CheckCompleted') {
+    if (eventForObservers.type === 'CheckCompleted') {
       try {
         const hook = this.context.executionContext?.hooks?.onCheckComplete;
         if (typeof hook === 'function') {
-          const checkConfig = this.context.config?.checks?.[event.checkId];
+          const checkConfig = this.context.config?.checks?.[eventForObservers.checkId];
           hook({
-            checkId: event.checkId,
-            result: event.result,
+            checkId: eventForObservers.checkId,
+            result: eventForObservers.result,
             checkConfig: checkConfig
               ? {
                   type: checkConfig.type,
@@ -286,8 +333,8 @@ export class StateMachineRunner {
       } catch {}
     }
 
-    if (this.context.debug && event.type !== 'StateTransition') {
-      logger.debug(`[StateMachine] Event: ${event.type}`);
+    if (this.context.debug && eventForObservers.type !== 'StateTransition') {
+      logger.debug(`[StateMachine] Event: ${eventForObservers.type}`);
     }
   }
 
