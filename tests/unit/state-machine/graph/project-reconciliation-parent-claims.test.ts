@@ -17,8 +17,14 @@ import {
   PROOF_ADMITTED_RECEIPT_CLAIM,
   PROOF_CANDIDATE_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM,
   PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
 } from '../../../../src/state-machine/graph/instance-plan';
+import {
+  PROOF_ADMISSION_WIRE_FIELD,
+  proofComponentCandidateEnvelopeJson,
+} from '../../../../src/providers/proof-admission-cli-child';
 
 const sessionId = 'project-reconciliation-test';
 const id = (label: string): string => sha256Canonical({ label });
@@ -326,6 +332,155 @@ function fixture(reverseRecords = false): {
   return { projection, generation: reconciliation, parentClaimIds };
 }
 
+function stagedFixture(reverseRecords = false): {
+  projection: InstanceProjection;
+  generation: NodeGenerationProjection;
+  parentClaimIds: readonly string[];
+  stageCandidateIds: readonly string[];
+  stageAdmissionIds: readonly string[];
+} {
+  const base = fixture(reverseRecords);
+  const projectId = base.generation.subgraphInstanceId;
+  const projection = {
+    ...base.projection,
+    instancesById: { ...base.projection.instancesById },
+    nodesById: { ...base.projection.nodesById },
+    generationsById: { ...base.projection.generationsById },
+    activeGenerationIdByNode: { ...base.projection.activeGenerationIdByNode },
+    claimsById: { ...base.projection.claimsById },
+  } as InstanceProjection;
+  const writable = projection as any;
+  const stageCandidateIds: string[] = [];
+  const stageAdmissionIds: string[] = [];
+
+  for (const child of Object.values(base.projection.instancesById).filter(instance =>
+    instance.parentSubgraphInstanceId === projectId)) {
+    const itemId = child.activeItemClaimId!;
+    const inspectGenerationId = writable.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.inspect!];
+    const admissionGenerationId = writable.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.proof_admit!];
+    const verifyGenerationId = writable.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.verify!];
+    const inspect = writable.generationsById[inspectGenerationId];
+    const admission = writable.generationsById[admissionGenerationId];
+    const verify = writable.generationsById[verifyGenerationId];
+    if (!inspect || !admission || !verify) throw new Error(`staged fixture missing legacy nodes for ${child.itemKey}`);
+    const candidateId = inspect.completedOutputClaimIds[0];
+    const admissionId = admission.completedOutputClaimIds[0];
+    const stageCandidateId = id(`${child.itemKey}-stage-candidate-claim`);
+    const stageAdmissionId = id(`${child.itemKey}-stage-admission-claim`);
+    const priorCandidate = writable.claimsById[candidateId];
+    const priorAdmission = writable.claimsById[admissionId];
+    const priorCandidateWire = proofComponentCandidateEnvelopeJson({
+      Publication: {
+        ClaimID: candidateId,
+        Claim: priorCandidate.claim,
+        PayloadFingerprint: priorCandidate.payloadFingerprint,
+        ParentClaimIDs: priorCandidate.parentClaimIds,
+      },
+    });
+    const priorAdmissionWire = '{"status":"ADMITTED"}';
+    writable.claimsById[admissionId] = {
+      ...priorAdmission,
+      payload: { ...(priorAdmission.payload as Record<string, unknown>), [PROOF_ADMISSION_WIRE_FIELD]: priorAdmissionWire },
+    };
+    const stageContext = {
+      version: 'proof.onboarding-stage-context/v1',
+      stage_id: 'spec_review',
+      prior_candidate: priorCandidateWire,
+      prior_admission: priorAdmissionWire,
+      prior_admission_claim_id: admissionId,
+      prior_admission_payload_fingerprint: priorAdmission.payloadFingerprint,
+    };
+    const stageCandidate = completedGeneration({
+      label: `${child.itemKey}-spec-review`,
+      checkId: 'spec_review',
+      subgraphInstanceId: child.subgraphInstanceId,
+      scope: child.scope,
+      activeInputClaimIds: [itemId, candidateId, admissionId].sort(),
+      completedOutputClaimIds: [stageCandidateId],
+    });
+    const stageAdmission = completedGeneration({
+      label: `${child.itemKey}-spec-review-admit`,
+      checkId: 'spec_review_admit',
+      subgraphInstanceId: child.subgraphInstanceId,
+      scope: child.scope,
+      activeInputClaimIds: [stageCandidateId],
+      completedOutputClaimIds: [stageAdmissionId],
+    });
+    const stageEvidence = {
+      role: {
+        invocation: {
+          role_id: 'spec-review',
+          stance: 'owner',
+          onboarding_stage: stageContext,
+        },
+        invocationDigest: id(`${child.itemKey}-spec-review-invocation`),
+      },
+    };
+    const stageCandidateParents = [itemId, candidateId, admissionId].sort((left, right) =>
+      Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+    writable.generationsById[stageCandidate.nodeGenerationId] = stageCandidate;
+    writable.generationsById[stageAdmission.nodeGenerationId] = stageAdmission;
+    writable.generationsById[verify.nodeGenerationId] = {
+      ...verify,
+      activeInputClaimIds: [candidateId, admissionId, stageCandidateId, stageAdmissionId].sort(),
+    };
+    for (const generation of [stageCandidate, stageAdmission]) {
+      writable.nodesById[generation.nodeInstanceId] = {
+        nodeInstanceId: generation.nodeInstanceId,
+        subgraphInstanceId: child.subgraphInstanceId,
+        templateNodeKey: generation.templateNodeKey,
+        scope: child.scope,
+      };
+      writable.activeGenerationIdByNode[generation.nodeInstanceId] = generation.nodeGenerationId;
+    }
+    writable.instancesById[child.subgraphInstanceId] = {
+      ...child,
+      nodeInstanceIdsByTemplateNode: {
+        ...child.nodeInstanceIdsByTemplateNode,
+        spec_review: stageCandidate.nodeInstanceId,
+        spec_review_admit: stageAdmission.nodeInstanceId,
+      },
+    };
+    writable.claimsById[stageCandidateId] = {
+      ...generatedClaim({
+      claimId: stageCandidateId,
+      claim: PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM,
+      producerCheckId: 'spec_review',
+      subgraphInstanceId: child.subgraphInstanceId,
+      scope: child.scope,
+      generation: stageCandidate,
+      parentClaimIds: stageCandidateParents,
+      }),
+      proofCandidateEvidence: stageEvidence,
+    } as any;
+    writable.claimsById[stageAdmissionId] = generatedClaim({
+      claimId: stageAdmissionId,
+      claim: PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM,
+      producerCheckId: 'spec_review_admit',
+      subgraphInstanceId: child.subgraphInstanceId,
+      scope: child.scope,
+      generation: stageAdmission,
+      parentClaimIds: [stageCandidateId],
+    });
+    stageCandidateIds.push(stageCandidateId);
+    stageAdmissionIds.push(stageAdmissionId);
+  }
+
+  const revalidationId = Object.values(base.projection.claimsById).find(claim =>
+    claim.claim === PROOF_CATALOG_REVALIDATION_CLAIM)!.claimId;
+  const parentClaimIds = [
+    revalidationId,
+    ...stageAdmissionIds,
+  ].sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+  return {
+    projection,
+    generation: base.generation,
+    parentClaimIds,
+    stageCandidateIds,
+    stageAdmissionIds,
+  };
+}
+
 function publication(
   projection: InstanceProjection,
   generation: NodeGenerationProjection,
@@ -381,8 +536,89 @@ describe('project reconciliation dynamic parents', () => {
   it('derives the UTF-8 sorted revalidation and child admission set independent of record order', () => {
     const normal = fixture();
     const reversed = fixture(true);
-    expect(deriveProofProjectReconciliationParentClaimIds(normal.projection, normal.generation)).toEqual(normal.parentClaimIds);
-    expect(deriveProofProjectReconciliationParentClaimIds(reversed.projection, reversed.generation)).toEqual(normal.parentClaimIds);
+    const normalParents = deriveProofProjectReconciliationParentClaimIds(normal.projection, normal.generation);
+    const reversedParents = deriveProofProjectReconciliationParentClaimIds(reversed.projection, reversed.generation);
+    expect(normalParents).toEqual(normal.parentClaimIds);
+    expect(reversedParents).toEqual(normal.parentClaimIds);
+    expect(JSON.stringify(reversedParents)).toBe(JSON.stringify(normalParents));
+  });
+
+  it('derives staged reconciliation parents from revalidation and terminal stage admissions', () => {
+    const normal = stagedFixture();
+    const reversed = stagedFixture(true);
+    const normalParents = deriveProofProjectReconciliationParentClaimIds(normal.projection, normal.generation);
+    const reversedParents = deriveProofProjectReconciliationParentClaimIds(reversed.projection, reversed.generation);
+    expect(normalParents).toEqual(normal.parentClaimIds);
+    expect(reversedParents).toEqual(normal.parentClaimIds);
+    expect(JSON.stringify(reversedParents)).toBe(JSON.stringify(normalParents));
+    expect(normalParents).toEqual(expect.arrayContaining(normal.stageAdmissionIds));
+    expect(normalParents).not.toEqual(expect.arrayContaining(
+      normal.stageCandidateIds,
+    ));
+    expect(normal.stageAdmissionIds.every(claimId =>
+      normal.projection.claimsById[claimId].claim === PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM,
+    )).toBe(true);
+    for (const child of Object.values(normal.projection.instancesById).filter(instance =>
+      instance.parentSubgraphInstanceId === normal.generation.subgraphInstanceId)) {
+      const verify = normal.projection.generationsById[
+        normal.projection.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.verify!]
+      ];
+      expect(verify.activeInputClaimIds).toHaveLength(4);
+      expect(verify.activeInputClaimIds).toEqual(expect.arrayContaining([
+        child.nodeInstanceIdsByTemplateNode.spec_review &&
+          normal.projection.generationsById[normal.projection.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.spec_review]].completedOutputClaimIds[0],
+        child.nodeInstanceIdsByTemplateNode.spec_review_admit &&
+          normal.projection.generationsById[normal.projection.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.spec_review_admit]].completedOutputClaimIds[0],
+      ]));
+    }
+  });
+
+  it.each<{
+    name: string;
+    mutate: (value: ReturnType<typeof stagedFixture>) => void;
+  }>([
+    {
+      name: 'missing stage admission',
+      mutate: value => {
+        delete (value.projection as any).claimsById[value.stageAdmissionIds[0]];
+      },
+    },
+    {
+      name: 'extra stage admission',
+      mutate: value => {
+        const source = value.projection.claimsById[value.stageAdmissionIds[0]];
+        const extraId = id('extra-stage-admission');
+        (value.projection as any).claimsById[extraId] = { ...source, claimId: extraId };
+      },
+    },
+    {
+      name: 'duplicate verify parent',
+      mutate: value => {
+        const child = Object.values(value.projection.instancesById).find(instance =>
+          instance.parentSubgraphInstanceId === value.generation.subgraphInstanceId)!;
+        const verify = value.projection.generationsById[
+          value.projection.activeGenerationIdByNode[child.nodeInstanceIdsByTemplateNode.verify!]
+        ];
+        (value.projection as any).generationsById[verify.nodeGenerationId] = {
+          ...verify,
+          activeInputClaimIds: [...verify.activeInputClaimIds, verify.activeInputClaimIds[3]],
+        };
+      },
+    },
+    {
+      name: 'cross-wired stage admission',
+      mutate: value => {
+        const source = value.projection.claimsById[value.stageAdmissionIds[0]];
+        (value.projection as any).claimsById[value.stageAdmissionIds[0]] = {
+          ...source,
+          parentClaimIds: [value.stageCandidateIds[1]],
+        };
+      },
+    },
+  ])('rejects staged reconciliation parent corruption: $name', ({ mutate }) => {
+    const value = stagedFixture();
+    mutate(value);
+    expectInvalid(() => deriveProofProjectReconciliationParentClaimIds(value.projection, value.generation));
   });
 
   it('admits only the exact reconciliation receipt publication with dynamic parents', () => {

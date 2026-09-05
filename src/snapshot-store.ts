@@ -2283,24 +2283,36 @@ export class ExecutionJournal {
       if (!child.activeItemClaimId) reconciliationFailure(`component ${child.itemKey} has no active WorkItem`);
       const item = this.instanceProjection.claimsById[child.activeItemClaimId];
       if (!item || !item.active || item.claim !== 'component.work_item@1') reconciliationFailure(`component ${child.itemKey} WorkItem is unavailable`);
+      validateComponentChildAdmission(
+        this.instanceProjection,
+        child.subgraphInstanceId,
+        true,
+        nodeGenerationId => this.getProofAdmissionRequest(nodeGenerationId),
+      );
       const verifyNodeId = child.nodeInstanceIdsByTemplateNode.verify;
       const verifyGenerationId = verifyNodeId ? this.instanceProjection.activeGenerationIdByNode[verifyNodeId] : undefined;
       const verify = verifyGenerationId ? this.instanceProjection.generationsById[verifyGenerationId] : undefined;
       if (!verify || verify.status !== 'completed' ||
-          verify.activeInputClaimIds.length !== 2) reconciliationFailure(`component ${child.itemKey} verify is incomplete`);
+          (verify.activeInputClaimIds.length !== 2 && verify.activeInputClaimIds.length !== 4) ||
+          new Set(verify.activeInputClaimIds).size !== verify.activeInputClaimIds.length) reconciliationFailure(`component ${child.itemKey} verify is incomplete`);
       const verifyClaims = verify.activeInputClaimIds.map(claimId => this.instanceProjection.claimsById[claimId]);
-      const componentCandidate = verifyClaims.find(value => value?.claim === PROOF_CANDIDATE_CLAIM);
-      const componentAdmission = verifyClaims.find(value => value?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+      const staged = verify.activeInputClaimIds.length === 4;
+      const candidateClaims = verifyClaims.filter(value => value?.claim === (staged ? PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM : PROOF_CANDIDATE_CLAIM));
+      const admissionClaims = verifyClaims.filter(value => value?.claim === (staged ? PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM : PROOF_ADMITTED_RECEIPT_CLAIM));
+      const componentCandidate = candidateClaims.length === 1 ? candidateClaims[0] : undefined;
+      const componentAdmission = admissionClaims.length === 1 ? admissionClaims[0] : undefined;
       if (!componentCandidate || !componentAdmission || !componentCandidate.nodeGenerationId || !componentAdmission.nodeGenerationId) {
         reconciliationFailure(`component ${child.itemKey} candidate/admission is unavailable`);
       }
-      try {
-        validateProofComponentCandidateAdmissionBinding(
-          generatedClaimView(componentCandidate, `component ${child.itemKey} candidate`),
-          generatedClaimView(componentAdmission, `component ${child.itemKey} admission`),
-        );
-      } catch (error) {
-        reconciliationFailure(`component ${child.itemKey} admission is invalid: ${error instanceof Error ? error.message : String(error)}`);
+      if (!staged) {
+        try {
+          validateProofComponentCandidateAdmissionBinding(
+            generatedClaimView(componentCandidate, `component ${child.itemKey} candidate`),
+            generatedClaimView(componentAdmission, `component ${child.itemKey} admission`),
+          );
+        } catch (error) {
+          reconciliationFailure(`component ${child.itemKey} admission is invalid: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       const candidateRequest = this.getProofAdmissionRequest(componentAdmission.nodeGenerationId);
       const extracted = extractProofAdmissionCandidate(candidateRequest);

@@ -11,6 +11,7 @@ import {
   PROOF_ADMIT_NODE_KEY,
   PROOF_CANDIDATE_CLAIM,
   PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM,
+  PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM,
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_PROJECT_RECONCILE_NODE_KEY,
   PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
@@ -923,28 +924,90 @@ export function deriveProofProjectReconciliationParentClaimIds(
         verify.subgraphInstanceId !== child.subgraphInstanceId ||
         verify.templateNodeKey !== 'verify' || verify.checkId !== 'verify' ||
         verify.status !== 'completed' || !verify.scheduled ||
-        verify.activeInputClaimIds.length !== 2 || new Set(verify.activeInputClaimIds).size !== 2) {
+        (verify.activeInputClaimIds.length !== 2 && verify.activeInputClaimIds.length !== 4) ||
+        new Set(verify.activeInputClaimIds).size !== verify.activeInputClaimIds.length) {
       invalidProjectReconciliationParents(`Component ${child.itemKey} verify is not current and complete`);
     }
     const inputs = verify.activeInputClaimIds.map(claimId => projection.claimsById[claimId]);
+    if (inputs.length !== verify.activeInputClaimIds.length || inputs.some(claim => !claim)) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} verify has an unknown input claim`);
+    }
+    const staged = verify.activeInputClaimIds.length === 4;
     const candidate = inputs.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
     const admission = inputs.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    const stageCandidate = inputs.find(claim => claim?.claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM);
+    const stageAdmission = inputs.find(claim => claim?.claim === PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM);
+    const expected = staged
+      ? [candidate?.claimId, admission?.claimId, stageCandidate?.claimId, stageAdmission?.claimId]
+      : [candidate?.claimId, admission?.claimId];
+    if (!candidate || !admission || (staged && (!stageCandidate || !stageAdmission)) ||
+        (!staged && (stageCandidate || stageAdmission)) || expected.some(id => id === undefined) ||
+        !sameStrings(verify.activeInputClaimIds, (expected as string[]).sort())) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} verify inputs are not the unique candidate and admission`);
+    }
     const activeCandidates = Object.values(projection.claimsById).filter(claim =>
       claim.active && claim.subgraphInstanceId === child.subgraphInstanceId && claim.claim === PROOF_CANDIDATE_CLAIM);
     const activeAdmissions = Object.values(projection.claimsById).filter(claim =>
       claim.active && claim.subgraphInstanceId === child.subgraphInstanceId && claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
-    if (!candidate || !admission || activeCandidates.length !== 1 || activeAdmissions.length !== 1 ||
-        activeCandidates[0].claimId !== candidate.claimId || activeAdmissions[0].claimId !== admission.claimId ||
-        !sameStrings(verify.activeInputClaimIds, [candidate.claimId, admission.claimId].sort())) {
+    const activeStageCandidates = Object.values(projection.claimsById).filter(claim =>
+      claim.active && claim.subgraphInstanceId === child.subgraphInstanceId && claim.claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM);
+    const activeStageAdmissions = Object.values(projection.claimsById).filter(claim =>
+      claim.active && claim.subgraphInstanceId === child.subgraphInstanceId && claim.claim === PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM);
+    if (activeCandidates.length !== 1 || activeAdmissions.length !== 1 ||
+        activeCandidates[0].claimId !== candidate.claimId || activeAdmissions[0].claimId !== admission.claimId) {
       invalidProjectReconciliationParents(`Component ${child.itemKey} verify inputs are not the unique candidate and admission`);
+    }
+    if ((staged && (activeStageCandidates.length !== 1 || activeStageAdmissions.length !== 1 ||
+                    activeStageCandidates[0].claimId !== stageCandidate?.claimId ||
+                    activeStageAdmissions[0].claimId !== stageAdmission?.claimId)) ||
+        (!staged && (activeStageCandidates.length !== 0 || activeStageAdmissions.length !== 0))) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} staged inputs are not the exact active pair`);
     }
     currentCompletedGeneratedOutput(projection, candidate, 'inspect', child.subgraphInstanceId);
     const admissionGeneration = currentCompletedGeneratedOutput(projection, admission, 'proof_admit', child.subgraphInstanceId);
-    if (!sameStrings(admissionGeneration.activeInputClaimIds, [candidate.claimId]) ||
+    if (!child.activeItemClaimId ||
+        !sameStrings(candidate.parentClaimIds, [child.activeItemClaimId]) ||
+        !sameStrings(admissionGeneration.activeInputClaimIds, [candidate.claimId]) ||
         !sameStrings(admission.parentClaimIds, [candidate.claimId])) {
       invalidProjectReconciliationParents(`Component ${child.itemKey} admission is detached from its candidate`);
     }
-    return admission.claimId;
+    if (!staged) return admission.claimId;
+
+    currentCompletedGeneratedOutput(
+      projection,
+      stageCandidate,
+      'spec_review',
+      child.subgraphInstanceId,
+    );
+    const stageAdmissionGeneration = currentCompletedGeneratedOutput(
+      projection,
+      stageAdmission,
+      'spec_review_admit',
+      child.subgraphInstanceId,
+    );
+    if (!sameStrings(stageAdmissionGeneration.activeInputClaimIds, [stageCandidate.claimId]) ||
+        !sameStrings(stageAdmission.parentClaimIds, [stageCandidate.claimId]) ||
+        stageCandidate.parentClaimIds.length !== 3 ||
+        new Set(stageCandidate.parentClaimIds).size !== 3 ||
+        canonicalJson(stageCandidate.parentClaimIds) !== canonicalJson([...stageCandidate.parentClaimIds].sort())) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} staged admission is detached from its candidate`);
+    }
+    const stageParents = stageCandidate.parentClaimIds.map(claimId => projection.claimsById[claimId]);
+    const component = stageParents.find(claim => claim?.claim === 'component.work_item@1');
+    const priorCandidate = stageParents.find(claim => claim?.claim === PROOF_CANDIDATE_CLAIM);
+    const priorAdmission = stageParents.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    if (stageParents.length !== 3 || stageParents.some(claim => !claim || !claim.active || claim.subgraphInstanceId !== child.subgraphInstanceId ||
+        canonicalJson(claim.scope) !== canonicalJson(stageCandidate.scope)) || !component || !priorCandidate || !priorAdmission ||
+        component.subgraphInstanceId !== child.subgraphInstanceId || priorCandidate.subgraphInstanceId !== child.subgraphInstanceId ||
+        priorAdmission.subgraphInstanceId !== child.subgraphInstanceId ||
+        component.kind !== 'controller-item' || priorCandidate.kind !== 'generated-output' || priorAdmission.kind !== 'generated-output' ||
+        !child.activeItemClaimId || !sameStrings(component.parentClaimIds, [catalog.claimId]) ||
+        !sameStrings(stageCandidate.parentClaimIds, [child.activeItemClaimId, candidate.claimId, admission.claimId].sort()) ||
+        !sameStrings(priorAdmission.parentClaimIds, [priorCandidate.claimId]) ||
+        priorCandidate.producerCheckId !== 'inspect' || priorAdmission.producerCheckId !== PROOF_ADMIT_NODE_KEY) {
+      invalidProjectReconciliationParents(`Component ${child.itemKey} staged candidate parents are not the exact legacy lineage`);
+    }
+    return stageAdmission.claimId;
   });
 
   const parents = [revalidation.claimId, ...admissionIds]
