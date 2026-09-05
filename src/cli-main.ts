@@ -20,8 +20,10 @@ import { logger, configureLoggerFromCli } from './logger';
 import { ChatTUI } from './tui/index';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
+import { createHash } from 'crypto';
 import { withVisorRun, getVisorRunAttributes } from './telemetry/trace-helpers';
 import { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import open from 'open';
@@ -31,6 +33,169 @@ import {
   injectGitHubCredentials,
   type GitHubAuthOptions,
 } from './github-auth';
+import {
+  createProofAdmissionCapability,
+  goCompatibleProofJson,
+  resolveProofRoleInvocation,
+} from './providers/proof-admission-cli-child';
+import type { VisorConfig } from './types/config';
+import { isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector } from './providers/governed-proof-inspect-check-provider';
+import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
+import { publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
+import { compileClaimPlan } from './state-machine/graph/claim-plan';
+import type { GraphJournalCheckpointV1 } from './snapshot-store';
+
+const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
+
+async function projectProofAuthority(config: VisorConfig, capability: object, cwd: string): Promise<void> {
+  const seen = new Set<object>();
+  let governedNodes = 0;
+  const visit = async (value: unknown): Promise<void> => {
+    if (!value || typeof value !== 'object' || seen.has(value as object)) return;
+    seen.add(value as object);
+    if (!Array.isArray(value) && (value as any).type === 'governed-proof-inspect') {
+      governedNodes++;
+      const node = value as any;
+      const invocation = node.invocation;
+      if (isGovernedProofComponentSelector(invocation) || isGovernedProofSpecReviewSelector(invocation)) return;
+      if (!invocation || typeof invocation !== 'object' || Reflect.ownKeys(invocation).length !== PROOF_INVOCATION_KEYS.length || !PROOF_INVOCATION_KEYS.every(key => Object.prototype.hasOwnProperty.call(invocation, key))) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed invocation is not closed');
+      const request = Object.fromEntries(PROOF_INVOCATION_KEYS.map(key => [key, invocation[key]]));
+      const authority = await resolveProofRoleInvocation(capability, request, cwd) as any;
+      if (authority.role_id !== request.role_id || authority.stance !== request.stance || goCompatibleProofJson(authority.subject) !== goCompatibleProofJson(request.subject) || authority.output_schema_id !== request.output_schema_id || authority.output_schema !== request.output_schema) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: C0 response does not equal authored invocation');
+      node.instructions = authority.instructions;
+      node.invocation_digest = authority.invocation_digest;
+      node.result_schema = Buffer.from(authority.output_schema, 'base64').toString('utf8');
+    }
+    for (const child of Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)) await visit(child);
+  };
+  await visit(config);
+  if (governedNodes === 0) throw new Error('PROOF_ADMISSION_INVALID_CONFIG: no governed-proof-inspect node');
+}
+
+function containsGovernedProofNode(value: unknown, seen = new Set<object>()): boolean {
+  if (!value || typeof value !== 'object' || seen.has(value as object)) return false;
+  seen.add(value as object);
+  if (!Array.isArray(value) && (value as any).type === 'governed-proof-inspect') return true;
+  return (Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)).some(child => containsGovernedProofNode(child, seen));
+}
+
+function readConfigDocument(configPath: string): unknown {
+  return yaml.load(fs.readFileSync(path.resolve(configPath), 'utf8'));
+}
+
+function isGovernedConfigFile(configPath: string): boolean {
+  try { return containsGovernedProofNode(readConfigDocument(configPath)); } catch { return false; }
+}
+
+function hasRemoteExtends(configPath: string): boolean {
+  try {
+    const root = readConfigDocument(configPath) as any;
+    const value = root && typeof root === 'object' ? root.extends || root.include : undefined;
+    const sources = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    return sources.some(source => typeof source === 'string' && /^https?:\/\//i.test(source));
+  } catch { return false; }
+}
+
+function validateGovernedReceiptMode(options: import('./types/cli').CliOptions): void {
+  if (!options.governedReceipt) return;
+  if (!options.configPath || !options.proofBin || options.checks.length !== 1 || options.output !== 'json') throw new Error('--governed-receipt requires --config, --proof-bin, one --check, and --output json');
+  if (options.watch || options.tui || options.debugServer || options.slack || options.telegram || options.email || options.whatsapp || options.teams || options.a2a || options.mcp) throw new Error('--governed-receipt is not compatible with watch, TUI, runner, or server modes');
+  const target = path.resolve(options.governedReceipt);
+  if (options.outputFile && path.resolve(options.outputFile) === target) throw new Error('--governed-receipt cannot alias --output-file');
+  const requestedParent = path.dirname(target); const requestedParentStat = fs.lstatSync(requestedParent);
+  if (requestedParentStat.isSymbolicLink() || !requestedParentStat.isDirectory()) throw new Error('--governed-receipt parent must be an existing real directory');
+  const parent = fs.realpathSync(requestedParent); const parentStat = fs.lstatSync(parent); const stat = fs.statSync(parent);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory() || !stat.isDirectory() || (stat.mode & 0o777) !== 0o700) throw new Error('--governed-receipt parent must be an existing private 0700 directory');
+  try { fs.lstatSync(path.join(parent, path.basename(target))); throw new Error('--governed-receipt target must be absent'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
+export function validateArtifactPathAliases(options: import('./types/cli').CliOptions): void {
+  const identity = (target: string): { canonical: string; dev?: number; ino?: number } => {
+    const resolved = path.resolve(target);
+    try {
+      const stat = fs.statSync(resolved);
+      return { canonical: fs.realpathSync(resolved), dev: stat.dev, ino: stat.ino };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(resolved);
+      let realParent = parent;
+      try { realParent = fs.realpathSync(parent); } catch {}
+      return { canonical: path.join(realParent, path.basename(resolved)) };
+    }
+  };
+  const paths = [
+    ['--graph-checkpoint-in', options.graphCheckpointIn],
+    ['--graph-checkpoint-out', options.graphCheckpointOut],
+    ['--governed-receipt', options.governedReceipt],
+    ['--output-file', options.outputFile],
+  ].filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  const identities = paths.map(([, target]) => identity(target));
+  for (let left = 0; left < paths.length; left++) {
+    for (let right = left + 1; right < paths.length; right++) {
+      const samePath = identities[left].canonical === identities[right].canonical;
+      const sameInode = identities[left].dev !== undefined && identities[right].dev !== undefined && identities[left].dev === identities[right].dev && identities[left].ino === identities[right].ino;
+      if (samePath || sameInode) {
+        throw new Error(`${paths[left][0]} cannot alias ${paths[right][0]}`);
+      }
+    }
+  }
+}
+
+export function validateGraphCheckpointMode(options: import('./types/cli').CliOptions): GraphJournalCheckpointV1 | undefined {
+  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner) return undefined;
+  if (options.graphCheckpointOwner && !options.graphCheckpointIn) throw new Error('--graph-checkpoint-owner requires --graph-checkpoint-in');
+  if ((options.graphCheckpointIn || options.graphCheckpointOut) && (!options.configPath || options.checks.length !== 1 || options.output !== 'json')) {
+    throw new Error('--graph-checkpoint-in/out requires --config, one --check, and --output json');
+  }
+  const checkpoint = options.graphCheckpointIn
+    ? validateGraphCheckpointInputFile(path.resolve(options.graphCheckpointIn))
+    : undefined;
+  if (options.graphCheckpointOut) validateGraphCheckpointOutputTarget(path.resolve(options.graphCheckpointOut));
+  return checkpoint;
+}
+
+function resolveGraphCheckpointOwner(config: VisorConfig, checks: readonly string[], explicit?: string): string {
+  if (explicit) return explicit;
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as VisorConfig);
+  const owners = Object.keys(plan.expansionPlan?.byOwner || {}).sort();
+  if (owners.length === 1) return owners[0];
+  const selected = checks.filter(check => owners.includes(check));
+  if (selected.length === 1) return selected[0];
+  throw new Error('--graph-checkpoint-owner is required when the graph has multiple expansion owners');
+}
+
+async function loadNormalizedForGovernanceCheck(configManager: ConfigManager, configPath: string): Promise<VisorConfig> {
+  const oldRemotePolicy = process.env.VISOR_NO_REMOTE_EXTENDS;
+  process.env.VISOR_NO_REMOTE_EXTENDS = 'true';
+  try {
+    return await configManager.loadConfig(path.resolve(configPath), { validate: false, mergeDefaults: true });
+  } finally {
+    if (oldRemotePolicy === undefined) delete process.env.VISOR_NO_REMOTE_EXTENDS;
+    else process.env.VISOR_NO_REMOTE_EXTENDS = oldRemotePolicy;
+  }
+}
+
+async function loadProofAwareConfig(configManager: ConfigManager, configPath: string, proofBin: string, ownNamespace?: (namespace: string) => void): Promise<{ config: VisorConfig; capability: object; memoryNamespace: string }> {
+  const capability = createProofAdmissionCapability(proofBin);
+  const resolvedPath = path.resolve(configPath);
+  const oldRemotePolicy = process.env.VISOR_NO_REMOTE_EXTENDS;
+  process.env.VISOR_NO_REMOTE_EXTENDS = 'true';
+  let config: VisorConfig;
+  try {
+    // Normalize and merge defaults before projecting Proof authority. This is
+    // the exact object that is subsequently validated and compiled.
+    config = await configManager.loadConfig(resolvedPath, { validate: false, mergeDefaults: true });
+  } finally {
+    if (oldRemotePolicy === undefined) delete process.env.VISOR_NO_REMOTE_EXTENDS;
+    else process.env.VISOR_NO_REMOTE_EXTENDS = oldRemotePolicy;
+  }
+  await projectProofAuthority(config, capability, path.dirname(resolvedPath));
+  const memoryNamespace = `visor-cli-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  ownNamespace?.(memoryNamespace);
+  config.memory = { ...(config.memory || {}), storage: 'memory', namespace: memoryNamespace };
+  configManager.validateConfig(config);
+  return { config, capability, memoryNamespace };
+}
 
 /**
  * Execute a single check in sandbox mode (--run-check).
@@ -1209,6 +1374,28 @@ export async function main(): Promise<void> {
   let tuiConsoleRestore: (() => void) | null = null;
   // Function to re-run workflow from TUI - set after setup is complete
   let runTuiWorkflow: ((message: string) => Promise<void>) | null = null;
+  let proofCapability: object | undefined;
+  let ownedMemoryNamespace: string | undefined;
+  let memoryCleanupFailed = false;
+  const cleanupOwnedMemoryNamespace = async (): Promise<void> => {
+    if (!ownedMemoryNamespace) return;
+    const namespace = ownedMemoryNamespace;
+    try {
+      const { MemoryStore } = await import('./memory-store');
+      const store = MemoryStore.getInstance();
+      const data = (store as any).data as Map<string, Map<string, unknown>>;
+      const unrelated = goCompatibleProofJson([...data].filter(([key]) => key !== namespace).map(([key, values]) => [key, [...values]]));
+      await store.clear(namespace);
+      if (store.list(namespace).length !== 0) throw new Error('namespace still contains data');
+      const remaining = goCompatibleProofJson([...data].filter(([key]) => key !== namespace).map(([key, values]) => [key, [...values]]));
+      if (remaining !== unrelated) throw new Error('unrelated memory namespaces changed');
+      // Keep ownership until the clear and postcondition both succeed.
+      ownedMemoryNamespace = undefined;
+    } catch (error) {
+      memoryCleanupFailed = true;
+      logger.error(`Proof memory cleanup failed closed for ${namespace}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   try {
     // Preflight: detect obviously stale dist relative to src and warn early.
@@ -1414,6 +1601,14 @@ export async function main(): Promise<void> {
 
     // Parse arguments using the CLI class
     const options = cli.parseArgs(filteredArgv);
+    validateArtifactPathAliases(options);
+    validateGovernedReceiptMode(options);
+    // Parse and authenticate the checkpoint before Proof role resolution,
+    // provider registry mutation, telemetry, or any other external launch.
+    const graphCheckpointInput = validateGraphCheckpointMode(options);
+    const receiptSourceConfigSha256 = options.governedReceipt && options.configPath
+      ? createHash('sha256').update(fs.readFileSync(path.resolve(options.configPath))).digest('hex')
+      : undefined;
     const explicitChecks =
       options.checks.length > 0
         ? new Set<string>(options.checks.map(check => check.toString()))
@@ -1686,7 +1881,48 @@ export async function main(): Promise<void> {
 
     // Load configuration FIRST (before starting debug server)
     let config: import('./types/config').VisorConfig;
-    if (options.configPath) {
+    if (options.configPath && options.proofBin) {
+      try {
+        logger.step('Loading configuration with trusted Proof authority');
+        const loaded = await loadProofAwareConfig(
+          configManager,
+          options.configPath,
+          options.proofBin,
+          namespace => { ownedMemoryNamespace = namespace; }
+        );
+        config = loaded.config;
+        proofCapability = loaded.capability;
+        ownedMemoryNamespace = loaded.memoryNamespace;
+      } catch (error) {
+        logger.error(`❌ Error loading governed configuration: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+        return;
+      }
+    } else if (options.proofBin) {
+      throw new Error('--proof-bin requires --config so the governed project cwd is explicit');
+    } else if (options.configPath) {
+      const directGoverned = isGovernedConfigFile(options.configPath);
+      const remoteShaped = hasRemoteExtends(options.configPath);
+      // A direct governed root with remote inheritance is rejected before the
+      // loader can fetch it. This keeps the remote fetch sentinel at zero while
+      // leaving ordinary non-governed remote extends on their existing path.
+      if (directGoverned && remoteShaped) {
+        throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed configuration requires --proof-bin <absolute-path>');
+      }
+      if (!remoteShaped) {
+        try {
+          const normalized = await loadNormalizedForGovernanceCheck(configManager, options.configPath);
+          if (containsGovernedProofNode(normalized)) {
+            throw new Error('PROOF_ADMISSION_INVALID_CONFIG: governed configuration requires --proof-bin <absolute-path>');
+          }
+        } catch (error) {
+          // A non-governed local chain may itself extend a remote config. Keep
+          // that ordinary behavior unchanged; a direct governed root is still
+          // denied without allowing the remote fetch to occur.
+          const message = error instanceof Error ? error.message : String(error);
+          if (directGoverned || !/remote extends are disabled/i.test(message)) throw error;
+        }
+      }
       try {
         logger.step('Loading configuration');
         config = await configManager.loadConfig(options.configPath);
@@ -1725,6 +1961,11 @@ export async function main(): Promise<void> {
       config = await configManager
         .findAndLoadConfig()
         .catch(() => configManager.getDefaultConfig());
+    }
+
+    if (proofCapability) {
+      const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
+      CheckProviderRegistry.getInstance().bootstrapProofAdmission(proofCapability);
     }
 
     // Save a startup config snapshot (best-effort, never blocks execution)
@@ -2435,6 +2676,9 @@ export async function main(): Promise<void> {
     // Skip initial automatic run for TUI mode - wait for user to type a message
     // TUI workflows are typically chat-style and expect user input first
     let executionResult: import('./types/execution').ExecutionResult;
+    let receiptDraft: GovernedGraphAnyTerminalReceiptDraft | undefined;
+    let receiptProjectionFailed = false;
+    let checkpointExportFailed = false;
     if (chatTui) {
       logger.info('[TUI] Waiting for user input - type a message to start the workflow');
       chatTui.setRunning(false);
@@ -2462,8 +2706,22 @@ export async function main(): Promise<void> {
         withVisorRun(
           { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
           { source: 'cli', workflowId: checksToRun.join(',') },
-          async () =>
-            engine.executeGroupedChecks(
+          async () => {
+            if (options.graphCheckpointIn) {
+              const checkpoint = graphCheckpointInput!;
+              const ownerCheck = resolveGraphCheckpointOwner(config, checksToRun, options.graphCheckpointOwner);
+              const continued = await engine.continueGraphCheckpoint({
+                checkpoint,
+                expansionOwnerCheck: ownerCheck,
+                config,
+                prInfo: prInfoWithContext,
+                debug: options.debug || false,
+                maxParallelism: options.maxParallelism,
+                failFast: options.failFast,
+              });
+              return continued.result;
+            }
+            return engine.executeGroupedChecks(
               prInfo,
               checksToRun,
               options.timeout,
@@ -2474,23 +2732,44 @@ export async function main(): Promise<void> {
               options.failFast,
               tagFilter,
               pauseGate
-            )
+            );
+          }
         );
-      if (sharedTaskStore) {
-        const { trackExecution } = await import('./agent-protocol/track-execution');
-        const tracked = await trackExecution(
-          {
-            taskStore: sharedTaskStore,
-            source: 'cli',
-            workflowId: checksToRun.join(','),
-            configPath: options.configPath,
-            messageText: options.message || `CLI run: ${checksToRun.join(', ')}`,
-          },
-          cliExecFn
-        );
-        executionResult = tracked.result;
-      } else {
-        executionResult = await cliExecFn();
+      try {
+        if (sharedTaskStore) {
+          const { trackExecution } = await import('./agent-protocol/track-execution');
+          const tracked = await trackExecution(
+            {
+              taskStore: sharedTaskStore,
+              source: 'cli',
+              workflowId: checksToRun.join(','),
+              configPath: options.configPath,
+              messageText: options.message || `CLI run: ${checksToRun.join(', ')}`,
+            },
+            cliExecFn
+          );
+          executionResult = tracked.result;
+        } else {
+          executionResult = await cliExecFn();
+        }
+      } finally {
+        if (options.governedReceipt && receiptSourceConfigSha256) {
+          try {
+            receiptDraft = engine.getGovernedGraphTerminalReceiptDraft(receiptSourceConfigSha256);
+          } catch (error) {
+            receiptProjectionFailed = true;
+            logger.error(`Governed receipt projection failed closed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        await cleanupOwnedMemoryNamespace();
+      }
+      if (options.graphCheckpointOut) {
+        try {
+          publishGraphCheckpointFile(engine.exportGraphCheckpoint(), options.graphCheckpointOut);
+        } catch (error) {
+          checkpointExportFailed = true;
+          logger.error(`Graph checkpoint publication failed closed: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
 
@@ -2678,7 +2957,8 @@ export async function main(): Promise<void> {
     // Force exit to prevent hanging from unclosed resources (MCP connections, etc.)
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
-    const exitCode = criticalCount > 0 || hasRepositoryError ? 1 : 0;
+    const receiptTerminalFailed = receiptDraft !== undefined && receiptDraft.failureCode !== null;
+    let exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed || receiptProjectionFailed || receiptTerminalFailed || checkpointExportFailed ? 1 : 0;
     // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {
@@ -2729,8 +3009,23 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
+    if (options.governedReceipt && receiptDraft && !memoryCleanupFailed && !receiptProjectionFailed) {
+      try {
+        const finalReceipt = finalizeGovernedGraphTerminalReceipt(
+          receiptDraft,
+          exitCode === 0 ? 'passed' : 'failed',
+          'clean',
+          exitCode === 0 ? 0 : 1
+        );
+        publishGovernedGraphTerminalReceipt(finalReceipt, options.governedReceipt);
+      } catch (error) {
+        exitCode = 1;
+        logger.error(`Governed receipt publication failed closed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     process.exit(exitCode);
   } catch (error) {
+    await cleanupOwnedMemoryNamespace();
     // Import error classes dynamically to avoid circular dependencies
     const { ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError } = await import(
       './providers/claude-code-check-provider'
@@ -2819,6 +3114,8 @@ export async function main(): Promise<void> {
       } catch {}
     }
     process.exit(1);
+  } finally {
+    await cleanupOwnedMemoryNamespace();
   }
 }
 

@@ -3,13 +3,97 @@ import { AnalysisResult } from './output-formatters';
 import type { VisorConfig } from './types/config';
 import type { PRInfo } from './pr-analyzer';
 import { StateMachineRunner } from './state-machine/runner';
-import type { EngineContext } from './types/engine';
+import type { EngineContext, RunState, GeneratedDispatchGate } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
+import type { GraphJournalCheckpointV1 } from './snapshot-store';
+import type { InstanceProjection } from './state-machine/graph/instance-kernel';
+import { compileClaimPlan } from './state-machine/graph/claim-plan';
 import { logger } from './logger';
 import type { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import { SandboxManager } from './sandbox/sandbox-manager';
 import * as path from 'path';
 import * as fs from 'fs';
+import type {
+  BuiltGraphCheckpointContext,
+  GraphCheckpointResumeBootstrap,
+  ProofCurrentCatalogCheckpointBootstrap,
+  CheckpointBootstrap,
+} from './state-machine/context/build-engine-context';
+import { projectGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
+
+export interface GraphCheckpointContinuationInput {
+  checkpoint: unknown;
+  expansionOwnerCheck: string;
+  config: VisorConfig;
+  prInfo: PRInfo;
+  debug?: boolean;
+  maxParallelism?: number;
+  failFast?: boolean;
+}
+
+export interface GraphCheckpointContinuationResult {
+  requestId: string;
+  result: ExecutionResult;
+  checkpoint: GraphJournalCheckpointV1;
+}
+
+export interface GraphCheckpointResumeInput {
+  checkpoint: unknown;
+  config: VisorConfig;
+  prInfo: PRInfo;
+  generatedDispatchGate?: GeneratedDispatchGate;
+  debug?: boolean;
+  maxParallelism?: number;
+  failFast?: boolean;
+}
+
+export type GraphCheckpointResumeResult = Omit<GraphCheckpointContinuationResult, 'requestId'>;
+
+export interface ProofCurrentCatalogCheckpointInput {
+  checkpoint: unknown;
+  projectSubgraphInstanceId: string;
+  /** Exact Proof CanonicalJSON bytes returned by Proof revalidation. */
+  revalidationBytes: string | Uint8Array;
+  /** Exact Proof CanonicalJSON bytes returned by Proof work-items materialization. */
+  workItemsBytes: string | Uint8Array;
+  config: VisorConfig;
+  prInfo: PRInfo;
+  debug?: boolean;
+  maxParallelism?: number;
+  failFast?: boolean;
+}
+
+export interface ProofCurrentCatalogCheckpointResult {
+  authorityId: string;
+  mutationEventCount: number;
+  result: ExecutionResult;
+  checkpoint: GraphJournalCheckpointV1;
+}
+
+type PreparedEngineRun =
+  | {
+      readonly kind: 'normal';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+    }
+  | {
+      readonly kind: 'graph';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+      readonly requestId: string;
+    }
+  | {
+      readonly kind: 'proof-current-catalog';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+      readonly authorityId: string;
+      readonly mutationEventCount: number;
+    }
+  | {
+      readonly kind: 'graph-resume';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
+    };
 
 /**
  * State machine-based execution engine
@@ -253,8 +337,37 @@ export class StateMachineExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter,
-    _pauseGate?: () => Promise<void>
+    generatedDispatchGate?: GeneratedDispatchGate
   ): Promise<ExecutionResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      prInfo,
+      checks,
+      timeout,
+      config,
+      outputFormat,
+      debug,
+      maxParallelism,
+      failFast,
+      tagFilter,
+      undefined,
+      generatedDispatchGate
+    );
+    return prepared.result;
+  }
+
+  private async executeGroupedChecksInternal(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: VisorConfig,
+    outputFormat?: string,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean,
+    tagFilter?: import('./types/config').TagFilter,
+    graphCheckpointBootstrap?: CheckpointBootstrap,
+    generatedDispatchGate?: GeneratedDispatchGate
+  ): Promise<PreparedEngineRun> {
     if (debug) {
       logger.info('[StateMachine] Using state machine engine');
     }
@@ -275,6 +388,23 @@ export class StateMachineExecutionEngine {
         }
       : config;
 
+    // Build/restore the engine context before registering tools or initializing
+    // any other service. Continuation restore and owner validation therefore
+    // remain fail-fast and side-effect free.
+    const builtContext = this.buildEngineContext(
+      configWithTagFilter,
+      prInfo,
+      debug,
+      maxParallelism,
+      failFast,
+      checks, // Pass the explicit checks list
+      graphCheckpointBootstrap,
+      generatedDispatchGate
+    );
+    const context = graphCheckpointBootstrap
+      ? (builtContext as BuiltGraphCheckpointContext).context
+      : (builtContext as EngineContext);
+
     // Register global custom tools once per run so MCP custom transport can resolve them.
     try {
       const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
@@ -286,15 +416,10 @@ export class StateMachineExecutionEngine {
       );
     }
 
-    // Build engine context
-    const context = this.buildEngineContext(
-      configWithTagFilter,
-      prInfo,
-      debug,
-      maxParallelism,
-      failFast,
-      checks // Pass the explicit checks list
-    );
+    // Continuation skips Init, so initialize its fresh memory service here.
+    if (graphCheckpointBootstrap) {
+      await context.memory.initialize();
+    }
 
     // Create SandboxManager if sandboxes are configured
     if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
@@ -384,8 +509,11 @@ export class StateMachineExecutionEngine {
     // Copy execution context (hooks, etc.) from legacy engine
     context.executionContext = this.getExecutionContext();
 
-    // Store context for later access (e.g., getOutputHistorySnapshot)
-    this._lastContext = context;
+    // Preserve the normal-run visibility point for frontend callbacks. A
+    // continuation keeps this unset until all setup has passed its gates.
+    if (!graphCheckpointBootstrap) {
+      this._lastContext = context;
+    }
 
     // Optionally enable event-driven frontends if configured
     let frontendsHost: any | undefined;
@@ -555,9 +683,36 @@ export class StateMachineExecutionEngine {
 
     // Create and run state machine with debug server support (M4)
     const runner = new StateMachineRunner(context, this.debugServer);
-    this._lastRunner = runner;
+    if (graphCheckpointBootstrap) {
+      const fresh = runner.getState();
+      const continuationState: RunState = {
+        currentState: 'LevelDispatch',
+        wave: 1,
+        levelQueue: [],
+        eventQueue: [],
+        activeDispatches: new Map(),
+        completedChecks: new Set(),
+        flags: {
+          failFastTriggered: false,
+          forwardRunRequested: false,
+          maxWorkflowDepth: fresh.flags.maxWorkflowDepth,
+          currentWorkflowDepth: 0,
+        },
+        stats: new Map(),
+        historyLog: [],
+        forwardRunGuards: new Set(),
+        currentLevelChecks: new Set(),
+        routingLoopCount: 0,
+        pendingRunScopes: new Map(),
+      };
+      runner.setState(continuationState);
+    }
 
     try {
+      // Keep these references untouched through all validation/setup gates;
+      // install the new run only at the point where execution starts.
+      this._lastContext = context;
+      this._lastRunner = runner;
       const result = await runner.run();
 
       // Stop frontends if started
@@ -600,7 +755,21 @@ export class StateMachineExecutionEngine {
         }
       }
 
-      return result;
+      if (!graphCheckpointBootstrap) return { kind: 'normal', context, result };
+      const continuation = builtContext as BuiltGraphCheckpointContext;
+      if (continuation.kind === 'graph') {
+        return { kind: 'graph', context, result, requestId: continuation.requestId };
+      }
+      if (continuation.kind === 'graph-resume') {
+        return { kind: 'graph-resume', context, result };
+      }
+      return {
+        kind: 'proof-current-catalog',
+        context,
+        result,
+        authorityId: continuation.authorityId,
+        mutationEventCount: continuation.mutationEventCount,
+      };
     } finally {
       // Cleanup sandbox containers
       if (context.sandboxManager) {
@@ -621,8 +790,10 @@ export class StateMachineExecutionEngine {
     debug?: boolean,
     maxParallelism?: number,
     failFast?: boolean,
-    requestedChecks?: string[]
-  ): EngineContext {
+    requestedChecks?: string[],
+    graphCheckpointBootstrap?: CheckpointBootstrap,
+    generatedDispatchGate?: GeneratedDispatchGate
+  ): EngineContext | BuiltGraphCheckpointContext {
     const { buildEngineContextForRun } = require('./state-machine/context/build-engine-context');
     return buildEngineContextForRun(
       this.workingDirectory,
@@ -631,8 +802,231 @@ export class StateMachineExecutionEngine {
       debug,
       maxParallelism,
       failFast,
-      requestedChecks
+      requestedChecks,
+      graphCheckpointBootstrap,
+      generatedDispatchGate
     );
+  }
+
+  /**
+   * Reconcile one compiled catalog owner from a quiescent Graph-v2 checkpoint.
+   * This operation intentionally has no legacy snapshot or runner-state path.
+   */
+  public async continueGraphCheckpoint(
+    input: GraphCheckpointContinuationInput
+  ): Promise<GraphCheckpointContinuationResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      {
+        kind: 'graph',
+        checkpoint: input.checkpoint,
+        expansionOwnerCheck: input.expansionOwnerCheck,
+      },
+    );
+
+    if (prepared.kind !== 'graph') {
+      throw new Error('Graph checkpoint continuation did not produce a reconciliation request');
+    }
+    const checkpoint = prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId);
+    return {
+      requestId: prepared.requestId,
+      result: prepared.result,
+      checkpoint,
+    };
+  }
+
+  /** Restore and dispatch a ready-only checkpoint without appending a request
+   * or Proof authority event. The journal owns all checkpoint validation. */
+  public async resumeGraphCheckpoint(
+    input: GraphCheckpointResumeInput
+  ): Promise<GraphCheckpointResumeResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      { kind: 'graph-resume', checkpoint: input.checkpoint } satisfies GraphCheckpointResumeBootstrap,
+      input.generatedDispatchGate,
+    );
+    if (prepared.kind !== 'graph-resume') {
+      throw new Error('Graph checkpoint resume did not produce a resumed run');
+    }
+    return {
+      result: prepared.result,
+      checkpoint: prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId),
+    };
+  }
+
+  /**
+   * Continue a quiescent Proof-backed graph checkpoint with exact Proof
+   * outputs.  The private bootstrap restores and validates the checkpoint,
+   * records the supplied bytes, and applies the journal-owned replacement
+   * batch before the runner or any provider is visible.  Only the changed
+   * component generations released by that batch are dispatched.
+   */
+  public async continueProofCurrentCatalogCheckpoint(
+    input: ProofCurrentCatalogCheckpointInput
+  ): Promise<ProofCurrentCatalogCheckpointResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      {
+        kind: 'proof-current-catalog',
+        checkpoint: input.checkpoint,
+        projectSubgraphInstanceId: input.projectSubgraphInstanceId,
+        revalidationBytes: input.revalidationBytes,
+        workItemsBytes: input.workItemsBytes,
+      } satisfies ProofCurrentCatalogCheckpointBootstrap
+    );
+
+    if (prepared.kind !== 'proof-current-catalog') {
+      throw new Error('Proof checkpoint continuation did not produce an authority application');
+    }
+    const checkpoint = prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId);
+    return {
+      authorityId: prepared.authorityId,
+      mutationEventCount: prepared.mutationEventCount,
+      result: prepared.result,
+      checkpoint,
+    };
+  }
+
+  /**
+   * Export the last Graph-v2 run through the public engine boundary.
+   *
+   * ExecutionJournal deliberately keeps its low-level export primitive
+   * available to the state machine and tests.  The public engine contract is
+   * stricter: it re-validates the exported prefix through the same restore
+   * path, which enforces graph authority, replay, allocator, and quiescence
+   * checks before callers are allowed to persist it.
+   */
+  public exportGraphCheckpoint(): GraphJournalCheckpointV1 {
+    const context = this._lastContext;
+    if (!context) {
+      const error = new Error('Graph checkpoint export requires a prior or active run') as Error & { code: string };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    if (!context.claimPlan?.active) {
+      throw new Error('Graph checkpoint export requires an active claim plan');
+    }
+    const checkpoint = context.journal.exportGraphCheckpoint(context.sessionId);
+    // Restore is the canonical public quiescence gate. It performs complete
+    // envelope/integrity/plan/replay validation without starting providers.
+    ExecutionJournal.restoreGraphCheckpoint(context.claimPlan, checkpoint);
+    return checkpoint;
+  }
+
+  /**
+   * Validate and canonicalize an imported checkpoint before any provider or
+   * run service is initialized. This is intentionally separate from
+   * continueGraphCheckpoint so CLI/SDK callers can fail closed early.
+   */
+  public validateGraphCheckpoint(input: unknown, config: VisorConfig): GraphJournalCheckpointV1 {
+    const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as VisorConfig);
+    const restored = ExecutionJournal.restoreGraphCheckpoint(plan, input);
+    const checkpoint = restored.exportGraphCheckpoint((input as any)?.sessionId);
+    return checkpoint;
+  }
+
+  /** Queue a compiled catalog owner on the currently active runner/journal. */
+  public requestCatalogReconciliation(ownerCheck: string) {
+    const runner = this._lastRunner;
+    if (!runner) {
+      const error = new Error('Catalog reconciliation requires an active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return runner.requestCatalogReconciliation(ownerCheck);
+  }
+
+  public getInstanceProjection(): InstanceProjection {
+    const journal = this._lastContext?.journal;
+    if (!journal) {
+      const error = new Error('Instance projection requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.getInstanceProjection();
+  }
+
+  public replayInstanceProjection(): InstanceProjection {
+    const journal = this._lastContext?.journal;
+    if (!journal) {
+      const error = new Error('Instance projection requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.replayInstanceProjection();
+  }
+
+  /** Narrow, read-only terminal receipt projection; never exposes the journal. */
+  public getGovernedGraphTerminalReceiptDraft(sourceConfigSha256: string): GovernedGraphAnyTerminalReceiptDraft {
+    const context = this._lastContext;
+    if (!context) {
+      const error = new Error('Governed terminal receipt requires a prior or active run') as Error & { code: string };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    if (!context.claimPlan) throw new Error('Governed terminal receipt requires compiled claim plan');
+    return projectGovernedGraphTerminalReceipt({ journal: context.journal, claimPlan: context.claimPlan, sourceConfigSha256 });
+  }
+
+  /** Read the deterministic request-bound expansion coverage projection. */
+  public getExpansionCoverageProjection(requestId: string) {
+    const journal = (this as any)._lastContext?.journal as ExecutionJournal | undefined;
+    if (!journal) {
+      const error = new Error('Expansion coverage requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.getExpansionCoverageProjection(requestId);
+  }
+
+  public getExpansionCoverageRequestIds(ownerCheck?: string) {
+    const journal = (this as any)._lastContext?.journal as ExecutionJournal | undefined;
+    if (!journal) return Object.freeze([] as string[]);
+    return journal.getExpansionCoverageRequestIds(ownerCheck);
+  }
+
+  public replayExpansionCoverageProjection(requestId: string) {
+    const journal = (this as any)._lastContext?.journal as ExecutionJournal | undefined;
+    if (!journal) {
+      const error = new Error('Expansion coverage requires a prior or active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return journal.replayExpansionCoverageProjection(requestId);
   }
 
   /**

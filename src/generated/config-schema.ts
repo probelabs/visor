@@ -79,6 +79,15 @@ export const configSchema = {
           description:
             "Check configurations (legacy, use 'steps' instead) - always populated after normalization",
         },
+        claim_types: {
+          $ref: '#/definitions/Record%3Cstring%2CClaimTypeConfig%3E',
+          description:
+            'Exact versioned candidate-claim schemas. Presence activates Graph v2 C1 semantics.',
+        },
+        subgraphs: {
+          $ref: '#/definitions/Record%3Cstring%2CSubgraphConfig%3E',
+          description: 'Named one-level templates used by C2 keyed expansion declarations.',
+        },
         output: {
           $ref: '#/definitions/OutputConfig',
           description: 'Output configuration (optional - defaults provided)',
@@ -868,6 +877,30 @@ export const configSchema = {
           description:
             'Check IDs that this check depends on (optional). Accepts single string or array.',
         },
+        emits: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/ClaimEmissionConfig',
+          },
+          description: "Candidate claims emitted from this check's raw terminal output.",
+          minItems: 1,
+        },
+        consumes: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/ClaimConsumptionConfig',
+          },
+          description: 'Exact candidate claims required before this check may run.',
+          minItems: 1,
+        },
+        expand: {
+          $ref: '#/definitions/ExpansionConfig',
+          description: 'Optional C2 keyed expansion owned by this root check.',
+        },
+        wait_for_expansion: {
+          $ref: '#/definitions/WaitForExpansionConfig',
+          description: 'Optional bounded completion barrier for a nested expansion.',
+        },
         group: {
           type: 'string',
           description:
@@ -1019,6 +1052,72 @@ export const configSchema = {
           type: 'string',
           description: 'Message template for log checks',
         },
+        instructions: {
+          type: 'string',
+        },
+        invocation: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'],
+          properties: {
+            role_id: {
+              type: 'string',
+            },
+            stance: {
+              type: 'string',
+              enum: ['owner', 'external-review'],
+            },
+            subject: {
+              anyOf: [
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['kind', 'id', 'fingerprint'],
+                  properties: {
+                    kind: {
+                      type: 'string',
+                      enum: ['project', 'requirement'],
+                    },
+                    id: {
+                      type: 'string',
+                    },
+                    fingerprint: {
+                      type: 'string',
+                      pattern: '^sha256:[0-9a-f]{64}$',
+                    },
+                  },
+                },
+                {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['kind'],
+                  properties: {
+                    kind: {
+                      const: 'component',
+                    },
+                  },
+                },
+              ],
+            },
+            output_schema_id: {
+              type: 'string',
+            },
+            output_schema: {
+              type: 'string',
+            },
+          },
+        },
+        invocation_digest: {
+          type: 'string',
+          pattern: '^sha256:[0-9a-f]{64}$',
+        },
+        result_schema: {
+          type: 'string',
+        },
+        profile: {
+          type: 'string',
+          const: 'luna-xhigh-readonly-v1',
+        },
         level: {
           type: 'string',
           enum: ['debug', 'info', 'warn', 'error'],
@@ -1157,7 +1256,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1174,7 +1273,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1279,6 +1378,12 @@ export const configSchema = {
         'git-checkout',
         'a2a',
         'utcp',
+        'proof-admit',
+        'proof-structural-inventory',
+        'proof-catalog-revalidate',
+        'proof-admitted-catalog',
+        'governed-proof-inspect',
+        'proof-project-reconcile',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1743,6 +1848,119 @@ export const configSchema = {
       },
       description: 'Environment variable reference configuration',
     },
+    ClaimEmissionConfig: {
+      type: 'object',
+      properties: {
+        claim: {
+          type: 'string',
+        },
+        from: {
+          type: 'string',
+          const: 'output',
+        },
+      },
+      required: ['claim', 'from'],
+      additionalProperties: false,
+      description: 'Publish the raw terminal provider output as an exact claim type/version.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    ClaimConsumptionConfig: {
+      type: 'object',
+      properties: {
+        claim: {
+          type: 'string',
+        },
+        cardinality: {
+          type: 'string',
+          const: 'one',
+          description:
+            'C1 root declarations require this explicitly; C2 templates default it to one.',
+        },
+        as: {
+          type: 'string',
+          description: 'Immutable provider-context binding used by generated template checks.',
+        },
+      },
+      required: ['claim'],
+      additionalProperties: false,
+      description: 'Require one active candidate claim of an exact type/version.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    ExpansionConfig: {
+      type: 'object',
+      properties: {
+        claim: {
+          type: 'string',
+          description: 'Catalog claim emitted by this same root check.',
+        },
+        template: {
+          type: 'string',
+          description: 'Named subgraph template to instantiate for every keyed catalog item.',
+        },
+        items_pointer: {
+          type: 'string',
+          description: 'RFC 6901 pointer from the catalog payload to its item array.',
+        },
+        key_pointer: {
+          type: 'string',
+          description: 'RFC 6901 pointer, relative to one item, to its stable key.',
+        },
+        item_claim: {
+          type: 'string',
+          description: 'Claim published by the controller for one schema-valid item.',
+        },
+        coverage: {
+          type: 'object',
+          properties: {
+            outcome_claim: {
+              type: 'string',
+              description: "Claim emitted exactly once by the template's terminal sink operation.",
+            },
+            class_pointer: {
+              type: 'string',
+              description: 'RFC 6901 pointer from the outcome payload to its terminal class.',
+            },
+          },
+          required: ['outcome_claim', 'class_pointer'],
+          additionalProperties: false,
+          description:
+            'Optional deterministic terminal coverage projection for the selected catalog.',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+      },
+      required: ['claim', 'template', 'items_pointer', 'key_pointer', 'item_claim'],
+      additionalProperties: false,
+      description: 'Compile one terminal catalog claim into stable keyed template instances.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    WaitForExpansionConfig: {
+      type: 'object',
+      properties: {
+        owner: {
+          type: 'string',
+          description: 'Sibling node in this template that owns the depth-2 expansion.',
+        },
+        terminal_node: {
+          type: 'string',
+          description: "Terminal node key in the owner's child template.",
+        },
+      },
+      required: ['owner', 'terminal_node'],
+      additionalProperties: false,
+      description:
+        'Hold one parent-template node open until the terminal node of every current child instance produced by a sibling expansion has completed. This is deliberately limited to one sibling expansion owner and one child terminal node; it is not a general fan-in/cardinality declaration.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
     CustomTemplateConfig: {
       type: 'object',
       properties: {
@@ -1923,7 +2141,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1938,14 +2156,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102>>':
+    'Record<string,Partial<interface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102>': {
+    'Partial<interface-src_types_config.ts-18108-34467-src_types_config.ts-0-66624>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -2182,6 +2400,67 @@ export const configSchema = {
         },
       },
       additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,ClaimTypeConfig>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/ClaimTypeConfig',
+      },
+    },
+    ClaimTypeConfig: {
+      type: 'object',
+      properties: {
+        schema: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'JSON Schema used for strict candidate publication validation.',
+        },
+      },
+      required: ['schema'],
+      additionalProperties: false,
+      description: 'A schema-bound candidate claim declaration.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,SubgraphConfig>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/SubgraphConfig',
+      },
+    },
+    SubgraphConfig: {
+      type: 'object',
+      properties: {
+        input: {
+          $ref: '#/definitions/SubgraphInputConfig',
+        },
+        checks: {
+          $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
+        },
+      },
+      required: ['input', 'checks'],
+      additionalProperties: false,
+      description: 'A statically compiled, one-level generated subgraph template.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SubgraphInputConfig: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+        },
+        claim: {
+          type: 'string',
+        },
+      },
+      required: ['name', 'claim'],
+      additionalProperties: false,
+      description: 'One externally supplied claim binding for a generated subgraph template.',
       patternProperties: {
         '^x-': {},
       },

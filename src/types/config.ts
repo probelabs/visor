@@ -219,7 +219,13 @@ export type ConfigCheckType =
   | 'workflow'
   | 'git-checkout'
   | 'a2a'
-  | 'utcp';
+  | 'utcp'
+  | 'proof-admit'
+  | 'proof-structural-inventory'
+  | 'proof-catalog-revalidate'
+  | 'proof-admitted-catalog'
+  | 'governed-proof-inspect'
+  | 'proof-project-reconcile';
 
 /**
  * Valid event triggers for checks
@@ -503,6 +509,73 @@ export interface RateLimitConfig {
   initial_delay_ms?: number;
 }
 
+/** A schema-bound candidate claim declaration. */
+export interface ClaimTypeConfig {
+  /** JSON Schema used for strict candidate publication validation. */
+  schema: Record<string, unknown>;
+}
+
+/** Publish the raw terminal provider output as an exact claim type/version. */
+export interface ClaimEmissionConfig {
+  claim: string;
+  from: 'output';
+}
+
+/** Require one active candidate claim of an exact type/version. */
+export interface ClaimConsumptionConfig {
+  claim: string;
+  /** C1 root declarations require this explicitly; C2 templates default it to one. */
+  cardinality?: 'one';
+  /** Immutable provider-context binding used by generated template checks. */
+  as?: string;
+}
+
+/** Compile one terminal catalog claim into stable keyed template instances. */
+export interface ExpansionConfig {
+  /** Catalog claim emitted by this same root check. */
+  claim: string;
+  /** Named subgraph template to instantiate for every keyed catalog item. */
+  template: string;
+  /** RFC 6901 pointer from the catalog payload to its item array. */
+  items_pointer: string;
+  /** RFC 6901 pointer, relative to one item, to its stable key. */
+  key_pointer: string;
+  /** Claim published by the controller for one schema-valid item. */
+  item_claim: string;
+  /** Optional deterministic terminal coverage projection for the selected catalog. */
+  coverage?: {
+    /** Claim emitted exactly once by the template's terminal sink operation. */
+    outcome_claim: string;
+    /** RFC 6901 pointer from the outcome payload to its terminal class. */
+    class_pointer: string;
+  };
+}
+
+/**
+ * Hold one parent-template node open until the terminal node of every
+ * current child instance produced by a sibling expansion has completed.
+ * This is deliberately limited to one sibling expansion owner and one child
+ * terminal node; it is not a general fan-in/cardinality declaration.
+ */
+export interface WaitForExpansionConfig {
+  /** Sibling node in this template that owns the depth-2 expansion. */
+  owner: string;
+  /** Terminal node key in the owner's child template. */
+  terminal_node: string;
+}
+
+/** One externally supplied claim binding for a generated subgraph template. */
+export interface SubgraphInputConfig {
+  name: string;
+  claim: string;
+}
+
+/** A statically compiled, one-level generated subgraph template. */
+export interface SubgraphConfig {
+  input: SubgraphInputConfig;
+  checks: Record<string, CheckConfig>;
+}
+
 /**
  * Configuration for a single check
  */
@@ -630,6 +703,20 @@ export interface CheckConfig {
   timeout?: number;
   /** Check IDs that this check depends on (optional). Accepts single string or array. */
   depends_on?: string | string[];
+  /**
+   * Candidate claims emitted from this check's raw terminal output.
+   * @minItems 1
+   */
+  emits?: ClaimEmissionConfig[];
+  /**
+   * Exact candidate claims required before this check may run.
+   * @minItems 1
+   */
+  consumes?: ClaimConsumptionConfig[];
+  /** Optional C2 keyed expansion owned by this root check. */
+  expand?: ExpansionConfig;
+  /** Optional bounded completion barrier for a nested expansion. */
+  wait_for_expansion?: WaitForExpansionConfig;
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
@@ -726,6 +813,12 @@ export interface CheckConfig {
    */
   /** Message template for log checks */
   message?: string;
+  /** Closed governed Proof inspection invocation fields. */
+  instructions?: string;
+  invocation?: Record<string, unknown>;
+  invocation_digest?: string;
+  result_schema?: string;
+  profile?: string;
   /** Log level for log checks */
   level?: 'debug' | 'info' | 'warn' | 'error';
   /** Include PR context in log output */
@@ -1609,6 +1702,10 @@ export interface VisorConfig {
   steps?: Record<string, CheckConfig>;
   /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */
   checks?: Record<string, CheckConfig>;
+  /** Exact versioned candidate-claim schemas. Presence activates Graph v2 C1 semantics. */
+  claim_types?: Record<string, ClaimTypeConfig>;
+  /** Named one-level templates used by C2 keyed expansion declarations. */
+  subgraphs?: Record<string, SubgraphConfig>;
   /** Output configuration (optional - defaults provided) */
   output?: OutputConfig;
   /** HTTP server configuration for receiving webhooks */

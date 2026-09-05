@@ -1,13 +1,63 @@
 import type { VisorConfig, EventTrigger } from '../../types/config';
 import type { PRInfo } from '../../pr-analyzer';
-import type { EngineContext, CheckMetadata } from '../../types/engine';
+import type { EngineContext, CheckMetadata, GeneratedDispatchGate } from '../../types/engine';
 import { ExecutionJournal } from '../../snapshot-store';
+import type { GraphJournalCheckpointV1 } from '../../snapshot-store';
 import { MemoryStore } from '../../memory-store';
 import { generateHumanId } from '../../utils/human-id';
 import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
 import { WorkspaceManager } from '../../utils/workspace-manager';
 import { FairConcurrencyLimiter } from '../../utils/fair-concurrency-limiter';
+import { compileClaimPlan } from '../graph/claim-plan';
+
+/** Private bootstrap used only by the engine's one-shot Graph checkpoint continuation. */
+export interface GraphCheckpointBootstrap {
+  readonly kind: 'graph';
+  readonly checkpoint: unknown;
+  readonly expansionOwnerCheck: string;
+}
+
+/** Restore a ready-only checkpoint without appending a catalog request. */
+export interface GraphCheckpointResumeBootstrap {
+  readonly kind: 'graph-resume';
+  readonly checkpoint: unknown;
+}
+
+/**
+ * Private bootstrap for a Proof catalog refresh.  The public SDK deliberately
+ * does not expose graph mutations: it supplies only the checkpoint and the
+ * exact Proof output bytes, which the journal authenticates and projects.
+ */
+export interface ProofCurrentCatalogCheckpointBootstrap {
+  readonly kind: 'proof-current-catalog';
+  readonly checkpoint: unknown;
+  readonly projectSubgraphInstanceId: string;
+  readonly revalidationBytes: string | Uint8Array;
+  readonly workItemsBytes: string | Uint8Array;
+}
+
+export type CheckpointBootstrap =
+  | GraphCheckpointBootstrap
+  | GraphCheckpointResumeBootstrap
+  | ProofCurrentCatalogCheckpointBootstrap;
+
+export type BuiltGraphCheckpointContext =
+  | {
+      readonly kind: 'graph';
+      readonly context: EngineContext;
+      readonly requestId: string;
+    }
+  | {
+      readonly kind: 'proof-current-catalog';
+      readonly context: EngineContext;
+      readonly authorityId: string;
+      readonly mutationEventCount: number;
+    }
+  | {
+      readonly kind: 'graph-resume';
+      readonly context: EngineContext;
+    };
 
 /**
  * Apply minimal criticality defaults in-place.
@@ -38,10 +88,99 @@ export function buildEngineContextForRun(
   debug?: boolean,
   maxParallelism?: number,
   failFast?: boolean,
-  requestedChecks?: string[]
-): EngineContext {
+  requestedChecks?: string[],
+  graphCheckpointBootstrap?: undefined,
+  generatedDispatchGate?: GeneratedDispatchGate
+): EngineContext;
+export function buildEngineContextForRun(
+  workingDirectory: string,
+  config: VisorConfig,
+  prInfo: PRInfo,
+  debug?: boolean,
+  maxParallelism?: number,
+  failFast?: boolean,
+  requestedChecks?: string[],
+  graphCheckpointBootstrap?: CheckpointBootstrap,
+  generatedDispatchGate?: GeneratedDispatchGate
+): BuiltGraphCheckpointContext;
+export function buildEngineContextForRun(
+  workingDirectory: string,
+  config: VisorConfig,
+  prInfo: PRInfo,
+  debug?: boolean,
+  maxParallelism?: number,
+  failFast?: boolean,
+  requestedChecks?: string[],
+  graphCheckpointBootstrap?: CheckpointBootstrap,
+  generatedDispatchGate?: GeneratedDispatchGate
+): EngineContext | BuiltGraphCheckpointContext {
   // Deep clone provided config to avoid cross-run mutations between tests/runs
   const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
+
+  // Compile exact claim bindings once. Materialize effective dependencies only
+  // into the per-run clone; the caller's authored configuration remains untouched.
+  const claimPlan = compileClaimPlan(clonedConfig);
+  if (claimPlan.active) {
+    const clonedChecks = clonedConfig.checks || clonedConfig.steps || {};
+    for (const [checkId, dependencies] of Object.entries(
+      claimPlan.effectiveDependenciesByCheck
+    )) {
+      const check = clonedChecks[checkId];
+      if (check) check.depends_on = [...dependencies];
+    }
+    clonedConfig.checks = clonedChecks;
+  }
+
+  // Restore the graph prefix before creating any session-capturing service. The
+  // restore routine owns all envelope, integrity, graph, replay, quiescence,
+  // and allocator validation; the engine only reads the validated envelope
+  // session after it succeeds.
+  let journal: ExecutionJournal;
+  let sessionId: string;
+  let checkpointResult:
+    | { readonly kind: 'graph'; readonly requestId: string }
+    | { readonly kind: 'graph-resume' }
+    | { readonly kind: 'proof-current-catalog'; readonly authorityId: string; readonly mutationEventCount: number }
+    | undefined;
+  if (graphCheckpointBootstrap) {
+    journal = ExecutionJournal.restoreGraphCheckpoint(
+      claimPlan,
+      graphCheckpointBootstrap.checkpoint
+    );
+    const validatedCheckpoint = graphCheckpointBootstrap.checkpoint as GraphJournalCheckpointV1;
+    sessionId = validatedCheckpoint.sessionId;
+    if (graphCheckpointBootstrap.kind === 'graph') {
+      const requestId = journal.requestCatalogReconciliation({
+        sessionId,
+        ownerCheck: graphCheckpointBootstrap.expansionOwnerCheck,
+      }).requestId;
+      checkpointResult = { kind: 'graph', requestId };
+    } else if (graphCheckpointBootstrap.kind === 'graph-resume') {
+      checkpointResult = { kind: 'graph-resume' };
+    } else {
+      // The Proof branch is intentionally a private, unpublished journal
+      // transaction.  The journal performs the topology/quiescence gate and
+      // validates the untrusted exact bytes before any engine context is
+      // published or any provider can be launched.
+      const authority = journal.recordProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId: graphCheckpointBootstrap.projectSubgraphInstanceId,
+        revalidationBytes: graphCheckpointBootstrap.revalidationBytes,
+        workItemsBytes: graphCheckpointBootstrap.workItemsBytes,
+      });
+      const applied = journal.applyProofCurrentCatalogAuthority({
+        projectSubgraphInstanceId: graphCheckpointBootstrap.projectSubgraphInstanceId,
+        authorityId: authority.authorityId,
+      });
+      checkpointResult = {
+        kind: 'proof-current-catalog',
+        authorityId: applied.authorityId,
+        mutationEventCount: applied.mutationEventCount,
+      };
+    }
+  } else {
+    sessionId = generateHumanId();
+    journal = new ExecutionJournal(claimPlan);
+  }
 
   // Build check metadata
   const checks: Record<string, CheckMetadata> = {};
@@ -96,15 +235,14 @@ export function buildEngineContextForRun(
     }
   }
 
-  // Initialize journal and memory
-  const journal = new ExecutionJournal();
+  // Initialize memory only after checkpoint restore and the direct owner
+  // request above. The continuation skips Init but receives this fresh store.
   const memory = MemoryStore.getInstance(clonedConfig.memory);
 
   // Create shared AI concurrency limiter if configured.
   // Uses a global singleton fair limiter: round-robin across sessions so
   // no single user/task can starve others.
   let sharedConcurrencyLimiter: any = undefined;
-  const sessionId = generateHumanId();
   if (clonedConfig.max_ai_concurrency) {
     const fairLimiter = FairConcurrencyLimiter.getInstance(clonedConfig.max_ai_concurrency);
     // Bind this engine run's session ID into acquire/release so the fair limiter
@@ -141,10 +279,11 @@ export function buildEngineContextForRun(
     };
   }
 
-  return {
+  const context: EngineContext = {
     mode: 'state-machine',
     config: clonedConfig,
     checks,
+    claimPlan,
     journal,
     memory,
     workingDirectory,
@@ -158,7 +297,23 @@ export function buildEngineContextForRun(
     requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : undefined,
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
     prInfo,
+    generatedDispatchGate,
   };
+
+  if (graphCheckpointBootstrap) {
+    // Generic continuation retains its exact request ID. Proof continuation
+    // intentionally has no request suffix; the applied authority has already
+    // released only the changed generations for LevelDispatch.
+    if (!checkpointResult) throw new Error('Checkpoint continuation result was not created');
+    if (checkpointResult.kind === 'graph') {
+      return { kind: 'graph', context, requestId: checkpointResult.requestId };
+    }
+    if (checkpointResult.kind === 'graph-resume') {
+      return { kind: 'graph-resume', context };
+    }
+    return { kind: 'proof-current-catalog', context, authorityId: checkpointResult.authorityId, mutationEventCount: checkpointResult.mutationEventCount };
+  }
+  return context;
 }
 
 /**

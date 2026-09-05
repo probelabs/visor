@@ -1,0 +1,807 @@
+# EXP-0209 discovery egress.  This is the operational graph source of truth.
+# The project catalog is one manually selected project.  Its discovery
+# subgraph is allowed to fan out only after Proof candidate admission and a
+# current Proof catalog-revalidation projection. Component boundaries are
+# model output and are intentionally absent from this authored file.
+version: "1.0"
+max_parallelism: 3
+workspace:
+  enabled: false
+
+claim_types:
+  project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [project_id, root]
+            properties:
+              project_id: { type: string, minLength: 1 }
+              root: { type: string, minLength: 1 }
+  project.discovery_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [project_id, root]
+      properties:
+        project_id: { type: string, minLength: 1 }
+        root: { type: string, minLength: 1 }
+  proof.candidate@1:
+    schema:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [version, project_id, components]
+          properties:
+            version: { const: proof.component-catalog-candidate/v1 }
+            project_id: { type: string, minLength: 1 }
+            components:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, responsibility, owned_paths]
+                properties:
+                  id: { type: string, minLength: 1 }
+                  responsibility: { type: string, minLength: 1 }
+                  owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  entry_points: { type: array, items: { type: string, minLength: 1 } }
+                  state_effects: { type: array, items: { type: string, minLength: 1 } }
+                  interfaces: { type: array, items: {} }
+                  uncertainty: { type: array, items: { type: string, minLength: 1 } }
+        - type: object
+          additionalProperties: false
+          required: [schema, project, shard, reviewedFiles, requirements, interfaces, findings, unknowns, repositoryMutated, commandsExecuted, checklistCompleted]
+          properties:
+            schema: { const: reqproof.component-onboarding/v1 }
+            project: { type: string }
+            shard: { type: string }
+            reviewedFiles:
+              type: array
+              minItems: 1
+              maxItems: 64
+              items:
+                type: object
+                additionalProperties: false
+                required: [path, coordinates]
+                properties:
+                  path: { type: string }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            requirements:
+              type: array
+              minItems: 4
+              maxItems: 16
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, text, coordinates]
+                properties:
+                  id: { type: string, pattern: "^(STK|SYS|SW|INT)-" }
+                  text: { type: string }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            interfaces:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [name, coordinates]
+                properties:
+                  name: { type: string }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            findings:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, severity, title, calibration, confidence, coordinates]
+                properties:
+                  id: { type: string }
+                  severity: { enum: [info, low, medium, high, critical] }
+                  title: { type: string }
+                  calibration: { enum: [confirmed, likely, possible] }
+                  confidence: { type: number, minimum: 0, maximum: 1 }
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: { type: string }
+                        line: { type: integer, minimum: 1 }
+            unknowns:
+              type: array
+              maxItems: 32
+              items: { type: string }
+            repositoryMutated: { const: false }
+            commandsExecuted: { const: false }
+            checklistCompleted: { const: false }
+  proof.admitted_receipt@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [Version, Status, CandidateID, ProbeResultDigest, ProbeCanonicalBytes, ClaimID, Claim, PayloadFingerprint, InvocationDigest, RoleID, Stance, Subject, ProducerCheckID, ParentClaimIDs, Binding, Termination, receipt_id, __proof_admission_wire]
+      properties:
+        Version: { enum: [proof.role-result-candidate-admission/v1, proof.role-result-candidate-admission/v2] }
+        Status: { const: ADMITTED }
+        CandidateID: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        ProbeResultDigest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        ProbeCanonicalBytes: { type: integer, minimum: 1 }
+        ClaimID: { type: string, pattern: "^[0-9a-f]{64}$" }
+        Claim: { const: proof.candidate@1 }
+        PayloadFingerprint: { type: string, pattern: "^[0-9a-f]{64}$" }
+        InvocationDigest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        RoleID: { const: onboard }
+        Stance: { const: owner }
+        Subject:
+          type: object
+          additionalProperties: false
+          required: [kind, id, fingerprint]
+          properties:
+            kind: { enum: [project, component] }
+            id: { type: string, minLength: 1 }
+            fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        ProducerCheckID: { const: inspect }
+        ParentClaimIDs: { type: array, items: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        Binding:
+          type: object
+          additionalProperties: false
+          required: [ManagedRunID, SessionID, CheckID, Scope, NodeInstanceID, NodeGenerationID, AttemptID, Fence]
+          properties:
+            ManagedRunID: { type: string, minLength: 1 }
+            SessionID: { type: string, minLength: 1 }
+            CheckID: { const: inspect }
+            Scope:
+              type: array
+              minItems: 1
+              maxItems: 2
+              items: { type: object, additionalProperties: false, required: [Kind, ExpansionOwnerCheck, Key, SubgraphInstanceID], properties: { Kind: { const: keyed }, ExpansionOwnerCheck: { type: string, minLength: 1 }, Key: { type: string, minLength: 1 }, SubgraphInstanceID: { type: string, pattern: "^[0-9a-f]{64}$" } } }
+            NodeInstanceID: { type: string, minLength: 1 }
+            NodeGenerationID: { type: string, minLength: 1 }
+            AttemptID: { type: string, minLength: 1 }
+            Fence: { type: integer, minimum: 1 }
+        Termination:
+          type: object
+          additionalProperties: false
+          required: [Version, Type, SessionID, Scope, Binding, CleanupStatus, ControllerDecision, FailureCode]
+          properties:
+            Version: { const: 1 }
+            Type: { const: ManagedRunTerminated }
+            SessionID: { type: string, minLength: 1 }
+            Scope:
+              type: array
+              minItems: 1
+              maxItems: 2
+              items: { type: object, additionalProperties: false, required: [Kind, ExpansionOwnerCheck, Key, SubgraphInstanceID], properties: { Kind: { const: keyed }, ExpansionOwnerCheck: { type: string, minLength: 1 }, Key: { type: string, minLength: 1 }, SubgraphInstanceID: { type: string, pattern: "^[0-9a-f]{64}$" } } }
+            Binding:
+              type: object
+              additionalProperties: false
+              required: [ManagedRunID, SessionID, CheckID, Scope, NodeInstanceID, NodeGenerationID, AttemptID, Fence]
+              properties:
+                ManagedRunID: { type: string, minLength: 1 }
+                SessionID: { type: string, minLength: 1 }
+                CheckID: { const: inspect }
+                Scope:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items: { type: object, additionalProperties: false, required: [Kind, ExpansionOwnerCheck, Key, SubgraphInstanceID], properties: { Kind: { const: keyed }, ExpansionOwnerCheck: { type: string, minLength: 1 }, Key: { type: string, minLength: 1 }, SubgraphInstanceID: { type: string, pattern: "^[0-9a-f]{64}$" } } }
+                NodeInstanceID: { type: string, minLength: 1 }
+                NodeGenerationID: { type: string, minLength: 1 }
+                AttemptID: { type: string, minLength: 1 }
+                Fence: { type: integer, minimum: 1 }
+            CleanupStatus: { const: clean }
+            ControllerDecision: { const: completed }
+            FailureCode: { const: null }
+        ProjectLineage:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [version, fingerprint, object_format, baseline_revision]
+          properties:
+            version: { const: proof.git-project-lineage-binding/v1 }
+            fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            object_format: { enum: [sha1, sha256] }
+            baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
+        receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        __proof_admission_wire: { type: string, minLength: 1 }
+      allOf:
+        - if:
+            properties:
+              Version: { const: proof.role-result-candidate-admission/v1 }
+          then:
+            not:
+              properties: { ProjectLineage: {} }
+              required: [ProjectLineage]
+            properties:
+              Subject:
+                type: object
+                properties:
+                  kind: { const: component }
+        - if:
+            properties:
+              Version: { const: proof.role-result-candidate-admission/v2 }
+          then:
+            required: [ProjectLineage]
+            properties:
+              Subject:
+                type: object
+                properties:
+                  kind: { const: project }
+  proof.structural_inventory@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [version, authority, sorted_paths, sorted_module_paths, boundary_fingerprint, input_state]
+      properties:
+        version: { const: proof.structural-inventory/v1 }
+        authority:
+          type: object
+          additionalProperties: false
+          required: [version, project_id, subject_fingerprint, code_fingerprint, tests_fingerprint]
+          properties:
+            version: { const: proof.project-authority/v1 }
+            project_id: { type: string, minLength: 1 }
+            subject_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            code_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            tests_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        sorted_paths: { type: array, items: { type: string, minLength: 1 } }
+        sorted_module_paths: { type: [array, 'null'], items: { type: string, minLength: 1 } }
+        boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        input_state:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [owner_kind, owner_id, input_kind, path, file_hash]
+            properties:
+              owner_kind: { const: onboarding_structural_inventory }
+              owner_id: { type: string, minLength: 1 }
+              input_kind: { type: string, minLength: 1 }
+              path: { type: string, minLength: 1 }
+              file_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+  proof.catalog_revalidation@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [version, inventory, catalog, work_items, receipt]
+      properties:
+        version: { const: proof.catalog-revalidation/v2 }
+        inventory:
+          type: object
+          additionalProperties: false
+          required: [version, authority, sorted_paths, sorted_module_paths, boundary_fingerprint, input_state]
+          properties:
+            version: { const: proof.structural-inventory/v1 }
+            authority:
+              type: object
+              additionalProperties: false
+              required: [version, project_id, subject_fingerprint, code_fingerprint, tests_fingerprint]
+              properties:
+                version: { const: proof.project-authority/v1 }
+                project_id: { type: string, minLength: 1 }
+                subject_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                code_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                tests_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            sorted_paths: { type: array, items: { type: string, minLength: 1 } }
+            sorted_module_paths: { type: [array, 'null'], items: { type: string, minLength: 1 } }
+            boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            input_state:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [owner_kind, owner_id, input_kind, path, file_hash]
+                properties:
+                  owner_kind: { const: onboarding_structural_inventory }
+                  owner_id: { type: string, minLength: 1 }
+                  input_kind: { type: string, minLength: 1 }
+                  path: { type: string, minLength: 1 }
+                  file_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        catalog:
+          type: object
+          additionalProperties: false
+          required: [version, project_id, components]
+          properties:
+            version: { const: proof.component-catalog-candidate/v1 }
+            project_id: { type: string, minLength: 1 }
+            components:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, responsibility, owned_paths]
+                properties:
+                  id: { type: string, minLength: 1 }
+                  responsibility: { type: string, minLength: 1 }
+                  owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  entry_points: { type: array, items: { type: string, minLength: 1 } }
+                  state_effects: { type: array, items: { type: string, minLength: 1 } }
+                  interfaces: { type: array, items: {} }
+                  uncertainty: { type: array, items: { type: string, minLength: 1 } }
+        work_items:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject]
+            properties:
+              version: { const: reqproof.onboarding-component-work-item/v1 }
+              project_id: { type: string, minLength: 1 }
+              component_id: { type: string, minLength: 1 }
+              sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+              sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+              proof_path_mapping:
+                type: object
+                additionalProperties: false
+                required: [paths, components, owner, risk_tier, enforcement]
+                properties:
+                  paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  components: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  owner: { const: onboard }
+                  risk_tier: { const: 0 }
+                  enforcement: { const: soft }
+              proof_input_state:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [owner_kind, owner_id, input_kind, path, file_hash]
+                  properties:
+                    owner_kind: { const: onboarding_component }
+                    owner_id: { type: string, minLength: 1 }
+                    input_kind: { type: string, minLength: 1 }
+                    path: { type: string, minLength: 1 }
+                    file_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              proof_component_subject:
+                type: object
+                additionalProperties: false
+                required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                properties:
+                  version: { const: proof.component-subject/v1 }
+                  project_id: { type: string, minLength: 1 }
+                  component_id: { type: string, minLength: 1 }
+                  sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        receipt:
+          type: object
+          additionalProperties: false
+          required: [version, decision, project_id, project_fingerprint, boundary_fingerprint, inventory_claim_id, catalog_claim_id, admission_candidate_id, admission_result_digest, admission_receipt_id, component_authorities, project_lineage, receipt_id]
+          properties:
+            version: { const: proof.catalog-revalidation-receipt/v2 }
+            decision: { const: accepted }
+            project_id: { type: string, minLength: 1 }
+            project_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            inventory_claim_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            catalog_claim_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_candidate_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_result_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            component_authorities:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items:
+                type: object
+                additionalProperties: false
+                required: [component_id, work_item_digest, subject]
+                properties:
+                  component_id: { type: string, minLength: 1 }
+                  work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                  subject:
+                    type: object
+                    additionalProperties: false
+                    required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                    properties:
+                      version: { const: proof.component-subject/v1 }
+                      project_id: { type: string, minLength: 1 }
+                      component_id: { type: string, minLength: 1 }
+                      sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            project_lineage:
+              type: [object, 'null']
+              additionalProperties: false
+              required: [version, fingerprint, object_format, baseline_revision]
+              properties:
+                version: { const: proof.git-project-lineage-binding/v1 }
+                fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                object_format: { enum: [sha1, sha256] }
+                baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
+            receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+  proof.project_reconciliation_receipt@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - project_authority
+        - catalog_revalidation_receipt
+        - component_admissions
+        - covered_work_item_digests
+        - receipt_id
+      properties:
+        version: { const: proof.project-reconciliation-receipt/v1 }
+        project_authority:
+          type: object
+          additionalProperties: false
+          required: [version, project_id, subject_fingerprint, code_fingerprint, tests_fingerprint]
+          properties:
+            version: { const: proof.project-authority/v1 }
+            project_id: { type: string, minLength: 1 }
+            subject_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            code_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            tests_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        catalog_revalidation_receipt:
+          type: object
+          additionalProperties: false
+          required: [version, decision, project_id, project_fingerprint, boundary_fingerprint, inventory_claim_id, catalog_claim_id, admission_candidate_id, admission_result_digest, admission_receipt_id, component_authorities, project_lineage, receipt_id]
+          properties:
+            version: { const: proof.catalog-revalidation-receipt/v2 }
+            decision: { const: accepted }
+            project_id: { type: string, minLength: 1 }
+            project_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            boundary_fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            inventory_claim_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            catalog_claim_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_candidate_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_result_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            admission_receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            component_authorities:
+              type: array
+              minItems: 3
+              maxItems: 3
+              items:
+                type: object
+                additionalProperties: false
+                required: [component_id, work_item_digest, subject]
+                properties:
+                  component_id: { type: string, minLength: 1 }
+                  work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                  subject:
+                    type: object
+                    additionalProperties: false
+                    required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                    properties:
+                      version: { const: proof.component-subject/v1 }
+                      project_id: { type: string, minLength: 1 }
+                      component_id: { type: string, minLength: 1 }
+                      sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            project_lineage:
+              type: [object, 'null']
+              additionalProperties: false
+              required: [version, fingerprint, object_format, baseline_revision]
+              properties:
+                version: { const: proof.git-project-lineage-binding/v1 }
+                fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                object_format: { enum: [sha1, sha256] }
+                baseline_revision: { type: string, pattern: "^(sha1:[0-9a-f]{40}|sha256:[0-9a-f]{64})$" }
+            receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        component_admissions:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [component_id, work_item_digest, candidate_id, result_digest, operational_scope_digest]
+            properties:
+              component_id: { type: string, minLength: 1 }
+              work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              candidate_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              result_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              operational_scope_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        covered_work_item_digests:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        receipt_id: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, authority]
+            properties:
+              version: { const: reqproof.onboarding-component-work-item/v1 }
+              project_id: { type: string, minLength: 1 }
+              component_id: { type: string, minLength: 1 }
+              sorted_owned_paths: { type: array, uniqueItems: true, items: { type: string } }
+              sorted_dependency_closure: { type: array, uniqueItems: true, items: { type: string } }
+              proof_path_mapping:
+                type: object
+                additionalProperties: false
+                required: [paths, components, owner, risk_tier, enforcement]
+                properties:
+                  paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  components: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+                  owner: { const: onboard }
+                  risk_tier: { const: 0 }
+                  enforcement: { const: soft }
+              proof_input_state:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [owner_kind, owner_id, input_kind, path, file_hash]
+                  properties:
+                    owner_kind: { const: onboarding_component }
+                    owner_id: { type: string, minLength: 1 }
+                    input_kind: { type: string, minLength: 1 }
+                    path: { type: string, minLength: 1 }
+                    file_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              proof_component_subject:
+                type: object
+                additionalProperties: false
+                required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                properties:
+                  version: { const: proof.component-subject/v1 }
+                  project_id: { type: string, minLength: 1 }
+                  component_id: { type: string, minLength: 1 }
+                  sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                  fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+              authority:
+                type: object
+                additionalProperties: false
+                required: [component_id, work_item_digest, subject]
+                properties:
+                  component_id: { type: string, minLength: 1 }
+                  work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+                  subject:
+                    type: object
+                    additionalProperties: false
+                    required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+                    properties:
+                      version: { const: proof.component-subject/v1 }
+                      project_id: { type: string, minLength: 1 }
+                      component_id: { type: string, minLength: 1 }
+                      sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                      fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+  component.work_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, authority]
+      properties:
+        version: { const: reqproof.onboarding-component-work-item/v1 }
+        project_id: { type: string, minLength: 1 }
+        component_id: { type: string, minLength: 1 }
+        sorted_owned_paths: { type: array, uniqueItems: true, items: { type: string } }
+        sorted_dependency_closure: { type: array, uniqueItems: true, items: { type: string } }
+        proof_path_mapping:
+          type: object
+          additionalProperties: false
+          required: [paths, components, owner, risk_tier, enforcement]
+          properties:
+            paths: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+            components: { type: array, minItems: 1, items: { type: string, minLength: 1 } }
+            owner: { const: onboard }
+            risk_tier: { const: 0 }
+            enforcement: { const: soft }
+        proof_input_state:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [owner_kind, owner_id, input_kind, path, file_hash]
+            properties:
+              owner_kind: { const: onboarding_component }
+              owner_id: { type: string, minLength: 1 }
+              input_kind: { type: string, minLength: 1 }
+              path: { type: string, minLength: 1 }
+              file_hash: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        proof_component_subject:
+          type: object
+          additionalProperties: false
+          required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+          properties:
+            version: { const: proof.component-subject/v1 }
+            project_id: { type: string, minLength: 1 }
+            component_id: { type: string, minLength: 1 }
+            sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+            sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+            fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+        authority:
+          type: object
+          additionalProperties: false
+          required: [component_id, work_item_digest, subject]
+          properties:
+            component_id: { type: string, minLength: 1 }
+            work_item_digest: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+            subject:
+              type: object
+              additionalProperties: false
+              required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, fingerprint]
+              properties:
+                version: { const: proof.component-subject/v1 }
+                project_id: { type: string, minLength: 1 }
+                component_id: { type: string, minLength: 1 }
+                sorted_owned_paths: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                sorted_dependency_closure: { type: array, minItems: 1, uniqueItems: true, items: { type: string, minLength: 1 } }
+                fingerprint: { type: string, pattern: "^sha256:[0-9a-f]{64}$" }
+checks:
+  project:
+    type: memory
+    operation: set
+    key: project-catalog
+    value:
+      projects:
+        - project_id: journalservice
+          root: .
+    emits:
+      - claim: project.catalog@1
+        from: output
+    expand:
+      claim: project.catalog@1
+      template: discover-project
+      items_pointer: /projects
+      key_pointer: /project_id
+      item_claim: project.discovery_item@1
+
+subgraphs:
+  discover-project:
+    input: { name: project, claim: project.discovery_item@1 }
+    checks:
+      structural_inventory:
+        type: proof-structural-inventory
+        consumes:
+          - { claim: project.discovery_item@1, as: project }
+        emits:
+          - { claim: proof.structural_inventory@1, from: output }
+      inspect:
+        type: governed-proof-inspect
+        message: >-
+          Execute the bound Proof discovery role and return only the closed canonical catalog JSON.
+          For this bounded demo, return exactly 3 components. The owned_paths arrays must form
+          an exact once-only partition of every path in current_inventory.sorted_paths, including
+          tests and manifests such as go.mod. Each dependency_closure may contain only exact paths
+          from current_inventory.sorted_paths and must include every owned path. Never use package,
+          symbol, or component labels as paths.
+        instructions: Discover the project's independently onboardable components; every path must be observed in the supplied Proof inventory. Do not invent files.
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject:
+            kind: project
+            id: journalservice
+            fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          output_schema_id: proof.component-catalog-candidate@1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJ2ZXJzaW9uIiwicHJvamVjdF9pZCIsImNvbXBvbmVudHMiXSwicHJvcGVydGllcyI6eyJ2ZXJzaW9uIjp7ImNvbnN0IjoicHJvb2YuY29tcG9uZW50LWNhdGFsb2ctY2FuZGlkYXRlL3YxIn0sInByb2plY3RfaWQiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sImNvbXBvbmVudHMiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjMsIm1heEl0ZW1zIjozLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJpZCIsInJlc3BvbnNpYmlsaXR5Iiwib3duZWRfcGF0aHMiXSwicHJvcGVydGllcyI6eyJpZCI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfSwicmVzcG9uc2liaWxpdHkiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX0sIm93bmVkX3BhdGhzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfSwidW5pcXVlSXRlbXMiOnRydWV9LCJkZXBlbmRlbmN5X2Nsb3N1cmUiOnsidHlwZSI6ImFycmF5IiwibWluSXRlbXMiOjEsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9LCJ1bmlxdWVJdGVtcyI6dHJ1ZX0sImVudHJ5X3BvaW50cyI6eyJ0eXBlIjoiYXJyYXkiLCJpdGVtcyI6eyJ0eXBlIjoic3RyaW5nIiwibWluTGVuZ3RoIjoxfX0sInN0YXRlX2VmZmVjdHMiOnsidHlwZSI6ImFycmF5IiwiaXRlbXMiOnsidHlwZSI6InN0cmluZyIsIm1pbkxlbmd0aCI6MX19LCJpbnRlcmZhY2VzIjp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7fX0sInVuY2VydGFpbnR5Ijp7InR5cGUiOiJhcnJheSIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmciLCJtaW5MZW5ndGgiOjF9fX19fX19
+        invocation_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        result_schema: '{"type":"object","additionalProperties":false,"required":["version","project_id","components"],"properties":{"version":{"const":"proof.component-catalog-candidate/v1"},"project_id":{"type":"string","minLength":1},"components":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"object","additionalProperties":false,"required":["id","responsibility","owned_paths"],"properties":{"id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1},"owned_paths":{"type":"array","minItems":1,"items":{"type":"string","minLength":1},"uniqueItems":true},"dependency_closure":{"type":"array","minItems":1,"items":{"type":"string","minLength":1},"uniqueItems":true},"entry_points":{"type":"array","items":{"type":"string","minLength":1}},"state_effects":{"type":"array","items":{"type":"string","minLength":1}},"interfaces":{"type":"array","items":{}},"uncertainty":{"type":"array","items":{"type":"string","minLength":1}}}}}}}'
+        consumes:
+          - { claim: project.discovery_item@1, as: project }
+          - { claim: proof.structural_inventory@1, as: current_inventory }
+        emits:
+          - { claim: proof.candidate@1, from: output }
+      proof_admit:
+        type: proof-admit
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+        emits:
+          - { claim: proof.admitted_receipt@1, from: output }
+      verify:
+        type: noop
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }
+      revalidate_catalog:
+        type: proof-catalog-revalidate
+        depends_on: [verify]
+        consumes:
+          - { claim: proof.structural_inventory@1, as: current_inventory }
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }
+        emits:
+          - { claim: proof.catalog_revalidation@1, from: output }
+      materialize_catalog:
+        type: proof-admitted-catalog
+        consumes:
+          - { claim: proof.structural_inventory@1, as: current_inventory }
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }
+          - { claim: proof.catalog_revalidation@1, as: current_revalidation }
+        emits:
+          - { claim: component.catalog@1, from: output }
+        expand:
+          claim: component.catalog@1
+          template: onboard-component
+          items_pointer: /components
+          key_pointer: /component_id
+          item_claim: component.work_item@1
+      project_reconcile:
+        type: proof-project-reconcile
+        depends_on: [materialize_catalog]
+        wait_for_expansion:
+          owner: materialize_catalog
+          terminal_node: verify
+        emits:
+          - { claim: proof.project_reconciliation_receipt@1, from: output }
+
+  onboard-component:
+    input: { name: component, claim: component.work_item@1 }
+    checks:
+      inspect:
+        type: governed-proof-inspect
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject: { kind: component }
+          output_schema_id: reqproof.component-onboarding/v1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJzY2hlbWEiLCJwcm9qZWN0Iiwic2hhcmQiLCJyZXZpZXdlZEZpbGVzIiwicmVxdWlyZW1lbnRzIiwiaW50ZXJmYWNlcyIsImZpbmRpbmdzIiwidW5rbm93bnMiLCJyZXBvc2l0b3J5TXV0YXRlZCIsImNvbW1hbmRzRXhlY3V0ZWQiLCJjaGVja2xpc3RDb21wbGV0ZWQiXSwicHJvcGVydGllcyI6eyJzY2hlbWEiOnsiY29uc3QiOiJyZXFwcm9vZi5jb21wb25lbnQtb25ib2FyZGluZy92MSJ9LCJwcm9qZWN0Ijp7InR5cGUiOiJzdHJpbmcifSwic2hhcmQiOnsidHlwZSI6InN0cmluZyJ9LCJyZXZpZXdlZEZpbGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJtYXhJdGVtcyI6NjQsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbInBhdGgiLCJjb29yZGluYXRlcyJdLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9LCJjb29yZGluYXRlcyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MSwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsInJlcXVpcmVkIjpbInBhdGgiLCJsaW5lIl0sInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn0sImxpbmUiOnsidHlwZSI6ImludGVnZXIiLCJtaW5pbXVtIjoxfX19fX19fSwicmVxdWlyZW1lbnRzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjo0LCJtYXhJdGVtcyI6MTYsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwidGV4dCIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyIsInBhdHRlcm4iOiJeKFNUS3xTWVN8U1d8SU5UKS0ifSwidGV4dCI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJpbnRlcmZhY2VzIjp7InR5cGUiOiJhcnJheSIsIm1heEl0ZW1zIjozMiwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicmVxdWlyZWQiOlsibmFtZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsibmFtZSI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJmaW5kaW5ncyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwic2V2ZXJpdHkiLCJ0aXRsZSIsImNhbGlicmF0aW9uIiwiY29uZmlkZW5jZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyJ9LCJzZXZlcml0eSI6eyJlbnVtIjpbImluZm8iLCJsb3ciLCJtZWRpdW0iLCJoaWdoIiwiY3JpdGljYWwiXX0sInRpdGxlIjp7InR5cGUiOiJzdHJpbmcifSwiY2FsaWJyYXRpb24iOnsiZW51bSI6WyJjb25maXJtZWQiLCJsaWtlbHkiLCJwb3NzaWJsZSJdfSwiY29uZmlkZW5jZSI6eyJ0eXBlIjoibnVtYmVyIiwibWluaW11bSI6MCwibWF4aW11bSI6MX0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJ1bmtub3ducyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcG9zaXRvcnlNdXRhdGVkIjp7ImNvbnN0IjpmYWxzZX0sImNvbW1hbmRzRXhlY3V0ZWQiOnsiY29uc3QiOmZhbHNlfSwiY2hlY2tsaXN0Q29tcGxldGVkIjp7ImNvbnN0IjpmYWxzZX19fQ==
+        consumes:
+          - { claim: component.work_item@1, as: component }
+        emits:
+          - { claim: proof.candidate@1, from: output }
+      proof_admit:
+        type: proof-admit
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+        emits:
+          - { claim: proof.admitted_receipt@1, from: output }
+      verify:
+        type: noop
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }

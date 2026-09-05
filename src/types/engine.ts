@@ -7,11 +7,24 @@ import type { ReviewSummary } from '../reviewer';
 import type { CheckExecutionStats } from './execution';
 import type { WorkspaceManager } from '../utils/workspace-manager';
 import type { SandboxManager } from '../sandbox/sandbox-manager';
+import type { ClaimPlan } from '../state-machine/graph/claim-plan';
+import type { NodeGenerationProjection } from '../state-machine/graph/instance-kernel';
 
 /**
  * Engine execution modes
  */
 export type EngineMode = 'legacy' | 'state-machine';
+
+/**
+ * Journal-derived decision for one ready generated node.  The gate may only
+ * choose whether this exact generation is dispatched or left at the ready
+ * frontier; it cannot replace any graph authority.
+ */
+export type GeneratedDispatchGateDecision = 'dispatch' | 'defer';
+
+export type GeneratedDispatchGate = (
+  generation: NodeGenerationProjection
+) => GeneratedDispatchGateDecision | void | Promise<GeneratedDispatchGateDecision | void>;
 
 /**
  * Options for engine execution
@@ -42,7 +55,18 @@ export type EngineEvent =
   | { type: 'WaveRequested'; wave: number }
   | { type: 'LevelReady'; level: ExecutionGroup; wave: number }
   | { type: 'LevelDepleted'; level: number; wave: number }
-  | { type: 'CheckScheduled'; checkId: string; scope: ScopePath }
+  | {
+      type: 'CheckScheduled';
+      checkId: string;
+      scope: ScopePath;
+      attemptId?: string;
+      fence?: number;
+      /** Journal-derived exact claim IDs exposed only after authoritative scheduling. */
+      claimIds?: readonly string[];
+      nodeInstanceId?: string;
+      nodeGenerationId?: string;
+      requestId?: string;
+    }
   | {
       type: 'CheckCompleted';
       checkId: string;
@@ -112,6 +136,8 @@ export interface EngineContext {
   config: VisorConfig;
   dependencyGraph?: DependencyGraph;
   checks: Record<string, CheckMetadata>;
+  /** Immutable compiled Graph v2 claim bindings, when claim mode is active. */
+  claimPlan?: ClaimPlan;
   journal: ExecutionJournal;
   memory: MemoryStore;
   gitHubChecks?: GitHubCheckService;
@@ -139,6 +165,8 @@ export interface EngineContext {
   sandboxManager?: SandboxManager;
   /** Policy engine for enterprise access control */
   policyEngine?: import('../policy/types').PolicyEngine;
+  /** Optional controller for a bounded, journal-derived ready frontier. */
+  generatedDispatchGate?: GeneratedDispatchGate;
 }
 
 /**
