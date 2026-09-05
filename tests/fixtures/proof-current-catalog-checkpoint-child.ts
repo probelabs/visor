@@ -468,7 +468,10 @@ async function negativeFrom(directory: string): Promise<void> {
     const foreign = await attempt({ ...baseInput, projectSubgraphInstanceId: 'missing-project', revalidationBytes: '{}', workItemsBytes: '{}' }, 'foreign');
     const pendingJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
     pendingJournal.requestCatalogReconciliation({ sessionId: checkpoint.sessionId, ownerCheck: 'project' });
-    const nonquiescent = pendingJournal.exportGraphCheckpoint(checkpoint.sessionId);
+    // P3a rejects exporting a pending request; preserve this negative oracle by
+    // rebuilding the exact appended event prefix and its envelope integrity.
+    const pendingEvents = [...checkpoint.events, ...pendingJournal.readRuntimeEvents().slice(-1)];
+    const nonquiescent = checkpointWithEvents(checkpoint, pendingEvents);
     const pending = await attempt({ ...baseInput, checkpoint: nonquiescent, revalidationBytes: '{}', workItemsBytes: '{}' }, 'nonquiescent');
     const continuedSource = JSON.parse(fs.readFileSync(path.join(directory, 'continuation.json'), 'utf8'));
     const continuedCheckpoint = JSON.parse(continuedSource.checkpoint);

@@ -1,6 +1,6 @@
 import type { VisorConfig, EventTrigger } from '../../types/config';
 import type { PRInfo } from '../../pr-analyzer';
-import type { EngineContext, CheckMetadata } from '../../types/engine';
+import type { EngineContext, CheckMetadata, GeneratedDispatchGate } from '../../types/engine';
 import { ExecutionJournal } from '../../snapshot-store';
 import type { GraphJournalCheckpointV1 } from '../../snapshot-store';
 import { MemoryStore } from '../../memory-store';
@@ -18,6 +18,12 @@ export interface GraphCheckpointBootstrap {
   readonly expansionOwnerCheck: string;
 }
 
+/** Restore a ready-only checkpoint without appending a catalog request. */
+export interface GraphCheckpointResumeBootstrap {
+  readonly kind: 'graph-resume';
+  readonly checkpoint: unknown;
+}
+
 /**
  * Private bootstrap for a Proof catalog refresh.  The public SDK deliberately
  * does not expose graph mutations: it supplies only the checkpoint and the
@@ -33,6 +39,7 @@ export interface ProofCurrentCatalogCheckpointBootstrap {
 
 export type CheckpointBootstrap =
   | GraphCheckpointBootstrap
+  | GraphCheckpointResumeBootstrap
   | ProofCurrentCatalogCheckpointBootstrap;
 
 export type BuiltGraphCheckpointContext =
@@ -46,6 +53,10 @@ export type BuiltGraphCheckpointContext =
       readonly context: EngineContext;
       readonly authorityId: string;
       readonly mutationEventCount: number;
+    }
+  | {
+      readonly kind: 'graph-resume';
+      readonly context: EngineContext;
     };
 
 /**
@@ -77,7 +88,9 @@ export function buildEngineContextForRun(
   debug?: boolean,
   maxParallelism?: number,
   failFast?: boolean,
-  requestedChecks?: string[]
+  requestedChecks?: string[],
+  graphCheckpointBootstrap?: undefined,
+  generatedDispatchGate?: GeneratedDispatchGate
 ): EngineContext;
 export function buildEngineContextForRun(
   workingDirectory: string,
@@ -87,7 +100,8 @@ export function buildEngineContextForRun(
   maxParallelism?: number,
   failFast?: boolean,
   requestedChecks?: string[],
-  graphCheckpointBootstrap?: CheckpointBootstrap
+  graphCheckpointBootstrap?: CheckpointBootstrap,
+  generatedDispatchGate?: GeneratedDispatchGate
 ): BuiltGraphCheckpointContext;
 export function buildEngineContextForRun(
   workingDirectory: string,
@@ -97,7 +111,8 @@ export function buildEngineContextForRun(
   maxParallelism?: number,
   failFast?: boolean,
   requestedChecks?: string[],
-  graphCheckpointBootstrap?: CheckpointBootstrap
+  graphCheckpointBootstrap?: CheckpointBootstrap,
+  generatedDispatchGate?: GeneratedDispatchGate
 ): EngineContext | BuiltGraphCheckpointContext {
   // Deep clone provided config to avoid cross-run mutations between tests/runs
   const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
@@ -124,6 +139,7 @@ export function buildEngineContextForRun(
   let sessionId: string;
   let checkpointResult:
     | { readonly kind: 'graph'; readonly requestId: string }
+    | { readonly kind: 'graph-resume' }
     | { readonly kind: 'proof-current-catalog'; readonly authorityId: string; readonly mutationEventCount: number }
     | undefined;
   if (graphCheckpointBootstrap) {
@@ -139,6 +155,8 @@ export function buildEngineContextForRun(
         ownerCheck: graphCheckpointBootstrap.expansionOwnerCheck,
       }).requestId;
       checkpointResult = { kind: 'graph', requestId };
+    } else if (graphCheckpointBootstrap.kind === 'graph-resume') {
+      checkpointResult = { kind: 'graph-resume' };
     } else {
       // The Proof branch is intentionally a private, unpublished journal
       // transaction.  The journal performs the topology/quiescence gate and
@@ -279,6 +297,7 @@ export function buildEngineContextForRun(
     requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : undefined,
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
     prInfo,
+    generatedDispatchGate,
   };
 
   if (graphCheckpointBootstrap) {
@@ -288,6 +307,9 @@ export function buildEngineContextForRun(
     if (!checkpointResult) throw new Error('Checkpoint continuation result was not created');
     if (checkpointResult.kind === 'graph') {
       return { kind: 'graph', context, requestId: checkpointResult.requestId };
+    }
+    if (checkpointResult.kind === 'graph-resume') {
+      return { kind: 'graph-resume', context };
     }
     return { kind: 'proof-current-catalog', context, authorityId: checkpointResult.authorityId, mutationEventCount: checkpointResult.mutationEventCount };
   }

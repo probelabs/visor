@@ -3,7 +3,7 @@ import { AnalysisResult } from './output-formatters';
 import type { VisorConfig } from './types/config';
 import type { PRInfo } from './pr-analyzer';
 import { StateMachineRunner } from './state-machine/runner';
-import type { EngineContext, RunState } from './types/engine';
+import type { EngineContext, RunState, GeneratedDispatchGate } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
 import type { GraphJournalCheckpointV1 } from './snapshot-store';
 import type { InstanceProjection } from './state-machine/graph/instance-kernel';
@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type {
   BuiltGraphCheckpointContext,
+  GraphCheckpointResumeBootstrap,
   ProofCurrentCatalogCheckpointBootstrap,
   CheckpointBootstrap,
 } from './state-machine/context/build-engine-context';
@@ -35,6 +36,18 @@ export interface GraphCheckpointContinuationResult {
   result: ExecutionResult;
   checkpoint: GraphJournalCheckpointV1;
 }
+
+export interface GraphCheckpointResumeInput {
+  checkpoint: unknown;
+  config: VisorConfig;
+  prInfo: PRInfo;
+  generatedDispatchGate?: GeneratedDispatchGate;
+  debug?: boolean;
+  maxParallelism?: number;
+  failFast?: boolean;
+}
+
+export type GraphCheckpointResumeResult = Omit<GraphCheckpointContinuationResult, 'requestId'>;
 
 export interface ProofCurrentCatalogCheckpointInput {
   checkpoint: unknown;
@@ -75,6 +88,11 @@ type PreparedEngineRun =
       readonly result: ExecutionResult;
       readonly authorityId: string;
       readonly mutationEventCount: number;
+    }
+  | {
+      readonly kind: 'graph-resume';
+      readonly context: EngineContext;
+      readonly result: ExecutionResult;
     };
 
 /**
@@ -319,7 +337,7 @@ export class StateMachineExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter,
-    _pauseGate?: () => Promise<void>
+    generatedDispatchGate?: GeneratedDispatchGate
   ): Promise<ExecutionResult> {
     const prepared = await this.executeGroupedChecksInternal(
       prInfo,
@@ -331,7 +349,8 @@ export class StateMachineExecutionEngine {
       maxParallelism,
       failFast,
       tagFilter,
-      _pauseGate
+      undefined,
+      generatedDispatchGate
     );
     return prepared.result;
   }
@@ -346,8 +365,8 @@ export class StateMachineExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter,
-    _pauseGate?: () => Promise<void>,
-    graphCheckpointBootstrap?: CheckpointBootstrap
+    graphCheckpointBootstrap?: CheckpointBootstrap,
+    generatedDispatchGate?: GeneratedDispatchGate
   ): Promise<PreparedEngineRun> {
     if (debug) {
       logger.info('[StateMachine] Using state machine engine');
@@ -379,7 +398,8 @@ export class StateMachineExecutionEngine {
       maxParallelism,
       failFast,
       checks, // Pass the explicit checks list
-      graphCheckpointBootstrap
+      graphCheckpointBootstrap,
+      generatedDispatchGate
     );
     const context = graphCheckpointBootstrap
       ? (builtContext as BuiltGraphCheckpointContext).context
@@ -740,6 +760,9 @@ export class StateMachineExecutionEngine {
       if (continuation.kind === 'graph') {
         return { kind: 'graph', context, result, requestId: continuation.requestId };
       }
+      if (continuation.kind === 'graph-resume') {
+        return { kind: 'graph-resume', context, result };
+      }
       return {
         kind: 'proof-current-catalog',
         context,
@@ -768,7 +791,8 @@ export class StateMachineExecutionEngine {
     maxParallelism?: number,
     failFast?: boolean,
     requestedChecks?: string[],
-    graphCheckpointBootstrap?: CheckpointBootstrap
+    graphCheckpointBootstrap?: CheckpointBootstrap,
+    generatedDispatchGate?: GeneratedDispatchGate
   ): EngineContext | BuiltGraphCheckpointContext {
     const { buildEngineContextForRun } = require('./state-machine/context/build-engine-context');
     return buildEngineContextForRun(
@@ -779,7 +803,8 @@ export class StateMachineExecutionEngine {
       maxParallelism,
       failFast,
       requestedChecks,
-      graphCheckpointBootstrap
+      graphCheckpointBootstrap,
+      generatedDispatchGate
     );
   }
 
@@ -800,12 +825,11 @@ export class StateMachineExecutionEngine {
       input.maxParallelism,
       input.failFast,
       undefined,
-      undefined,
       {
         kind: 'graph',
         checkpoint: input.checkpoint,
         expansionOwnerCheck: input.expansionOwnerCheck,
-      }
+      },
     );
 
     if (prepared.kind !== 'graph') {
@@ -816,6 +840,33 @@ export class StateMachineExecutionEngine {
       requestId: prepared.requestId,
       result: prepared.result,
       checkpoint,
+    };
+  }
+
+  /** Restore and dispatch a ready-only checkpoint without appending a request
+   * or Proof authority event. The journal owns all checkpoint validation. */
+  public async resumeGraphCheckpoint(
+    input: GraphCheckpointResumeInput
+  ): Promise<GraphCheckpointResumeResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      { kind: 'graph-resume', checkpoint: input.checkpoint } satisfies GraphCheckpointResumeBootstrap,
+      input.generatedDispatchGate,
+    );
+    if (prepared.kind !== 'graph-resume') {
+      throw new Error('Graph checkpoint resume did not produce a resumed run');
+    }
+    return {
+      result: prepared.result,
+      checkpoint: prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId),
     };
   }
 
@@ -838,7 +889,6 @@ export class StateMachineExecutionEngine {
       input.debug,
       input.maxParallelism,
       input.failFast,
-      undefined,
       undefined,
       {
         kind: 'proof-current-catalog',

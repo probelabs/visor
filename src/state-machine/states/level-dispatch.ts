@@ -830,6 +830,7 @@ async function handleClaimReadyDispatch(
   const pending = new Set(queued);
   const running = new Map<string, Promise<void>>();
   let managedHaltApplied = false;
+  let generatedDispatchGateHalted = false;
   const maxParallelism = context.maxParallelism || 10;
   const failed = ((state as any).failedChecks ||= new Set<string>()) as Set<string>;
 
@@ -978,12 +979,40 @@ async function handleClaimReadyDispatch(
   while (true) {
     let launched = false;
     if (!state.flags.failFastTriggered && !managedHaltApplied) {
-      for (const generation of context.journal.queryReadyWork()) {
-        if (running.size >= maxParallelism) break;
-        launchGenerated(generation);
-        launched = true;
+      if (!context.generatedDispatchGate) {
+        for (const generation of context.journal.queryReadyWork()) {
+          if (running.size >= maxParallelism) break;
+          launchGenerated(generation);
+          launched = true;
+        }
+      } else if (running.size === 0) {
+        // Evaluate the complete immutable frontier before constructing any
+        // attempt.  A deferred generation remains ready and is revisited only
+        // after allowed work has drained; it is never marked failed/skipped.
+        const readySnapshot = Object.freeze([...context.journal.queryReadyWork()]);
+        const dispatchable: NodeGenerationProjection[] = [];
+        for (const generation of readySnapshot) {
+          const decision = await context.generatedDispatchGate(generation);
+          if (decision !== undefined && decision !== 'dispatch' && decision !== 'defer') {
+            const error = new Error('Generated dispatch gate returned an invalid decision') as Error & {
+              code: string;
+            };
+            error.code = 'INVALID_GENERATED_DISPATCH_GATE_DECISION';
+            throw error;
+          }
+          if (decision !== 'defer') dispatchable.push(generation);
+        }
+        if (readySnapshot.length > 0 && dispatchable.length === 0) {
+          generatedDispatchGateHalted = true;
+        }
+        for (const generation of dispatchable) {
+          if (running.size >= maxParallelism) break;
+          launchGenerated(generation);
+          launched = true;
+        }
       }
       for (const checkId of [...pending]) {
+        if (generatedDispatchGateHalted) break;
         if (context.journal.queryReadyWork().length > 0) break;
         if (running.size >= maxParallelism) break;
         if (!isReady(checkId)) continue;
@@ -998,6 +1027,8 @@ async function handleClaimReadyDispatch(
     }
 
     if (managedHaltApplied) break;
+
+    if (generatedDispatchGateHalted) break;
 
     if (context.journal.queryReadyWork().length > 0) continue;
 

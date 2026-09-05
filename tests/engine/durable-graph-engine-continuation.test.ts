@@ -19,11 +19,15 @@ type Artifact = {
   replay?: any;
   canonicalReexport?: any;
   transitions?: any[];
+  gateObservations?: any[];
 };
 
 const fixturePath = path.join(__dirname, '../fixtures/durable-graph-engine-continuation-child.ts');
 
-function runChild(mode: 'produce' | 'continue', artifactDirectory: string): void {
+function runChild(
+  mode: 'produce' | 'continue' | 'pause' | 'resume' | 'invalid-resume' | 'legacy-gate',
+  artifactDirectory: string
+): void {
   execFileSync(
     process.execPath,
     ['-r', 'ts-node/register/transpile-only', fixturePath, mode, artifactDirectory],
@@ -85,6 +89,8 @@ function instanceSlice(projection: any, itemKey: string): unknown {
 describe('durable Graph checkpoint continuation', () => {
   let artifactDirectory: string;
   let producer: Artifact;
+  let pauseDirectory: string;
+  let paused: Artifact;
 
   beforeAll(() => {
     artifactDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-graph-continuation-'));
@@ -92,10 +98,14 @@ describe('durable Graph checkpoint continuation', () => {
     // other fixture child, in a fresh process with a fresh module cache.
     runChild('produce', artifactDirectory);
     producer = readArtifact(artifactDirectory, 'producer.json');
+    pauseDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-graph-pause-'));
+    runChild('pause', pauseDirectory);
+    paused = readArtifact(pauseDirectory, 'paused.json');
   });
 
   afterAll(() => {
     fs.rmSync(artifactDirectory, { recursive: true, force: true });
+    fs.rmSync(pauseDirectory, { recursive: true, force: true });
   });
 
   afterEach(() => {
@@ -148,7 +158,21 @@ describe('durable Graph checkpoint continuation', () => {
       sessionId: producer.checkpoint.sessionId,
       ownerCheck: OWNER,
     });
-    const pending = journal.exportGraphCheckpoint(producer.checkpoint.sessionId);
+    // P3a deliberately rejects exporting a pending request. Build the same
+    // hashed non-quiescent input from the journal's exact appended event so
+    // the continuation fail-fast assertion remains meaningful.
+    expect(() => journal.exportGraphCheckpoint(producer.checkpoint.sessionId)).toThrow(
+      expect.objectContaining({ code: 'CHECKPOINT_NOT_QUIESCENT' })
+    );
+    const events = [...producer.checkpoint.events, ...journal.readRuntimeEvents().slice(-1)];
+    const pending = rehash({
+      ...producer.checkpoint,
+      events,
+      frontier: {
+        eventCount: events.length,
+        lastEventId: events[events.length - 1].eventId,
+      },
+    });
     const initialize = jest.spyOn(MemoryStore.prototype, 'initialize');
     const engine = new StateMachineExecutionEngine();
 
@@ -188,6 +212,95 @@ describe('durable Graph checkpoint continuation', () => {
     expect(initialize).toHaveBeenCalledTimes(1);
     expect((engine as any)._lastContext).toBe(priorContext);
     expect((engine as any)._lastRunner).toBe(priorRunner);
+  });
+
+  it('holds B at a frozen ready frontier while A completes, then round-trips it', () => {
+    expect(paused.calls.map(call => `${call.kind}:${call.checkId}:${call.key || ''}`)).toEqual([
+      'owner:discover-items:',
+      'generated:inspect:A',
+      'generated:summarize:A',
+    ]);
+    const pausedA = instanceSlice(paused.projection, 'A') as any;
+    const pausedB = instanceSlice(paused.projection, 'B') as any;
+    expect(pausedA.generations.every((generation: any) => generation.status === 'completed')).toBe(true);
+    expect(pausedB.generations).toHaveLength(1);
+    expect(pausedB.generations[0].status).toBe('ready');
+    expect(paused.calls.some(call => call.key === 'B')).toBe(false);
+    expect(paused.events.filter(event =>
+      ['AttemptStarted', 'CheckScheduled', 'ManagedRunAcquired', 'ManagedRunStarted', 'ManagedRunTerminated'].includes(event.type) &&
+      event.scope?.some((part: any) => part.key === 'B')
+    )).toHaveLength(0);
+    expect(paused.gateObservations?.length).toBeGreaterThan(0);
+    expect(paused.gateObservations?.every(observation =>
+      observation.frozen && observation.status === 'ready' &&
+      paused.projection.generationsById[observation.generationId]
+    )).toBe(true);
+    expect(paused.restoredLive).toEqual(paused.projection);
+    expect(paused.replay).toEqual(paused.projection);
+    expect(paused.canonicalReexport).toEqual(paused.checkpoint);
+  });
+
+  it('resumes only B in a fresh process without a reconciliation suffix', () => {
+    runChild('resume', pauseDirectory);
+    const resumed = readArtifact(pauseDirectory, 'resumed.json');
+    const sourceEvents = paused.events || paused.checkpoint.events;
+    const suffix = resumed.checkpoint.events.slice(sourceEvents.length);
+
+    expect(resumed.pid).not.toBe(paused.pid);
+    expect(resumed.checkpoint.sessionId).toBe(paused.checkpoint.sessionId);
+    expect(resumed.checkpoint.graphSemanticDigest).toBe(paused.checkpoint.graphSemanticDigest);
+    expect(resumed.checkpoint.events.slice(0, sourceEvents.length)).toEqual(sourceEvents);
+    expect(resumed.calls.map(call => `${call.kind}:${call.checkId}:${call.key || ''}`)).toEqual([
+      'generated:inspect:B',
+      'generated:summarize:B',
+    ]);
+    expect(resumed.calls.some(call => call.kind === 'owner' || call.key === 'A')).toBe(false);
+    expect(suffix.some(event => event.type === 'CatalogReconciliationRequested')).toBe(false);
+    expect(suffix.some(event => event.type === 'AttemptStarted' && !event.nodeGenerationId)).toBe(false);
+    expect(suffix.every(event => event.sessionId === paused.checkpoint.sessionId)).toBe(true);
+    expect(suffix.map(event => event.eventId)).toEqual(
+      suffix.map((_event, index) => paused.checkpoint.frontier.lastEventId + index + 1)
+    );
+    const attempts = suffix.filter(event => event.type === 'AttemptStarted');
+    const priorFence = Math.max(...paused.events.filter(event => event.type === 'AttemptStarted').map(event => event.fence));
+    expect(attempts.map(event => event.fence)).toEqual(attempts.map((_event, index) => priorFence + index + 1));
+    expect(instanceSlice(resumed.projection, 'A')).toEqual(instanceSlice(paused.projection, 'A'));
+    expect((instanceSlice(resumed.projection, 'B') as any).generations.every((generation: any) => generation.status === 'completed')).toBe(true);
+    expect(resumed.gateObservations?.every(observation =>
+      observation.frozen && observation.status === 'ready' &&
+      resumed.projection.generationsById[observation.generationId]
+    )).toBe(true);
+    expect(resumed.transitions?.[0]).toEqual({ type: 'StateTransition', from: 'LevelDispatch', to: 'LevelDispatch' });
+    expect(resumed.restoredLive).toEqual(resumed.projection);
+    expect(resumed.replay).toEqual(resumed.projection);
+    expect(resumed.canonicalReexport).toEqual(resumed.checkpoint);
+  });
+
+  it('rejects an invalid gate decision before any resumed attempt or provider call', () => {
+    runChild('invalid-resume', pauseDirectory);
+    const invalid = readArtifact(pauseDirectory, 'invalid-resume.json');
+    expect(invalid.error.code).toBe('INVALID_GENERATED_DISPATCH_GATE_DECISION');
+    expect(invalid.calls).toEqual([]);
+    expect(invalid.events).toEqual(paused.events);
+    expect(invalid.events.slice(paused.events.length).some(event => event.type === 'AttemptStarted')).toBe(false);
+  });
+
+  it('keeps legacy async gate callbacks dispatching normally', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-graph-legacy-gate-'));
+    try {
+      runChild('legacy-gate', directory);
+      const artifact = readArtifact(directory, 'legacy-gate.json');
+      expect(artifact.calls[0]).toMatchObject({ kind: 'owner', checkId: OWNER });
+      expect(artifact.calls.slice(1).map(call => `${call.kind}:${call.checkId}:${call.key || ''}`).sort()).toEqual([
+        'generated:inspect:A',
+        'generated:inspect:B',
+        'generated:summarize:A',
+        'generated:summarize:B',
+      ].sort());
+      expect(artifact.events.filter(event => event.type === 'AttemptStarted' && event.nodeGenerationId)).toHaveLength(4);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('continues one changed keyed closure in a separate process and round-trips the result', () => {

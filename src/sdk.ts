@@ -10,8 +10,14 @@ import type { AnalysisResult } from './output-formatters';
 import type { VisorConfig, TagFilter, HumanInputRequest } from './types/config';
 import type { ExecutionContext } from './providers/check-provider.interface';
 import type {
+  GeneratedDispatchGate,
+  GeneratedDispatchGateDecision,
+} from './types/engine';
+import type {
   GraphCheckpointContinuationInput,
   GraphCheckpointContinuationResult,
+  GraphCheckpointResumeInput,
+  GraphCheckpointResumeResult,
   ProofCurrentCatalogCheckpointInput,
   ProofCurrentCatalogCheckpointResult,
 } from './state-machine-execution-engine';
@@ -29,9 +35,12 @@ import type {
 
 export { StateMachineExecutionEngine };
 export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
+export type { GeneratedDispatchGate, GeneratedDispatchGateDecision };
 export type {
   GraphCheckpointContinuationInput,
   GraphCheckpointContinuationResult,
+  GraphCheckpointResumeInput,
+  GraphCheckpointResumeResult,
   ProofCurrentCatalogCheckpointInput,
   ProofCurrentCatalogCheckpointResult,
   GraphJournalCheckpointV1,

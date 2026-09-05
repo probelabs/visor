@@ -8,11 +8,23 @@ import type { CheckExecutionStats } from './execution';
 import type { WorkspaceManager } from '../utils/workspace-manager';
 import type { SandboxManager } from '../sandbox/sandbox-manager';
 import type { ClaimPlan } from '../state-machine/graph/claim-plan';
+import type { NodeGenerationProjection } from '../state-machine/graph/instance-kernel';
 
 /**
  * Engine execution modes
  */
 export type EngineMode = 'legacy' | 'state-machine';
+
+/**
+ * Journal-derived decision for one ready generated node.  The gate may only
+ * choose whether this exact generation is dispatched or left at the ready
+ * frontier; it cannot replace any graph authority.
+ */
+export type GeneratedDispatchGateDecision = 'dispatch' | 'defer';
+
+export type GeneratedDispatchGate = (
+  generation: NodeGenerationProjection
+) => GeneratedDispatchGateDecision | void | Promise<GeneratedDispatchGateDecision | void>;
 
 /**
  * Options for engine execution
@@ -153,6 +165,8 @@ export interface EngineContext {
   sandboxManager?: SandboxManager;
   /** Policy engine for enterprise access control */
   policyEngine?: import('../policy/types').PolicyEngine;
+  /** Optional controller for a bounded, journal-derived ready frontier. */
+  generatedDispatchGate?: GeneratedDispatchGate;
 }
 
 /**
