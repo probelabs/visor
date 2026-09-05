@@ -4,7 +4,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from '@jest/globals';
 import * as yaml from 'js-yaml';
-import { runPreflight } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
+import {
+  aggregateFailureDiagnostics,
+  installProbeFailureDiagnostics,
+  runPreflight,
+  sanitizeProbeFailureTaxonomy,
+  serializeFailureDiagnostics,
+} from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
 
 type AnyRecord = Record<string, any>;
 const ROOT = path.resolve(__dirname, '../..');
@@ -16,6 +22,24 @@ const PINS = {
   probe: '0.6.0-rc334', codex: '0.150.1', profile: 'luna-xhigh-readonly-v1',
 };
 const STAGES = ['inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify'];
+const DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
+const FAILURE_PREDICATES = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract'];
+const SCHEMA_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity'];
+const SCHEMA_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'];
+
+function diagnosticEntry(phase: string, component: string, index: number): AnyRecord {
+  return {
+    phase,
+    check_id: 'spec_review',
+    component_id: component,
+    binding_digest: `sha256:${index.toString(16).padStart(64, '0')}`,
+    taxonomy: sanitizeProbeFailureTaxonomy({ answerFailureStage: 'provider_engine' }),
+  };
+}
+
+function request(component: string, error: Error): AnyRecord {
+  return { binding: { checkId: 'spec_review', attemptId: component, scope: [{ key: 'jsonparser' }, { key: component }] }, error };
+}
 
 describe('EXP-0210 live preflight', () => {
   it('exposes dependency-only preflight with zero governed/model calls', () => {
@@ -85,7 +109,7 @@ describe('EXP-0210 live preflight', () => {
     expect(source).toContain("'run-once.started.json'");
     expect(source).toContain("'run-once.completed.json'");
     expect(source).toContain("'run-once.failure.json'");
-    expect(source).not.toMatch(/createGovernedProofInspectProviderForFocusedTest|installProbe|synthetic-fixture|deterministic-fake-probe/);
+    expect(source).not.toMatch(/createGovernedProofInspectProviderForFocusedTest|synthetic-fixture|deterministic-fake-probe/);
   });
 
   it('binds phase labels/budgets and fails truthfully before live work', () => {
@@ -138,5 +162,90 @@ describe('EXP-0210 live preflight', () => {
     expect(source).toContain("latest_checkpoint: latestCheckpoint");
     expect(source).toContain("replacementSuffix.length !== STAGES.length + 1");
     expect(source).toContain("reconcileAttempts.length !== 1");
+  });
+
+  it('aggregates pause and resume fragments without losing either rejection', () => {
+    const pause = diagnosticEntry('pause', 'parser-core', 1);
+    const resume = diagnosticEntry('resume', 'byte-conversion-backend', 2);
+    const result = aggregateFailureDiagnostics([
+      { schema: DIAGNOSTICS_SCHEMA, failures: [pause] },
+      { schema: DIAGNOSTICS_SCHEMA, failures: [resume, pause, { ...resume, raw_output: 'secret' }] },
+      { schema: 'wrong-schema', failures: [diagnosticEntry('replacement', 'ignored', 3)] },
+    ]);
+    expect(result).toHaveLength(2);
+    expect(result.map(entry => [entry.phase, entry.component_id])).toEqual([
+      ['pause', 'parser-core'], ['resume', 'byte-conversion-backend'],
+    ]);
+  });
+
+  it('caps 33 concurrent rejections at 32 and writes bounded mode-0600 JSON', async () => {
+    class RejectingProbe {
+      answer(input: AnyRecord): Promise<never> { return Promise.reject(input.error); }
+    }
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-diagnostics-'));
+    fs.mkdirSync(path.join(stage, '.private'), { mode: 0o700 });
+    try {
+      const restore = installProbeFailureDiagnostics('pause', stage, RejectingProbe);
+      try {
+        const calls = Array.from({ length: 33 }, (_, index) => request(`component-${index}`, Object.assign(new Error('raw secret output'), { answerFailureStage: 'provider_engine', path: '/private/secret' })));
+        await Promise.all(calls.map(async input => expect(RejectingProbe.prototype.answer.call(new RejectingProbe(), input)).rejects.toBe(input.error)));
+      } finally { restore(); }
+      const file = path.join(stage, '.private', 'failure-diagnostics.pause.json');
+      const bytes = fs.readFileSync(file);
+      const body = JSON.parse(bytes.toString());
+      expect(body.failures).toHaveLength(32);
+      expect(new Set(body.failures.map((entry: AnyRecord) => entry.component_id))).toEqual(new Set(Array.from({ length: 32 }, (_, index) => `component-${index}`)));
+      expect(new Set(body.failures.map((entry: AnyRecord) => entry.binding_digest)).size).toBe(32);
+      expect(bytes.length).toBeLessThanOrEqual(32 * 1024);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+      expect(serializeFailureDiagnostics(body.failures)).toBe(bytes.toString());
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  });
+
+  it('keeps hostile paths, prompts, messages, and raw output outside the closed taxonomy', () => {
+    const taxonomyCases = [
+      ...['native_event_grammar', 'provider_engine', 'schema_result_validation', 'unknown'].map(answerFailureStage => ({ answerFailureStage })),
+      ...['raw_item_predicate', 'live_envelope_session'].map(nativeEventFailureBoundary => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary })),
+      ...['session_sequence', 'envelope_shape', 'correlation', 'attestation'].map(nativeEventFailureSubreason => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason })),
+      ...['thread_id', 'response_id'].map(nativeEventFailureCorrelationOperand => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'correlation', nativeEventFailureCorrelationOperand })),
+      ...FAILURE_PREDICATES.map(nativeEventFailureAttestationPredicate => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate })),
+      ...SCHEMA_SUBREASONS.map(schemaResultValidationSubreason => ({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason })),
+      ...SCHEMA_KEYWORDS.map(schemaResultValidationKeyword => ({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword })),
+    ];
+    for (const input of taxonomyCases) {
+      const taxonomy = sanitizeProbeFailureTaxonomy(input);
+      expect(Object.isFrozen(taxonomy)).toBe(true);
+      expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
+    }
+    const hostile = Object.assign(new Error('secret raw answer'), {
+      answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword: 'type',
+      path: '/private/secret/path', prompt: 'secret prompt', raw_output: 'secret model output', token: 'secret token',
+    });
+    const taxonomy = sanitizeProbeFailureTaxonomy(hostile);
+    expect(taxonomy).toEqual({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword: 'type' });
+    expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
+    const invalid = { ...diagnosticEntry('pause', 'parser-core', 1), raw_output: 'secret model output' };
+    expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [invalid] }])).toEqual([]);
+  });
+
+  it('restores the original wrapper and preserves rejected error identity', async () => {
+    class RejectingProbe {
+      answer(input: AnyRecord): Promise<never> { return Promise.reject(input.error); }
+    }
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-restore-'));
+    fs.mkdirSync(path.join(stage, '.private'), { mode: 0o700 });
+    const original = Object.getOwnPropertyDescriptor(RejectingProbe.prototype, 'answer');
+    const error = Object.assign(new Error('opaque secret'), { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'raw_item_predicate' });
+    const input = request('parser-core', error);
+    try {
+      const restore = installProbeFailureDiagnostics('resume', stage, RejectingProbe);
+      await expect(new RejectingProbe().answer(input)).rejects.toBe(error);
+      restore(); restore();
+      expect(Object.getOwnPropertyDescriptor(RejectingProbe.prototype, 'answer')).toEqual(original);
+      await expect(new RejectingProbe().answer(input)).rejects.toBe(error);
+      const fragment = JSON.parse(fs.readFileSync(path.join(stage, '.private', 'failure-diagnostics.resume.json'), 'utf8'));
+      expect(fragment.failures).toHaveLength(1);
+      expect(fragment.failures[0]).toEqual(expect.objectContaining({ phase: 'resume', check_id: 'spec_review', component_id: 'parser-core' }));
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   });
 });

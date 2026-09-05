@@ -54,6 +54,16 @@ const SUBJECT_FILES = [
 ] as const;
 const OFFLINE_ENV = { GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' };
 const PR: PRInfo = { number: 210, title: 'jsonparser staged live demo', body: '', author: 'fixture', base: 'baseline', head: 'fixed', files: [], totalAdditions: 0, totalDeletions: 0, eventType: 'manual' };
+const PROBE_FAILURE_STAGES = new Set(['native_event_grammar', 'provider_engine', 'schema_result_validation', 'unknown']);
+const PROBE_FAILURE_BOUNDARIES = new Set(['raw_item_predicate', 'live_envelope_session']);
+const PROBE_FAILURE_SUBREASONS = new Set(['session_sequence', 'envelope_shape', 'correlation', 'attestation']);
+const PROBE_FAILURE_OPERANDS = new Set(['thread_id', 'response_id']);
+const PROBE_FAILURE_PREDICATES = new Set(['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract']);
+const PROBE_SCHEMA_SUBREASONS = new Set(['response_json', 'schema_definition', 'schema_mismatch', 'result_identity']);
+const PROBE_SCHEMA_KEYWORDS = new Set(['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown']);
+const FAILURE_DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
+const MAX_FAILURE_DIAGNOSTICS = 32;
+const MAX_FAILURE_DIAGNOSTICS_BYTES = 32 * 1024;
 
 const requireFromRepo = createRequire(path.join(REPO_ROOT, 'package.json'));
 
@@ -73,6 +83,204 @@ function writeExclusiveJson(file: string, value: unknown): void {
   const fd = fs.openSync(file, 'wx', 0o600);
   try { fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8'); }
   finally { fs.closeSync(fd); }
+}
+
+function ownData(value: unknown, key: string): unknown {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
+
+function allowedProbeValue(values: Set<string>, value: unknown): string | undefined {
+  return typeof value === 'string' && values.has(value) ? value : undefined;
+}
+
+function safeDiagnosticId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9_.:-]+$/.test(value) ? value : undefined;
+}
+
+export function sanitizeProbeFailureTaxonomy(error: unknown): AnyRecord {
+  const stageValue = ownData(error, 'answerFailureStage');
+  const stage = allowedProbeValue(PROBE_FAILURE_STAGES, stageValue) || 'unknown';
+  const taxonomy: AnyRecord = { answerFailureStage: stage };
+  if (stage === 'native_event_grammar') {
+    const boundaryValue = ownData(error, 'nativeEventFailureBoundary');
+    const boundary = allowedProbeValue(PROBE_FAILURE_BOUNDARIES, boundaryValue) || null;
+    taxonomy.nativeEventFailureBoundary = boundary;
+    if (boundary === 'live_envelope_session') {
+      const subreasonValue = ownData(error, 'nativeEventFailureSubreason');
+      const subreason = allowedProbeValue(PROBE_FAILURE_SUBREASONS, subreasonValue) || null;
+      taxonomy.nativeEventFailureSubreason = subreason;
+      if (subreason === 'correlation') {
+        const operand = ownData(error, 'nativeEventFailureCorrelationOperand');
+        taxonomy.nativeEventFailureCorrelationOperand = allowedProbeValue(PROBE_FAILURE_OPERANDS, operand) || null;
+      }
+      if (subreason === 'attestation') {
+        const predicate = ownData(error, 'nativeEventFailureAttestationPredicate');
+        taxonomy.nativeEventFailureAttestationPredicate = allowedProbeValue(PROBE_FAILURE_PREDICATES, predicate) || null;
+      }
+    }
+  } else if (stage === 'schema_result_validation') {
+    const subreasonValue = ownData(error, 'schemaResultValidationSubreason');
+    const subreason = allowedProbeValue(PROBE_SCHEMA_SUBREASONS, subreasonValue) || null;
+    taxonomy.schemaResultValidationSubreason = subreason;
+    taxonomy.schemaResultValidationKeyword = null;
+    if (subreason === 'schema_mismatch') {
+      const keyword = ownData(error, 'schemaResultValidationKeyword');
+      taxonomy.schemaResultValidationKeyword = allowedProbeValue(PROBE_SCHEMA_KEYWORDS, keyword) || 'unknown';
+    }
+  }
+  return Object.freeze(taxonomy);
+}
+
+type FailureBinding = Readonly<{ phase: string; check_id: string; component_id: string | null; binding_digest: string }>;
+
+const DIAGNOSTIC_PHASES = new Set(['discovery', 'pause', 'resume', 'replacement']);
+const DIAGNOSTIC_ENTRY_KEYS = ['binding_digest', 'check_id', 'component_id', 'phase', 'taxonomy'];
+
+function failureBinding(phase: string, request: unknown): FailureBinding {
+  const binding = ownData(request, 'binding');
+  const checkValue = ownData(binding, 'checkId');
+  const scope = ownData(binding, 'scope');
+  const lastScope = Array.isArray(scope) && scope.length > 1 ? scope[scope.length - 1] : undefined;
+  const componentValue = ownData(lastScope, 'key');
+  let bindingDigest = 'unknown';
+  try { bindingDigest = `sha256:${sha256(canonicalJson(binding))}`; } catch { /* Keep only the safe correlation fields. */ }
+  return Object.freeze({
+    phase,
+    check_id: safeDiagnosticId(checkValue) || 'unknown',
+    component_id: safeDiagnosticId(componentValue) || null,
+    binding_digest: bindingDigest,
+  });
+}
+
+function diagnosticEntryKey(entry: AnyRecord): string {
+  return `${entry.phase}\0${entry.check_id}\0${entry.component_id || ''}\0${entry.binding_digest}\0${canonicalJson(entry.taxonomy)}`;
+}
+
+function validDiagnosticTaxonomy(value: unknown): value is AnyRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const taxonomy = value as AnyRecord;
+  const stage = taxonomy.answerFailureStage;
+  if (typeof stage !== 'string' || !PROBE_FAILURE_STAGES.has(stage)) return false;
+  const keys = Object.keys(taxonomy).sort();
+  if (stage === 'native_event_grammar') {
+    if (keys.indexOf('nativeEventFailureBoundary') < 0 || keys.some(key => !['answerFailureStage', 'nativeEventFailureAttestationPredicate', 'nativeEventFailureBoundary', 'nativeEventFailureCorrelationOperand', 'nativeEventFailureSubreason'].includes(key))) return false;
+    const boundary = taxonomy.nativeEventFailureBoundary;
+    if (boundary !== null && !PROBE_FAILURE_BOUNDARIES.has(boundary)) return false;
+    if (boundary !== 'live_envelope_session') return keys.length === 2;
+    const subreason = taxonomy.nativeEventFailureSubreason;
+    if (subreason !== null && !PROBE_FAILURE_SUBREASONS.has(subreason)) return false;
+    if (subreason === 'correlation') return keys.length === 4 && (taxonomy.nativeEventFailureCorrelationOperand === null || PROBE_FAILURE_OPERANDS.has(taxonomy.nativeEventFailureCorrelationOperand));
+    if (subreason === 'attestation') return keys.length === 4 && (taxonomy.nativeEventFailureAttestationPredicate === null || PROBE_FAILURE_PREDICATES.has(taxonomy.nativeEventFailureAttestationPredicate));
+    return keys.length === 3;
+  }
+  if (stage === 'schema_result_validation') {
+    if (keys.length !== 3 || keys.some(key => !['answerFailureStage', 'schemaResultValidationKeyword', 'schemaResultValidationSubreason'].includes(key))) return false;
+    if (taxonomy.schemaResultValidationSubreason !== null && !PROBE_SCHEMA_SUBREASONS.has(taxonomy.schemaResultValidationSubreason)) return false;
+    return taxonomy.schemaResultValidationSubreason === 'schema_mismatch'
+      ? typeof taxonomy.schemaResultValidationKeyword === 'string' && PROBE_SCHEMA_KEYWORDS.has(taxonomy.schemaResultValidationKeyword)
+      : taxonomy.schemaResultValidationKeyword === null;
+  }
+  return keys.length === 1;
+}
+
+function validDiagnosticEntry(value: unknown): value is AnyRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as AnyRecord;
+  if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(DIAGNOSTIC_ENTRY_KEYS)) return false;
+  if (!DIAGNOSTIC_PHASES.has(entry.phase) || (entry.check_id !== 'unknown' && !safeDiagnosticId(entry.check_id)) || (entry.component_id !== null && !safeDiagnosticId(entry.component_id))) return false;
+  if (entry.binding_digest !== 'unknown' && (typeof entry.binding_digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(entry.binding_digest))) return false;
+  return validDiagnosticTaxonomy(entry.taxonomy);
+}
+
+export function aggregateFailureDiagnostics(fragments: readonly unknown[]): AnyRecord[] {
+  const entries: AnyRecord[] = [];
+  const seen = new Set<string>();
+  for (const fragment of fragments) {
+    if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment)) continue;
+    const body = fragment as AnyRecord;
+    if (body.schema !== FAILURE_DIAGNOSTICS_SCHEMA || !Array.isArray(body.failures) || body.failures.length > MAX_FAILURE_DIAGNOSTICS) continue;
+    for (const entry of body.failures) {
+      if (!validDiagnosticEntry(entry)) continue;
+      const key = diagnosticEntryKey(entry);
+      if (seen.has(key) || entries.length >= MAX_FAILURE_DIAGNOSTICS) continue;
+      seen.add(key);
+      entries.push(Object.freeze({ ...entry, taxonomy: Object.freeze({ ...entry.taxonomy }) }));
+    }
+  }
+  return entries.sort((left, right) => diagnosticEntryKey(left).localeCompare(diagnosticEntryKey(right)));
+}
+
+export function serializeFailureDiagnostics(entries: readonly AnyRecord[]): string {
+  const body = { schema: FAILURE_DIAGNOSTICS_SCHEMA, failures: entries.slice(0, MAX_FAILURE_DIAGNOSTICS) };
+  const serialized = `${JSON.stringify(body, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_FAILURE_DIAGNOSTICS_BYTES) throw new Error('failure diagnostics exceed bounded size');
+  return serialized;
+}
+
+function writeFailureDiagnostics(file: string, entries: readonly AnyRecord[]): void {
+  const serialized = serializeFailureDiagnostics(entries);
+  fs.writeFileSync(file, serialized, { encoding: 'utf8', mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+}
+
+function aggregateFailureDiagnosticsFile(stage: string): void {
+  try {
+    const fragments: unknown[] = [];
+    for (const mode of DIAGNOSTIC_PHASES) {
+      const file = path.join(stage, '.private', `failure-diagnostics.${mode}.json`);
+      if (!fs.existsSync(file)) continue;
+      try { fragments.push(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch { /* Ignore malformed private fragments. */ }
+    }
+    const entries = aggregateFailureDiagnostics(fragments);
+    if (entries.length > 0) writeFailureDiagnostics(path.join(stage, 'failure-diagnostics.json'), entries);
+  } catch { /* Diagnostics never mask the primary governed failure. */ }
+}
+
+export function installProbeFailureDiagnostics(mode: string, stage: string, runnerClass: { prototype: object }): () => void {
+  const prototype = runnerClass.prototype as AnyRecord;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'answer');
+  if (!descriptor || typeof descriptor.value !== 'function') throw new Error('governed Probe answer observer cannot attach');
+  const entries: AnyRecord[] = [];
+  const seen = new Set<string>();
+  let restored = false;
+  const write = (): void => {
+    writeFailureDiagnostics(path.join(stage, '.private', `failure-diagnostics.${mode}.json`), entries);
+  };
+  const record = (binding: FailureBinding, error: unknown): void => {
+    try {
+      const taxonomy = sanitizeProbeFailureTaxonomy(error);
+      const key = canonicalJson({ binding_digest: binding.binding_digest, taxonomy });
+      if (seen.has(key) || entries.length >= MAX_FAILURE_DIAGNOSTICS) return;
+      const entry = Object.freeze({ ...binding, taxonomy });
+      const next = [...entries, entry].sort((left, right) => `${left.phase}\0${left.check_id}\0${left.component_id || ''}\0${left.binding_digest}`.localeCompare(`${right.phase}\0${right.check_id}\0${right.component_id || ''}\0${right.binding_digest}`));
+      try { serializeFailureDiagnostics(next); } catch { return; }
+      seen.add(key);
+      entries.splice(0, entries.length, ...next);
+      write();
+    } catch { /* Diagnostics never alter the governed failure or expose raw errors. */ }
+  };
+  Object.defineProperty(prototype, 'answer', {
+    ...descriptor,
+    value: function (this: unknown, ...args: unknown[]): unknown {
+      const binding = failureBinding(mode, args[0]);
+      let result: unknown;
+      try { result = Reflect.apply(descriptor.value as Function, this, args); }
+      catch (error) { record(binding, error); throw error; }
+      if (result && typeof (result as AnyRecord).then === 'function') {
+        return Promise.resolve(result).then(value => value, error => { record(binding, error); throw error; });
+      }
+      return result;
+    },
+  });
+  return () => {
+    if (restored) return;
+    restored = true;
+    Object.defineProperty(prototype, 'answer', descriptor);
+  };
 }
 
 function command(executable: string, args: string[], cwd = REPO_ROOT, input?: Buffer | string): { status: number; stdout: string; stderr: string } {
@@ -538,6 +746,7 @@ function retainFailureCheckpoint(stage: string): string | undefined {
 
 function failureReceipt(stage: string, code: string, counts?: AnyRecord, mode: 'preflight-only' | 'run-once' = 'run-once'): void {
   try {
+    aggregateFailureDiagnosticsFile(stage);
     const latestCheckpoint = retainFailureCheckpoint(stage);
     writeExclusiveJson(path.join(stage, 'run-once.failure.json'), {
       schema: 'urn:reqproof:agent-governance:exp-0210-live-failure:v1', status: 'failed', terminal: true, mode, failure_code: code,
@@ -599,45 +808,50 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
   const { StateMachineExecutionEngine } = require('../../../src/state-machine-execution-engine') as typeof import('../../../src/state-machine-execution-engine');
   const { CheckProviderRegistry } = require('../../../src/providers/check-provider-registry') as typeof import('../../../src/providers/check-provider-registry');
   const { createProofAdmissionCapability } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
-  const { withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
+  const { GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
   const registry = CheckProviderRegistry.getInstance(); registry.bootstrapProofAdmission(createProofAdmissionCapability(input.proofBinary));
   const engine = new StateMachineExecutionEngine(mode === 'replacement' ? input.fixedWorkspace : input.baselineWorkspace);
   let result: AnyRecord;
-  if (mode === 'discovery') {
-    const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 ? 'defer' : 'dispatch';
-    const runResult = await withGovernedProbeRunnerBudget(1, () => engine.executeGroupedChecks(PR, ['project'], undefined, config, 'json', false, 3, true, undefined, gate));
-    const checkpoint = engine.exportGraphCheckpoint();
-    const selection = authenticatedWorkItems(checkpoint, config);
-    result = { checkpoint, component_ids: selection.componentIds, changed_component_id: selection.changedComponentId, held_component_id: selection.heldComponentId, completed_component_ids: [], statistics: runResult.statistics };
-  } else if (mode === 'pause') {
-    const discovery = JSON.parse(fs.readFileSync(input.discoveryCheckpoint, 'utf8')) as AnyRecord;
-    const selection = authenticatedWorkItems(discovery, config);
-    const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 && String(generation.scope.at(-1)?.key || '') === selection.heldComponentId ? 'defer' : 'dispatch';
-    const pauseBudget = 2 * (selection.componentIds.length - 1);
-    if (1 + pauseBudget > PAUSE_CALLS) throw new Error('pause governed call budget exceeded');
-    const runResult = await withGovernedProbeRunnerBudget(pauseBudget, () => engine.resumeGraphCheckpoint({ checkpoint: discovery, config, prInfo: PR, maxParallelism: 3, failFast: true, generatedDispatchGate: gate }));
-    const checkpoint = runResult.checkpoint;
-    const view = componentProjection(checkpoint, config);
-    const completed = selection.componentIds.filter(id => STAGES.every(stageName => generationsFor(view, id).some(value => value.checkId === stageName && value.status === 'completed')));
-    result = { checkpoint, component_ids: selection.componentIds, changed_component_id: selection.changedComponentId, held_component_id: selection.heldComponentId, completed_component_ids: completed, statistics: runResult.result.statistics };
-  } else if (mode === 'resume') {
-    const checkpoint = JSON.parse(fs.readFileSync(input.pauseCheckpoint, 'utf8')) as AnyRecord;
-    const selection = authenticatedWorkItems(checkpoint, config, false);
-    const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 && String(generation.scope.at(-1)?.key || '') === selection.heldComponentId ? 'dispatch' : 'defer';
-    const runResult = await withGovernedProbeRunnerBudget(RESUME_CALLS, () => engine.resumeGraphCheckpoint({ checkpoint, config, prInfo: PR, maxParallelism: 3, failFast: true, generatedDispatchGate: gate }));
-    result = { checkpoint: runResult.checkpoint, statistics: runResult.result.statistics };
-  } else {
-    const checkpoint = JSON.parse(fs.readFileSync(input.baselineCheckpoint, 'utf8')) as AnyRecord;
-    const selection = authenticatedWorkItems(checkpoint, config, false);
-    const refreshed = proofRefresh(input.proofBinary, input.fixedWorkspace, checkpoint, config);
-    const changedOwnerPaths = (refreshed.changedPaths || []).map(String);
-    if (refreshed.changedComponentId !== selection.changedComponentId || !changedOwnerPaths.includes('parser.go') || !changedOwnerPaths.includes('parser_test.go')) throw new Error('Proof replacement owner is not the authenticated parser WorkItem');
-    const project = Object.values(componentProjection(checkpoint, config).instancesById).find((value: any) => value.itemKey === 'jsonparser' && !value.parentSubgraphInstanceId) as AnyRecord | undefined;
-    if (!project) throw new Error('project instance missing');
-    const continued = await withGovernedProbeRunnerBudget(REPLACEMENT_CALLS, () => engine.continueProofCurrentCatalogCheckpoint({ checkpoint, projectSubgraphInstanceId: project.subgraphInstanceId, revalidationBytes: refreshed.revalidationBytes, workItemsBytes: refreshed.workItemsBytes, config, prInfo: PR, maxParallelism: 3, failFast: true }));
-    result = { checkpoint: continued.checkpoint, refreshed };
+  const restoreProbeDiagnostics = installProbeFailureDiagnostics(mode, stage, GovernedProbeAgentRunner);
+  try {
+    if (mode === 'discovery') {
+      const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 ? 'defer' : 'dispatch';
+      const runResult = await withGovernedProbeRunnerBudget(1, () => engine.executeGroupedChecks(PR, ['project'], undefined, config, 'json', false, 3, true, undefined, gate));
+      const checkpoint = engine.exportGraphCheckpoint();
+      const selection = authenticatedWorkItems(checkpoint, config);
+      result = { checkpoint, component_ids: selection.componentIds, changed_component_id: selection.changedComponentId, held_component_id: selection.heldComponentId, completed_component_ids: [], statistics: runResult.statistics };
+    } else if (mode === 'pause') {
+      const discovery = JSON.parse(fs.readFileSync(input.discoveryCheckpoint, 'utf8')) as AnyRecord;
+      const selection = authenticatedWorkItems(discovery, config);
+      const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 && String(generation.scope.at(-1)?.key || '') === selection.heldComponentId ? 'defer' : 'dispatch';
+      const pauseBudget = 2 * (selection.componentIds.length - 1);
+      if (1 + pauseBudget > PAUSE_CALLS) throw new Error('pause governed call budget exceeded');
+      const runResult = await withGovernedProbeRunnerBudget(pauseBudget, () => engine.resumeGraphCheckpoint({ checkpoint: discovery, config, prInfo: PR, maxParallelism: 3, failFast: true, generatedDispatchGate: gate }));
+      const checkpoint = runResult.checkpoint;
+      const view = componentProjection(checkpoint, config);
+      const completed = selection.componentIds.filter(id => STAGES.every(stageName => generationsFor(view, id).some(value => value.checkId === stageName && value.status === 'completed')));
+      result = { checkpoint, component_ids: selection.componentIds, changed_component_id: selection.changedComponentId, held_component_id: selection.heldComponentId, completed_component_ids: completed, statistics: runResult.result.statistics };
+    } else if (mode === 'resume') {
+      const checkpoint = JSON.parse(fs.readFileSync(input.pauseCheckpoint, 'utf8')) as AnyRecord;
+      const selection = authenticatedWorkItems(checkpoint, config, false);
+      const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 && String(generation.scope.at(-1)?.key || '') === selection.heldComponentId ? 'dispatch' : 'defer';
+      const runResult = await withGovernedProbeRunnerBudget(RESUME_CALLS, () => engine.resumeGraphCheckpoint({ checkpoint, config, prInfo: PR, maxParallelism: 3, failFast: true, generatedDispatchGate: gate }));
+      result = { checkpoint: runResult.checkpoint, statistics: runResult.result.statistics };
+    } else {
+      const checkpoint = JSON.parse(fs.readFileSync(input.baselineCheckpoint, 'utf8')) as AnyRecord;
+      const selection = authenticatedWorkItems(checkpoint, config, false);
+      const refreshed = proofRefresh(input.proofBinary, input.fixedWorkspace, checkpoint, config);
+      const changedOwnerPaths = (refreshed.changedPaths || []).map(String);
+      if (refreshed.changedComponentId !== selection.changedComponentId || !changedOwnerPaths.includes('parser.go') || !changedOwnerPaths.includes('parser_test.go')) throw new Error('Proof replacement owner is not the authenticated parser WorkItem');
+      const project = Object.values(componentProjection(checkpoint, config).instancesById).find((value: any) => value.itemKey === 'jsonparser' && !value.parentSubgraphInstanceId) as AnyRecord | undefined;
+      if (!project) throw new Error('project instance missing');
+      const continued = await withGovernedProbeRunnerBudget(REPLACEMENT_CALLS, () => engine.continueProofCurrentCatalogCheckpoint({ checkpoint, projectSubgraphInstanceId: project.subgraphInstanceId, revalidationBytes: refreshed.revalidationBytes, workItemsBytes: refreshed.workItemsBytes, config, prInfo: PR, maxParallelism: 3, failFast: true }));
+      result = { checkpoint: continued.checkpoint, refreshed };
+    }
+    writePrivateJson(path.join(stage, '.private', `${mode}.result.json`), result);
+  } finally {
+    restoreProbeDiagnostics();
   }
-  writePrivateJson(path.join(stage, '.private', `${mode}.result.json`), result);
 }
 
 function parseArgs(argv: readonly string[]): { mode: 'preflight-only' | 'run-once' | 'child'; output: string; childMode?: 'discovery' | 'pause' | 'resume' | 'replacement'; controllerPid?: number } {
