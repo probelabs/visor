@@ -74,6 +74,10 @@ const FOCUSED_BASELINE_LINEAGE = 'sha256:af892646ce4a1ccf206224987408c102bd14034
 const FOCUSED_BASELINE_DATE = '2026-09-05 10:03:54 +0300';
 const FOCUSED_SCHEMA_PATHS = 'unavailable_at_probe_boundary';
 const FOCUSED_CHILD_TIMEOUT_MS = COMPONENT_TIMEOUT_MS;
+const FOCUSED_BOUNDARY_MODE = 'focused-diagnostic-boundary';
+const FOCUSED_ANSWER_SENTINEL = new Error('focused answer boundary sentinel');
+const FOCUSED_PROCESS_SENTINEL = new Error('focused process boundary sentinel');
+const FOCUSED_NETWORK_SENTINEL = new Error('focused network boundary sentinel');
 
 const requireFromRepo = createRequire(path.join(REPO_ROOT, 'package.json'));
 
@@ -504,7 +508,7 @@ function preflightReport(config: AnyRecord, graphDigest: string, inventory: AnyR
   };
 }
 
-function prepare(stage: string, requireFrozen = false, focused = false): Prepared {
+function prepare(stage: string, requireFrozen = false, focused = false, codexEvidence?: AnyRecord): Prepared {
   const privateDir = path.join(stage, '.private');
   const work = path.join(privateDir, 'work');
   fs.mkdirSync(work, { recursive: true, mode: 0o700 });
@@ -517,7 +521,7 @@ function prepare(stage: string, requireFrozen = false, focused = false): Prepare
   const config = yaml.load(fs.readFileSync(PROFILE, 'utf8')) as VisorConfig;
   const inventory = resolveProjectRole(proofBinary, baselineWorkspace, config);
   const graphDigest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
-  const codex = verifyCodex();
+  const codex = codexEvidence || verifyCodex();
   const probe = verifyProbe();
   const pins = frozenPins(requireFrozen);
   const baseline = sourceManifest(baselineWorkspace, BASELINE_COMMIT);
@@ -678,10 +682,12 @@ function focusedAuthorizationReceipt(): AnyRecord {
   const expectedRunner = process.env.VISOR_EXP0210_EXPECTED_RUNNER_SHA256;
   const pins = receipt.pins;
   const frozenPinsValid = !!pins && pins.visor_base === VISOR_COMMIT && typeof expectedHead === 'string' && pins.visor_head === expectedHead && pins.frozen_head === expectedHead && pins.visor_clean === true && typeof pins.repo_status_digest === 'string' && /^[0-9a-f]{64}$/.test(pins.repo_status_digest) && typeof expectedYaml === 'string' && pins.yaml_sha256 === expectedYaml && typeof expectedRunner === 'string' && pins.runner_sha256 === expectedRunner;
-  if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'focused-diagnostic-preflight' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.network_dispatches_requested !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.schema_paths !== FOCUSED_SCHEMA_PATHS || !frozenPinsValid || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS]) || receipt.derivation?.checkpoint_sha256 !== `sha256:${FOCUSED_CHECKPOINT_SHA256}` || receipt.derivation?.graph_semantic_digest !== FOCUSED_GRAPH_DIGEST || canonicalJson(receipt.derivation?.aliases) !== canonicalJson(['admission', 'candidate', 'component']) || receipt.preflight_receipt?.sha256 !== `sha256:${FOCUSED_PREFLIGHT_SHA256}`) throw new Error('focused diagnostic preflight authorization is not an exact zero-call pin');
+  const codex = receipt.codex;
+  const codexEvidence = !!codex && codex.version === CODEX_VERSION && codex.required_version === CODEX_VERSION && codex.login_verified === true;
+  if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'focused-diagnostic-preflight' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.network_dispatches_requested !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.schema_paths !== FOCUSED_SCHEMA_PATHS || !frozenPinsValid || !codexEvidence || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS]) || receipt.derivation?.checkpoint_sha256 !== `sha256:${FOCUSED_CHECKPOINT_SHA256}` || receipt.derivation?.graph_semantic_digest !== FOCUSED_GRAPH_DIGEST || canonicalJson(receipt.derivation?.aliases) !== canonicalJson(['admission', 'candidate', 'component']) || receipt.preflight_receipt?.sha256 !== `sha256:${FOCUSED_PREFLIGHT_SHA256}`) throw new Error('focused diagnostic preflight authorization is not an exact zero-call pin');
   const resolution = receipt.spec_review_resolution;
   if (!resolution || resolution.role_id !== 'spec-review' || resolution.stage_id !== 'spec_review' || typeof resolution.invocation_digest !== 'string' || typeof resolution.output_schema_id !== 'string' || typeof resolution.output_schema_digest !== 'string') throw new Error('focused diagnostic preflight lacks pinned spec-review resolution');
-  return { sha256: `sha256:${expected}`, graph_semantic_digest: receipt.derivation.graph_semantic_digest, derivation: receipt.derivation, spec_review_resolution: resolution };
+  return { sha256: `sha256:${expected}`, graph_semantic_digest: receipt.derivation.graph_semantic_digest, derivation: receipt.derivation, spec_review_resolution: resolution, codex: { version: CODEX_VERSION, required_version: CODEX_VERSION, login_verified: true } };
 }
 
 function consumeFocusedCapability(file: string, expectedDigest: string, derivation: FocusedDerivation): void {
@@ -708,6 +714,130 @@ function focusedBindingSummary(binding: AnyRecord): AnyRecord {
     node_generation_id: safeDiagnosticId(binding.nodeGenerationId) || 'unknown',
     scope_digest: `sha256:${sha256(canonicalJson(binding.scope))}`,
   };
+}
+
+function focusedManagedRequest(derivation: FocusedDerivation, workingDirectory: string): AnyRecord {
+  const generation = derivation.execution.generation as AnyRecord;
+  return {
+    prInfo: PR,
+    checkConfig: derivation.execution.node.check,
+    dependencyResults: new Map(Object.entries(derivation.execution.claims).map(([alias, claim]: [string, AnyRecord]) => [alias, { issues: [], output: claim.payload }])),
+    executionContext: {
+      claims: derivation.execution.claims,
+      nodeInstanceId: generation.nodeInstanceId,
+      nodeGenerationId: generation.nodeGenerationId,
+      scope: generation.scope,
+      proofComponentAuthority: derivation.authority,
+      proofOnboardingStageContext: derivation.onboardingStage,
+    },
+    binding: derivation.binding,
+    executionConfigDigest: generation.executionConfigDigest,
+    workingDirectory,
+  };
+}
+
+type FocusedBoundaryCounters = { process: number; network: number; answer: number };
+type FocusedBoundarySequence = { value: number };
+
+function markFocusedBoundary(timeline: AnyRecord[], sequence: FocusedBoundarySequence, event: string, status: string, extra?: AnyRecord): void {
+  timeline.push({ event, status, sequence: sequence.value++, ...(extra || {}) });
+}
+
+function installFocusedBoundaryInstrumentation(binary: string, timeline: AnyRecord[], counters: FocusedBoundaryCounters, sequence: FocusedBoundarySequence): () => void {
+  const restores: Array<() => void> = [];
+  let restored = false;
+  let runnerBoundaryObserved = false;
+  const mark = (event: string, status: string): void => { markFocusedBoundary(timeline, sequence, event, status); };
+  const restoreAll = (): void => {
+    const pending = restores.splice(0).reverse();
+    let firstError: unknown;
+    for (const restore of pending) {
+      try { restore(); } catch (error) { firstError ||= error; }
+    }
+    if (firstError) throw firstError;
+  };
+  const patch = (target: AnyRecord, name: string, replacement: Function, mandatory = true): void => {
+    const descriptor = Object.getOwnPropertyDescriptor(target, name);
+    if (!descriptor || typeof descriptor.value !== 'function') {
+      if (mandatory) throw new Error('focused boundary method is unavailable');
+      return;
+    }
+    Object.defineProperty(target, name, { ...descriptor, value: replacement });
+    if (Object.getOwnPropertyDescriptor(target, name)?.value !== replacement) throw new Error('focused boundary patch was not installed');
+    restores.push(() => Object.defineProperty(target, name, descriptor));
+  };
+  const wrap = (target: AnyRecord, name: string, event: string): void => {
+    const original = Object.getOwnPropertyDescriptor(target, name)?.value;
+    if (typeof original !== 'function') throw new Error('focused boundary method is unavailable');
+    patch(target, name, function (this: unknown, ...args: unknown[]): unknown {
+      if ((event === 'runner_preview' || event === 'runner_answer') && !runnerBoundaryObserved) {
+        runnerBoundaryObserved = true;
+        mark('runner_construction', 'observed');
+        mark('proof_resolution', 'completed');
+        mark('provider_acquisition', 'completed');
+      }
+      mark(event, 'entered');
+      try {
+        const result = Reflect.apply(original, this, args);
+        if (result && typeof (result as AnyRecord).then === 'function') {
+          return Promise.resolve(result).then(value => { mark(event, 'completed'); return value; }, error => { mark(event, 'failed'); throw error; });
+        }
+        mark(event, 'completed');
+        return result;
+      } catch (error) {
+        mark(event, 'failed');
+        throw error;
+      }
+    }, true);
+  };
+  const answerBlock = function (): never { counters.answer += 1; mark('probe_answer_governed', 'blocked'); throw FOCUSED_ANSWER_SENTINEL; };
+  const forbiddenBlock = (event: string, kind: keyof FocusedBoundaryCounters, sentinel: Error): Function => function (): never {
+    counters[kind] += 1;
+    mark(event, 'blocked');
+    throw sentinel;
+  };
+  try {
+    const probe = requireFromRepo('@probelabs/probe') as AnyRecord;
+    const probePrototype = probe.ProbeAgent?.prototype as AnyRecord | undefined;
+    if (!probePrototype) throw new Error('ProbeAgent prototype is unavailable');
+    wrap(probePrototype, 'initialize', 'probe_initialize');
+    wrap(probePrototype, 'previewGovernedAnswerDispatch', 'probe_preview');
+    patch(probePrototype, 'answerGoverned', answerBlock, true);
+    if (Object.getOwnPropertyDescriptor(probePrototype, 'answerGoverned')?.value !== answerBlock) throw new Error('focused answer guard was not installed');
+    const { GovernedProbeAgentRunner } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
+    const runnerPrototype = GovernedProbeAgentRunner.prototype as AnyRecord;
+    wrap(runnerPrototype, 'preview', 'runner_preview');
+    wrap(runnerPrototype, 'answer', 'runner_answer');
+    wrap(runnerPrototype, 'close', 'runner_close');
+
+    const childProcess = require('node:child_process') as AnyRecord;
+    const proofPath = fs.realpathSync(binary);
+    for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
+      const original = Object.getOwnPropertyDescriptor(childProcess, name)?.value;
+      if (typeof original !== 'function') continue;
+      patch(childProcess, name, function (this: unknown, ...args: unknown[]): unknown {
+        let command = '';
+        try { command = typeof args[0] === 'string' ? fs.realpathSync(args[0]) : ''; } catch { /* Treat an unresolvable executable as forbidden. */ }
+        const childArgs = Array.isArray(args[1]) ? args[1].map(value => String(value)) : [];
+        if (command === proofPath && canonicalJson(childArgs) === canonicalJson(['resolve-role-invocation'])) return Reflect.apply(original, this, args);
+        return forbiddenBlock('process_guard', 'process', FOCUSED_PROCESS_SENTINEL)();
+      }, true);
+    }
+    const networkModules: Array<[AnyRecord, string[]]> = [
+      [require('node:http'), ['request', 'get']], [require('node:https'), ['request', 'get']],
+      [require('node:net'), ['connect', 'createConnection']], [require('node:tls'), ['connect']],
+    ];
+    for (const [network, names] of networkModules) for (const name of names) patch(network, name, forbiddenBlock('network_guard', 'network', FOCUSED_NETWORK_SENTINEL), true);
+    patch(globalThis as AnyRecord, 'fetch', forbiddenBlock('fetch_guard', 'network', FOCUSED_NETWORK_SENTINEL), true);
+    return () => {
+      if (restored) return;
+      restored = true;
+      restoreAll();
+    };
+  } catch (error) {
+    try { restoreAll(); } catch { /* Attempt every partial restoration before surfacing installation failure. */ }
+    throw error;
+  }
 }
 
 function deriveFocusedSpecReview(config: VisorConfig, checkpointBytes = focusedCheckpointBytes()): FocusedDerivation {
@@ -826,6 +956,7 @@ function focusedDiagnosticPreflightReport(prepared: Prepared, derivation: Focuse
     status: 'passed', mode: 'focused-diagnostic-preflight', governed_calls: 0, model_calls: 0,
     network_dispatches_requested: 0, retries: 0, fallback: false, schema_paths: FOCUSED_SCHEMA_PATHS,
     pins: { ...prepared.pins, proof_commit: PROOF_COMMIT, probe_version: PROBE_VERSION, codex_version: CODEX_VERSION, profile_id: PROFILE_ID, probe_tools: [...PROBE_TOOLS] }, preflight_receipt: receipt,
+    codex: { version: prepared.preflight.codex?.version, required_version: CODEX_VERSION, login_verified: prepared.preflight.codex?.login_verified === true },
     derivation: focusedDerivationSummary(derivation),
     spec_review_resolution: specReviewResolution,
     evidence: 'preflight restored the retained checkpoint and constructed no provider, Probe agent, or model dispatch',
@@ -1164,26 +1295,9 @@ async function runFocusedSpecReviewChild(stage: string, controllerPid: number): 
   let outcomeError: unknown;
   let close: AnyRecord = { status: 'not_started' };
   try {
-    const dependencyResults = new Map(Object.entries(derivation.execution.claims).map(([alias, claim]: [string, AnyRecord]) => [alias, { issues: [], output: claim.payload }]));
-    const generation = derivation.execution.generation as AnyRecord;
-    const request = {
-      prInfo: PR,
-      checkConfig: derivation.execution.node.check,
-      dependencyResults,
-      executionContext: {
-        claims: derivation.execution.claims,
-        nodeInstanceId: generation.nodeInstanceId,
-        nodeGenerationId: generation.nodeGenerationId,
-        scope: generation.scope,
-        proofComponentAuthority: derivation.authority,
-        proofOnboardingStageContext: derivation.onboardingStage,
-      },
-      binding: derivation.binding,
-      executionConfigDigest: generation.executionConfigDigest,
-      workingDirectory: input.workingDirectory,
-    } as any;
+    const request = focusedManagedRequest(derivation, input.workingDirectory);
     const provider = createGovernedProofInspectProviderFromCapability(createProofAdmissionCapability(input.proofBinary));
-    run = withGovernedProbeRunnerBudget(1, () => provider.startManaged(request));
+    run = withGovernedProbeRunnerBudget(1, () => provider.startManaged(request as any));
     await run.started;
     timeline.push({ event: 'managed_run_started', status: 'started', binding: focusedBindingSummary(run.binding) });
     try { outcome = await run.outcome; }
@@ -1213,6 +1327,82 @@ async function runFocusedSpecReviewChild(stage: string, controllerPid: number): 
   };
   writePrivateJson(path.join(stage, '.private', 'focused-spec-review.result.json'), result);
   process.stdout.write('EXP-0210 focused child completed\n');
+}
+
+export async function runFocusedBoundaryLocalization(outputDirectory: string): Promise<AnyRecord> {
+  const stage = claimRunOutput(outputDirectory);
+  let prepared: Prepared | undefined;
+  try {
+    writeExclusiveJson(path.join(stage, 'focused-boundary.started.json'), { schema: 'urn:reqproof:agent-governance:exp-0210-focused-boundary-started:v1', status: 'started', mode: FOCUSED_BOUNDARY_MODE, retries: 0, fallback: false });
+    const preflightReceipt = focusedAuthorizationReceipt();
+    prepared = prepare(stage, true, true, preflightReceipt.codex);
+    const checkpointBytes = focusedCheckpointBytes();
+    const checkpoint = JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord;
+    verifyFocusedBaselineLineage(prepared.proofBinary, prepared.baselineWorkspace, checkpoint);
+    resolveHistoricalProjectRole(prepared.proofBinary, prepared.baselineWorkspace, prepared.config, checkpoint);
+    if (compileClaimPlan(prepared.config).expansionPlan.graphSemanticDigest !== FOCUSED_GRAPH_DIGEST) throw new Error('focused effective config graph digest is not pinned');
+    writePrivateJson(prepared.configPath, prepared.config);
+    const derivation = deriveFocusedSpecReview(prepared.config, checkpointBytes);
+    if (canonicalJson(focusedDerivationSummary(derivation)) !== canonicalJson(preflightReceipt.derivation)) throw new Error('focused diagnostic preflight derivation is detached');
+    const checkpointFile = path.join(prepared.privateDir, 'focused-boundary.checkpoint.json');
+    fs.writeFileSync(checkpointFile, checkpointBytes, { mode: 0o600 }); fs.chmodSync(checkpointFile, 0o600);
+    const capabilityFile = path.join(prepared.privateDir, 'focused-boundary-capability.json');
+    const capability = { version: 'urn:reqproof:agent-governance:exp-0210-focused-capability:v1', nonce: randomBytes(32).toString('hex'), checkpoint_sha256: `sha256:${FOCUSED_CHECKPOINT_SHA256}`, node_generation_id: derivation.execution.generation.nodeGenerationId };
+    writeExclusiveJson(capabilityFile, capability);
+    const sequence: FocusedBoundarySequence = { value: 1 };
+    const timeline: AnyRecord[] = [];
+    markFocusedBoundary(timeline, sequence, 'derivation', 'validated', { digest: focusedDerivationSummary(derivation).onboarding_stage_digest });
+    consumeFocusedCapability(capabilityFile, sha256(canonicalJson(capability)), derivation);
+    const guardCounters: FocusedBoundaryCounters = { process: 0, network: 0, answer: 0 };
+    const restoreInstrumentation = installFocusedBoundaryInstrumentation(prepared.proofBinary, timeline, guardCounters, sequence);
+    let run: import('../../../src/providers/check-provider.interface').ManagedAgentRun | undefined;
+    let outcome: unknown;
+    let outcomeError: unknown;
+    let close: AnyRecord = { status: 'not_started' };
+    try {
+      const { createProofAdmissionCapability } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
+      const { createGovernedProofInspectProviderFromCapability } = require('../../../src/providers/governed-proof-inspect-check-provider') as typeof import('../../../src/providers/governed-proof-inspect-check-provider');
+      const { withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
+      markFocusedBoundary(timeline, sequence, 'proof_resolution', 'started');
+      const provider = createGovernedProofInspectProviderFromCapability(createProofAdmissionCapability(prepared.proofBinary));
+      const request = focusedManagedRequest(derivation, prepared.baselineWorkspace);
+      markFocusedBoundary(timeline, sequence, 'provider_acquisition', 'started');
+      run = withGovernedProbeRunnerBudget(1, () => provider.startManaged(request as any));
+      markFocusedBoundary(timeline, sequence, 'provider_acquisition', 'handle_created');
+      await run.started;
+      markFocusedBoundary(timeline, sequence, 'managed_run', 'started');
+      try { outcome = await run.outcome; }
+      catch (error) { outcomeError = error; }
+      markFocusedBoundary(timeline, sequence, 'provider_outcome', outcomeError ? 'failed' : 'completed');
+    } finally {
+      if (run) {
+        try { close = await run.close(); }
+        catch (error) { close = { status: 'failed', ...safeFocusedError(error) }; }
+        markFocusedBoundary(timeline, sequence, 'provider_close', close.status === 'clean' ? 'clean' : 'failed');
+      }
+      restoreInstrumentation();
+    }
+    const guarded = outcomeError === FOCUSED_ANSWER_SENTINEL && guardCounters.answer === 1 && guardCounters.process === 0 && guardCounters.network === 0 && close.status === 'clean';
+    const outcomeSummary = outcomeError === FOCUSED_ANSWER_SENTINEL
+      ? { status: 'blocked_before_model', ...safeFocusedError(outcomeError), taxonomy: sanitizeProbeFailureTaxonomy(outcomeError) }
+      : focusedOutcomeSummary(outcome, outcomeError);
+    const report = {
+      schema: 'urn:reqproof:agent-governance:exp-0210-focused-boundary:v1', status: guarded ? 'passed' : 'failed', mode: FOCUSED_BOUNDARY_MODE,
+      retries: 0, fallback: false, schema_paths: FOCUSED_SCHEMA_PATHS, governed_calls: 0, model_calls: 0, network_dispatches_requested: 0,
+      pins: { ...prepared.pins, proof_commit: PROOF_COMMIT, probe_version: PROBE_VERSION, codex_version: CODEX_VERSION, profile_id: PROFILE_ID, probe_tools: [...PROBE_TOOLS] },
+      derivation: focusedDerivationSummary(derivation), preflight_receipt: preflightReceipt, timeline,
+      outcome: outcomeSummary, lifecycle: { close_status: close.status === 'clean' ? 'clean' : 'failed', checkpoint_sha256: `sha256:${sha256(checkpointBytes)}`, answer_guard_hits: guardCounters.answer, forbidden_process_hits: guardCounters.process, forbidden_network_hits: guardCounters.network },
+    };
+    fs.rmSync(path.join(stage, 'preflight.json'), { force: true });
+    writePrivateJson(path.join(stage, 'focused-boundary-report.json'), report);
+    writeExclusiveJson(path.join(stage, 'focused-boundary.completed.json'), { schema: 'urn:reqproof:agent-governance:exp-0210-focused-boundary-completed:v1', status: 'completed', mode: FOCUSED_BOUNDARY_MODE, retries: 0, fallback: false });
+    cleanupPrivate(prepared);
+    return report;
+  } catch (error) {
+    if (prepared) cleanupPrivate(prepared);
+    failureReceipt(stage, 'FOCUSED_BOUNDARY_FAILED');
+    throw error;
+  }
 }
 
 async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacement' | 'focused-spec-review', stage: string, controllerPid: number): Promise<void> {
@@ -1272,12 +1462,13 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
   }
 }
 
-function parseArgs(argv: readonly string[]): { mode: 'preflight-only' | 'run-once' | 'focused-diagnostic-preflight' | 'focused-diagnostic-run-once' | 'child'; output: string; childMode?: 'discovery' | 'pause' | 'resume' | 'replacement' | 'focused-spec-review'; controllerPid?: number } {
+function parseArgs(argv: readonly string[]): { mode: 'preflight-only' | 'run-once' | 'focused-diagnostic-preflight' | 'focused-diagnostic-run-once' | typeof FOCUSED_BOUNDARY_MODE | 'child'; output: string; childMode?: 'discovery' | 'pause' | 'resume' | 'replacement' | 'focused-spec-review'; controllerPid?: number } {
   const modeFlags = [
     ['--preflight-only', 'preflight-only'],
     ['--run-once', 'run-once'],
     ['--focused-diagnostic-preflight', 'focused-diagnostic-preflight'],
     ['--focused-diagnostic-run-once', 'focused-diagnostic-run-once'],
+    ['--focused-diagnostic-boundary', FOCUSED_BOUNDARY_MODE],
     ['--child', 'child'],
   ] as const;
   const selected = modeFlags.filter(([flag]) => argv.includes(flag));
@@ -1308,6 +1499,7 @@ async function main(): Promise<void> {
     else if (args.mode === 'run-once') runJsonparserStagedLive(args.output);
     else if (args.mode === 'focused-diagnostic-preflight') await runFocusedDiagnosticPreflight(args.output);
     else if (args.mode === 'focused-diagnostic-run-once') runFocusedDiagnosticOnce(args.output);
+    else if (args.mode === FOCUSED_BOUNDARY_MODE) await runFocusedBoundaryLocalization(args.output);
     else await runChildMode(args.childMode!, args.output, args.controllerPid!);
 }
 

@@ -33,9 +33,10 @@ const SCHEMA_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 
 const RETAINED_CHECKPOINT = '/tmp/visor-exp0210-live-luna.fom5fO/output/failure.checkpoint.json';
 const RETAINED_PREFLIGHT = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
 
-function focusedSubprocess(kind: 'valid' | 'checkpoint' | 'preflight'): { root: string; output: string; runner: string; result: ReturnType<typeof spawnSync> } {
+function focusedSubprocess(kind: 'valid' | 'checkpoint' | 'preflight' | 'boundary'): { root: string; output: string; runner: string; result: ReturnType<typeof spawnSync> } {
   const shadow = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-focused-shadow-'));
-  const output = path.join(shadow, 'focused-output');
+  const output = kind === 'boundary' ? fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-boundary-output-')) : path.join(shadow, 'focused-output');
+  if (kind === 'boundary') fs.rmdirSync(output);
   const runnerRelative = 'examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo.ts';
   const archive = spawnSync('git', ['archive', 'HEAD', '--', 'src', 'package.json', 'package-lock.json', 'tsconfig.json', 'examples/agent-governance/exp-0210-jsonparser-staged'], { cwd: ROOT, encoding: null, maxBuffer: 64 * 1024 * 1024 });
   if (archive.status !== 0 || !archive.stdout) throw new Error('unable to archive the Visor test shadow');
@@ -62,7 +63,17 @@ function focusedSubprocess(kind: 'valid' | 'checkpoint' | 'preflight'): { root: 
   const digest = (file: string): string => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const env = { ...process.env, VISOR_EXP0210_EXPECTED_VISOR_HEAD: head, VISOR_EXP0210_EXPECTED_YAML_SHA256: digest(path.join(shadow, 'examples/agent-governance/exp-0210-jsonparser-staged/visor.yaml')), VISOR_EXP0210_EXPECTED_RUNNER_SHA256: digest(runner) };
   delete env.GIT_DIR; delete env.GIT_WORK_TREE;
-  const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner, '--focused-diagnostic-preflight', '--output', output], { cwd: shadow, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+  let boundaryAuth: string | undefined;
+  if (kind === 'boundary') {
+    const authOutput = path.join(shadow, '.git', 'focused-auth');
+    const auth = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner, '--focused-diagnostic-preflight', '--output', authOutput], { cwd: shadow, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+    boundaryAuth = path.join(authOutput, 'focused-diagnostic-preflight.json');
+    if (auth.status !== 0 || !fs.existsSync(boundaryAuth)) throw new Error('unable to produce focused boundary authorization');
+    env.VISOR_EXP0210_FOCUSED_PREFLIGHT_PATH = boundaryAuth;
+    env.VISOR_EXP0210_FOCUSED_PREFLIGHT_SHA256 = digest(boundaryAuth);
+  }
+  const mode = kind === 'boundary' ? '--focused-diagnostic-boundary' : '--focused-diagnostic-preflight';
+  const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner, mode, '--output', output], { cwd: shadow, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
   return { root: shadow, output, runner, result };
 }
 
@@ -412,5 +423,40 @@ describe('EXP-0210 live preflight', () => {
         expect(fs.existsSync(path.join(run.output, 'focused-diagnostic-preflight.json'))).toBe(false);
       } finally { fs.rmSync(run.root, { recursive: true, force: true }); }
     }
+  }, 120_000);
+
+  it('runs the child-isolated boundary guard through Proof and Probe setup only', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
+    const run = focusedSubprocess('boundary');
+    try {
+      expect(run.result.status).toBe(0);
+      expect(run.result.stderr).toBe('');
+      const report = JSON.parse(fs.readFileSync(path.join(run.output, 'focused-boundary-report.json'), 'utf8')) as AnyRecord;
+      expect(report).toEqual(expect.objectContaining({ schema: 'urn:reqproof:agent-governance:exp-0210-focused-boundary:v1', status: 'passed', mode: 'focused-diagnostic-boundary', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+      expect(report.outcome).toEqual(expect.objectContaining({ status: 'blocked_before_model', error_class: 'unknown', taxonomy: { answerFailureStage: 'unknown' } }));
+      expect(report.lifecycle).toEqual(expect.objectContaining({ close_status: 'clean', answer_guard_hits: 1, forbidden_process_hits: 0, forbidden_network_hits: 0, checkpoint_sha256: `sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249` }));
+      const events = report.timeline.map((event: AnyRecord) => `${event.event}:${event.status}`);
+      expect(events).toEqual([
+        'derivation:validated', 'proof_resolution:started', 'provider_acquisition:started',
+        'provider_acquisition:handle_created', 'managed_run:started', 'runner_construction:observed',
+        'proof_resolution:completed', 'provider_acquisition:completed', 'runner_answer:entered',
+        'probe_initialize:entered', 'probe_initialize:completed', 'probe_answer_governed:blocked',
+        'runner_answer:failed', 'provider_outcome:failed', 'runner_close:entered',
+        'runner_close:completed', 'provider_close:clean',
+      ]);
+      expect(events.filter(value => value === 'proof_resolution:started')).toHaveLength(1);
+      expect(events).not.toContain('probe_answer_governed:entered');
+      expect(events).not.toContain('probe_answer_governed:completed');
+      expect(events).not.toContain('runner_preview:entered');
+      expect(events).not.toContain('runner_preview:completed');
+      expect(events).not.toContain('probe_preview:entered');
+      expect(events).not.toContain('probe_preview:completed');
+      expect(events).not.toContain('fetch_guard:blocked');
+      expect(events).not.toContain('network_guard:blocked');
+      expect(events).not.toContain('process_guard:blocked');
+      expect(fs.existsSync(path.join(run.output, '.private'))).toBe(false);
+      for (const file of fs.readdirSync(run.output)) expect(fs.statSync(path.join(run.output, file)).mode & 0o777).toBe(0o600);
+      expect(JSON.stringify(report)).not.toMatch(/secret|private|prompt|raw output/i);
+    } finally { fs.rmSync(run.output, { recursive: true, force: true }); fs.rmSync(run.root, { recursive: true, force: true }); }
   }, 120_000);
 });
