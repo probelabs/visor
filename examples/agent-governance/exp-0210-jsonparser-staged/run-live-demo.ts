@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as yaml from 'js-yaml';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
@@ -64,6 +64,16 @@ const PROBE_SCHEMA_KEYWORDS = new Set(['required', 'additionalProperties', 'type
 const FAILURE_DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
 const MAX_FAILURE_DIAGNOSTICS = 32;
 const MAX_FAILURE_DIAGNOSTICS_BYTES = 32 * 1024;
+const FOCUSED_CHECKPOINT = '/tmp/visor-exp0210-live-luna.fom5fO/output/failure.checkpoint.json';
+const FOCUSED_PREFLIGHT = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
+const FOCUSED_CHECKPOINT_SHA256 = '1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249';
+const FOCUSED_PREFLIGHT_SHA256 = 'd46cd19eb7b7cc64165288caee36498591860da1d636a6f9bd2393ca07bb6507';
+const FOCUSED_GRAPH_DIGEST = '306b074949f3975a5396dfffe74fc335790f7c6247f9b6c0ea90a5555d8fb212';
+const FOCUSED_BASELINE_ROOT = 'f92c73d79e79102093bdb93bc0b75fc037900618';
+const FOCUSED_BASELINE_LINEAGE = 'sha256:af892646ce4a1ccf206224987408c102bd140348931fcb1d2d378bf4887b3955';
+const FOCUSED_BASELINE_DATE = '2026-09-05 10:03:54 +0300';
+const FOCUSED_SCHEMA_PATHS = 'unavailable_at_probe_boundary';
+const FOCUSED_CHILD_TIMEOUT_MS = COMPONENT_TIMEOUT_MS;
 
 const requireFromRepo = createRequire(path.join(REPO_ROOT, 'package.json'));
 
@@ -292,7 +302,7 @@ function run(executable: string, args: string[], cwd = REPO_ROOT, input?: Buffer
   return execFileSync(executable, args, { cwd, input, maxBuffer: 512 * 1024 * 1024, env: { ...process.env, ...OFFLINE_ENV } });
 }
 
-function archive(repo: string, revision: string, destination: string): void {
+function archive(repo: string, revision: string, destination: string, deterministicRoot = false): void {
   fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
   const tar = run('git', ['-C', repo, 'archive', revision, '--', ...SUBJECT_FILES]);
   run('tar', ['-xf', '-', '-C', destination], REPO_ROOT, tar);
@@ -301,7 +311,18 @@ function archive(repo: string, revision: string, destination: string): void {
   run('git', ['config', 'user.email', 'visor-exp0210@example.invalid'], destination);
   run('git', ['config', 'user.name', 'Visor EXP-0210'], destination);
   run('git', ['add', '--', ...SUBJECT_FILES, 'proof.yaml'], destination);
-  run('git', ['-c', 'core.hooksPath=/dev/null', 'commit', '-qm', `EXP-0210 ${revision}`], destination);
+  if (!deterministicRoot) {
+    run('git', ['-c', 'core.hooksPath=/dev/null', 'commit', '-qm', `EXP-0210 ${revision}`], destination);
+    return;
+  }
+  const commit = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', 'commit', '-qm', `EXP-0210 ${revision}`], {
+    cwd: destination,
+    env: { ...process.env, ...OFFLINE_ENV, GIT_AUTHOR_DATE: FOCUSED_BASELINE_DATE, GIT_COMMITTER_DATE: FOCUSED_BASELINE_DATE },
+    encoding: 'utf8', timeout: 30_000,
+  });
+  if (commit.status !== 0) throw new Error('focused baseline archive commit failed');
+  const root = run('git', ['rev-list', '--max-parents=0', 'HEAD'], destination).toString('utf8').trim();
+  if (root !== FOCUSED_BASELINE_ROOT) throw new Error('focused baseline root commit does not match retained lineage');
 }
 
 function buildProof(destination: string): string {
@@ -399,6 +420,75 @@ function resolveProjectRole(binary: string, workspace: string, config: AnyRecord
   return inventory;
 }
 
+/** Restore the project selector from authenticated retained evidence.  The
+ * inventory command may discover a new subject after a provider upgrade; a
+ * focused replay must use the invocation that produced the checkpoint. */
+function resolveHistoricalProjectRole(binary: string, workspace: string, config: AnyRecord, checkpoint: AnyRecord): void {
+  const event = checkpoint.events.find((value: any) => value.type === 'ClaimPublished' && value.claim === 'proof.candidate@1' && value.scope?.length === 1 && value.proofCandidateEvidence);
+  if (!event?.proofCandidateEvidence) throw new Error('historical project Proof evidence is missing');
+  const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
+  const historical = evidence.role.invocation;
+  // Proof's CLI request is a closed Go struct wire (not Proof CanonicalJSON):
+  // preserve the authenticated values while rebuilding its declared field
+  // order, including the nested Subject order.
+  const historicalSubject = historical.subject as AnyRecord;
+  const request = {
+    role_id: historical.role_id,
+    stance: historical.stance,
+    subject: { kind: historicalSubject.kind, id: historicalSubject.id, fingerprint: historicalSubject.fingerprint },
+    output_schema_id: historical.output_schema_id,
+    output_schema: historical.output_schema,
+  };
+  const resolved = proofInvoke(binary, workspace, ['resolve-role-invocation'], JSON.stringify(request));
+  if (resolved.invocation_digest !== evidence.role.invocationDigest) throw new Error('historical project invocation digest does not match retained evidence');
+  const check = config.subgraphs['discover-project'].checks.inspect;
+  check.invocation = JSON.parse(JSON.stringify(historical));
+  check.instructions = resolved.instructions;
+  check.invocation_digest = resolved.invocation_digest;
+  check.result_schema = Buffer.from(String(historical.output_schema), 'base64').toString('utf8');
+}
+
+function verifyFocusedBaselineLineage(binary: string, workspace: string, checkpoint: AnyRecord): void {
+  const root = run('git', ['rev-list', '--max-parents=0', 'HEAD'], workspace).toString('utf8').trim();
+  if (root !== FOCUSED_BASELINE_ROOT) throw new Error('focused baseline root is detached from retained evidence');
+  const retained = checkpoint.events.map((event: any) => event.proofCandidateEvidence?.role?.invocation?.component_authority?.catalog_revalidation_receipt?.project_lineage).find(Boolean) as AnyRecord | undefined;
+  if (!retained || retained.baseline_revision !== `sha1:${root}` || retained.fingerprint !== FOCUSED_BASELINE_LINEAGE || retained.object_format !== 'sha1') throw new Error('focused baseline lineage evidence is not exact');
+  const { candidate, admission } = candidateAndAdmission(checkpoint);
+  const candidatePayload = typeof candidate.payload === 'string' ? JSON.parse(candidate.payload) : candidate.payload;
+  const admissionPayload = typeof admission.payload === 'string' ? JSON.parse(admission.payload) : admission.payload;
+  if (typeof admissionPayload?.__proof_admission_wire !== 'string') throw new Error('focused project admission wire is missing');
+  const request = proofCanonicalJson({ version: 'proof.catalog-revalidation-request/v2', candidate: candidatePayload, admission: JSON.parse(admissionPayload.__proof_admission_wire) });
+  const refreshed = proofInvoke(binary, workspace, ['onboarding', 'revalidate'], request);
+  const lineage = refreshed.receipt?.project_lineage;
+  if (!lineage || lineage.baseline_revision !== retained.baseline_revision || lineage.fingerprint !== retained.fingerprint || lineage.object_format !== retained.object_format || lineage.version !== retained.version) throw new Error('focused baseline lineage does not revalidate exactly');
+}
+
+async function resolveFocusedSpecReviewRole(binary: string, workspace: string, derivation: FocusedDerivation): Promise<AnyRecord> {
+  const invocation = derivation.execution.node.check.invocation as AnyRecord;
+  const subject = derivation.authority.subject as AnyRecord;
+  const request = {
+    role_id: invocation.role_id,
+    stance: invocation.stance,
+    subject: { kind: 'component', id: subject.component_id, fingerprint: subject.fingerprint },
+    component_authority: derivation.authority,
+    onboarding_stage: derivation.onboardingStage,
+    output_schema_id: invocation.output_schema_id,
+    output_schema: invocation.output_schema,
+  };
+  const { createProofAdmissionCapability, resolveProofRoleInvocation } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
+  const resolved = await resolveProofRoleInvocation(createProofAdmissionCapability(binary), request, workspace);
+  if (typeof resolved.invocation_digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(resolved.invocation_digest) || resolved.role_id !== invocation.role_id || resolved.output_schema_id !== invocation.output_schema_id || resolved.output_schema !== invocation.output_schema || typeof resolved.instructions !== 'string' || resolved.instructions.length === 0) {
+    throw new Error('focused spec-review invocation is not pinned to retained Proof authority');
+  }
+  return {
+    role_id: resolved.role_id,
+    stage_id: derivation.onboardingStage.stage_id,
+    invocation_digest: resolved.invocation_digest,
+    output_schema_id: resolved.output_schema_id,
+    output_schema_digest: resolved.output_schema_digest,
+  };
+}
+
 function preflightReport(config: AnyRecord, graphDigest: string, inventory: AnyRecord, codex: AnyRecord, probe: AnyRecord, baseline: AnyRecord, fixed: AnyRecord, pins: FrozenPins): AnyRecord {
   return {
     schema: 'urn:reqproof:agent-governance:exp-0210-live-preflight:v1', status: 'passed', mode: 'preflight-only',
@@ -414,14 +504,14 @@ function preflightReport(config: AnyRecord, graphDigest: string, inventory: AnyR
   };
 }
 
-function prepare(stage: string, requireFrozen = false): Prepared {
+function prepare(stage: string, requireFrozen = false, focused = false): Prepared {
   const privateDir = path.join(stage, '.private');
   const work = path.join(privateDir, 'work');
   fs.mkdirSync(work, { recursive: true, mode: 0o700 });
   fs.chmodSync(privateDir, 0o700); fs.chmodSync(work, 0o700);
   const baselineWorkspace = path.join(work, 'baseline');
   const fixedWorkspace = path.join(work, 'fixed');
-  archive(SUBJECT_REPO, BASELINE_COMMIT, baselineWorkspace);
+  archive(SUBJECT_REPO, BASELINE_COMMIT, baselineWorkspace, focused);
   archive(SUBJECT_REPO, FIX_COMMIT, fixedWorkspace);
   const proofBinary = buildProof(path.join(work, 'proof'));
   const config = yaml.load(fs.readFileSync(PROFILE, 'utf8')) as VisorConfig;
@@ -550,6 +640,261 @@ function childProcess(mode: 'discovery' | 'pause' | 'resume' | 'replacement', st
   const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', CHILD_ENTRY, '--child', mode, '--output', stage, '--controller-pid', String(process.pid)], { cwd: REPO_ROOT, env: childEnvironment(), encoding: 'utf8', timeout, maxBuffer: 128 * 1024 * 1024 });
   if (result.error || result.status !== 0) throw new Error(`live child ${mode} failed`);
   return JSON.parse(fs.readFileSync(path.join(stage, '.private', `${mode}.result.json`), 'utf8')) as ChildResult;
+}
+
+type FocusedDerivation = Readonly<{
+  checkpoint: AnyRecord;
+  checkpointBytes: Buffer;
+  execution: AnyRecord;
+  authority: AnyRecord;
+  onboardingStage: AnyRecord;
+  binding: AnyRecord;
+  historicalTermination: AnyRecord;
+}>;
+
+function focusedCheckpointBytes(): Buffer {
+  const bytes = fs.readFileSync(FOCUSED_CHECKPOINT);
+  if (sha256(bytes) !== FOCUSED_CHECKPOINT_SHA256) throw new Error('focused checkpoint pin does not match');
+  return bytes;
+}
+
+function focusedUpstreamPreflightReceipt(): AnyRecord {
+  const bytes = fs.readFileSync(FOCUSED_PREFLIGHT);
+  if (sha256(bytes) !== FOCUSED_PREFLIGHT_SHA256) throw new Error('focused preflight receipt pin does not match');
+  const receipt = JSON.parse(bytes.toString('utf8')) as AnyRecord;
+  if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-live-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'preflight-only' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.graph?.semantic_digest !== FOCUSED_GRAPH_DIGEST || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS])) throw new Error('focused preflight receipt is not an exact zero-call pin');
+  return { sha256: `sha256:${FOCUSED_PREFLIGHT_SHA256}`, graph_semantic_digest: receipt.graph.semantic_digest };
+}
+
+function focusedAuthorizationReceipt(): AnyRecord {
+  const file = process.env.VISOR_EXP0210_FOCUSED_PREFLIGHT_PATH;
+  const expected = process.env.VISOR_EXP0210_FOCUSED_PREFLIGHT_SHA256?.replace(/^sha256:/, '');
+  if (!file || !path.isAbsolute(file) || !expected || !/^[0-9a-f]{64}$/.test(expected)) throw new Error('focused diagnostic preflight path and exact SHA-256 pin are required');
+  const bytes = fs.readFileSync(file);
+  if (sha256(bytes) !== expected) throw new Error('focused diagnostic preflight authorization pin does not match');
+  const receipt = JSON.parse(bytes.toString('utf8')) as AnyRecord;
+  const expectedHead = process.env.VISOR_EXP0210_EXPECTED_VISOR_HEAD;
+  const expectedYaml = process.env.VISOR_EXP0210_EXPECTED_YAML_SHA256;
+  const expectedRunner = process.env.VISOR_EXP0210_EXPECTED_RUNNER_SHA256;
+  const pins = receipt.pins;
+  const frozenPinsValid = !!pins && pins.visor_base === VISOR_COMMIT && typeof expectedHead === 'string' && pins.visor_head === expectedHead && pins.frozen_head === expectedHead && pins.visor_clean === true && typeof pins.repo_status_digest === 'string' && /^[0-9a-f]{64}$/.test(pins.repo_status_digest) && typeof expectedYaml === 'string' && pins.yaml_sha256 === expectedYaml && typeof expectedRunner === 'string' && pins.runner_sha256 === expectedRunner;
+  if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'focused-diagnostic-preflight' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.network_dispatches_requested !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.schema_paths !== FOCUSED_SCHEMA_PATHS || !frozenPinsValid || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS]) || receipt.derivation?.checkpoint_sha256 !== `sha256:${FOCUSED_CHECKPOINT_SHA256}` || receipt.derivation?.graph_semantic_digest !== FOCUSED_GRAPH_DIGEST || canonicalJson(receipt.derivation?.aliases) !== canonicalJson(['admission', 'candidate', 'component']) || receipt.preflight_receipt?.sha256 !== `sha256:${FOCUSED_PREFLIGHT_SHA256}`) throw new Error('focused diagnostic preflight authorization is not an exact zero-call pin');
+  const resolution = receipt.spec_review_resolution;
+  if (!resolution || resolution.role_id !== 'spec-review' || resolution.stage_id !== 'spec_review' || typeof resolution.invocation_digest !== 'string' || typeof resolution.output_schema_id !== 'string' || typeof resolution.output_schema_digest !== 'string') throw new Error('focused diagnostic preflight lacks pinned spec-review resolution');
+  return { sha256: `sha256:${expected}`, graph_semantic_digest: receipt.derivation.graph_semantic_digest, derivation: receipt.derivation, spec_review_resolution: resolution };
+}
+
+function consumeFocusedCapability(file: string, expectedDigest: string, derivation: FocusedDerivation): void {
+  const consumed = `${file}.consumed.${process.pid}`;
+  try {
+    fs.renameSync(file, consumed);
+    const value = JSON.parse(fs.readFileSync(consumed, 'utf8')) as AnyRecord;
+    if (sha256(canonicalJson(value)) !== expectedDigest || value.version !== 'urn:reqproof:agent-governance:exp-0210-focused-capability:v1' || value.checkpoint_sha256 !== `sha256:${FOCUSED_CHECKPOINT_SHA256}` || value.node_generation_id !== derivation.execution.generation.nodeGenerationId || typeof value.nonce !== 'string' || !/^[0-9a-f]{64}$/.test(value.nonce)) throw new Error('focused parent capability is invalid');
+  } catch (error) {
+    if (error instanceof Error && error.message === 'focused parent capability is invalid') throw error;
+    throw new Error('focused parent capability was already consumed');
+  } finally {
+    try { fs.unlinkSync(consumed); } catch { /* A failed rename leaves no capability to clean. */ }
+  }
+}
+
+function focusedBindingSummary(binding: AnyRecord): AnyRecord {
+  return {
+    session_id: safeDiagnosticId(binding.sessionId) || 'unknown',
+    check_id: safeDiagnosticId(binding.checkId) || 'unknown',
+    attempt_id: safeDiagnosticId(binding.attemptId) || 'unknown',
+    fence: Number.isSafeInteger(binding.fence) ? binding.fence : null,
+    node_instance_id: safeDiagnosticId(binding.nodeInstanceId) || 'unknown',
+    node_generation_id: safeDiagnosticId(binding.nodeGenerationId) || 'unknown',
+    scope_digest: `sha256:${sha256(canonicalJson(binding.scope))}`,
+  };
+}
+
+function deriveFocusedSpecReview(config: VisorConfig, checkpointBytes = focusedCheckpointBytes()): FocusedDerivation {
+  const checkpoint = JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord;
+  if (checkpoint.graphSemanticDigest !== FOCUSED_GRAPH_DIGEST) throw new Error('focused checkpoint graph digest is not pinned');
+  const claimPlan = compileClaimPlan(config);
+  if (claimPlan.expansionPlan.graphSemanticDigest !== FOCUSED_GRAPH_DIGEST) throw new Error('focused effective config graph digest is not pinned');
+  const journal = ExecutionJournal.restoreGraphCheckpoint(claimPlan, checkpoint);
+  const projection = journal.getInstanceProjection() as AnyRecord;
+  const failed = Object.values(projection.generationsById).filter((value: any) =>
+    value.checkId === 'spec_review' && value.templateNodeKey === 'spec_review' && value.status === 'failed' &&
+    value.scope?.length === 2 && value.scope?.at(-1)?.key === 'parser-core') as AnyRecord[];
+  if (failed.length !== 1) throw new Error('focused parser-core spec_review generation is not unique');
+  const execution = journal.getGeneratedExecution(failed[0].nodeGenerationId) as AnyRecord;
+  if (JSON.stringify(Object.keys(execution.claims).sort()) !== JSON.stringify(['admission', 'candidate', 'component'])) throw new Error('focused generated aliases are not exact');
+  const authority = journal.getProofComponentInvocationAuthority(failed[0].nodeGenerationId) as AnyRecord;
+  const onboardingStage = journal.getProofComponentOnboardingStageContext(failed[0].nodeGenerationId) as AnyRecord;
+  const terminations = checkpoint.events.filter((event: any) =>
+    event.type === 'ManagedRunTerminated' && event.binding?.nodeGenerationId === failed[0].nodeGenerationId &&
+    event.binding?.checkId === 'spec_review') as AnyRecord[];
+  const acquired = checkpoint.events.filter((event: any) =>
+    event.type === 'ManagedRunAcquired' && event.binding?.nodeGenerationId === failed[0].nodeGenerationId &&
+    event.binding?.checkId === 'spec_review') as AnyRecord[];
+  if (acquired.length !== 1 || terminations.length !== 1 || canonicalJson(acquired[0].binding) !== canonicalJson(terminations[0].binding)) throw new Error('focused historical managed binding is not unique');
+  if (terminations[0].cleanupStatus !== 'clean' || terminations[0].controllerDecision !== 'failed') throw new Error('focused historical termination is not a clean failure');
+  return Object.freeze({ checkpoint, checkpointBytes, execution, authority, onboardingStage, binding: acquired[0].binding, historicalTermination: terminations[0] });
+}
+
+function safeFocusedError(error: unknown): AnyRecord {
+  const name = ownData(error, 'name');
+  const allowed = new Set(['Error', 'TypeError', 'RangeError', 'AbortError', 'TimeoutError']);
+  return { error_class: typeof name === 'string' && allowed.has(name) ? name : 'unknown' };
+}
+
+function safeFocusedAttestation(value: unknown): AnyRecord | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const att = value as AnyRecord;
+  const requested = att.requested;
+  const observed = att.observed;
+  const dispatch = att.dispatch;
+  const pick = (record: AnyRecord | undefined, keys: readonly string[]): AnyRecord | undefined => {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) return undefined;
+    const result: AnyRecord = {};
+    for (const key of keys) if (typeof record[key] === 'string' || typeof record[key] === 'number' || typeof record[key] === 'boolean') result[key] = record[key];
+    return Object.keys(result).length > 0 ? result : undefined;
+  };
+  return {
+    version: typeof att.version === 'string' ? att.version : 'unknown',
+    profile_id: safeDiagnosticId(att.profileId) || 'unknown',
+    requested: pick(requested, ['profileDigest', 'cwdDigest', 'probeToolsDigest', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy']),
+    observed: pick(observed, ['source', 'model', 'modelProviderId', 'reasoningEffort', 'approvalPolicy', 'cwdDigest', 'permissionProfileDigest', 'filesystem', 'network']),
+    dispatch: pick(dispatch, ['source', 'tool', 'promptDigest', 'promptBytes']),
+    usage: pick(att.usage, ['status']),
+  };
+}
+
+function focusedOutcomeSummary(outcome: unknown, error?: unknown): AnyRecord {
+  if (error) return { status: 'provider_failed', ...safeFocusedError(error), failure_taxonomy: sanitizeProbeFailureTaxonomy(error) };
+  if (!outcome || typeof outcome !== 'object') return { status: 'provider_failed', error_class: 'unknown' };
+  const value = outcome as AnyRecord;
+  if (value.kind !== 'succeeded-proof-candidate') return { status: typeof value.kind === 'string' ? value.kind : 'provider_failed' };
+  const evidence = value.proofCandidateEvidence as AnyRecord;
+  validateProofCandidateEvidence(evidence);
+  const identity = evidence.probe?.resultIdentity as AnyRecord;
+  return {
+    status: 'succeeded-proof-candidate', wire_mode: value.wireMode,
+    invocation_digest: safeDiagnosticId(evidence.role?.invocationDigest) || 'unknown',
+    result_identity: { version: identity.version, source: identity.source, result_digest: identity.resultDigest, canonical_bytes: identity.canonicalBytes },
+    attestation: safeFocusedAttestation(evidence.probe?.attestation),
+  };
+}
+
+function focusedChildStream(value: unknown): AnyRecord {
+  const bytes = Buffer.from(String(value || ''), 'utf8');
+  const control = bytes.toString('utf8').trim();
+  return { byte_count: bytes.length, sha256: `sha256:${sha256(bytes)}`, truncated: bytes.length > 4096, control_line: control === 'EXP-0210 focused child completed' || control === 'EXP-0210 focused child failed' ? control : null };
+}
+
+function focusedChildProcess(stage: string): AnyRecord {
+  const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', CHILD_ENTRY, '--child', 'focused-spec-review', '--output', stage, '--controller-pid', String(process.pid)], { cwd: REPO_ROOT, env: childEnvironment(), encoding: 'utf8', timeout: FOCUSED_CHILD_TIMEOUT_MS, maxBuffer: 128 * 1024 * 1024 });
+  const streams = { stdout: focusedChildStream(result.stdout), stderr: focusedChildStream(result.stderr) };
+  if (result.error || result.status !== 0) {
+    writePrivateJson(path.join(stage, '.private', 'focused-child-streams.json'), streams);
+    throw new Error('focused diagnostic child failed');
+  }
+  const file = path.join(stage, '.private', 'focused-spec-review.result.json');
+  return { ...JSON.parse(fs.readFileSync(file, 'utf8')) as AnyRecord, child_streams: streams };
+}
+
+function focusedDerivationSummary(derivation: FocusedDerivation): AnyRecord {
+  const generation = derivation.execution.generation as AnyRecord;
+  const claims = derivation.execution.claims as AnyRecord;
+  return {
+    checkpoint_sha256: `sha256:${sha256(derivation.checkpointBytes)}`,
+    graph_semantic_digest: derivation.checkpoint.graphSemanticDigest,
+    session_id: safeDiagnosticId(derivation.checkpoint.sessionId) || 'unknown',
+    node_generation_id: safeDiagnosticId(generation.nodeGenerationId) || 'unknown',
+    node_instance_id: safeDiagnosticId(generation.nodeInstanceId) || 'unknown',
+    component_id: safeDiagnosticId(derivation.authority.subject?.component_id) || 'unknown',
+    aliases: Object.keys(claims).sort(),
+    claim_ids: Object.fromEntries(Object.entries(claims).map(([alias, value]: [string, any]) => [alias, safeDiagnosticId(value.claimId) || 'unknown'])),
+    authority_digest: `sha256:${sha256(proofCanonicalJson(derivation.authority))}`,
+    onboarding_stage_digest: `sha256:${sha256(proofCanonicalJson(derivation.onboardingStage))}`,
+    historical_binding: focusedBindingSummary(derivation.binding),
+    historical_termination: {
+      controller_decision: derivation.historicalTermination.controllerDecision === 'failed' ? 'failed' : 'unknown',
+      cleanup_status: derivation.historicalTermination.cleanupStatus === 'clean' ? 'clean' : 'unknown',
+      failure_code: derivation.historicalTermination.failureCode === 'MANAGED_OUTCOME_FAILED' ? 'MANAGED_OUTCOME_FAILED' : 'unknown',
+    },
+  };
+}
+
+function focusedDiagnosticPreflightReport(prepared: Prepared, derivation: FocusedDerivation, receipt: AnyRecord, specReviewResolution: AnyRecord): AnyRecord {
+  return {
+    schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1',
+    status: 'passed', mode: 'focused-diagnostic-preflight', governed_calls: 0, model_calls: 0,
+    network_dispatches_requested: 0, retries: 0, fallback: false, schema_paths: FOCUSED_SCHEMA_PATHS,
+    pins: { ...prepared.pins, proof_commit: PROOF_COMMIT, probe_version: PROBE_VERSION, codex_version: CODEX_VERSION, profile_id: PROFILE_ID, probe_tools: [...PROBE_TOOLS] }, preflight_receipt: receipt,
+    derivation: focusedDerivationSummary(derivation),
+    spec_review_resolution: specReviewResolution,
+    evidence: 'preflight restored the retained checkpoint and constructed no provider, Probe agent, or model dispatch',
+  };
+}
+
+async function runFocusedDiagnosticPreflight(outputDirectory: string): Promise<AnyRecord> {
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-focused-preflight-')); fs.chmodSync(stage, 0o700);
+  try {
+    const receipt = focusedUpstreamPreflightReceipt();
+    const prepared = prepare(stage, true, true);
+    const checkpointBytes = focusedCheckpointBytes();
+    verifyFocusedBaselineLineage(prepared.proofBinary, prepared.baselineWorkspace, JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord);
+    resolveHistoricalProjectRole(prepared.proofBinary, prepared.baselineWorkspace, prepared.config, JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord);
+    if (compileClaimPlan(prepared.config).expansionPlan.graphSemanticDigest !== FOCUSED_GRAPH_DIGEST) throw new Error('focused effective config graph digest is not pinned');
+    writePrivateJson(prepared.configPath, prepared.config);
+    const derivation = deriveFocusedSpecReview(prepared.config, checkpointBytes);
+    const specReviewResolution = await resolveFocusedSpecReviewRole(prepared.proofBinary, prepared.baselineWorkspace, derivation);
+    const report = focusedDiagnosticPreflightReport(prepared, derivation, receipt, specReviewResolution);
+    writePrivateJson(path.join(stage, 'focused-diagnostic-preflight.json'), report);
+    cleanupPrivate(prepared);
+    publish(stage, outputDirectory);
+    return report;
+  } catch (error) {
+    failureReceipt(stage, 'FOCUSED_PREFLIGHT_FAILED', { governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, completed_phases: [], checkpoint_evidence: [] }, 'preflight-only');
+    fs.rmSync(path.join(stage, '.private'), { recursive: true, force: true });
+    try { publish(stage, outputDirectory); } catch { fs.rmSync(stage, { recursive: true, force: true }); }
+    throw error;
+  }
+}
+
+function runFocusedDiagnosticOnce(outputDirectory: string): AnyRecord {
+  const stage = claimRunOutput(outputDirectory);
+  try {
+    writeExclusiveJson(path.join(stage, 'focused-diagnostic.started.json'), { schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-started:v1', status: 'started', mode: 'focused-diagnostic-run-once', retries: 0, fallback: false });
+    const preflightReceipt = focusedAuthorizationReceipt();
+    const prepared = prepare(stage, true, true);
+    const checkpointBytes = focusedCheckpointBytes();
+    verifyFocusedBaselineLineage(prepared.proofBinary, prepared.baselineWorkspace, JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord);
+    resolveHistoricalProjectRole(prepared.proofBinary, prepared.baselineWorkspace, prepared.config, JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord);
+    if (compileClaimPlan(prepared.config).expansionPlan.graphSemanticDigest !== FOCUSED_GRAPH_DIGEST) throw new Error('focused effective config graph digest is not pinned');
+    writePrivateJson(prepared.configPath, prepared.config);
+    const derivation = deriveFocusedSpecReview(prepared.config, checkpointBytes);
+    if (canonicalJson(focusedDerivationSummary(derivation)) !== canonicalJson(preflightReceipt.derivation)) throw new Error('focused diagnostic preflight derivation is detached');
+    const checkpointFile = path.join(prepared.privateDir, 'focused.checkpoint.json');
+    fs.writeFileSync(checkpointFile, checkpointBytes, { mode: 0o600 }); fs.chmodSync(checkpointFile, 0o600);
+    const capabilityFile = path.join(prepared.privateDir, 'focused-capability.json');
+    const capability = { version: 'urn:reqproof:agent-governance:exp-0210-focused-capability:v1', nonce: randomBytes(32).toString('hex'), checkpoint_sha256: `sha256:${FOCUSED_CHECKPOINT_SHA256}`, node_generation_id: derivation.execution.generation.nodeGenerationId };
+    writeExclusiveJson(capabilityFile, capability);
+    writePrivateJson(path.join(prepared.privateDir, 'focused-input.json'), { configPath: prepared.configPath, proofBinary: prepared.proofBinary, workingDirectory: prepared.baselineWorkspace, checkpointFile, capabilityFile, capabilityDigest: sha256(canonicalJson(capability)), preflightReceiptSha256: preflightReceipt.sha256 });
+    const child = focusedChildProcess(stage);
+    if (child.preflight_receipt_sha256 !== preflightReceipt.sha256 || child.checkpoint_sha256_before !== `sha256:${FOCUSED_CHECKPOINT_SHA256}` || child.checkpoint_sha256_after !== child.checkpoint_sha256_before) throw new Error('focused child is detached from retained preflight/checkpoint');
+    if (child.graph_semantic_digest !== FOCUSED_GRAPH_DIGEST || child.node_generation_id !== derivation.execution.generation.nodeGenerationId) throw new Error('focused child derivation is detached');
+    const report = {
+      schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic:v1', status: child.status, mode: 'focused-diagnostic-run-once',
+      retries: 0, fallback: false, schema_paths: FOCUSED_SCHEMA_PATHS, pins: { ...prepared.pins, proof_commit: PROOF_COMMIT, probe_version: PROBE_VERSION, codex_version: CODEX_VERSION, profile_id: PROFILE_ID, probe_tools: [...PROBE_TOOLS] },
+      derivation: focusedDerivationSummary(derivation), preflight_receipt: preflightReceipt, timeline: child.timeline, call_ledger: child.call_ledger,
+      outcome: child.outcome, child_streams: child.child_streams,
+    };
+    writePrivateJson(path.join(stage, 'focused-diagnostic-report.json'), report);
+    writePrivateText(path.join(stage, 'focused-diagnostic-report.md'), `# EXP-0210 focused spec-review diagnostic\n\nStatus: ${String(child.status)}\nSchema paths: ${FOCUSED_SCHEMA_PATHS}\nRetries: 0\nFallback: false\n`);
+    writeExclusiveJson(path.join(stage, 'focused-diagnostic.completed.json'), { schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-completed:v1', status: 'completed', mode: 'focused-diagnostic-run-once', retries: 0, fallback: false });
+    cleanupPrivate(prepared);
+    return report;
+  } catch (error) {
+    failureReceipt(stage, 'FOCUSED_RUN_FAILED');
+    fs.rmSync(path.join(stage, '.private'), { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function validateRun(prepared: Prepared, pause: ChildResult, resumed: ChildResult, replacement: ChildResult): AnyRecord {
@@ -801,7 +1146,80 @@ export function runJsonparserStagedLive(outputDirectory: string): AnyRecord {
   }
 }
 
-async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacement', stage: string, controllerPid: number): Promise<void> {
+async function runFocusedSpecReviewChild(stage: string, controllerPid: number): Promise<void> {
+  if (process.ppid !== controllerPid) throw new Error('child controller ownership failed');
+  const input = JSON.parse(fs.readFileSync(path.join(stage, '.private', 'focused-input.json'), 'utf8')) as AnyRecord;
+  const config = JSON.parse(fs.readFileSync(input.configPath, 'utf8')) as VisorConfig;
+  const checkpointBytes = fs.readFileSync(input.checkpointFile);
+  const derivation = deriveFocusedSpecReview(config, checkpointBytes);
+  if (typeof input.preflightReceiptSha256 !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.preflightReceiptSha256)) throw new Error('focused preflight receipt is not bound');
+  consumeFocusedCapability(input.capabilityFile, input.capabilityDigest, derivation);
+  const { createProofAdmissionCapability } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
+  const { createGovernedProofInspectProviderFromCapability } = require('../../../src/providers/governed-proof-inspect-check-provider') as typeof import('../../../src/providers/governed-proof-inspect-check-provider');
+  const { GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
+  const restoreProbeDiagnostics = installProbeFailureDiagnostics('focused-spec-review', stage, GovernedProbeAgentRunner);
+  const timeline: AnyRecord[] = [{ event: 'derived', status: 'validated', binding_digest: focusedBindingSummary(derivation.binding).scope_digest }];
+  let run: import('../../../src/providers/check-provider.interface').ManagedAgentRun | undefined;
+  let outcome: unknown;
+  let outcomeError: unknown;
+  let close: AnyRecord = { status: 'not_started' };
+  try {
+    const dependencyResults = new Map(Object.entries(derivation.execution.claims).map(([alias, claim]: [string, AnyRecord]) => [alias, { issues: [], output: claim.payload }]));
+    const generation = derivation.execution.generation as AnyRecord;
+    const request = {
+      prInfo: PR,
+      checkConfig: derivation.execution.node.check,
+      dependencyResults,
+      executionContext: {
+        claims: derivation.execution.claims,
+        nodeInstanceId: generation.nodeInstanceId,
+        nodeGenerationId: generation.nodeGenerationId,
+        scope: generation.scope,
+        proofComponentAuthority: derivation.authority,
+        proofOnboardingStageContext: derivation.onboardingStage,
+      },
+      binding: derivation.binding,
+      executionConfigDigest: generation.executionConfigDigest,
+      workingDirectory: input.workingDirectory,
+    } as any;
+    const provider = createGovernedProofInspectProviderFromCapability(createProofAdmissionCapability(input.proofBinary));
+    run = withGovernedProbeRunnerBudget(1, () => provider.startManaged(request));
+    await run.started;
+    timeline.push({ event: 'managed_run_started', status: 'started', binding: focusedBindingSummary(run.binding) });
+    try { outcome = await run.outcome; }
+    catch (error) { outcomeError = error; }
+    timeline.push({ event: 'managed_run_outcome', status: outcomeError ? 'failed' : focusedOutcomeSummary(outcome).status });
+  } finally {
+    if (run) {
+      try { close = await run.close(); }
+      catch (error) { close = { status: 'failed', ...safeFocusedError(error) }; }
+      timeline.push({ event: 'managed_run_closed', status: close.status === 'clean' ? 'clean' : 'failed' });
+    }
+    restoreProbeDiagnostics();
+  }
+  const beforeHash = sha256(checkpointBytes);
+  const afterBytes = fs.readFileSync(input.checkpointFile);
+  const afterHash = sha256(afterBytes);
+  const outcomeSummary = focusedOutcomeSummary(outcome, outcomeError);
+  const successful = outcomeSummary.status === 'succeeded-proof-candidate';
+  const result = {
+    schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-child:v1',
+    status: successful ? 'passed' : 'provider_failed', schema_paths: FOCUSED_SCHEMA_PATHS, preflight_receipt_sha256: input.preflightReceiptSha256,
+    checkpoint_sha256_before: `sha256:${beforeHash}`, checkpoint_sha256_after: `sha256:${afterHash}`,
+    graph_semantic_digest: derivation.checkpoint.graphSemanticDigest,
+    node_generation_id: derivation.execution.generation.nodeGenerationId,
+    timeline, outcome: outcomeSummary,
+    call_ledger: { budget: 1, runner_constructions: successful ? 1 : 'unknown', governed_calls: 1, model_calls: successful ? 1 : 'unknown', network_dispatches_requested: successful ? 1 : 'unknown', retries: 0, fallback: false },
+  };
+  writePrivateJson(path.join(stage, '.private', 'focused-spec-review.result.json'), result);
+  process.stdout.write('EXP-0210 focused child completed\n');
+}
+
+async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacement' | 'focused-spec-review', stage: string, controllerPid: number): Promise<void> {
+  if (mode === 'focused-spec-review') {
+    await runFocusedSpecReviewChild(stage, controllerPid);
+    return;
+  }
   if (process.ppid !== controllerPid) throw new Error('child controller ownership failed');
   const input = privateInput(stage);
   const config = JSON.parse(fs.readFileSync(input.configPath, 'utf8')) as VisorConfig;
@@ -854,10 +1272,12 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
   }
 }
 
-function parseArgs(argv: readonly string[]): { mode: 'preflight-only' | 'run-once' | 'child'; output: string; childMode?: 'discovery' | 'pause' | 'resume' | 'replacement'; controllerPid?: number } {
+function parseArgs(argv: readonly string[]): { mode: 'preflight-only' | 'run-once' | 'focused-diagnostic-preflight' | 'focused-diagnostic-run-once' | 'child'; output: string; childMode?: 'discovery' | 'pause' | 'resume' | 'replacement' | 'focused-spec-review'; controllerPid?: number } {
   const modeFlags = [
     ['--preflight-only', 'preflight-only'],
     ['--run-once', 'run-once'],
+    ['--focused-diagnostic-preflight', 'focused-diagnostic-preflight'],
+    ['--focused-diagnostic-run-once', 'focused-diagnostic-run-once'],
     ['--child', 'child'],
   ] as const;
   const selected = modeFlags.filter(([flag]) => argv.includes(flag));
@@ -875,10 +1295,10 @@ function parseArgs(argv: readonly string[]): { mode: 'preflight-only' | 'run-onc
   }
   if (mode !== 'child') return { mode, output: path.resolve(output) };
   const childIndex = argv.indexOf('--child');
-  const childMode = argv[childIndex + 1] as 'discovery' | 'pause' | 'resume' | 'replacement';
+  const childMode = argv[childIndex + 1] as 'discovery' | 'pause' | 'resume' | 'replacement' | 'focused-spec-review';
   const pidIndex = argv.indexOf('--controller-pid');
   const controllerPid = Number(argv[pidIndex + 1]);
-  if (!['discovery', 'pause', 'resume', 'replacement'].includes(childMode) || !Number.isSafeInteger(controllerPid) || controllerPid <= 0) throw new Error('child arguments are invalid');
+  if (!['discovery', 'pause', 'resume', 'replacement', 'focused-spec-review'].includes(childMode) || !Number.isSafeInteger(controllerPid) || controllerPid <= 0) throw new Error('child arguments are invalid');
   return { mode, output: path.resolve(output), childMode, controllerPid };
 }
 
@@ -886,12 +1306,14 @@ async function main(): Promise<void> {
     const args = parseArgs(process.argv.slice(2));
     if (args.mode === 'preflight-only') runPreflight(args.output);
     else if (args.mode === 'run-once') runJsonparserStagedLive(args.output);
+    else if (args.mode === 'focused-diagnostic-preflight') await runFocusedDiagnosticPreflight(args.output);
+    else if (args.mode === 'focused-diagnostic-run-once') runFocusedDiagnosticOnce(args.output);
     else await runChildMode(args.childMode!, args.output, args.controllerPid!);
 }
 
 if (require.main === module) {
   void main().catch(() => {
-    process.stderr.write('EXP-0210 live runner failed\n');
+    process.stderr.write(process.argv.includes('focused-spec-review') ? 'EXP-0210 focused child failed\n' : 'EXP-0210 live runner failed\n');
     process.exitCode = 1;
   });
 }

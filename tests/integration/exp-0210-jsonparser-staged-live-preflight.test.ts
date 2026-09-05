@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import * as yaml from 'js-yaml';
 import {
   aggregateFailureDiagnostics,
@@ -11,6 +12,9 @@ import {
   sanitizeProbeFailureTaxonomy,
   serializeFailureDiagnostics,
 } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
+import { validateProofCandidateEvidence } from '../../src/providers/governed-proof-inspect-check-provider';
+import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
+import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
 type AnyRecord = Record<string, any>;
 const ROOT = path.resolve(__dirname, '../..');
@@ -26,6 +30,41 @@ const DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagn
 const FAILURE_PREDICATES = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract'];
 const SCHEMA_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity'];
 const SCHEMA_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'];
+const RETAINED_CHECKPOINT = '/tmp/visor-exp0210-live-luna.fom5fO/output/failure.checkpoint.json';
+const RETAINED_PREFLIGHT = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
+
+function focusedSubprocess(kind: 'valid' | 'checkpoint' | 'preflight'): { root: string; output: string; runner: string; result: ReturnType<typeof spawnSync> } {
+  const shadow = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-focused-shadow-'));
+  const output = path.join(shadow, 'focused-output');
+  const runnerRelative = 'examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo.ts';
+  const archive = spawnSync('git', ['archive', 'HEAD', '--', 'src', 'package.json', 'package-lock.json', 'tsconfig.json', 'examples/agent-governance/exp-0210-jsonparser-staged'], { cwd: ROOT, encoding: null, maxBuffer: 64 * 1024 * 1024 });
+  if (archive.status !== 0 || !archive.stdout) throw new Error('unable to archive the Visor test shadow');
+  const unpack = spawnSync('tar', ['-xf', '-', '-C', shadow], { input: archive.stdout });
+  if (unpack.status !== 0) throw new Error('unable to unpack the Visor test shadow');
+  const preflight = path.join(shadow, 'retained-preflight.json');
+  const checkpoint = path.join(shadow, 'retained-checkpoint.json');
+  fs.copyFileSync(RETAINED_PREFLIGHT, preflight); fs.copyFileSync(RETAINED_CHECKPOINT, checkpoint);
+  if (kind === 'preflight') { const value = JSON.parse(fs.readFileSync(preflight, 'utf8')); value.graph.semantic_digest = '0'.repeat(64); fs.writeFileSync(preflight, `${JSON.stringify(value)}\n`); }
+  if (kind === 'checkpoint') { const value = JSON.parse(fs.readFileSync(checkpoint, 'utf8')); value.graphSemanticDigest = '0'.repeat(64); fs.writeFileSync(checkpoint, `${JSON.stringify(value)}\n`); }
+  const runner = path.join(shadow, runnerRelative);
+  let source = fs.readFileSync(LIVE, 'utf8');
+  if (kind !== 'valid') {
+    source = source.replace(/const FOCUSED_PREFLIGHT = '[^']+';/, `const FOCUSED_PREFLIGHT = ${JSON.stringify(preflight)};`);
+    source = source.replace(/const FOCUSED_CHECKPOINT = '[^']+';/, `const FOCUSED_CHECKPOINT = ${JSON.stringify(checkpoint)};`);
+  }
+  fs.writeFileSync(runner, source, { encoding: 'utf8', mode: 0o600 });
+  fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(shadow, 'node_modules'), 'dir');
+  for (const args of [['init', '-q'], ['config', 'user.email', 'visor-exp0210@example.invalid'], ['config', 'user.name', 'Visor EXP-0210'], ['add', '-A'], ['commit', '-qm', 'focused-preflight']]) {
+    const git = spawnSync('git', args, { cwd: shadow, encoding: 'utf8' });
+    if (git.status !== 0) throw new Error('unable to commit the Visor test shadow');
+  }
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: shadow, encoding: 'utf8' }).stdout.trim();
+  const digest = (file: string): string => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const env = { ...process.env, VISOR_EXP0210_EXPECTED_VISOR_HEAD: head, VISOR_EXP0210_EXPECTED_YAML_SHA256: digest(path.join(shadow, 'examples/agent-governance/exp-0210-jsonparser-staged/visor.yaml')), VISOR_EXP0210_EXPECTED_RUNNER_SHA256: digest(runner) };
+  delete env.GIT_DIR; delete env.GIT_WORK_TREE;
+  const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner, '--focused-diagnostic-preflight', '--output', output], { cwd: shadow, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+  return { root: shadow, output, runner, result };
+}
 
 function diagnosticEntry(phase: string, component: string, index: number): AnyRecord {
   return {
@@ -248,4 +287,130 @@ describe('EXP-0210 live preflight', () => {
       expect(fragment.failures[0]).toEqual(expect.objectContaining({ phase: 'resume', check_id: 'spec_review', component_id: 'parser-core' }));
     } finally { fs.rmSync(stage, { recursive: true, force: true }); }
   });
+
+  it('rechecks the retained checkpoint oracle when the private artifact is available', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT)) return;
+    const bytes = fs.readFileSync(RETAINED_CHECKPOINT);
+    const checkpoint = JSON.parse(bytes.toString()) as AnyRecord;
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe('1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249');
+    expect(checkpoint.graphSemanticDigest).toBe('306b074949f3975a5396dfffe74fc335790f7c6247f9b6c0ea90a5555d8fb212');
+    expect(checkpoint.events).toHaveLength(125);
+    const componentEvents = checkpoint.events.filter((event: AnyRecord) => event.scope?.length === 2 && event.scope.at(-1)?.key);
+    expect(new Set(componentEvents.map((event: AnyRecord) => event.scope.at(-1).key))).toEqual(new Set(['parser-core', 'unicode-escape-codec', 'byte-conversion-backend']));
+    const governedStarts = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptStarted' && ['inspect', 'spec_review'].includes(event.checkId));
+    expect(governedStarts).toHaveLength(7);
+    expect(governedStarts.reduce((counts: AnyRecord, event: AnyRecord) => { counts[event.checkId] = (counts[event.checkId] || 0) + 1; return counts; }, {})).toEqual({ inspect: 4, spec_review: 3 });
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'ClaimPublished' && event.proofCandidateEvidence)).toHaveLength(4);
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review')).toHaveLength(3);
+    const parserFailure = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope.at(-1)?.key === 'parser-core');
+    expect(parserFailure).toHaveLength(1);
+    expect(checkpoint.events.some((event: AnyRecord) => ['spec_review_admit', 'project_reconcile', 'reconcile'].includes(event.checkId))).toBe(false);
+    expect(checkpoint.events.some((event: AnyRecord) => String(event.claim || '').startsWith('proof.component_spec_review_'))).toBe(false);
+    for (const event of checkpoint.events.filter((value: AnyRecord) => value.type === 'ClaimPublished')) {
+      expect(event.payloadFingerprint).toBe(sha256Canonical(event.payload));
+      if (event.proofCandidateEvidence) expect(event.proofCandidateEvidenceFingerprint).toBe(sha256Canonical(event.proofCandidateEvidence));
+    }
+    const parserCandidate = checkpoint.events.find((event: AnyRecord) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope.at(-1)?.key === 'parser-core');
+    const parserAdmission = checkpoint.events.find((event: AnyRecord) => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1' && event.scope.at(-1)?.key === 'parser-core');
+    expect(parserCandidate).toEqual(expect.objectContaining({ producerCheckId: 'inspect', wireMode: 'generic' }));
+    expect(parserAdmission).toEqual(expect.objectContaining({ producerCheckId: 'proof_admit', parentClaimIds: [parserCandidate.claimId] }));
+    expect(parserCandidate.sessionId).toBe(parserAdmission.sessionId);
+    expect(parserCandidate.scope).toEqual(parserAdmission.scope);
+    expect(parserCandidate.proofCandidateEvidence.probe.attestation.evidence.eventCount).toBe(1);
+    expect(parserCandidate.proofCandidateEvidence.probe.resultIdentity.resultDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('hydrates the retained role and rejects forged target/digest before provider construction', () => {
+    const source = fs.readFileSync(LIVE, 'utf8');
+    const config = yaml.load(fs.readFileSync(PROFILE, 'utf8')) as AnyRecord;
+    expect(compileClaimPlan(config).expansionPlan.graphSemanticDigest).toBe('c7730a647d15ad36c3378990041d7c4641da1782b05f026f0c4d3c18d78d10b1');
+    expect(source).toContain('function resolveHistoricalProjectRole');
+    expect(source).toContain('const historical = evidence.role.invocation;');
+    expect(source).toContain('if (resolved.invocation_digest !== evidence.role.invocationDigest)');
+    expect(source).toContain('check.invocation = JSON.parse(JSON.stringify(historical));');
+    const derive = source.slice(source.indexOf('function deriveFocusedSpecReview'), source.indexOf('function safeFocusedError'));
+    expect(derive).toContain("value.scope?.at(-1)?.key === 'parser-core'");
+    expect(derive).toContain('if (failed.length !== 1)');
+    const child = source.slice(source.indexOf('async function runFocusedSpecReviewChild'), source.indexOf('async function runChildMode'));
+    expect(child.indexOf('const derivation = deriveFocusedSpecReview')).toBeLessThan(child.indexOf('createProofAdmissionCapability'));
+    if (!fs.existsSync(RETAINED_CHECKPOINT)) return;
+    const checkpoint = JSON.parse(fs.readFileSync(RETAINED_CHECKPOINT, 'utf8')) as AnyRecord;
+    const failed = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core');
+    expect(failed).toHaveLength(1);
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key !== 'parser-core')).toHaveLength(2);
+    const duplicate = [...checkpoint.events, failed[0]];
+    expect(duplicate.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core')).toHaveLength(2);
+    const forged = checkpoint.events.map((event: AnyRecord) => event === failed[0] ? { ...event, scope: [{ ...event.scope.at(-1), key: 'forged-target' }] } : event);
+    expect(forged.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core')).toHaveLength(0);
+    const candidate = checkpoint.events.find((event: AnyRecord) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope?.at(-1)?.key === 'parser-core') as AnyRecord;
+    const altered = JSON.parse(JSON.stringify(candidate.proofCandidateEvidence));
+    altered.role.invocationDigest = `sha256:${'0'.repeat(64)}`;
+    expect(() => validateProofCandidateEvidence(altered)).toThrow();
+  });
+
+  it('keeps retained preflight, lifecycle, ledger, and stdio evidence zero-call and inspectable', () => {
+    const source = fs.readFileSync(LIVE, 'utf8');
+    const focused = source.slice(source.indexOf('function focusedDiagnosticPreflightReport'), source.indexOf('function runFocusedDiagnosticPreflight'));
+    expect(focused).toContain("schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1'");
+    expect(focused).toContain('governed_calls: 0, model_calls: 0');
+    expect(focused).toContain('derivation: focusedDerivationSummary(derivation)');
+    const summary = source.slice(source.indexOf('function focusedDerivationSummary'), source.indexOf('function focusedDiagnosticPreflightReport'));
+    expect(summary).toContain('historical_binding');
+    expect(summary).toContain('historical_termination');
+    const child = source.slice(source.indexOf('async function runFocusedSpecReviewChild'), source.indexOf('async function runChildMode'));
+    expect(child).toContain('timeline');
+    expect(child).toContain('call_ledger');
+    expect(child).toContain('checkpoint_sha256_before');
+    expect(child).toContain('checkpoint_sha256_after');
+    expect(source).toContain('function focusedChildStream');
+    if (!fs.existsSync(RETAINED_CHECKPOINT)) return;
+    const checkpoint = JSON.parse(fs.readFileSync(RETAINED_CHECKPOINT, 'utf8')) as AnyRecord;
+    const preflightPath = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
+    if (fs.existsSync(preflightPath)) {
+      const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as AnyRecord;
+      expect(preflight).toEqual(expect.objectContaining({ status: 'passed', mode: 'preflight-only', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+      expect(preflight.graph).toEqual(expect.objectContaining({ semantic_digest: checkpoint.graphSemanticDigest, compiled: true, dynamic_expansion: true, staged_profile: true }));
+      expect(preflight.contract.stages).toEqual(STAGES);
+      expect(preflight.evidence).toContain('no Probe-agent initialization');
+    }
+    const parser = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core');
+    const binding = parser[0]?.nodeGenerationId;
+    expect(binding).toBeTruthy();
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'ManagedRunAcquired' && event.binding?.nodeGenerationId === binding)).toHaveLength(1);
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'ManagedRunTerminated' && event.binding?.nodeGenerationId === binding)).toHaveLength(1);
+  });
+
+  it('runs focused preflight in a clean subprocess and binds the generated report to retained history', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
+    const run = focusedSubprocess('valid');
+    try {
+      expect(run.result.status).toBe(0);
+      expect(run.result.stderr).toBe('');
+      const report = JSON.parse(fs.readFileSync(path.join(run.output, 'focused-diagnostic-preflight.json'), 'utf8')) as AnyRecord;
+      expect(report).toEqual(expect.objectContaining({ schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1', status: 'passed', mode: 'focused-diagnostic-preflight', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+      expect(report.derivation).toEqual(expect.objectContaining({ checkpoint_sha256: 'sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249', graph_semantic_digest: '306b074949f3975a5396dfffe74fc335790f7c6247f9b6c0ea90a5555d8fb212', component_id: 'parser-core', aliases: ['admission', 'candidate', 'component'] }));
+      expect(report.derivation.historical_termination).toEqual({ controller_decision: 'failed', cleanup_status: 'clean', failure_code: 'MANAGED_OUTCOME_FAILED' });
+      expect(report.preflight_receipt).toEqual(expect.objectContaining({ sha256: 'sha256:d46cd19eb7b7cc64165288caee36498591860da1d636a6f9bd2393ca07bb6507', graph_semantic_digest: report.derivation.graph_semantic_digest }));
+      const source = fs.readFileSync(run.runner, 'utf8');
+      const child = source.slice(source.indexOf('async function runFocusedSpecReviewChild'), source.indexOf('async function runChildMode'));
+      expect(child.indexOf('consumeFocusedCapability')).toBeLessThan(child.indexOf('createProofAdmissionCapability'));
+      const directDir = path.join(run.root, 'direct-child'); fs.mkdirSync(path.join(directDir, '.private'), { recursive: true, mode: 0o700 });
+      const direct = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', run.runner, '--child', 'focused-spec-review', '--output', directDir, '--controller-pid', String(process.pid)], { cwd: run.root, encoding: 'utf8', timeout: 30_000 });
+      expect(direct.status).toBe(1); expect(direct.stderr).toBe('EXP-0210 focused child failed\n');
+      expect(fs.existsSync(path.join(directDir, '.private', 'focused-spec-review.result.json'))).toBe(false);
+    } finally { fs.rmSync(run.root, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it('rejects mutated retained checkpoint and preflight digests before any provider path', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
+    for (const kind of ['checkpoint', 'preflight'] as const) {
+      const run = focusedSubprocess(kind);
+      try {
+        expect(run.result.status).toBe(1); expect(run.result.stderr).toBe('EXP-0210 live runner failed\n');
+        const failure = JSON.parse(fs.readFileSync(path.join(run.output, 'run-once.failure.json'), 'utf8')) as AnyRecord;
+        expect(failure).toEqual(expect.objectContaining({ status: 'failed', terminal: true, mode: 'preflight-only', failure_code: 'FOCUSED_PREFLIGHT_FAILED', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+        expect(fs.existsSync(path.join(run.output, 'focused-diagnostic-preflight.json'))).toBe(false);
+      } finally { fs.rmSync(run.root, { recursive: true, force: true }); }
+    }
+  }, 120_000);
 });
