@@ -54,11 +54,12 @@ const SUBJECT_FILES = [
 ] as const;
 const OFFLINE_ENV = { GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' };
 const PR: PRInfo = { number: 210, title: 'jsonparser staged live demo', body: '', author: 'fixture', base: 'baseline', head: 'fixed', files: [], totalAdditions: 0, totalDeletions: 0, eventType: 'manual' };
-const PROBE_FAILURE_STAGES = new Set(['native_event_grammar', 'provider_engine', 'schema_result_validation', 'unknown']);
+const PROBE_FAILURE_STAGES = new Set(['native_event_grammar', 'provider_engine', 'schema_result_validation', 'internal_contract', 'unknown']);
 const PROBE_FAILURE_BOUNDARIES = new Set(['raw_item_predicate', 'live_envelope_session']);
+const PROBE_PROVIDER_ENGINE_FAILURE_BOUNDARIES = new Set(['acquire', 'query', 'close']);
 const PROBE_FAILURE_SUBREASONS = new Set(['session_sequence', 'envelope_shape', 'correlation', 'attestation']);
 const PROBE_FAILURE_OPERANDS = new Set(['thread_id', 'response_id']);
-const PROBE_FAILURE_PREDICATES = new Set(['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract']);
+const PROBE_FAILURE_PREDICATES = new Set(['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract', 'invocation_attestation', 'native_capability_aggregate']);
 const PROBE_SCHEMA_SUBREASONS = new Set(['response_json', 'schema_definition', 'schema_mismatch', 'result_identity']);
 const PROBE_SCHEMA_KEYWORDS = new Set(['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown']);
 const FAILURE_DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
@@ -136,6 +137,9 @@ export function sanitizeProbeFailureTaxonomy(error: unknown): AnyRecord {
         taxonomy.nativeEventFailureAttestationPredicate = allowedProbeValue(PROBE_FAILURE_PREDICATES, predicate) || null;
       }
     }
+  } else if (stage === 'provider_engine') {
+    const boundaryValue = ownData(error, 'providerEngineFailureBoundary');
+    taxonomy.providerEngineFailureBoundary = allowedProbeValue(PROBE_PROVIDER_ENGINE_FAILURE_BOUNDARIES, boundaryValue) || null;
   } else if (stage === 'schema_result_validation') {
     const subreasonValue = ownData(error, 'schemaResultValidationSubreason');
     const subreason = allowedProbeValue(PROBE_SCHEMA_SUBREASONS, subreasonValue) || null;
@@ -190,6 +194,11 @@ function validDiagnosticTaxonomy(value: unknown): value is AnyRecord {
     if (subreason === 'correlation') return keys.length === 4 && (taxonomy.nativeEventFailureCorrelationOperand === null || PROBE_FAILURE_OPERANDS.has(taxonomy.nativeEventFailureCorrelationOperand));
     if (subreason === 'attestation') return keys.length === 4 && (taxonomy.nativeEventFailureAttestationPredicate === null || PROBE_FAILURE_PREDICATES.has(taxonomy.nativeEventFailureAttestationPredicate));
     return keys.length === 3;
+  }
+  if (stage === 'provider_engine') {
+    if (keys.length !== 2 || keys.some(key => !['answerFailureStage', 'providerEngineFailureBoundary'].includes(key))) return false;
+    const boundary = taxonomy.providerEngineFailureBoundary;
+    return boundary === null || PROBE_PROVIDER_ENGINE_FAILURE_BOUNDARIES.has(boundary);
   }
   if (stage === 'schema_result_validation') {
     if (keys.length !== 3 || keys.some(key => !['answerFailureStage', 'schemaResultValidationKeyword', 'schemaResultValidationSubreason'].includes(key))) return false;

@@ -27,7 +27,8 @@ const PINS = {
 };
 const STAGES = ['inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify'];
 const DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
-const FAILURE_PREDICATES = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract'];
+const PROVIDER_ENGINE_FAILURE_BOUNDARIES = ['acquire', 'query', 'close'];
+const FAILURE_PREDICATES = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract', 'invocation_attestation', 'native_capability_aggregate'];
 const SCHEMA_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity'];
 const SCHEMA_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'];
 const RETAINED_CHECKPOINT = '/tmp/visor-exp0210-live-luna.fom5fO/output/failure.checkpoint.json';
@@ -84,6 +85,16 @@ function diagnosticEntry(phase: string, component: string, index: number): AnyRe
     component_id: component,
     binding_digest: `sha256:${index.toString(16).padStart(64, '0')}`,
     taxonomy: sanitizeProbeFailureTaxonomy({ answerFailureStage: 'provider_engine' }),
+  };
+}
+
+function diagnosticEntryWithTaxonomy(taxonomy: AnyRecord, index: number): AnyRecord {
+  return {
+    phase: 'pause',
+    check_id: 'spec_review',
+    component_id: `taxonomy-${index}`,
+    binding_digest: `sha256:${index.toString(16).padStart(64, '0')}`,
+    taxonomy,
   };
 }
 
@@ -254,7 +265,8 @@ describe('EXP-0210 live preflight', () => {
 
   it('keeps hostile paths, prompts, messages, and raw output outside the closed taxonomy', () => {
     const taxonomyCases = [
-      ...['native_event_grammar', 'provider_engine', 'schema_result_validation', 'unknown'].map(answerFailureStage => ({ answerFailureStage })),
+      ...['native_event_grammar', 'provider_engine', 'schema_result_validation', 'internal_contract', 'unknown'].map(answerFailureStage => ({ answerFailureStage })),
+      ...PROVIDER_ENGINE_FAILURE_BOUNDARIES.map(providerEngineFailureBoundary => ({ answerFailureStage: 'provider_engine', providerEngineFailureBoundary })),
       ...['raw_item_predicate', 'live_envelope_session'].map(nativeEventFailureBoundary => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary })),
       ...['session_sequence', 'envelope_shape', 'correlation', 'attestation'].map(nativeEventFailureSubreason => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason })),
       ...['thread_id', 'response_id'].map(nativeEventFailureCorrelationOperand => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'correlation', nativeEventFailureCorrelationOperand })),
@@ -276,6 +288,74 @@ describe('EXP-0210 live preflight', () => {
     expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
     const invalid = { ...diagnosticEntry('pause', 'parser-core', 1), raw_output: 'secret model output' };
     expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [invalid] }])).toEqual([]);
+  });
+
+  it('accepts every additive Probe taxonomy value and validates the deterministic closed projection', () => {
+    const accepted: Array<[string, AnyRecord, AnyRecord]> = [
+      ['internal_contract stage', { answerFailureStage: 'internal_contract' }, { answerFailureStage: 'internal_contract' }],
+      ...PROVIDER_ENGINE_FAILURE_BOUNDARIES.map(boundary => [
+        `provider_engine ${boundary} boundary`,
+        { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: boundary },
+        { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: boundary },
+      ] as [string, AnyRecord, AnyRecord]),
+      ...['invocation_attestation', 'native_capability_aggregate'].map(predicate => [
+        `native attestation ${predicate} predicate`,
+        { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: predicate },
+        { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: predicate },
+      ] as [string, AnyRecord, AnyRecord]),
+    ];
+    for (const [index, [, input, expected]] of accepted.entries()) {
+      const first = sanitizeProbeFailureTaxonomy(input);
+      const second = sanitizeProbeFailureTaxonomy({ ...input });
+      expect(first).toEqual(expected);
+      expect(second).toEqual(first);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+      expect(Object.isFrozen(first)).toBe(true);
+      expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [diagnosticEntryWithTaxonomy(first, index)] }])).toEqual([
+        expect.objectContaining({ taxonomy: expected }),
+      ]);
+    }
+  });
+
+  it('projects invalid and compound additive taxonomy values to bounded nulls without raw leakage', () => {
+    const cases: Array<[string, AnyRecord, AnyRecord]> = [
+      ['missing provider boundary', { answerFailureStage: 'provider_engine' }, { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null }],
+      ['unknown provider boundary', { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'dispatch_secret', raw_output: 'secret provider output' }, { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null }],
+      ['non-string provider boundary', { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: ['query'], prompt: 'secret prompt' }, { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null }],
+      ['internal contract ignores provider key', { answerFailureStage: 'internal_contract', providerEngineFailureBoundary: 'close', path: '/private/secret/path' }, { answerFailureStage: 'internal_contract' }],
+      ['native attestation rejects wrong predicate', { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'secret_predicate', token: 'secret token' }, { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: null }],
+      ['native attestation ignores provider key', { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'native_capability_aggregate', providerEngineFailureBoundary: 'query', raw_output: 'secret model output' }, { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'native_capability_aggregate' }],
+    ];
+    for (const [label, input, expected] of cases) {
+      const error = Object.assign(new Error(`raw ${label} secret`), input);
+      const taxonomy = sanitizeProbeFailureTaxonomy(error);
+      expect(taxonomy).toEqual(expected);
+      expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
+    }
+  });
+
+  it('enforces stage/key coupling and rejects forged or compound diagnostic taxonomies', () => {
+    const valid = [
+      { answerFailureStage: 'internal_contract' },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'acquire' },
+      { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'invocation_attestation' },
+    ];
+    for (const [index, taxonomy] of valid.entries()) {
+      expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [diagnosticEntryWithTaxonomy(taxonomy, index)] }])).toHaveLength(1);
+    }
+    const rejected = [
+      { answerFailureStage: 'provider_engine' },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'dispatch' },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query', raw_output: 'secret' },
+      { answerFailureStage: 'internal_contract', providerEngineFailureBoundary: null },
+      { answerFailureStage: 'unknown', providerEngineFailureBoundary: 'close' },
+      { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'native_capability_aggregate', providerEngineFailureBoundary: 'query' },
+      { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'raw_item_predicate', nativeEventFailureAttestationPredicate: 'invocation_attestation' },
+    ];
+    for (const [index, taxonomy] of rejected.entries()) {
+      expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [diagnosticEntryWithTaxonomy(taxonomy, index + valid.length)] }])).toEqual([]);
+    }
   });
 
   it('restores the original wrapper and preserves rejected error identity', async () => {

@@ -1,7 +1,8 @@
 # EXP-0210 focused spec-review diagnostic
 
-Status: CONSUMED_FAILED_TERMINAL. The 13/13 zero-model harness gate passed and
-Sol ACCEPT applies to that gate only, not to the live outcome. This record is
+Status: CONSUMED_FAILED_TERMINAL; ZERO_MODEL_BOUNDARY_LOCALIZED;
+PROBE_DIAGNOSTIC_PR_OPEN. The 13/13 zero-model harness gate passed and Sol
+ACCEPT applies to that gate only, not to the live outcome. This record is
 limited to the retained preflight and focused diagnostic artifacts; it grants
 no live authority.
 
@@ -50,13 +51,32 @@ with the expected control line; stderr 0 bytes,
 `sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 No raw prompt, output, error, or message is retained here.
 
-## Limitation and next step
+## Zero-model localization and next step
 
-The report cannot localize acquisition, preview, initialization, or answer
-dispatch. Clean close excludes close as the primary failure boundary, but the
-record does not establish model/provider correctness, schema blame, or a
-successful candidate/live run.
-Next step, exactly as scoped by Sol: run a zero-model child-isolated
-boundary-localization probe over the existing provider/test-factory and local
-Probe preview, with real answer dispatch stubbed before invocation. Do no
-checkpoint/provenance work and grant no live authority.
+The follow-up localizer at pushed Visor
+`05b29f082107e46bf68e310d2cf03bbce69dd0a7` reused the retained
+`parser-core/spec_review` request and real pinned Proof/provider construction,
+but replaced `ProbeAgent.answerGoverned` with a closed sentinel before its
+original invocation. Probe initialization completed, this provider correctly
+performed no preview, the answer guard was hit exactly once, forbidden
+process/network dispatch counts remained zero, and close completed cleanly.
+The zero-model boundary test passed 1/1 and the focused suite passed 14/14.
+This localizes the retained failure to the real `ProbeAgent.answerGoverned`
+call, not a pre-answer acquisition/construction boundary or close. It does not
+establish model/provider correctness, schema blame, or a successful candidate.
+No new live/model call occurred.
+
+Probe [PR #595](https://github.com/probelabs/probe/pull/595), pushed on
+`codex/exp-0210-governed-diagnostics` at
+`0fe631b9b244308c8a9c95eac2738b42ebd18811`, adds closed
+`acquire`/`query`/`close` provider boundaries, `internal_contract`, and precise
+invocation-attestation/native-capability predicates without replacing the
+existing exact attestation predicates or exposing raw errors. Its focused
+runtime and native-capability tests pass 54/54; independent Sol review returned
+**ACCEPT**. The PR remains open, unmerged, and unreleased. Merge/publish requires
+user approval; only afterward should Visor repin and, under separately granted
+live authority, rerun this retained focused path. No fresh live run should occur
+before the diagnostic build is integrated.
+This observability step is necessary to the shortest north-star debugging loop,
+not a graph-feature detour; no prompt, schema, scheduler, checkpoint, transport,
+or authority change is indicated.
