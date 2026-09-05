@@ -88,6 +88,7 @@ function resetObservableModuleMocks(): void {
 
 const MANAGED_PROVIDER = 'exp-0123-managed';
 const LEGACY_PROVIDER = 'exp-0123-legacy';
+const NON_GOVERNED_PROVIDER = 'exp-0123-non-governed-candidate';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -221,6 +222,59 @@ function cleanupReceipt(binding: ManagedRunBindingV1): ManagedRunCleanupReceiptV
     status: 'clean',
     activeChildren: 0,
     activeResources: 0,
+  };
+}
+
+function ordinaryCandidateEvidence(payload: unknown): any {
+  const digest = governedResultDigest(payload);
+  const attestationDigest = '9'.repeat(64);
+  const invocationDigest = `sha256:${'b'.repeat(64)}`;
+  const invocation = {
+    role_id: 'onboard',
+    stance: 'owner',
+    subject: { kind: 'project', id: 'fixture', fingerprint: `sha256:${'a'.repeat(64)}` },
+    output_schema_id: 'result',
+    output_schema: Buffer.from('{"type":"object"}').toString('base64'),
+  };
+  return {
+    version: 'visor.proof-candidate-evidence/v1',
+    role: { invocation, invocationDigest },
+    probe: {
+      attestation: {
+        version: 'probe.governed-codex-attestation/v2',
+        profileId: 'luna-xhigh-readonly-v1',
+        requested: {
+          profileDigest: attestationDigest,
+          cwdDigest: attestationDigest,
+          probeToolsDigest: attestationDigest,
+          model: 'gpt-5.6-luna',
+          reasoningEffort: 'xhigh',
+          sandbox: 'read-only',
+          approvalPolicy: 'never',
+        },
+        observed: {
+          source: 'session_configured',
+          model: 'gpt-5.6-luna',
+          modelProviderId: 'openai',
+          reasoningEffort: 'xhigh',
+          approvalPolicy: 'never',
+          cwdDigest: attestationDigest,
+          permissionProfileDigest: attestationDigest,
+          filesystem: 'restricted-read-root',
+          network: 'restricted',
+        },
+        executionContext: { source: 'caller', invocationDigest },
+        dispatch: { source: 'probe-host-tools-call', tool: 'codex', promptDigest: digest, promptBytes: 0 },
+        evidence: { eventCount: 1 },
+        usage: { status: 'unavailable' },
+      },
+      resultIdentity: {
+        version: 'probe.governed-result-identity/v1',
+        source: 'probe-host-schema-valid-json',
+        resultDigest: digest,
+        canonicalBytes: Buffer.byteLength(canonicalJson(payload), 'utf8'),
+      },
+    },
   };
 }
 
@@ -366,7 +420,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
       config: CheckProviderConfig
     ): Promise<ReviewSummary> {
       const checkId = String(config.checkName);
-      if (checkId !== 'discover-components') {
+      if (checkId !== 'discover-components' && checkId !== JSON.stringify(['discover-project', 'materialize_catalog'])) {
         throw new Error('MANAGED_GENERATED_EXECUTE_MUST_NOT_RUN');
       }
       const index = catalogCalls++;
@@ -873,6 +927,69 @@ describe('EXP-0123 managed graph-run ownership', () => {
     await run;
   });
 
+  it('rejects a valid proof candidate from a non-governed compiled producer', async () => {
+    let closeCalls = 0;
+    class NonGovernedCandidateProvider extends CheckProvider {
+      getName() { return NON_GOVERNED_PROVIDER; }
+      getDescription() { return 'EXP-0123 invalid governed-output fixture'; }
+      async validateConfig() { return true; }
+      async isAvailable() { return true; }
+      getRequirements() { return []; }
+      getSupportedConfigKeys() { return ['type']; }
+      async execute(_pr: PRInfo, config: CheckProviderConfig): Promise<ReviewSummary> {
+        if (config.checkName !== 'discover-components') throw new Error('NON_GOVERNED_UNEXPECTED_EXECUTE');
+        return { issues: [], output: { components: catalogs[0] } };
+      }
+      startManaged(request: ManagedRunStartRequest): ManagedAgentRun {
+        const output = { id: String(request.binding.scope[0]?.key), findings: ['non-governed'] };
+        return {
+          binding: request.binding,
+          started: Promise.resolve(startedReceipt(request.binding)),
+          outcome: Promise.resolve({
+            version: 1,
+            kind: 'succeeded-proof-candidate',
+            binding: request.binding,
+            summary: { issues: [], output },
+            proofCandidateEvidence: ordinaryCandidateEvidence(output),
+            wireMode: 'generic',
+          } as any),
+          cancel: async () => cancelReceipt(request.binding),
+          close: async () => { closeCalls++; return cleanupReceipt(request.binding); },
+        };
+      }
+    }
+    const provider = new NonGovernedCandidateProvider();
+    registry.register(provider);
+    try {
+      const result = await engine.executeGroupedChecks(
+        prInfo,
+        ['discover-components'],
+        undefined,
+        fixtureConfig(NON_GOVERNED_PROVIDER),
+        'table',
+        false,
+        1,
+      );
+      const events = (engine as any)._lastContext.journal.readRuntimeEvents() as readonly any[];
+      const generated = events.filter(event => event.checkId === 'inspect' || event.binding?.checkId === 'inspect');
+      expect(result.statistics.failedExecutions).toBe(1);
+      expect(generated.filter(event => event.type === 'AttemptFailed')).toHaveLength(1);
+      expect(generated.find(event => event.type === 'AttemptFailed')).toMatchObject({
+        reason: 'MANAGED_OUTCOME_RECEIPT_INVALID',
+      });
+      expect(generated.filter(event => event.type === 'ClaimPublished')).toHaveLength(0);
+      expect(generated.filter(event => event.type === 'ManagedRunTerminated')).toHaveLength(1);
+      expect(generated.find(event => event.type === 'ManagedRunTerminated')).toMatchObject({
+        controllerDecision: 'failed',
+        cleanupStatus: 'clean',
+        failureCode: 'MANAGED_OUTCOME_RECEIPT_INVALID',
+      });
+      expect(closeCalls).toBe(1);
+    } finally {
+      registry.unregister(NON_GOVERNED_PROVIDER);
+    }
+  });
+
   it('injects journal authority only when the staged spec-review node becomes ready', async () => {
     const registryDescriptor = Object.getOwnPropertyDescriptor(registry as any, 'providers')!;
     const providerMap = registryDescriptor.value as Map<string, CheckProvider>;
@@ -900,13 +1017,14 @@ describe('EXP-0123 managed graph-run ownership', () => {
       role_id, stance: 'owner', subject: { kind: 'component' },
         output_schema_id: 'reqproof.component-onboarding/v1', output_schema: schema,
     });
-      const candidateEvidence = () => {
+    const candidateEvidence = (role_id = 'onboard', onboardingStage?: unknown) => {
       const data = { component_id: 'A', decision: 'accept' };
       const digest = governedResultDigest(data);
       const resolvedInvocation = {
-        ...invocation('onboard'),
+        ...invocation(role_id),
         subject: { kind: 'component', id: 'A', fingerprint: authority.subject.fingerprint },
         component_authority: authority,
+        ...(onboardingStage === undefined ? {} : { onboarding_stage: onboardingStage }),
       };
       const invocationDigest = `sha256:${'3'.repeat(64)}`;
       const attestationDigest = '4'.repeat(64);
@@ -968,6 +1086,10 @@ describe('EXP-0123 managed graph-run ownership', () => {
     }
     const stagedConfig = () => {
       const config: any = fixtureConfig();
+      const materializeOwner = JSON.stringify(['discover-project', 'materialize_catalog']);
+      const rootCheck = config.checks['discover-components'];
+      delete config.checks['discover-components'];
+      config.checks[materializeOwner] = rootCheck;
       config.claim_types['component.catalog@1'].schema.additionalProperties = true;
       config.claim_types['component.catalog@1'].schema.properties.components.items.additionalProperties = true;
       Object.assign(config.claim_types, {
@@ -977,7 +1099,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
         'proof.component_spec_review_candidate@1': { schema: { type: 'object', additionalProperties: true } },
         'proof.component_spec_review_admitted_receipt@1': { schema: { type: 'object', additionalProperties: true } },
       });
-      config.checks['discover-components'].expand.item_claim = 'component.work_item@1';
+      config.checks[materializeOwner].expand.item_claim = 'component.work_item@1';
       config.subgraphs['onboard-component'] = {
         input: { name: 'component', claim: 'component.work_item@1' },
         checks: {
@@ -1008,9 +1130,13 @@ describe('EXP-0123 managed graph-run ownership', () => {
     });
     providerMap.set('governed-proof-inspect', new StagedGovernedProvider());
     providerMap.set('proof-admit', new StagedAdmissionProvider());
-    catalogs = [[{ id: 'A', path: 'packages/a', authority: compactAuthority } as any]];
+    catalogs = [[{
+      id: 'A', path: 'packages/a', component_id: 'A',
+      proof_component_subject: authoritySubject, authority: compactAuthority,
+    } as any]];
     try {
-      const run = engine.executeGroupedChecks(prInfo, ['discover-components'], undefined, stagedConfig(), 'table', false, 1);
+      const run = engine.executeGroupedChecks(prInfo, [JSON.stringify(['discover-project', 'materialize_catalog'])], undefined, stagedConfig(), 'table', false, 1, false, undefined,
+        generation => generation.checkId === 'spec_review_admit' ? 'defer' : 'dispatch');
       await until(() => stageRequests.some(request => request.binding.checkId === 'spec_review'), 'staged spec-review acquisition');
       const inspect = stageRequests.find(request => request.binding.checkId === 'inspect')!;
       const specReview = stageRequests.find(request => request.binding.checkId === 'spec_review')!;
@@ -1021,8 +1147,26 @@ describe('EXP-0123 managed graph-run ownership', () => {
       expect((specReview.executionContext.proofOnboardingStageContext as any).prior_candidate).not.toBe('{}');
       expect(specReview.executionContext.proofComponentAuthority).not.toBe(forged);
       expect(specReview.executionContext.proofOnboardingStageContext).not.toBe(forged);
-      stageOutcome.resolve({ version: 1, kind: 'failed', binding: specReview.binding });
+      const stageEvidence = candidateEvidence('spec-review', derivedStageContext);
+      stageOutcome.resolve({
+        version: 1,
+        kind: 'succeeded-proof-candidate',
+        binding: specReview.binding,
+        summary: { issues: [], output: { component_id: 'A', decision: 'accept' } },
+        proofCandidateEvidence: stageEvidence,
+        wireMode: 'generic',
+      } as any);
       await run;
+      const journal = (engine as any)._lastContext.journal;
+      const events = journal.readRuntimeEvents();
+      const stagedCandidates = events.filter((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.component_spec_review_candidate@1');
+      expect(stagedCandidates).toHaveLength(1);
+      expect(stagedCandidates[0].parentClaimIds).toHaveLength(3);
+      expect(events.filter((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.component_spec_review_admitted_receipt@1')).toHaveLength(0);
+      const projection = journal.getInstanceProjection();
+      const stagedAdmission = Object.values(projection.generationsById).find((generation: any) => generation.checkId === 'spec_review_admit');
+      expect(stagedAdmission).toMatchObject({ status: 'ready' });
+      expect(events.some((event: any) => event.type === 'AttemptStarted' && event.checkId === 'spec_review_admit')).toBe(false);
     } finally {
       if (priorInspect) providerMap.set('governed-proof-inspect', priorInspect); else providerMap.delete('governed-proof-inspect');
       if (priorAdmission) providerMap.set('proof-admit', priorAdmission); else providerMap.delete('proof-admit');

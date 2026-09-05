@@ -2529,6 +2529,18 @@ export class ExecutionJournal {
     return Object.freeze({ generation, node, claims: Object.freeze(claims) });
   }
 
+  isGovernedProofCandidateProducer(nodeGenerationId: string): boolean {
+    try {
+      const execution = this.getGeneratedExecution(nodeGenerationId);
+      const emissions = execution.node.emissions;
+      return execution.node.check.type === 'governed-proof-inspect' &&
+        emissions.length === 1 && emissions[0].from === 'output' &&
+        isGovernedCandidateClaim(emissions[0].claim);
+    } catch {
+      return false;
+    }
+  }
+
   /** Assemble the complete controller-owned authority for a component C0
    * activation. The catalog item carries only the compact subject/digest;
    * the raw candidate, admission, WorkItem and current receipt are recovered

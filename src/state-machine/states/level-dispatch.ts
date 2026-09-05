@@ -288,6 +288,7 @@ async function runManagedProvider(input: {
   readonly snapshot: ManagedRunSnapshot;
   readonly timeoutMs: number;
   readonly providerType: string;
+  readonly acceptsProofCandidateOutcome: boolean;
   readonly trustedWireMode: GovernedWireMode;
   readonly onStarted: () => void;
   readonly onStartedObserved: () => void;
@@ -413,8 +414,7 @@ async function runManagedProvider(input: {
     try {
       const normalized = normalizeManagedRunOutcome(outcome.value.value, input.snapshot.binding, input.trustedWireMode);
       if (normalized.kind === 'failed') return finishOrdinary('MANAGED_OUTCOME_FAILED');
-      if (normalized.kind === 'succeeded-proof-candidate' &&
-          (input.providerType !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || input.snapshot.binding.checkId !== 'inspect')) {
+      if (normalized.kind === 'succeeded-proof-candidate' && !input.acceptsProofCandidateOutcome) {
         return finishOrdinary('MANAGED_OUTCOME_RECEIPT_INVALID');
       }
       return finishOrdinary(undefined, normalized.summary, normalized.kind === 'succeeded-proof-candidate' ? normalized.proofCandidateEvidence : undefined, normalized.kind === 'succeeded-proof-candidate' ? normalized.wireMode : undefined);
@@ -3404,6 +3404,10 @@ async function executeSingleCheck(
         snapshot,
         timeoutMs: managedTimeoutMs,
         providerType,
+        acceptsProofCandidateOutcome: dynamic?.kind === 'generated' &&
+          providerType === GOVERNED_PROOF_INSPECT_PROVIDER_NAME &&
+          checkConfig.type === GOVERNED_PROOF_INSPECT_PROVIDER_NAME &&
+          context.journal.isGovernedProofCandidateProducer(dynamic.attempt.nodeGenerationId),
         trustedWireMode: trustedManagedProofWireMode(checkId, providerType, checkConfig),
         onStarted: () => {
           context.journal.recordManagedRunStarted(binding);
