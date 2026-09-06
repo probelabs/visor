@@ -85,6 +85,25 @@ const FOCUSED_NETWORK_SENTINEL = new Error('focused network boundary sentinel');
 const FOCUSED_PREVIEW_SENTINEL = new Error('focused preview localization sentinel');
 const FOCUSED_PROMPT_BYTES_LIMIT = 131072;
 
+const CHILD_FAILURE_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-child-failure:v1';
+const CHILD_FAILURE_PHASES = new Set(['discovery', 'pause', 'resume', 'replacement']);
+const CHILD_FAILURE_BOUNDARIES = new Set([
+  'restore', 'authenticated_work_items', 'proof_refresh', 'owner_binding',
+  'project_lookup', 'continue_current_catalog', 'graph_dispatch', 'cleanup',
+  'result_write', 'result_read', 'child_process',
+]);
+const CHILD_FAILURE_CODES = new Set([
+  'INVALID_PROOF_CURRENT_APPLICATION', 'MANAGED_OUTCOME_FAILED',
+  'CHILD_PROCESS_FAILED', 'UNCLASSIFIED_CHILD_FAILURE',
+]);
+
+export type ChildFailureProjection = Readonly<{
+  schema: typeof CHILD_FAILURE_SCHEMA;
+  phase: 'discovery' | 'pause' | 'resume' | 'replacement';
+  boundary: 'restore' | 'authenticated_work_items' | 'proof_refresh' | 'owner_binding' | 'project_lookup' | 'continue_current_catalog' | 'graph_dispatch' | 'cleanup' | 'result_write' | 'result_read' | 'child_process';
+  code: 'INVALID_PROOF_CURRENT_APPLICATION' | 'MANAGED_OUTCOME_FAILED' | 'CHILD_PROCESS_FAILED' | 'UNCLASSIFIED_CHILD_FAILURE';
+}>;
+
 const requireFromRepo = createRequire(path.join(REPO_ROOT, 'package.json'));
 
 function sha256(value: Buffer | string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -92,6 +111,35 @@ function sha256(value: Buffer | string): string { return createHash('sha256').up
 function writePrivateJson(file: string, value: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   fs.chmodSync(file, 0o600);
+}
+
+function childFailurePrivateFile(stage: string, phase: string): string {
+  return path.join(stage, '.private', `child-failure.${phase}.json`);
+}
+
+function writeChildFailureProjection(stage: string, phase: string, boundary: string, error: unknown): void {
+  writePrivateJson(childFailurePrivateFile(stage, phase), projectChildFailure(phase, boundary, error));
+}
+
+function readChildFailureProjection(file: string): ChildFailureProjection | undefined {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    return validateChildFailureProjection(value) ? value : undefined;
+  } catch { return undefined; }
+}
+
+export function promoteChildFailure(stage: string, phase: string): ChildFailureProjection | undefined {
+  const projection = readChildFailureProjection(childFailurePrivateFile(stage, phase));
+  if (!projection || projection.phase !== phase) return undefined;
+  const file = path.join(stage, 'child-failure.json');
+  writePrivateJson(file, projection);
+  return projection;
+}
+
+function writeParentChildFailure(stage: string, phase: string, boundary: ChildFailureProjection['boundary'], code: ChildFailureProjection['code']): ChildFailureProjection {
+  const projection = projectChildFailure(phase, boundary, { code });
+  writePrivateJson(path.join(stage, 'child-failure.json'), projection);
+  return projection;
 }
 
 function writePrivateText(file: string, value: string): void {
@@ -111,6 +159,51 @@ function ownData(value: unknown, key: string): unknown {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && 'value' in descriptor ? descriptor.value : undefined;
   } catch { return undefined; }
+}
+
+export function resumeDispatchDecision(generation: unknown, heldComponentId: string): 'dispatch' | 'defer' {
+  const scope = ownData(generation, 'scope');
+  if (!Array.isArray(scope) || scope.length === 0 || scope.length > 2) return 'defer';
+  if (scope.length === 1) return 'dispatch';
+  return ownData(scope.at(-1), 'key') === heldComponentId ? 'dispatch' : 'defer';
+}
+
+function childFailureCode(error: unknown): ChildFailureProjection['code'] {
+  const code = ownData(error, 'code');
+  return typeof code === 'string' && CHILD_FAILURE_CODES.has(code)
+    ? code as ChildFailureProjection['code']
+    : 'UNCLASSIFIED_CHILD_FAILURE';
+}
+
+export function selectPrimaryFailure(
+  hasPrimaryError: boolean,
+  primaryError: unknown,
+  failureBoundary: ChildFailureProjection['boundary'],
+  fallbackError: unknown,
+  fallbackBoundary: ChildFailureProjection['boundary'],
+): { error: unknown; boundary: ChildFailureProjection['boundary'] } {
+  return hasPrimaryError ? { error: primaryError, boundary: failureBoundary } : { error: fallbackError, boundary: fallbackBoundary };
+}
+
+export function projectChildFailure(phase: unknown, boundary: unknown, error: unknown): ChildFailureProjection {
+  if (typeof phase !== 'string' || !CHILD_FAILURE_PHASES.has(phase)) throw new Error('child failure phase is invalid');
+  if (typeof boundary !== 'string' || !CHILD_FAILURE_BOUNDARIES.has(boundary)) throw new Error('child failure boundary is invalid');
+  return Object.freeze({
+    schema: CHILD_FAILURE_SCHEMA,
+    phase: phase as ChildFailureProjection['phase'],
+    boundary: boundary as ChildFailureProjection['boundary'],
+    code: childFailureCode(error),
+  });
+}
+
+export function validateChildFailureProjection(value: unknown): value is ChildFailureProjection {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as AnyRecord;
+  if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(['boundary', 'code', 'phase', 'schema'])) return false;
+  return entry.schema === CHILD_FAILURE_SCHEMA
+    && typeof entry.phase === 'string' && CHILD_FAILURE_PHASES.has(entry.phase)
+    && typeof entry.boundary === 'string' && CHILD_FAILURE_BOUNDARIES.has(entry.boundary)
+    && typeof entry.code === 'string' && CHILD_FAILURE_CODES.has(entry.code);
 }
 
 function allowedProbeValue(values: Set<string>, value: unknown): string | undefined {
@@ -653,11 +746,21 @@ function proofRefresh(binary: string, workspace: string, checkpoint: AnyRecord, 
 
 function childEnvironment(): NodeJS.ProcessEnv { return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|ACCESS_TOKEN|SECRET|PASSWORD|EVALUATOR|SUBJECT)/i.test(key))); }
 
-function childProcess(mode: 'discovery' | 'pause' | 'resume' | 'replacement', stage: string): ChildResult {
+export function childProcess(mode: 'discovery' | 'pause' | 'resume' | 'replacement', stage: string): ChildResult {
   const timeout = mode === 'discovery' ? DISCOVERY_TIMEOUT_MS : COMPONENT_TIMEOUT_MS;
   const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', CHILD_ENTRY, '--child', mode, '--output', stage, '--controller-pid', String(process.pid)], { cwd: REPO_ROOT, env: childEnvironment(), encoding: 'utf8', timeout, maxBuffer: 128 * 1024 * 1024 });
-  if (result.error || result.status !== 0) throw new Error(`live child ${mode} failed`);
-  return JSON.parse(fs.readFileSync(path.join(stage, '.private', `${mode}.result.json`), 'utf8')) as ChildResult;
+  if (result.error || result.status !== 0) {
+    if (!promoteChildFailure(stage, mode)) writeParentChildFailure(stage, mode, 'child_process', 'CHILD_PROCESS_FAILED');
+    throw new Error(`live child ${mode} failed`);
+  }
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(stage, '.private', `${mode}.result.json`), 'utf8')) as ChildResult;
+    if (!value || typeof value !== 'object' || !value.checkpoint) throw new Error('child result is unreadable');
+    return value;
+  } catch {
+    writeParentChildFailure(stage, mode, 'result_read', 'CHILD_PROCESS_FAILED');
+    throw new Error(`live child ${mode} result is unreadable`);
+  }
 }
 
 type FocusedDerivation = Readonly<{
@@ -1250,13 +1353,15 @@ function retainFailureCheckpoint(stage: string): string | undefined {
   return undefined;
 }
 
-function failureReceipt(stage: string, code: string, counts?: AnyRecord, mode: 'preflight-only' | 'run-once' = 'run-once'): void {
+export function failureReceipt(stage: string, code: string, counts?: AnyRecord, mode: 'preflight-only' | 'run-once' = 'run-once'): void {
   try {
     aggregateFailureDiagnosticsFile(stage);
     const latestCheckpoint = retainFailureCheckpoint(stage);
+    const childFailure = readChildFailureProjection(path.join(stage, 'child-failure.json'));
     writeExclusiveJson(path.join(stage, 'run-once.failure.json'), {
       schema: 'urn:reqproof:agent-governance:exp-0210-live-failure:v1', status: 'failed', terminal: true, mode, failure_code: code,
       ...(counts || failureEvidence(stage)), retries: 0, fallback: false,
+      ...(childFailure ? { child_failure: childFailure } : {}),
       ...(latestCheckpoint ? { latest_checkpoint: latestCheckpoint } : {}),
     });
   } catch { /* Preserve the first terminal receipt. */ }
@@ -1449,29 +1554,38 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
     return;
   }
   if (process.ppid !== controllerPid) throw new Error('child controller ownership failed');
-  const input = privateInput(stage);
-  const config = JSON.parse(fs.readFileSync(input.configPath, 'utf8')) as VisorConfig;
-  const { StateMachineExecutionEngine } = require('../../../src/state-machine-execution-engine') as typeof import('../../../src/state-machine-execution-engine');
-  const { CheckProviderRegistry } = require('../../../src/providers/check-provider-registry') as typeof import('../../../src/providers/check-provider-registry');
-  const { createProofAdmissionCapability } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
-  const { GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
-  const registry = CheckProviderRegistry.getInstance(); registry.bootstrapProofAdmission(createProofAdmissionCapability(input.proofBinary));
-  const engine = new StateMachineExecutionEngine(mode === 'replacement' ? input.fixedWorkspace : input.baselineWorkspace);
-  let result: AnyRecord;
-  const restoreProbeDiagnostics = installProbeFailureDiagnostics(mode, stage, GovernedProbeAgentRunner);
+  let childBoundary: ChildFailureProjection['boundary'] = 'restore';
+  let failureBoundary: ChildFailureProjection['boundary'] = 'restore';
+  let primaryError: unknown;
+  let hasPrimaryError = false;
   try {
+    const input = privateInput(stage);
+    const config = JSON.parse(fs.readFileSync(input.configPath, 'utf8')) as VisorConfig;
+    const { StateMachineExecutionEngine } = require('../../../src/state-machine-execution-engine') as typeof import('../../../src/state-machine-execution-engine');
+    const { CheckProviderRegistry } = require('../../../src/providers/check-provider-registry') as typeof import('../../../src/providers/check-provider-registry');
+    const { createProofAdmissionCapability } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
+    const { GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
+    const registry = CheckProviderRegistry.getInstance(); registry.bootstrapProofAdmission(createProofAdmissionCapability(input.proofBinary));
+    const engine = new StateMachineExecutionEngine(mode === 'replacement' ? input.fixedWorkspace : input.baselineWorkspace);
+    let result: AnyRecord;
+    const restoreProbeDiagnostics = installProbeFailureDiagnostics(mode, stage, GovernedProbeAgentRunner);
+    try {
     if (mode === 'discovery') {
       const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 ? 'defer' : 'dispatch';
+      childBoundary = 'graph_dispatch';
       const runResult = await withGovernedProbeRunnerBudget(1, () => engine.executeGroupedChecks(PR, ['project'], undefined, config, 'json', false, 3, true, undefined, gate));
       const checkpoint = engine.exportGraphCheckpoint();
+      childBoundary = 'authenticated_work_items';
       const selection = authenticatedWorkItems(checkpoint, config);
       result = { checkpoint, component_ids: selection.componentIds, changed_component_id: selection.changedComponentId, held_component_id: selection.heldComponentId, completed_component_ids: [], statistics: runResult.statistics };
     } else if (mode === 'pause') {
       const discovery = JSON.parse(fs.readFileSync(input.discoveryCheckpoint, 'utf8')) as AnyRecord;
+      childBoundary = 'authenticated_work_items';
       const selection = authenticatedWorkItems(discovery, config);
       const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 && String(generation.scope.at(-1)?.key || '') === selection.heldComponentId ? 'defer' : 'dispatch';
       const pauseBudget = 2 * (selection.componentIds.length - 1);
       if (1 + pauseBudget > PAUSE_CALLS) throw new Error('pause governed call budget exceeded');
+      childBoundary = 'graph_dispatch';
       const runResult = await withGovernedProbeRunnerBudget(pauseBudget, () => engine.resumeGraphCheckpoint({ checkpoint: discovery, config, prInfo: PR, maxParallelism: 3, failFast: true, generatedDispatchGate: gate }));
       const checkpoint = runResult.checkpoint;
       const view = componentProjection(checkpoint, config);
@@ -1479,24 +1593,44 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
       result = { checkpoint, component_ids: selection.componentIds, changed_component_id: selection.changedComponentId, held_component_id: selection.heldComponentId, completed_component_ids: completed, statistics: runResult.result.statistics };
     } else if (mode === 'resume') {
       const checkpoint = JSON.parse(fs.readFileSync(input.pauseCheckpoint, 'utf8')) as AnyRecord;
+      childBoundary = 'authenticated_work_items';
       const selection = authenticatedWorkItems(checkpoint, config, false);
-      const gate = (generation: AnyRecord): 'dispatch' | 'defer' => generation.scope?.length === 2 && String(generation.scope.at(-1)?.key || '') === selection.heldComponentId ? 'dispatch' : 'defer';
+      const gate = (generation: AnyRecord): 'dispatch' | 'defer' => resumeDispatchDecision(generation, selection.heldComponentId);
+      childBoundary = 'graph_dispatch';
       const runResult = await withGovernedProbeRunnerBudget(RESUME_CALLS, () => engine.resumeGraphCheckpoint({ checkpoint, config, prInfo: PR, maxParallelism: 3, failFast: true, generatedDispatchGate: gate }));
       result = { checkpoint: runResult.checkpoint, statistics: runResult.result.statistics };
     } else {
       const checkpoint = JSON.parse(fs.readFileSync(input.baselineCheckpoint, 'utf8')) as AnyRecord;
+      childBoundary = 'authenticated_work_items';
       const selection = authenticatedWorkItems(checkpoint, config, false);
+      childBoundary = 'proof_refresh';
       const refreshed = proofRefresh(input.proofBinary, input.fixedWorkspace, checkpoint, config);
       const changedOwnerPaths = (refreshed.changedPaths || []).map(String);
+      childBoundary = 'owner_binding';
       if (refreshed.changedComponentId !== selection.changedComponentId || !changedOwnerPaths.includes('parser.go') || !changedOwnerPaths.includes('parser_test.go')) throw new Error('Proof replacement owner is not the authenticated parser WorkItem');
+      childBoundary = 'project_lookup';
       const project = Object.values(componentProjection(checkpoint, config).instancesById).find((value: any) => value.itemKey === 'jsonparser' && !value.parentSubgraphInstanceId) as AnyRecord | undefined;
       if (!project) throw new Error('project instance missing');
+      childBoundary = 'continue_current_catalog';
       const continued = await withGovernedProbeRunnerBudget(REPLACEMENT_CALLS, () => engine.continueProofCurrentCatalogCheckpoint({ checkpoint, projectSubgraphInstanceId: project.subgraphInstanceId, revalidationBytes: refreshed.revalidationBytes, workItemsBytes: refreshed.workItemsBytes, config, prInfo: PR, maxParallelism: 3, failFast: true }));
       result = { checkpoint: continued.checkpoint, refreshed };
     }
+    childBoundary = 'result_write';
     writePrivateJson(path.join(stage, '.private', `${mode}.result.json`), result);
-  } finally {
-    restoreProbeDiagnostics();
+    } catch (error) {
+      hasPrimaryError = true;
+      primaryError = error;
+      failureBoundary = childBoundary;
+      throw error;
+    } finally {
+      childBoundary = 'cleanup';
+      try { restoreProbeDiagnostics(); }
+      catch (error) { if (!hasPrimaryError) throw error; }
+    }
+  } catch (error) {
+    const selected = selectPrimaryFailure(hasPrimaryError, primaryError, failureBoundary, error, childBoundary);
+    try { writeChildFailureProjection(stage, mode, selected.boundary, selected.error); } catch { /* Failure projection never masks the child failure. */ }
+    throw error;
   }
 }
 

@@ -8,11 +8,20 @@ import * as yaml from 'js-yaml';
 import {
   aggregateFailureDiagnostics,
   installProbeFailureDiagnostics,
+  childProcess,
+  failureReceipt,
+  projectChildFailure,
+  promoteChildFailure,
+  resumeDispatchDecision,
   runPreflight,
   sanitizeProbeFailureTaxonomy,
+  selectPrimaryFailure,
   serializeFailureDiagnostics,
+  validateChildFailureProjection,
 } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
+import { runJsonparserStagedDemo } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-demo';
 import { validateProofCandidateEvidence } from '../../src/providers/governed-proof-inspect-check-provider';
+import { ExecutionJournal } from '../../src/snapshot-store';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
 
@@ -103,6 +112,24 @@ function request(component: string, error: Error): AnyRecord {
   return { binding: { checkId: 'spec_review', attemptId: component, scope: [{ key: 'jsonparser' }, { key: component }] }, error };
 }
 
+function projection(checkpoint: AnyRecord, config: AnyRecord): AnyRecord {
+  return ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection() as AnyRecord;
+}
+
+function componentId(value: AnyRecord): string {
+  return String(value.scope?.at(-1)?.key ?? value.payload?.component_id ?? '');
+}
+
+function activeClaims(view: AnyRecord, claim: string, scopeLength?: number): AnyRecord[] {
+  return Object.values(view.claimsById).filter((value: any) => value.claim === claim && value.active === true && (scopeLength === undefined || value.scope.length === scopeLength)) as AnyRecord[];
+}
+
+function attemptStages(checkpoint: AnyRecord, view: AnyRecord, id: string): string[] {
+  const instance = Object.values(view.instancesById).find((value: any) => value.itemKey === id) as AnyRecord | undefined;
+  if (!instance) return [];
+  return checkpoint.events.filter((event: any) => event.type === 'AttemptStarted' && event.scope?.some((scope: any) => scope.subgraphInstanceId === instance.subgraphInstanceId)).map((event: any) => String(event.checkId));
+}
+
 describe('EXP-0210 live preflight', () => {
   it('exposes dependency-only preflight with zero governed/model calls', () => {
     expect(typeof runPreflight).toBe('function');
@@ -138,6 +165,109 @@ describe('EXP-0210 live preflight', () => {
       }
     } finally { fs.rmSync(parent, { recursive: true, force: true }); }
   });
+
+  it('dispatches root and held scopes, and fails closed for sibling or malformed scopes', () => {
+    const held = 'component-held';
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }] }, held)).toBe('dispatch');
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }, { key: held }] }, held)).toBe('dispatch');
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }, { key: 'component-sibling' }] }, held)).toBe('defer');
+    expect(resumeDispatchDecision({ scope: [] }, held)).toBe('defer');
+    expect(resumeDispatchDecision({}, held)).toBe('defer');
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }, { key: held }, { key: 'deeper' }] }, held)).toBe('defer');
+  });
+
+  it('replays the paused/resumed zero-model graph with one held reconciliation and selective continuation', async () => {
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-zero-model-'));
+    try {
+      const result = await runJsonparserStagedDemo(output);
+      expect(result.report).toEqual(expect.objectContaining({ model_calls: 0, network_calls: 0, current_reconciliation: true }));
+      const config = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'effective-config.json'), 'utf8')) as AnyRecord;
+      const pause = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'pause.checkpoint.json'), 'utf8')) as AnyRecord;
+      const resumed = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'continued.checkpoint.json'), 'utf8')) as AnyRecord;
+      const final = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'replacement.checkpoint.json'), 'utf8')) as AnyRecord;
+      const resumedView = projection(resumed, config);
+      const finalView = projection(final, config);
+      const held = String(result.report.unaffected_component_id);
+      const changed = String(result.report.changed_component_id);
+      expect(attemptStages(resumed, resumedView, held).slice(-STAGES.length)).toEqual(STAGES);
+      expect(resumed.events.slice(0, pause.events.length)).toEqual(pause.events);
+      expect(resumed.events.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'project_reconcile' && event.scope?.length === 1)).toHaveLength(1);
+      expect(resumed.events.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'project_reconcile' && event.scope?.length === 1)).toHaveLength(1);
+      expect(Object.values(resumedView.generationsById).filter((value: any) => value.checkId === 'project_reconcile' && value.status === 'completed')).toHaveLength(1);
+      expect(activeClaims(resumedView, 'proof.project_reconciliation_receipt@1', 1)).toHaveLength(1);
+      expect(attemptStages(final, finalView, changed).slice(-STAGES.length)).toEqual(STAGES);
+      const continuationSuffix = final.events.slice(resumed.events.length).filter((event: any) => event.type === 'AttemptStarted');
+      expect(continuationSuffix).toHaveLength(STAGES.length + 1);
+      expect(continuationSuffix.every((event: any) => event.checkId === 'project_reconcile' || event.scope?.at(-1)?.key === changed)).toBe(true);
+      expect(final.events.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'project_reconcile' && event.scope?.length === 1)).toHaveLength(2);
+      expect(Object.values(finalView.generationsById).filter((value: any) => value.checkId === 'project_reconcile' && value.status === 'completed' && finalView.activeGenerationIdByNode[value.nodeInstanceId] === value.nodeGenerationId)).toHaveLength(1);
+      expect(activeClaims(finalView, 'proof.project_reconciliation_receipt@1', 1)).toHaveLength(1);
+      const componentIds = new Set((result.report.component_ids || []).map(String));
+      const resumedSiblingClaims = Object.values(resumedView.claimsById).filter((value: any) => componentIds.has(componentId(value)) && componentId(value) !== changed).sort((left: any, right: any) => left.claimId.localeCompare(right.claimId));
+      const finalSiblingClaims = Object.values(finalView.claimsById).filter((value: any) => componentIds.has(componentId(value)) && componentId(value) !== changed).sort((left: any, right: any) => left.claimId.localeCompare(right.claimId));
+      expect(finalSiblingClaims).toEqual(resumedSiblingClaims);
+    } finally { fs.rmSync(output, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it('projects only bounded child-failure fields and rejects malformed replacement boundaries', () => {
+    const error = Object.assign(new Error('raw secret message'), { code: 'INVALID_PROOF_CURRENT_APPLICATION', path: '/private/secret', prompt: 'secret prompt' });
+    const projected = projectChildFailure('replacement', 'continue_current_catalog', error);
+    expect(projected).toEqual({ schema: 'urn:reqproof:agent-governance:exp-0210-child-failure:v1', phase: 'replacement', boundary: 'continue_current_catalog', code: 'INVALID_PROOF_CURRENT_APPLICATION' });
+    expect(projectChildFailure('replacement', 'continue_current_catalog', new Error('managed execution failure')).boundary).toBe('continue_current_catalog');
+    expect(JSON.stringify(projected)).not.toMatch(/raw|secret|message|path|prompt/i);
+    expect(validateChildFailureProjection(projected)).toBe(true);
+    expect(validateChildFailureProjection({ ...projected, boundary: 'provider_engine' })).toBe(false);
+    expect(validateChildFailureProjection({ ...projected, code: 'provider_engine_failure' })).toBe(false);
+    expect(validateChildFailureProjection({ ...projected, message: 'secret' })).toBe(false);
+    expect(() => projectChildFailure('replacement', 'provider_engine', error)).toThrow('child failure boundary is invalid');
+    expect(projectChildFailure('replacement', 'owner_binding', Object.assign(new Error('opaque'), { code: 'not-allowlisted' })).code).toBe('UNCLASSIFIED_CHILD_FAILURE');
+  });
+
+  it('preserves a falsy primary through cleanup failure selection', () => {
+    const cleanupFailure = new Error('cleanup failure');
+    expect(selectPrimaryFailure(true, 0, 'continue_current_catalog', cleanupFailure, 'cleanup')).toEqual({ error: 0, boundary: 'continue_current_catalog' });
+    expect(selectPrimaryFailure(false, undefined, 'restore', cleanupFailure, 'cleanup')).toEqual({ error: cleanupFailure, boundary: 'cleanup' });
+  });
+
+  it('promotes an actual zero-model child failure into a mode-0600 terminal receipt', () => {
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-child-failure-'));
+    const privateDir = path.join(stage, '.private');
+    fs.mkdirSync(privateDir, { mode: 0o700 });
+    fs.writeFileSync(path.join(privateDir, 'run-input.json'), `${JSON.stringify({
+      configPath: path.join(stage, 'missing-config.json'),
+      proofBinary: path.join(stage, 'missing-proof'),
+      baselineWorkspace: stage,
+      fixedWorkspace: stage,
+    })}\n`, { encoding: 'utf8', mode: 0o600 });
+    try {
+      expect(() => childProcess('replacement', stage)).toThrow('live child replacement failed');
+      const privateFile = path.join(privateDir, 'child-failure.replacement.json');
+      const publicFile = path.join(stage, 'child-failure.json');
+      const privateProjection = JSON.parse(fs.readFileSync(privateFile, 'utf8')) as AnyRecord;
+      const publicProjection = JSON.parse(fs.readFileSync(publicFile, 'utf8')) as AnyRecord;
+      expect(privateProjection).toEqual({ schema: 'urn:reqproof:agent-governance:exp-0210-child-failure:v1', phase: 'replacement', boundary: 'restore', code: 'UNCLASSIFIED_CHILD_FAILURE' });
+      expect(publicProjection).toEqual(privateProjection);
+      expect(validateChildFailureProjection(privateProjection)).toBe(true);
+      expect(fs.statSync(privateFile).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(publicFile).mode & 0o777).toBe(0o600);
+      expect(JSON.stringify(publicProjection)).not.toMatch(/message|stderr|path|payload|prompt|raw|secret/i);
+
+      const publicBytes = fs.readFileSync(publicFile);
+      fs.writeFileSync(privateFile, `${JSON.stringify({ ...privateProjection, phase: 'pause' })}\n`, { encoding: 'utf8', mode: 0o600 });
+      expect(promoteChildFailure(stage, 'replacement')).toBeUndefined();
+      expect(fs.readFileSync(publicFile)).toEqual(publicBytes);
+      fs.writeFileSync(privateFile, `${JSON.stringify({ ...privateProjection, boundary: 'not-a-boundary', raw_output: 'secret' })}\n`, { encoding: 'utf8', mode: 0o600 });
+      expect(promoteChildFailure(stage, 'replacement')).toBeUndefined();
+      expect(fs.readFileSync(publicFile)).toEqual(publicBytes);
+
+      failureReceipt(stage, 'RUN_ONCE_FAILED');
+      const terminalFile = path.join(stage, 'run-once.failure.json');
+      const terminal = JSON.parse(fs.readFileSync(terminalFile, 'utf8')) as AnyRecord;
+      expect(terminal.child_failure).toEqual(publicProjection);
+      expect(fs.statSync(terminalFile).mode & 0o777).toBe(0o600);
+      expect(JSON.stringify(terminal)).not.toMatch(/message|stderr|path|payload|prompt|raw|secret/i);
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  }, 30_000);
 
   it('keeps the graph/pins bounded and isolates live-child/private receipt paths', () => {
     const source = fs.readFileSync(LIVE, 'utf8');
@@ -228,6 +358,16 @@ describe('EXP-0210 live preflight', () => {
     expect(source).toContain("latest_checkpoint: latestCheckpoint");
     expect(source).toContain("replacementSuffix.length !== STAGES.length + 1");
     expect(source).toContain("reconcileAttempts.length !== 1");
+    expect(source).toContain('resumeDispatchDecision(generation, selection.heldComponentId)');
+    expect(source).toContain("const CHILD_FAILURE_BOUNDARIES = new Set([");
+    expect(source).toContain("'continue_current_catalog', 'graph_dispatch', 'cleanup'");
+    expect(source).toContain("'result_write', 'result_read', 'child_process'");
+    expect(source).toContain('let hasPrimaryError = false;');
+    expect(source).toContain('if (!hasPrimaryError) throw error;');
+    expect(source).toContain('selectPrimaryFailure(hasPrimaryError, primaryError, failureBoundary, error, childBoundary)');
+    expect(source).toContain('promoteChildFailure(stage, mode)');
+    expect(source).toContain('projection.phase !== phase');
+    expect(source).toContain("child_failure: childFailure");
   });
 
   it('aggregates pause and resume fragments without losing either rejection', () => {

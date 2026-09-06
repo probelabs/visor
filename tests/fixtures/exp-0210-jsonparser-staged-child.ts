@@ -14,6 +14,7 @@ import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { canonicalJson, immutableCanonicalValue } from '../../src/state-machine/graph/claim-kernel';
 import { validateProofCurrentCatalogAuthorityBytes } from '../../src/providers/proof-catalog-check-providers';
 import { createProofAdmissionCapability } from '../../src/providers/proof-admission-cli-child';
+import { resumeDispatchDecision } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
 
 type Any = Record<string, any>;
 const PROFILE = path.resolve(__dirname, '../../examples/agent-governance/exp-0210-jsonparser-staged/visor.yaml');
@@ -166,7 +167,16 @@ async function runEngine(binary: string, workspace: string, config: Any, compone
   const restore = installProbe(capability, components, calls);
   try {
     const engine = new StateMachineExecutionEngine(workspace);
-    if (mode === 'resume') return { ...(await engine.resumeGraphCheckpoint({ checkpoint, config, prInfo: PR, maxParallelism: 3 })), calls };
+    if (mode === 'resume') {
+      const view = project(checkpoint, config);
+      const held = components.find(component => {
+        const instance = Object.values(view.instancesById).find((value: any) => value.itemKey === component.id) as Any;
+        return !!instance && Object.values(view.generationsById).some((value: any) => value.subgraphInstanceId === instance.subgraphInstanceId && value.checkId === 'inspect' && value.status === 'ready');
+      })?.id;
+      if (!held) throw new Error('resume held component is not derived from the paused checkpoint');
+      const gate = (generation: Any): 'dispatch' | 'defer' => resumeDispatchDecision(generation, String(held));
+      return { ...(await engine.resumeGraphCheckpoint({ checkpoint, config, prInfo: PR, maxParallelism: 3, generatedDispatchGate: gate })), calls, heldComponentId: held };
+    }
     const ordered = components.slice().sort((a, b) => Buffer.from(a.id).compare(Buffer.from(b.id)));
     const owners = ordered.filter(component => changedPaths.every(file => component.owned_paths.includes(file)));
     if (owners.length !== 1) throw new Error(`changed paths have ${owners.length} component owners`);
