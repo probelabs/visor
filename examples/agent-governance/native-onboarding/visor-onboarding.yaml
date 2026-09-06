@@ -1,0 +1,530 @@
+# Fresh native Proof onboarding. Discovery and catalog authority stay on sealed
+# Proof providers. Authoring is editable work; review is read-only evidence.
+version: "1.0"
+max_parallelism: 3
+fail_fast: false
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+limits:
+  max_runs_per_check: 1
+
+claim_types:
+  project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [project_id, root]
+            properties:
+              project_id: {type: string, minLength: 1}
+              root: {type: string, minLength: 1}
+  project.discovery_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [project_id, root]
+      properties:
+        project_id: {type: string, minLength: 1}
+        root: {type: string, minLength: 1}
+  proof.structural_inventory@1: {schema: {}}
+  proof.candidate@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [version, project_id, components]
+      properties:
+        version: {const: proof.component-catalog-candidate/v1}
+        project_id: {type: string, minLength: 1}
+        components:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, responsibility, owned_paths]
+            properties:
+              id: {type: string, minLength: 1}
+              responsibility: {type: string, minLength: 1}
+              owned_paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+              dependency_closure: {type: array, items: {type: string, minLength: 1}}
+              entry_points: {type: array, items: {type: string, minLength: 1}}
+              state_effects: {type: array, items: {type: string, minLength: 1}}
+              interfaces: {type: array, items: {}}
+              uncertainty: {type: array, items: {type: string, minLength: 1}}
+  proof.admitted_receipt@1: {schema: {}}
+  proof.catalog_revalidation@1: {schema: {}}
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 1
+          items: {type: object}
+  component.work_item@1:
+    schema:
+      type: object
+      required: [component_id]
+      properties:
+        component_id: {type: string, minLength: 1}
+  proof.project_reconciliation_receipt@1: {schema: {}}
+  native.role.onboard@1: {schema: {type: string, minLength: 1}}
+  native.role.spec_review@1: {schema: {type: string, minLength: 1}}
+  native.author.evidence@1: {schema: {}}
+  native.requirement.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [component_id, items]
+      properties:
+        component_id: {type: string, minLength: 1}
+        items:
+          type: array
+          minItems: 1
+          items: {type: object}
+  native.requirement.item@1:
+    schema:
+      type: object
+      required: [id, component_id, proof_snapshot, proof_file_hash]
+      properties:
+        id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        proof_file_hash: {type: string, minLength: 1}
+        proof_snapshot: {type: object}
+  native.review.candidate@1: {schema: {}}
+  native.review.packet@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, component_id, candidate, requirements]
+      properties:
+        id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        candidate: {}
+        requirements: {type: array, minItems: 1, items: {type: object}}
+  native.component.reviewed@1:
+    schema:
+      type: object
+      required: [component_id, status, item_count, packets]
+      properties:
+        component_id: {type: string, minLength: 1}
+        status: {type: string, minLength: 1}
+        item_count: {type: integer, minimum: 1}
+        packets: {type: array, minItems: 1}
+  native.component.summary@1:
+    schema:
+      type: object
+      required: [component_id, status, freshness, validation, audit, checklist]
+      properties:
+        component_id: {type: string, minLength: 1}
+        status: {type: string, minLength: 1}
+        freshness: {type: array, minItems: 1}
+        validation: {type: object}
+        audit: {type: object}
+        checklist: {type: object}
+        open_native_checks: {type: array, items: {type: object}}
+
+checks:
+  project:
+    type: memory
+    operation: set
+    key: project-catalog
+    value:
+      projects:
+        - project_id: jsonparser
+          root: .
+    emits:
+      - {claim: project.catalog@1, from: output}
+    expand:
+      claim: project.catalog@1
+      template: discover-project
+      items_pointer: /projects
+      key_pointer: /project_id
+      item_claim: project.discovery_item@1
+
+subgraphs:
+  discover-project:
+    input: {name: project, claim: project.discovery_item@1}
+    checks:
+      structural_inventory:
+        type: proof-structural-inventory
+        consumes:
+          - {claim: project.discovery_item@1, as: project}
+        emits:
+          - {claim: proof.structural_inventory@1, from: output}
+      inspect:
+        type: governed-proof-inspect
+        message: >-
+          Discover natural independently onboardable components in the current
+          Proof inventory. Partition every observed path exactly once.
+        instructions: >-
+          Return only the canonical catalog supported by the supplied inventory.
+          The catalog may contain one or more components; impose no quota.
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject:
+            kind: project
+            id: jsonparser
+            fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          output_schema_id: proof.component-catalog-candidate@1
+          output_schema: __ENCODE_FROM_RESULT_SCHEMA__
+        invocation_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        result_schema: |
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "project_id", "components"],
+            "properties": {
+              "version": {"const": "proof.component-catalog-candidate/v1"},
+              "project_id": {"type": "string", "minLength": 1},
+              "components": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "responsibility", "owned_paths"],
+                  "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "responsibility": {"type": "string", "minLength": 1},
+                    "owned_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+                    "dependency_closure": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                    "entry_points": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                    "state_effects": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                    "interfaces": {"type": "array", "items": {}},
+                    "uncertainty": {"type": "array", "items": {"type": "string", "minLength": 1}}
+                  }
+                }
+              }
+            }
+          }
+        consumes:
+          - {claim: project.discovery_item@1, as: project}
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+        emits:
+          - {claim: proof.candidate@1, from: output}
+      proof_admit:
+        type: proof-admit
+        consumes:
+          - {claim: proof.candidate@1, as: candidate}
+        emits:
+          - {claim: proof.admitted_receipt@1, from: output}
+      verify:
+        type: noop
+        consumes:
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+      revalidate_catalog:
+        type: proof-catalog-revalidate
+        depends_on: [verify]
+        consumes:
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+        emits:
+          - {claim: proof.catalog_revalidation@1, from: output}
+      materialize_catalog:
+        type: proof-admitted-catalog
+        consumes:
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+          - {claim: proof.catalog_revalidation@1, as: current_revalidation}
+        emits:
+          - {claim: component.catalog@1, from: output}
+        expand:
+          claim: component.catalog@1
+          template: onboard-component
+          items_pointer: /components
+          key_pointer: /component_id
+          item_claim: component.work_item@1
+      project_reconcile:
+        type: proof-project-reconcile
+        depends_on: [materialize_catalog]
+        wait_for_expansion:
+          owner: materialize_catalog
+          terminal_node: verify
+        emits:
+          - {claim: proof.project_reconciliation_receipt@1, from: output}
+
+  onboard-component:
+    input: {name: component, claim: component.work_item@1}
+    checks:
+      role-onboard-component:
+        type: command
+        timeout: 120000
+        schema: plain
+        transform_js: |
+          return String(output);
+        consumes:
+          - {claim: component.work_item@1, as: component}
+        emits:
+          - {claim: native.role.onboard@1, from: output}
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          "$PROOF_BIN" role show onboard --format agent
+
+      author-native-component:
+        type: ai
+        depends_on: [role-onboard-component]
+        timeout: 1800000
+        criticality: internal
+        schema: plain
+        resource_group: proof-workspace-mutation
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.role.onboard@1, as: role}
+        emits:
+          - {claim: native.author.evidence@1, from: output}
+        prompt: |
+          You are the editable native Proof onboarding author for exactly one
+          authenticated component WorkItem. The current directory is the
+          authorized subject checkout. Use the runtime Proof executable from
+          PROOF_BIN and the exact WorkItem and built-in role supplied below.
+          Do not inspect or modify any protected original checkout.
+
+          {{ outputs | json }}
+
+          Materialize real native Proof requirements, vars, annotations, and
+          trace links supported by this component's source. Use original native
+          Proof files and commands; do not create a custom compiler, opaque
+          artifact manifest, or model-only requirement IDs. Keep source behavior
+          unchanged: source comments and Proof spec files are allowed. Bind
+          every requirement row and scoped variable you create to the exact
+          WorkItem.component_id; do not use a neighboring component name. After
+          writing, inspect the native rows and report an explicit
+          unmapped_authored_requirements list for anything that cannot be
+          mapped to this WorkItem, then fail rather than silently omitting it.
+          Return an operational summary only after writing native files. This
+          output is not a candidate, admission receipt, or approval.
+        ai:
+          model: gpt-5.6-luna
+          prompt_type: engineer
+          allowEdit: true
+          allowBash: true
+          allowedTools: [search, extract, listFiles, edit, create, bash]
+          max_iterations: 80
+          timeout: 1500000
+          retry:
+            maxRetries: 0
+          bashConfig:
+            workingDirectory: .
+            disableDefaultAllow: true
+            deny: ["rm:*", "sudo:*", "git:push", "git:reset", "git:clean"]
+        ai_bash_config_js: |
+          if (!env.PROOF_BIN) return { allow: [] };
+          return {
+            allow: [
+              env.PROOF_BIN + ':*',
+              'git:status', 'git:diff', 'git:diff:*',
+              'go:test', 'go:test:*', 'go:vet', 'go:vet:*',
+            ],
+          };
+
+      enumerate-native-requirements:
+        type: command
+        depends_on: [author-native-component]
+        timeout: 180000
+        resource_group: proof-workspace-mutation
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.author.evidence@1, as: author}
+        emits:
+          - {claim: native.requirement.catalog@1, from: output}
+        exec: |
+          set -eu
+          node - "$PROOF_BIN" <<'NODE'
+          const {execFileSync} = require('node:child_process');
+          const proof = process.argv[2];
+          const deps = {{ outputs | json }};
+          const workItem = deps['materialize_catalog'];
+          if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string') throw new Error('native requirement enumeration missing exact materialized WorkItem');
+          const componentId = workItem.component_id;
+          const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], {encoding: 'utf8'}));
+          const unmapped = rows.filter(row => !row || typeof row.component !== 'string' || row.component.length === 0);
+          if (unmapped.length) throw new Error('unmapped authored native requirements: ' + JSON.stringify(unmapped.map(row => row && row.id ? row.id : row)));
+          const items = rows.filter(row => row && row.component === componentId).map(row => {
+            const shown = JSON.parse(execFileSync(proof, ['req', 'show', row.id, '--with', 'file', '--format', 'json'], {encoding: 'utf8'}));
+            const requirement = shown && shown.requirement;
+            if (!requirement || requirement.id !== row.id || shown.file_path !== row.file_path) throw new Error('Proof req show does not match req list for ' + row.id);
+            const hash = requirement._computed && requirement._computed.file_hash;
+            if (typeof hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(hash)) throw new Error('Proof req show has no computed file hash for ' + row.id);
+            const graph = JSON.parse(execFileSync(proof, ['spec', 'graph', '--focus', row.id, '--format', 'json'], {encoding: 'utf8'}));
+            return {...row, proof_file_hash: hash, proof_snapshot: {req_show: shown, spec_graph: graph}};
+          });
+          if (!items.length) throw new Error('native Proof catalog has no requirements for ' + componentId);
+          process.stdout.write(JSON.stringify({component_id: componentId, items}));
+          NODE
+
+      role-spec-review-component:
+        type: command
+        timeout: 120000
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+        emits:
+          - {claim: native.role.spec_review@1, from: output}
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          "$PROOF_BIN" role show spec-review --format agent
+
+      review-native-component:
+        type: ai
+        depends_on: [enumerate-native-requirements, role-spec-review-component]
+        timeout: 540000
+        criticality: policy
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.requirement.catalog@1, as: catalog}
+          - {claim: native.role.spec_review@1, as: role}
+        emits:
+          - {claim: native.review.candidate@1, from: output}
+        prompt: |
+          Independently review the actual native Proof requirement catalog for
+          exactly one component, read-only. The catalog contains each real
+          req show --with file snapshot and focused spec graph. Use only
+          search, extract, and listFiles; do not edit, create, run Bash, run
+          Proof commands, or claim Proof admission. Return concise findings
+          tied to exact requirement IDs and unresolved questions. This is
+          operational review evidence, not native approval.
+
+          Follow the exact runtime built-in spec-review role text supplied by
+          `role-spec-review-component`; it is operating guidance, not an
+          admission receipt. Exact generated component, role, and requirement
+          context:
+          {{ outputs | json }}
+        ai:
+          codex_execution_profile: luna-xhigh-readonly-v1
+          max_iterations: 12
+          timeout: 480000
+          prompt_type: engineer
+
+      persist-review-packet:
+        type: command
+        depends_on: [review-native-component]
+        timeout: 120000
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.requirement.catalog@1, as: catalog}
+          - {claim: native.review.candidate@1, as: candidate}
+        emits:
+          - {claim: native.review.packet@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const deps = {{ outputs | json }};
+          const catalog = deps['enumerate-native-requirements'];
+          if (!catalog || typeof catalog !== 'object' || !Array.isArray(catalog.items) || typeof catalog.component_id !== 'string') throw new Error('review packet missing exact native requirement catalog');
+          const candidate = deps['review-native-component'];
+          if (candidate === undefined) throw new Error('review packet missing independent review candidate');
+          const packet = {id: 'component-' + catalog.component_id, component_id: catalog.component_id, candidate, requirements: catalog.items};
+          const root = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+          if (!root) throw new Error('NATIVE_ONBOARDING_OUTPUT_DIR is required');
+          const encodedId = Buffer.from(catalog.component_id, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+          const file = path.join(root, 'review-packets', encodedId + '.json');
+          fs.mkdirSync(path.dirname(file), {recursive: true});
+          const serialized = JSON.stringify(packet, null, 2) + '\n';
+          JSON.parse(serialized);
+          fs.writeFileSync(file, serialized, 'utf8');
+          JSON.parse(fs.readFileSync(file, 'utf8'));
+          process.stdout.write(JSON.stringify(packet));
+          NODE
+
+      component-reviewed:
+        type: command
+        depends_on: [persist-review-packet]
+        timeout: 120000
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.review.packet@1, as: packet}
+        emits:
+          - {claim: native.component.reviewed@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const deps = {{ outputs | json }};
+          const packet = deps['persist-review-packet'];
+          if (!packet || typeof packet !== 'object' || !Array.isArray(packet.requirements) || typeof packet.component_id !== 'string') throw new Error('review fan-in missing exact persisted packet');
+          const encodedId = Buffer.from(packet.component_id, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+          const file = path.join(process.env.NATIVE_ONBOARDING_OUTPUT_DIR, 'review-packets', encodedId + '.json');
+          if (!fs.existsSync(file)) throw new Error('missing persisted review packet ' + file);
+          process.stdout.write(JSON.stringify({component_id: packet.component_id, status: 'reviewed-component-catalog-persisted', item_count: packet.requirements.length, packets: [file], open_step: 'per-requirement Graph-v2 expansion is deferred because this graph already uses its single nested expansion for natural component scopes'}));
+          NODE
+
+      native-validation:
+        type: command
+        depends_on: [component-reviewed]
+        resource_group: proof-workspace-mutation
+        timeout: 900000
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.component.reviewed@1, as: reviewed}
+        emits:
+          - {claim: native.component.summary@1, from: output}
+        exec: |
+          set -eu
+          node - "$PROOF_BIN" <<'NODE'
+          const {execFileSync} = require('node:child_process');
+          const proof = process.argv[2];
+          const deps = {{ outputs | json }};
+          const workItem = deps['materialize_catalog'];
+          if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string') throw new Error('native validation missing exact materialized WorkItem');
+          const componentId = workItem.component_id;
+          const run = args => {
+            try { const stdout = execFileSync(proof, args, {encoding: 'utf8'}); return {exit_code: 0, value: JSON.parse(stdout)}; }
+            catch (error) { return {exit_code: typeof error.status === 'number' ? error.status : 1, stdout: String(error.stdout || ''), stderr: String(error.stderr || error.message || error)}; }
+          };
+          const listed = run(['req', 'list', '--format', 'json']);
+          if (listed.exit_code !== 0 || !Array.isArray(listed.value)) throw new Error('native validation req list failed');
+          const items = listed.value.filter(row => row && row.component === componentId);
+          if (!items.length) throw new Error('native validation found no requirements for ' + componentId);
+          const freshness = items.map(row => {
+            const shown = run(['req', 'show', row.id, '--with', 'file', '--format', 'json']);
+            const req = shown.value && shown.value.requirement;
+            if (shown.exit_code !== 0 || !req || req.id !== row.id || shown.value.file_path !== row.file_path || typeof req._computed?.file_hash !== 'string') throw new Error('native validation req show failed for ' + row.id);
+            return {id: row.id, file_path: row.file_path, file_hash: req._computed.file_hash};
+          });
+          const validation = run(['validate', '--variable-drift', '--format', 'json']);
+          const audit = run(['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json']);
+          const checklist = run(['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json']);
+          const statusDetail = run(['status', '--format', 'json']);
+          const openNativeChecks = [
+            ['validate', validation],
+            ['audit', audit],
+            ['checklist', checklist],
+            ['status', statusDetail],
+          ].filter(([, result]) => result.exit_code !== 0).map(([name, result]) => ({name, exit_code: result.exit_code}));
+          const output = {component_id: componentId, status: validation.exit_code !== 0 || statusDetail.exit_code !== 0 ? 'native-validation-failed' : 'validated-native-state-recorded', freshness, validation, audit, checklist, status_detail: statusDetail, open_native_checks: openNativeChecks, reviewed: deps['component-reviewed'] || null};
+          process.stdout.write(JSON.stringify(output));
+          if (validation.exit_code !== 0 || statusDetail.exit_code !== 0) process.exitCode = 1;
+          NODE
+
+      verify:
+        type: noop
+        depends_on: [native-validation]
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.component.summary@1, as: summary}

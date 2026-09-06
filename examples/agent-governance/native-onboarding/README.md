@@ -176,6 +176,57 @@ pause is not in-flight overlap or demonstrated interruption recovery. This
 prototype does not claim concurrent per-spec Proof validation; selective
 reruns, project reconciliation, and full-campaign admission remain deferred.
 
+## Fresh native onboarding flow
+
+`visor-onboarding.yaml` is the bounded fresh-project flow. Its launcher accepts
+generic absolute roots, checks the unannotated subject and protected original,
+requires a caller-provided private `CODEX_HOME` with no MCP/plugin/hook or
+subject-local Codex overrides, then runs `proof init` in the subject before
+loading the graph. It records only safe preflight facts; it never copies or
+prints authentication or raw Codex configuration.
+
+The fresh flow requires the reviewed Probe governed-profile source at commit
+`20f2f060` (the currently installed local module); this is still a source fix,
+not a published package release. The older `36c6cf04` source remains the
+historical Milestone A/B evidence and is not the fresh-flow pin.
+
+```sh
+SUBJECT_BASELINE_REVISION=cb835d480ac58e1b4be76afeac49e89ed651c3b5 \
+REQUEST_TIMEOUT=480000 \
+TS_NODE_TRANSPILE_ONLY=1 npx ts-node examples/agent-governance/native-onboarding/run-onboarding.ts \
+  --subject-root /absolute/path/to/fresh-subject \
+  --original-root /absolute/path/to/jsonparser \
+  --proof-bin /private/tmp/proof-native-graph-tools.0B8QnO/proof \
+  --output /absolute/path/to/fresh-onboarding-output \
+  --timeout 1800000
+```
+
+`REQUEST_TIMEOUT` is required to be smaller than the outer timeout. The
+launcher sets `USE_CODEX=true`, `DISABLE_FALLBACK=1`, and `AUTO_FALLBACK=0`
+before any provider dispatch.
+
+For a zero-model boundary check on a disposable fresh subject, append
+`--preflight-only`; it still initializes Proof, resolves the real inventory and
+onboard role invocation, and strictly validates the actual registered providers,
+but does not dispatch Visor checks or AI workers.
+
+The graph lets Proof discover its natural component count, materializes one
+authenticated WorkItem at a time under the shared
+`proof-workspace-mutation` resource group, asks an ordinary editable worker to
+author native files, re-lists and shows the actual native requirements and
+focused graphs, runs a separate Luna/xhigh read-only review, persists review
+packets, and serializes native validation/audit/checklist/status. Review output
+is a candidate packet only; authoring and review never become native approval.
+
+The current Graph-v2 compiler permits one nested expansion owner. This flow
+uses that owner for natural component scopes, so the output explicitly records
+the open step “per-requirement Graph-v2 expansion” while the component packet
+still contains every real requirement snapshot. The output `summary.json`,
+`checkpoint.json`, `postflight.json`, and retained command streams distinguish
+discovery candidate/admission, reviewed packets, native validation, and the
+uncompleted component-admission/project-reconciliation boundary. No approval
+is inferred when that boundary remains open.
+
 ## Scope and deferred risk
 
 The slice is parser iteration/extraction, selected from the actual checkout by
