@@ -349,6 +349,8 @@ export interface AIProviderConfig {
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
   /** Model name to use */
   model?: string;
+  /** Closed execution profile for the read-only Luna xhigh worker path. */
+  codex_execution_profile?: 'luna-xhigh-readonly-v1';
   /** API key (usually from environment variables) */
   apiKey?: string;
   /** Request timeout in milliseconds */
@@ -719,6 +721,8 @@ export interface CheckConfig {
   wait_for_expansion?: WaitForExpansionConfig;
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
   group?: string;
+  /** Static Graph-v2 generated-attempt resource group; at most one runs at a time. */
+  resource_group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
   schema?: string | Record<string, unknown>;
   /**

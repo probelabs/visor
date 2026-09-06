@@ -1,5 +1,7 @@
 import { ProbeAgent } from '@probelabs/probe';
-import type { ProbeAgentOptions } from '@probelabs/probe';
+import type { GovernedCodexProfile, ProbeAgentOptions } from '@probelabs/probe';
+import fs from 'fs';
+import path from 'path';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
@@ -27,6 +29,133 @@ const PROBE_GRACEFUL_MARGIN_MS = 90_000;
  * as-is because there isn't enough room for a meaningful margin.
  */
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
+
+const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
+const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
+const LUNA_READONLY_MODEL = 'gpt-5.6-luna' as const;
+
+/**
+ * Build the profile object consumed by Probe's existing governed Codex path.
+ * This is deliberately the v1 profile: ordinary onboarding uses Probe's
+ * regular answer() API and does not produce Proof candidate/admission data.
+ */
+function buildLunaReadonlyProfile(cwd: string): GovernedCodexProfile {
+  return {
+    version: 'probe.governed-codex-profile/v1',
+    profileId: LUNA_READONLY_PROFILE,
+    engine: 'codex',
+    model: LUNA_READONLY_MODEL,
+    reasoningEffort: 'xhigh',
+    sandbox: 'read-only',
+    approvalPolicy: 'never',
+    cwd,
+    probeTools: [...LUNA_READONLY_TOOLS],
+    fallback: false,
+    retries: 0,
+  };
+}
+
+function resolveLunaReadonlyCwd(config: AIReviewConfig): string {
+  const configured = config.path || config.allowedFolders?.[0] || process.cwd();
+  const candidate = path.resolve(configured);
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(candidate);
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires an existing run working directory: ${candidate}`
+    );
+  }
+  try {
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires a directory run working directory: ${resolved}`
+    );
+  }
+  return resolved;
+}
+
+function assertLunaReadonlyConfig(config: AIReviewConfig): void {
+  if (config.codexExecutionProfile !== LUNA_READONLY_PROFILE) {
+    throw new Error(
+      `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
+    );
+  }
+
+  // Probe's Codex engine honors USE_CLAUDE_CODE independently of the
+  // explicit provider option. Reject the process-level override rather than
+  // mutating global environment state in a concurrent worker.
+  if (process.env.USE_CLAUDE_CODE === 'true') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} conflicts with USE_CLAUDE_CODE=true`
+    );
+  }
+
+  // A profile-selected call cannot inherit a mutable or multi-provider path.
+  if (config.provider !== undefined && config.provider !== 'codex') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} conflicts with provider ${String(config.provider)}`
+    );
+  }
+  if (config.model !== undefined && config.model !== LUNA_READONLY_MODEL) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} conflicts with model ${String(config.model)}`
+    );
+  }
+  if (config.retry !== undefined || config.fallback !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires fallback=false and retries=0`
+    );
+  }
+  if (config.allowEdit === true || config.allowBash === true || config.bashConfig !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects edit/create/bash capabilities`
+    );
+  }
+  if (
+    config.enableDelegate === true ||
+    config.enableTasks === true ||
+    config.enableExecutePlan === true
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects delegation/tasks/execute_plan`
+    );
+  }
+  if (
+    config.disableTools === true ||
+    (config.allowedTools !== undefined &&
+      (!Array.isArray(config.allowedTools) ||
+        config.allowedTools.length !== LUNA_READONLY_TOOLS.length ||
+        config.allowedTools.some((tool, index) => tool !== LUNA_READONLY_TOOLS[index])))
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires allowedTools exactly [search,extract,listFiles]`
+    );
+  }
+
+  const cwd = resolveLunaReadonlyCwd(config);
+  if (config.allowedFolders !== undefined) {
+    if (config.allowedFolders.length !== 1) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects extra allowed folders`
+      );
+    }
+    let folder: string;
+    try {
+      folder = fs.realpathSync(path.resolve(config.allowedFolders[0]));
+    } catch {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects unresolved allowed folders`
+      );
+    }
+    if (folder !== cwd) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} requires allowedFolders to equal the run working directory`
+      );
+    }
+  }
+}
 
 /**
  * Lightweight callback bridge for dynamically extending a withTimeout deadline.
@@ -544,7 +673,9 @@ export interface AIReviewConfig {
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 1800000ms (30 minutes)
   maxIterations?: number; // Maximum tool iterations for ProbeAgent
-  provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code';
+  provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code' | 'codex';
+  /** Closed Probe/Codex execution profile for ordinary read-only AI work. */
+  codexExecutionProfile?: 'luna-xhigh-readonly-v1';
   debug?: boolean; // Enable debug mode
   tools?: Array<{ name: string; [key: string]: unknown }>; // (unused) Legacy tool listing
   // Pass-through MCP server configuration for ProbeAgent
@@ -668,6 +799,12 @@ export class AIReviewService {
       timeout: 1800000, // Increased timeout to 30 minutes for AI responses
       ...config,
     };
+
+    // Validate the user-selected profile before provider auto-detection can
+    // replace an omitted provider with an environment-derived one.
+    if (this.config.codexExecutionProfile !== undefined) {
+      assertLunaReadonlyConfig(this.config);
+    }
 
     this.sessionRegistry = SessionRegistry.getInstance();
 
@@ -836,6 +973,13 @@ export class AIReviewService {
 
       return result;
     } catch (error) {
+      // A profile-selected runtime failure must remain a failure. In
+      // particular, debug mode must not turn a missing attestation, sandbox
+      // mismatch, provider override, or cleanup failure into a completed
+      // ordinary review summary.
+      if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+        throw error;
+      }
       if (debugInfo) {
         debugInfo.errors = [error instanceof Error ? error.message : String(error)];
         debugInfo.processingTime = Date.now() - startTime;
@@ -871,6 +1015,11 @@ export class AIReviewService {
     checkName?: string,
     sessionMode: 'clone' | 'append' = 'clone'
   ): Promise<ReviewSummary> {
+    if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects session reuse`
+      );
+    }
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
@@ -2609,6 +2758,34 @@ If you receive a message that the time limit has been reached or your operation 
         options.model = this.config.model;
       }
 
+      // Profile-selected ordinary AI uses Probe's existing governed Codex
+      // construction, while retaining the normal answer() API. The profile
+      // is deliberately applied last so environment/provider defaults and
+      // generic options cannot weaken the boundary.
+      if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+        const cwd = resolveLunaReadonlyCwd(this.config);
+        const governedCodexProfile = buildLunaReadonlyProfile(cwd);
+        options.provider = 'codex';
+        options.model = LUNA_READONLY_MODEL;
+        options.path = cwd;
+        (options as any).cwd = cwd;
+        options.allowEdit = false;
+        (options as any).enableBash = false;
+        (options as any).bashConfig = undefined;
+        (options as any).enableDelegate = false;
+        (options as any).enableTasks = false;
+        (options as any).enableExecutePlan = false;
+        (options as any).searchDelegate = false;
+        (options as any).enableMcp = false;
+        (options as any).mcpConfig = undefined;
+        (options as any).allowedFolders = [cwd];
+        options.allowedTools = [...LUNA_READONLY_TOOLS];
+        (options as any).disableTools = false;
+        (options as any).retry = undefined;
+        (options as any).fallback = undefined;
+        options.governedCodexProfile = governedCodexProfile;
+      }
+
       log(
         `🔧 ProbeAgent options: allowEdit=${(options as any).allowEdit}, enableBash=${(options as any).enableBash}, promptType=${options.promptType}`
       );
@@ -2964,7 +3141,7 @@ ${'='.repeat(60)}
       }
 
       // Register the session for potential reuse by dependent checks
-      if (_checkName) {
+      if (_checkName && this.config.codexExecutionProfile !== LUNA_READONLY_PROFILE) {
         // ProbeAgent.clone() will handle history filtering when this session is cloned
         this.registerSession(sessionId, agent);
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);

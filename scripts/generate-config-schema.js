@@ -115,6 +115,27 @@ async function generate() {
 
   hardenGovernedProofInspectFields(schema);
 
+  const checkProperties = schema?.definitions?.CheckConfig?.properties;
+  if (!checkProperties) {
+    throw new Error('generated schema is missing definitions.CheckConfig.properties');
+  }
+  checkProperties.resource_group = {
+    type: 'string',
+    minLength: 1,
+    maxLength: 64,
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
+    description: 'Static Graph-v2 generated-attempt resource group; at most one runs at a time.',
+  };
+  const aiProperties = schema?.definitions?.AIProviderConfig?.properties;
+  if (!aiProperties) {
+    throw new Error('generated schema is missing definitions.AIProviderConfig.properties');
+  }
+  aiProperties.codex_execution_profile = {
+    type: 'string',
+    enum: ['luna-xhigh-readonly-v1'],
+    description: 'Closed execution profile for the read-only Luna xhigh worker path.',
+  };
+
   const outDir = path.resolve(__dirname, '..', 'src', 'generated');
   const outFile = path.join(outDir, 'config-schema.ts');
   fs.mkdirSync(outDir, { recursive: true });

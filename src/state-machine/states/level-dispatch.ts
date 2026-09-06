@@ -164,6 +164,23 @@ function controllerWorkingDirectory(context: EngineContext): string {
   return resolved;
 }
 
+const RESOURCE_GROUP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+function resourceGroupForCheck(
+  checkConfig: CheckConfig | undefined,
+  dynamicKind?: DynamicExecution['kind']
+): string | undefined {
+  const resourceGroup = checkConfig?.resource_group;
+  if (resourceGroup === undefined) return undefined;
+  if (typeof resourceGroup !== 'string' || !RESOURCE_GROUP_PATTERN.test(resourceGroup)) {
+    throw new Error('resource_group must be a non-empty safe token of at most 64 characters');
+  }
+  if (dynamicKind !== 'generated') {
+    throw new Error('resource_group is supported only on Graph-v2 generated checks');
+  }
+  return resourceGroup;
+}
+
 function startCheckProgressTelemetry(
   checkId: string,
   providerType: string,
@@ -829,6 +846,7 @@ async function handleClaimReadyDispatch(
   state.levelQueue = [];
   const pending = new Set(queued);
   const running = new Map<string, Promise<void>>();
+  const activeResourceGroups = new Set<string>();
   let managedHaltApplied = false;
   let generatedDispatchGateHalted = false;
   const maxParallelism = context.maxParallelism || 10;
@@ -878,8 +896,44 @@ async function handleClaimReadyDispatch(
   };
 
   const launchGenerated = (generation: NodeGenerationProjection): void => {
-    const attempt = context.journal.startGeneratedAttempt(generation.nodeGenerationId);
-    const execution = context.journal.getGeneratedExecution(generation.nodeGenerationId);
+    const resourceGroup = resourceGroupForCheck(
+      context.journal.getGeneratedExecution(generation.nodeGenerationId).node.check,
+      'generated'
+    );
+    if (resourceGroup && activeResourceGroups.has(resourceGroup)) {
+      throw new Error(`resource_group ${resourceGroup} is already active`);
+    }
+    if (resourceGroup) activeResourceGroups.add(resourceGroup);
+    let attempt: GeneratedAttemptStartedEvent;
+    try {
+      attempt = context.journal.startGeneratedAttempt(generation.nodeGenerationId);
+    } catch (error) {
+      if (resourceGroup) activeResourceGroups.delete(resourceGroup);
+      throw error;
+    }
+    const releaseStartedAttempt = (): void => {
+      if (resourceGroup) activeResourceGroups.delete(resourceGroup);
+      try {
+        const projected = context.journal.getInstanceProjection().generationsById[
+          attempt.nodeGenerationId
+        ];
+        if (
+          projected?.status === 'running' &&
+          projected.attemptId === attempt.attemptId &&
+          projected.fence === attempt.fence
+        ) {
+          context.journal.failGeneratedAttempt(attempt, 'PROVIDER_EXECUTION_FAILED');
+        }
+      } catch {}
+    };
+    const execution = (() => {
+      try {
+        return context.journal.getGeneratedExecution(generation.nodeGenerationId);
+      } catch (error) {
+        releaseStartedAttempt();
+        throw error;
+      }
+    })();
     const key = generation.nodeGenerationId;
     const startedAt = Date.now();
     const generatedState: RunState = {
@@ -934,7 +988,10 @@ async function handleClaimReadyDispatch(
             context.journal.failGeneratedAttempt(attempt, 'PROVIDER_EXECUTION_FAILED');
           }
         }
-      } finally { running.delete(key); }
+      } finally {
+        if (resourceGroup) activeResourceGroups.delete(resourceGroup);
+        running.delete(key);
+      }
     })();
     running.set(key, task);
   };
@@ -982,6 +1039,11 @@ async function handleClaimReadyDispatch(
       if (!context.generatedDispatchGate) {
         for (const generation of context.journal.queryReadyWork()) {
           if (running.size >= maxParallelism) break;
+          const resourceGroup = resourceGroupForCheck(
+            context.journal.getGeneratedExecution(generation.nodeGenerationId).node.check,
+            'generated'
+          );
+          if (resourceGroup && activeResourceGroups.has(resourceGroup)) continue;
           launchGenerated(generation);
           launched = true;
         }
@@ -1006,6 +1068,11 @@ async function handleClaimReadyDispatch(
           generatedDispatchGateHalted = true;
         }
         for (const generation of dispatchable) {
+          const resourceGroup = resourceGroupForCheck(
+            context.journal.getGeneratedExecution(generation.nodeGenerationId).node.check,
+            'generated'
+          );
+          if (resourceGroup && activeResourceGroups.has(resourceGroup)) continue;
           if (running.size >= maxParallelism) break;
           launchGenerated(generation);
           launched = true;
@@ -2549,6 +2616,7 @@ async function executeSingleCheck(
 ): Promise<ReviewSummary> {
   // Check if this check depends on a forEach parent
   const checkConfig = dynamic?.checkConfig || context.config.checks?.[checkId];
+  resourceGroupForCheck(checkConfig, dynamic?.kind);
   const dynamicScope = (scopeOverride || []) as unknown as Array<{
     check: string;
     index: number;

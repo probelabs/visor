@@ -906,6 +906,14 @@ export const configSchema = {
           description:
             'Group name for comment separation (e.g., "code-review", "pr-overview") - optional',
         },
+        resource_group: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 64,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
+          description:
+            'Static Graph-v2 generated-attempt resource group; at most one runs at a time.',
+        },
         schema: {
           anyOf: [
             {
@@ -1491,6 +1499,11 @@ export const configSchema = {
         model: {
           type: 'string',
           description: 'Model name to use',
+        },
+        codex_execution_profile: {
+          type: 'string',
+          enum: ['luna-xhigh-readonly-v1'],
+          description: 'Closed execution profile for the read-only Luna xhigh worker path.',
         },
         apiKey: {
           type: 'string',

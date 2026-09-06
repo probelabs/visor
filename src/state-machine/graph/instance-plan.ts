@@ -20,6 +20,7 @@ const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const CONTROLLER_TIMEOUT_MIN = 1;
 const CONTROLLER_TIMEOUT_MAX = 2147483647;
+const RESOURCE_GROUP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Reserved EXP-0205 admission profile identifiers. */
 export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
@@ -708,6 +709,13 @@ function compileTemplate(
         `Template check "${name}.${nodeKey}" cannot use forEach, workflow, or lifecycle routing`
       );
     }
+    if (check.resource_group !== undefined &&
+        (typeof check.resource_group !== 'string' || !RESOURCE_GROUP_PATTERN.test(check.resource_group))) {
+      throw new InstancePlanError(
+        'INVALID_RESOURCE_GROUP',
+        `Template check "${name}.${nodeKey}" resource_group must be a non-empty safe token of at most 64 characters`
+      );
+    }
     if (check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
       validateGovernedInspectConfig(name, check, componentSelectorTemplateBindingAllowed(inputName, inputClaim, check), nodeKey === 'spec_review');
     }
@@ -928,6 +936,14 @@ export function compileExpansionPlan(
   authority: ExpansionCompileAuthority
 ): ExpansionPlan {
   const checks = config.checks || config.steps || {};
+  for (const [checkId, check] of Object.entries(checks)) {
+    if (check.resource_group !== undefined) {
+      throw new InstancePlanError(
+        'UNSUPPORTED_RESOURCE_GROUP_PLACEMENT',
+        `Check "${checkId}" declares resource_group outside a Graph-v2 subgraph template`
+      );
+    }
+  }
   const subgraphs = config.subgraphs;
   const owners = Object.entries(checks).filter(([, check]) => hasOwn(check, 'expand'));
   const hasSubgraphs = hasOwn(config, 'subgraphs');

@@ -31,6 +31,9 @@ import { getTaskProgressToolDefinition } from '../agent-protocol/task-progress-t
 import { extractSlackContext } from '../slack/schedule-tool-handler';
 import { formatUserFacingExecutionError } from '../utils/user-facing-error';
 
+const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
+const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
+
 /**
  * AI-powered check provider using probe agent
  */
@@ -134,6 +137,46 @@ export class AICheckProvider extends CheckProvider {
     // Validate AI provider config if present
     if (cfg.ai) {
       if (
+        cfg.ai.codex_execution_profile !== undefined &&
+        cfg.ai.codex_execution_profile !== LUNA_READONLY_PROFILE
+      ) {
+        return false;
+      }
+      if (cfg.ai.codex_execution_profile === LUNA_READONLY_PROFILE) {
+        const profileAi = cfg.ai as any;
+        if (
+          profileAi.provider !== undefined ||
+          (profileAi.model !== undefined && profileAi.model !== 'gpt-5.6-luna') ||
+          profileAi.retry !== undefined ||
+          profileAi.fallback !== undefined ||
+          profileAi.allowEdit === true ||
+          profileAi.allowBash === true ||
+          profileAi.bashConfig !== undefined ||
+          profileAi.enableDelegate === true ||
+          profileAi.enableTasks === true ||
+          profileAi.enableExecutePlan === true ||
+          profileAi.disableTools === true ||
+          (profileAi.allowedTools !== undefined &&
+            (!Array.isArray(profileAi.allowedTools) ||
+              profileAi.allowedTools.length !== LUNA_READONLY_TOOLS.length ||
+              profileAi.allowedTools.some(
+                (tool: unknown, index: number) => tool !== LUNA_READONLY_TOOLS[index]
+              ))) ||
+          (Array.isArray(profileAi.extra_allowed_folders) &&
+            profileAi.extra_allowed_folders.length > 0) ||
+          (profileAi.mcpServers && Object.keys(profileAi.mcpServers).length > 0) ||
+          ((cfg as any).ai_mcp_servers &&
+            Object.keys((cfg as any).ai_mcp_servers).length > 0) ||
+          (cfg as any).ai_mcp_servers_js ||
+          (cfg as any).ai_custom_tools ||
+          (cfg as any).ai_custom_tools_js ||
+          (cfg as any).ai_bash_config_js ||
+          (cfg as any).ai_extra_allowed_folders_js
+        ) {
+          return false;
+        }
+      }
+      if (
         cfg.ai.provider &&
         !['google', 'anthropic', 'openai', 'bedrock', 'mock'].includes(cfg.ai.provider as string)
       ) {
@@ -146,6 +189,19 @@ export class AICheckProvider extends CheckProvider {
           return false;
         }
       }
+    }
+
+    if (
+      cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE &&
+      ((cfg as any).ai_provider !== undefined ||
+        ((cfg as any).ai_model !== undefined &&
+          (cfg as any).ai_model !== 'gpt-5.6-luna') ||
+        (cfg as any).reuse_ai_session === true ||
+        typeof (cfg as any).reuse_ai_session === 'string')
+    ) {
+      // Top-level provider/model/session reuse settings are resolved during
+      // execution, but a profile-selected check can reject them early.
+      if (cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE) return false;
     }
 
     // Validate check-level MCP servers if present
@@ -847,6 +903,12 @@ export class AICheckProvider extends CheckProvider {
           aiConfig.model = modelVal;
         }
       }
+      if (aiAny.codex_execution_profile !== undefined) {
+        const profile =
+          (await resolveLiquid(aiAny.codex_execution_profile)) ??
+          String(aiAny.codex_execution_profile);
+        aiConfig.codexExecutionProfile = profile as 'luna-xhigh-readonly-v1';
+      }
       if (aiAny.timeout !== undefined) {
         const resolvedTimeout = (await resolveLiquid(aiAny.timeout)) ?? aiAny.timeout;
         aiConfig.timeout = Number(resolvedTimeout);
@@ -878,7 +940,13 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.provider !== undefined) {
         const providerVal = (await resolveLiquid(aiAny.provider)) ?? String(aiAny.provider);
         if (providerVal) {
-          aiConfig.provider = providerVal as 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
+          aiConfig.provider = providerVal as
+            | 'google'
+            | 'anthropic'
+            | 'openai'
+            | 'bedrock'
+            | 'mock'
+            | 'codex';
         }
       }
       if (aiAny.debug !== undefined) {
@@ -1073,6 +1141,28 @@ export class AICheckProvider extends CheckProvider {
       // Best-effort only; fall back to defaults on error.
     }
 
+    // The closed Luna profile is scoped to the actual run working directory
+    // (the checked-out project), never the multi-project workspace root or
+    // any additional folder supplied by an ordinary AI check.
+    if (aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+      const aiAny = (config.ai || {}) as any;
+      const extraFolders = aiAny.extra_allowed_folders;
+      if (Array.isArray(extraFolders) && extraFolders.length > 0) {
+        throw new Error(
+          `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects extra allowed folders`
+        );
+      }
+      const parentCtx: any = (sessionInfo as any)?._parentContext;
+      const runDirectory =
+        typeof parentCtx?.workingDirectory === 'string'
+          ? parentCtx.workingDirectory
+          : (aiConfig as any).path || process.cwd();
+      (aiConfig as any).path = runDirectory;
+      (aiConfig as any).cwd = runDirectory;
+      (aiConfig as any).workspacePath = runDirectory;
+      (aiConfig as any).allowedFolders = [runDirectory];
+    }
+
     // Check-level AI model and provider (top-level properties)
     if (config.ai_model !== undefined) {
       aiConfig.model = config.ai_model as string;
@@ -1092,6 +1182,71 @@ export class AICheckProvider extends CheckProvider {
     // Guard against NaN from template rendering (e.g., Number("{{ ... }}") = NaN)
     if (aiConfig.maxIterations === undefined || Number.isNaN(aiConfig.maxIterations)) {
       aiConfig.maxIterations = 100;
+    }
+
+    if (aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+      const aiAny = (config.ai || {}) as any;
+      const reject = (message: string): never => {
+        throw new Error(`codex_execution_profile ${LUNA_READONLY_PROFILE} ${message}`);
+      };
+      if (aiConfig.provider !== undefined && aiConfig.provider !== 'codex') {
+        reject(`conflicts with provider ${String(aiConfig.provider)}`);
+      }
+      if (aiConfig.model !== undefined && aiConfig.model !== 'gpt-5.6-luna') {
+        reject(`conflicts with model ${String(aiConfig.model)}`);
+      }
+      if (config.ai_provider !== undefined && config.ai_provider !== 'codex') {
+        reject(`conflicts with provider ${String(config.ai_provider)}`);
+      }
+      if (config.ai_model !== undefined && config.ai_model !== 'gpt-5.6-luna') {
+        reject(`conflicts with model ${String(config.ai_model)}`);
+      }
+      if (aiAny.retry !== undefined || aiAny.fallback !== undefined) {
+        reject('requires fallback=false and retries=0');
+      }
+      if (aiConfig.allowEdit === true || aiConfig.allowBash === true || aiAny.bashConfig !== undefined) {
+        reject('rejects edit/create/bash capabilities');
+      }
+      if (
+        aiConfig.enableDelegate === true ||
+        aiConfig.enableTasks === true ||
+        aiConfig.enableExecutePlan === true
+      ) {
+        reject('rejects delegation/tasks/execute_plan');
+      }
+      if (aiConfig.disableTools === true) {
+        reject('requires allowedTools exactly [search,extract,listFiles]');
+      }
+      if (
+        aiConfig.allowedTools !== undefined &&
+        (!Array.isArray(aiConfig.allowedTools) ||
+          aiConfig.allowedTools.length !== LUNA_READONLY_TOOLS.length ||
+          aiConfig.allowedTools.some((tool, index) => tool !== LUNA_READONLY_TOOLS[index]))
+      ) {
+        reject('requires allowedTools exactly [search,extract,listFiles]');
+      }
+      if ((config as any).reuse_ai_session === true || typeof (config as any).reuse_ai_session === 'string') {
+        reject('rejects session reuse');
+      }
+      if (sessionInfo?.reuseSession || sessionInfo?.parentSessionId) {
+        reject('rejects session reuse');
+      }
+      const allowedFolders = (aiConfig as any).allowedFolders;
+      if (!Array.isArray(allowedFolders) || allowedFolders.length !== 1) {
+        reject('rejects extra allowed folders');
+      }
+      if ((config as any).ai_custom_tools_js) {
+        reject('requires only Probe tools [search,extract,listFiles]');
+      }
+      if ((config as any).ai_mcp_servers_js && !_dependencyResults) {
+        reject('requires only Probe tools [search,extract,listFiles]');
+      }
+      if ((config as any).ai_allowed_tools_js && !_dependencyResults) {
+        reject('requires allowedTools exactly [search,extract,listFiles]');
+      }
+      if ((config as any).ai_extra_allowed_folders_js && !_dependencyResults) {
+        reject('rejects extra allowed folders');
+      }
     }
 
     // Pass shared concurrency limiter for global AI call gating
@@ -1129,6 +1284,18 @@ export class AICheckProvider extends CheckProvider {
           );
         } catch {}
       }
+    }
+
+    if (
+      aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE &&
+      aiConfig.allowedTools !== undefined &&
+      (!Array.isArray(aiConfig.allowedTools) ||
+        aiConfig.allowedTools.length !== LUNA_READONLY_TOOLS.length ||
+        aiConfig.allowedTools.some((tool, index) => tool !== LUNA_READONLY_TOOLS[index]))
+    ) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} requires allowedTools exactly [search,extract,listFiles]`
+      );
     }
 
     // Get custom prompt from config - REQUIRED, no fallbacks
@@ -1218,6 +1385,15 @@ export class AICheckProvider extends CheckProvider {
           });
         }
       } catch {}
+    }
+
+    if (
+      aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE &&
+      Object.keys(mcpServers).length > 0
+    ) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} requires only Probe tools [search,extract,listFiles]`
+      );
     }
 
     // 5. Resolve environment variable placeholders in MCP server env configs and headers
@@ -1389,6 +1565,15 @@ export class AICheckProvider extends CheckProvider {
       if (!customToolsServerName) {
         customToolsServerName = '__tools__';
       }
+    }
+
+    if (
+      aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE &&
+      customToolsToLoad.length > 0
+    ) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} requires only Probe tools [search,extract,listFiles]`
+      );
     }
 
     // Option 5: Handle built-in tools (currently just 'schedule')
@@ -1752,6 +1937,11 @@ export class AICheckProvider extends CheckProvider {
 
     // Evaluate ai_bash_config_js for dynamic bash command permissions
     const bashConfigJsExpr = (config as any).ai_bash_config_js as string | undefined;
+    if (aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE && bashConfigJsExpr) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects edit/create/bash capabilities`
+      );
+    }
     if (bashConfigJsExpr && _dependencyResults) {
       try {
         const dynamicBashConfig = this.evaluateBashConfigJs(
@@ -1796,6 +1986,15 @@ export class AICheckProvider extends CheckProvider {
           config
         );
         if (dynamicAllowedTools !== null) {
+          if (
+            aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE &&
+            (dynamicAllowedTools.length !== LUNA_READONLY_TOOLS.length ||
+              dynamicAllowedTools.some((tool, index) => tool !== LUNA_READONLY_TOOLS[index]))
+          ) {
+            throw new Error(
+              `codex_execution_profile ${LUNA_READONLY_PROFILE} requires allowedTools exactly [search,extract,listFiles]`
+            );
+          }
           aiConfig.allowedTools = dynamicAllowedTools;
           this.logDebug(
             `[AI Provider] ai_allowed_tools_js evaluated to: ${JSON.stringify(dynamicAllowedTools)}`
@@ -1819,6 +2018,11 @@ export class AICheckProvider extends CheckProvider {
           config
         );
         if (Array.isArray(result) && result.length > 0) {
+          if (aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+            throw new Error(
+              `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects extra allowed folders`
+            );
+          }
           const existing = (aiConfig as any).allowedFolders || [];
           (aiConfig as any).allowedFolders = [
             ...existing,
