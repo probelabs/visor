@@ -6,6 +6,7 @@ import type {
   ManagedAgentRun,
   ManagedRunOutcomeV1,
 } from './check-provider.interface';
+import { logger } from '../logger';
 import { canonicalJson } from '../state-machine/graph/claim-kernel';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
 import {
@@ -33,6 +34,7 @@ export const PROOF_ADMISSION_REQUEST_MAX_BYTES = 2162688;
 const REQUEST_LIMIT = PROOF_ADMISSION_REQUEST_MAX_BYTES;
 const STDOUT_LIMIT = PROOF_ADMISSION_OUTPUT_MAX_BYTES;
 const STDERR_LIMIT = 65536;
+const FAILED_LOG_STREAM_LIMIT = 4096;
 // The Proof child may invoke Git for project lineage. Keep this environment
 // deliberately small and identical for C0 and every managed onboarding call.
 const PROOF_CHILD_ENV = Object.freeze({ PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' });
@@ -1194,9 +1196,11 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
   let exitCode: number | null | undefined;
   let signal: NodeJS.Signals | null | undefined;
   let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0);
+  let stdoutBytes = 0, stderrBytes = 0;
   let stdoutEnd = false, stderrEnd = false, closeSeen = false, writeDone = false;
   let cleaned = false;
   let failed: string | undefined;
+  let failureLogged = false;
   let output: unknown;
   let accepted = false;
   let terminationRequested = false;
@@ -1212,6 +1216,36 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
   const outcome = new Promise<ManagedRunOutcomeV1>(resolve => { resolveOutcome = resolve; });
   const cleanup = new Promise<any>((resolve, reject) => { resolveCleanup = resolve; rejectCleanup = reject; });
   const failOnce = (reason: string) => { if (!failed) failed = reason; };
+  const emitFailureLog = (failureStage: string, reason: string): void => {
+    if (failureLogged) return;
+    failureLogged = true;
+    const stdoutLog = stdout.subarray(0, FAILED_LOG_STREAM_LIMIT);
+    const stderrLog = stderr.subarray(0, FAILED_LOG_STREAM_LIMIT);
+    const record = {
+      event: 'proof_managed_cli_failed',
+      command: [...request.command],
+      binding: {
+        managedRunId: binding.managedRunId,
+        checkId: binding.checkId,
+        attemptId: binding.attemptId,
+      },
+      failure_stage: failureStage,
+      reason,
+      exit_code: exitCode ?? null,
+      signal: signal ?? null,
+      stdout: stdoutLog.toString('utf8'),
+      stderr: stderrLog.toString('utf8'),
+      stdout_original_bytes: stdoutBytes,
+      stderr_original_bytes: stderrBytes,
+      stdout_truncated: stdoutBytes > stdoutLog.length,
+      stderr_truncated: stderrBytes > stderrLog.length,
+    };
+    try { logger.error(JSON.stringify(record)); } catch { /* preserve the managed outcome if logging fails */ }
+  };
+  const resolveFailed = (failureStage: string, reason: string): void => {
+    emitFailureLog(failureStage, reason);
+    resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+  };
   const closeStreams = () => {
     for (const stream of [child?.stdin, child?.stdout, child?.stderr]) {
       if (stream && typeof (stream as any).destroy === 'function') (stream as any).destroy();
@@ -1225,7 +1259,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     if (reapTimer) { clearTimeout(reapTimer); reapTimer = undefined; }
     closeStreams();
     child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
-    resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+    resolveFailed('spawn', failed || 'child unavailable');
     resolveCleanup(Object.freeze({ version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }));
   };
   const reapOrSettle = () => {
@@ -1242,7 +1276,7 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
         if (timer) { clearTimeout(timer); timer = undefined; }
         closeStreams();
         child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
-        resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+        resolveFailed('cleanup', failed || 'process group reap timed out');
         rejectCleanup(new Error(PROOF_ADMISSION_CLEANUP_FAILED));
       } else reapOrSettle();
     }, 10);
@@ -1272,14 +1306,14 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     if (reapTimer) { clearTimeout(reapTimer); reapTimer = undefined; }
     child?.removeAllListeners(); child?.stdin?.removeAllListeners(); child?.stdout?.removeAllListeners(); child?.stderr?.removeAllListeners();
     if (cleanupFailed) {
-      resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+      resolveFailed('cleanup', failed || PROOF_ADMISSION_CLEANUP_FAILED);
       rejectCleanup(new Error(PROOF_ADMISSION_CLEANUP_FAILED));
       return;
     }
     if (!failed && accepted && writeDone && exitCode === 0 && signal === null && stderr.length === 0 && output !== undefined) {
       resolveOutcome(Object.freeze({ version: 1, kind: 'succeeded', binding, summary: Object.freeze({ issues: [], output }) }));
     } else {
-      resolveOutcome(Object.freeze({ version: 1, kind: 'failed', binding }));
+      resolveFailed('outcome', failed || (signal ? 'child terminated by signal' : exitCode !== 0 ? 'child exited nonzero' : 'managed outcome invalid'));
     }
     resolveCleanup(Object.freeze({ version: 1, kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }));
   };
@@ -1302,8 +1336,8 @@ export function startProofManagedCliChild(request: ProofManagedCliRequest, execu
     } catch { failOnce('decision protocol invalid'); }
   };
   const attach = (proc: ChildProcess) => {
-    proc.stdout?.on('data', (chunk: Buffer) => { const remaining = request.outputLimit - stdout.length; const append = Math.min(chunk.length, remaining); if (append > 0) stdout = Buffer.concat([stdout, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stdout limit exceeded'); killIfNeeded(); } });
-    proc.stderr?.on('data', (chunk: Buffer) => { const remaining = STDERR_LIMIT - stderr.length; const append = Math.min(chunk.length, remaining); if (append > 0) stderr = Buffer.concat([stderr, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stderr limit exceeded'); killIfNeeded(); } });
+    proc.stdout?.on('data', (chunk: Buffer) => { stdoutBytes += chunk.length; const remaining = request.outputLimit - stdout.length; const append = Math.min(chunk.length, remaining); if (append > 0) stdout = Buffer.concat([stdout, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stdout limit exceeded'); killIfNeeded(); } });
+    proc.stderr?.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; const remaining = STDERR_LIMIT - stderr.length; const append = Math.min(chunk.length, remaining); if (append > 0) stderr = Buffer.concat([stderr, chunk.subarray(0, append)]); if (chunk.length > remaining) { failOnce('stderr limit exceeded'); killIfNeeded(); } });
     proc.stdout?.on('end', () => { stdoutEnd = true; inspectStdout(); settle(); });
     proc.stderr?.on('end', () => { stderrEnd = true; settle(); });
     proc.on('error', () => {

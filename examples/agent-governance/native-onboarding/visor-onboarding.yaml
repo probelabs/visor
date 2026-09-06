@@ -53,8 +53,22 @@ claim_types:
             properties:
               id: {type: string, minLength: 1}
               responsibility: {type: string, minLength: 1}
-              owned_paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
-              dependency_closure: {type: array, items: {type: string, minLength: 1}}
+              owned_paths:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                description: Exact project-relative paths from Proof inventory.sorted_paths; include every file assigned to this component.
+                items:
+                  type: string
+                  minLength: 1
+                  description: "Exact project-relative inventory path, never a component ID, import name, package name, or prose."
+              dependency_closure:
+                type: array
+                description: If present and non-empty, exact project-relative inventory paths for the transitive in-repository closure and every owned_paths entry; omit or leave empty when unknown so Proof defaults it to owned_paths.
+                items:
+                  type: string
+                  minLength: 1
+                  description: "Exact project-relative inventory path, never a component ID, import name, package name, language label, or prose."
               entry_points: {type: array, items: {type: string, minLength: 1}}
               state_effects: {type: array, items: {type: string, minLength: 1}}
               interfaces: {type: array, items: {}}
@@ -166,7 +180,15 @@ subgraphs:
         type: governed-proof-inspect
         message: >-
           Discover natural independently onboardable components in the current
-          Proof inventory. Partition every observed path exactly once.
+          Proof inventory. Partition every observed path exactly once. The
+          `owned_paths` and `dependency_closure` values must be exact
+          project-relative path strings from `inventory.sorted_paths`: include
+          every owned path, and when a non-empty dependency closure is given,
+          include every owned path plus transitive in-repository dependency
+          files. Omit the closure or return it empty when dependencies are
+          unknown so Proof defaults it to the owned paths. Never put component
+          IDs, import/package names, language labels, or prose in either path
+          array; semantic dependency names belong in interfaces or uncertainty.
         instructions: >-
           Return only the canonical catalog supported by the supplied inventory.
           The catalog may contain one or more components; impose no quota.
@@ -199,8 +221,8 @@ subgraphs:
                   "properties": {
                     "id": {"type": "string", "minLength": 1},
                     "responsibility": {"type": "string", "minLength": 1},
-                    "owned_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-                    "dependency_closure": {"type": "array", "items": {"type": "string", "minLength": 1}},
+                    "owned_paths": {"type": "array", "minItems": 1, "uniqueItems": true, "description": "Exact project-relative paths from Proof inventory.sorted_paths; include every file assigned to this component.", "items": {"type": "string", "minLength": 1, "description": "Exact project-relative inventory path, never a component ID, import name, package name, or prose."}},
+                    "dependency_closure": {"type": "array", "description": "If present and non-empty, exact project-relative inventory paths for the transitive in-repository closure and every owned_paths entry; omit or leave empty when unknown so Proof defaults it to owned_paths.", "items": {"type": "string", "minLength": 1, "description": "Exact project-relative inventory path, never a component ID, import name, package name, language label, or prose."}},
                     "entry_points": {"type": "array", "items": {"type": "string", "minLength": 1}},
                     "state_effects": {"type": "array", "items": {"type": "string", "minLength": 1}},
                     "interfaces": {"type": "array", "items": {}},

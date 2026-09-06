@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
+import yaml from 'js-yaml';
 import {
   assertPrivateCodexHome,
   serializeRoleInvocation,
@@ -105,5 +106,21 @@ describe('native onboarding runner boundaries', () => {
     expect(result.stderr).toContain('REQUEST_TIMEOUT must be an explicit positive inner budget');
     expect(result.stderr).not.toContain('ReferenceError');
     expect(fs.existsSync(output)).toBe(true);
+  });
+
+  it('documents the Proof inventory path contract in both discovery schemas', () => {
+    const file = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml');
+    const config = yaml.load(fs.readFileSync(file, 'utf8')) as any;
+    const claimProperties = config.claim_types['proof.candidate@1'].schema.properties.components.items.properties;
+    const resultSchema = JSON.parse(config.subgraphs['discover-project'].checks.inspect.result_schema);
+    const resultProperties = resultSchema.properties.components.items.properties;
+    for (const properties of [claimProperties, resultProperties]) {
+      expect(properties.owned_paths.description).toContain('inventory.sorted_paths');
+      expect(properties.owned_paths.items.description).toContain('project-relative');
+      expect(properties.dependency_closure.description).toContain('every owned_paths entry');
+      expect(properties.dependency_closure.items.description).toContain('never a component ID');
+    }
+    expect(config.subgraphs['discover-project'].checks.inspect.message).toContain('owned_paths');
+    expect(config.subgraphs['discover-project'].checks.inspect.message).toContain('transitive in-repository dependency files');
   });
 });
