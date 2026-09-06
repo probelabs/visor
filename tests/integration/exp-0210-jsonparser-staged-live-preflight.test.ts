@@ -23,8 +23,9 @@ const PROFILE = path.join(ROOT, 'examples/agent-governance/exp-0210-jsonparser-s
 const PINS = {
   visor: '025f53ce', baseline: 'cb835d480ac58e1b4be76afeac49e89ed651c3b5',
   fix: '3980c9c9b9919e643bd095fa4469bfa19e29f20c', proof: '543994bd68f2b6d6217749c4c19be737021b993a',
-  probe: '0.6.0-rc334', codex: '0.150.1', profile: 'luna-xhigh-readonly-v1',
+  probe: '0.6.0-rc336', codex: '0.150.1', profile: 'luna-xhigh-readonly-v1',
 };
+const RETAINED_PROBE_VERSION = '0.6.0-rc334';
 const STAGES = ['inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify'];
 const DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
 const PROVIDER_ENGINE_FAILURE_BOUNDARIES = ['acquire', 'query', 'close'];
@@ -179,6 +180,10 @@ describe('EXP-0210 live preflight', () => {
       VISOR_COMMIT: PINS.visor, BASELINE_COMMIT: PINS.baseline, FIX_COMMIT: PINS.fix,
       PROOF_COMMIT: PINS.proof, PROBE_VERSION: PINS.probe, CODEX_VERSION: PINS.codex,
     })) expect(source).toContain(`const ${name} = '${value}';`);
+    expect(source).toContain(`const FOCUSED_RETAINED_PROBE_VERSION = '${RETAINED_PROBE_VERSION}';`);
+    const upstream = source.slice(source.indexOf('function focusedUpstreamPreflightReceipt'), source.indexOf('function focusedAuthorizationReceipt'));
+    expect(upstream).toContain('receipt.pins?.probe_version !== FOCUSED_RETAINED_PROBE_VERSION');
+    expect(upstream).not.toContain('receipt.pins?.probe_version !== PROBE_VERSION');
     expect(source).toContain('VISOR_EXP0210_EXPECTED_VISOR_HEAD');
     expect(source).toContain('VISOR_EXP0210_EXPECTED_YAML_SHA256');
     expect(source).toContain('VISOR_EXP0210_EXPECTED_RUNNER_SHA256');
@@ -477,7 +482,10 @@ describe('EXP-0210 live preflight', () => {
     try {
       expect(run.result.status).toBe(0);
       expect(run.result.stderr).toBe('');
+      const retained = JSON.parse(fs.readFileSync(RETAINED_PREFLIGHT, 'utf8')) as AnyRecord;
+      expect(retained.pins?.probe_version).toBe(RETAINED_PROBE_VERSION);
       const report = JSON.parse(fs.readFileSync(path.join(run.output, 'focused-diagnostic-preflight.json'), 'utf8')) as AnyRecord;
+      expect(report.pins?.probe_version).toBe(PINS.probe);
       expect(report).toEqual(expect.objectContaining({ schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1', status: 'passed', mode: 'focused-diagnostic-preflight', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
       expect(report.derivation).toEqual(expect.objectContaining({ checkpoint_sha256: 'sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249', graph_semantic_digest: '306b074949f3975a5396dfffe74fc335790f7c6247f9b6c0ea90a5555d8fb212', component_id: 'parser-core', aliases: ['admission', 'candidate', 'component'] }));
       expect(report.derivation.historical_termination).toEqual({ controller_decision: 'failed', cleanup_status: 'clean', failure_code: 'MANAGED_OUTCOME_FAILED' });

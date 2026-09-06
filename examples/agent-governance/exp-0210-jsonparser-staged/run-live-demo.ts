@@ -33,7 +33,10 @@ const VISOR_COMMIT = '025f53ce';
 const BASELINE_COMMIT = 'cb835d480ac58e1b4be76afeac49e89ed651c3b5';
 const FIX_COMMIT = '3980c9c9b9919e643bd095fa4469bfa19e29f20c';
 const PROOF_COMMIT = '543994bd68f2b6d6217749c4c19be737021b993a';
-const PROBE_VERSION = '0.6.0-rc334';
+const PROBE_VERSION = '0.6.0-rc336';
+// The retained upstream preflight was authenticated under rc334.  Keep that
+// historical source pin separate from the current execution dependency.
+const FOCUSED_RETAINED_PROBE_VERSION = '0.6.0-rc334';
 const CODEX_VERSION = '0.150.1';
 const PROFILE_ID = 'luna-xhigh-readonly-v1';
 const PROBE_TOOLS = ['search', 'extract', 'listFiles'] as const;
@@ -675,7 +678,7 @@ function focusedUpstreamPreflightReceipt(): AnyRecord {
   const bytes = fs.readFileSync(FOCUSED_PREFLIGHT);
   if (sha256(bytes) !== FOCUSED_PREFLIGHT_SHA256) throw new Error('focused preflight receipt pin does not match');
   const receipt = JSON.parse(bytes.toString('utf8')) as AnyRecord;
-  if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-live-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'preflight-only' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.graph?.semantic_digest !== FOCUSED_GRAPH_DIGEST || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS])) throw new Error('focused preflight receipt is not an exact zero-call pin');
+  if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-live-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'preflight-only' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.graph?.semantic_digest !== FOCUSED_GRAPH_DIGEST || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== FOCUSED_RETAINED_PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS])) throw new Error('focused preflight receipt is not an exact zero-call pin');
   return { sha256: `sha256:${FOCUSED_PREFLIGHT_SHA256}`, graph_semantic_digest: receipt.graph.semantic_digest };
 }
 
