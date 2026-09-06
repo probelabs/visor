@@ -978,7 +978,18 @@ export class AICheckProvider extends CheckProvider {
         aiConfig.allowBash = await resolveBool(aiAny.allowBash);
       }
       if (aiAny.bashConfig !== undefined) {
-        aiConfig.bashConfig = aiAny.bashConfig as import('../types/config').BashConfig;
+        const staticBashConfig = aiAny.bashConfig as import('../types/config').BashConfig;
+        // Configs produced by the native graph may be deeply frozen. Keep the
+        // service-owned policy mutable without changing the source config.
+        aiConfig.bashConfig = {
+          ...staticBashConfig,
+          ...(Array.isArray(staticBashConfig.allow)
+            ? { allow: [...staticBashConfig.allow] }
+            : {}),
+          ...(Array.isArray(staticBashConfig.deny)
+            ? { deny: [...staticBashConfig.deny] }
+            : {}),
+        };
       }
       if (aiAny.search_delegate_provider !== undefined) {
         aiConfig.search_delegate_provider =
@@ -1943,35 +1954,41 @@ export class AICheckProvider extends CheckProvider {
       );
     }
     if (bashConfigJsExpr && _dependencyResults) {
-      try {
-        const dynamicBashConfig = this.evaluateBashConfigJs(
-          bashConfigJsExpr,
-          prInfo,
-          _dependencyResults,
-          config
-        );
-        // Merge: dynamic arrays extend static ones
-        if (!aiConfig.bashConfig) aiConfig.bashConfig = {};
-        if (dynamicBashConfig.allow?.length) {
-          aiConfig.bashConfig.allow = [
-            ...(aiConfig.bashConfig.allow || []),
-            ...dynamicBashConfig.allow,
-          ];
-        }
-        if (dynamicBashConfig.deny?.length) {
-          aiConfig.bashConfig.deny = [
-            ...(aiConfig.bashConfig.deny || []),
-            ...dynamicBashConfig.deny,
-          ];
-        }
-        // Also enable bash if dynamic config provides commands
-        if (dynamicBashConfig.allow?.length || dynamicBashConfig.deny?.length) {
-          aiConfig.allowBash = true;
-        }
-      } catch (error) {
-        logger.error(
-          `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
+      const dynamicBashConfig = this.evaluateBashConfigJs(
+        bashConfigJsExpr,
+        prInfo,
+        _dependencyResults,
+        config
+      );
+      // Merge into a service-owned copy. Dynamic arrays extend static ones in
+      // declaration order, and no frozen source config is ever mutated.
+      const baseBashConfig = aiConfig.bashConfig
+        ? {
+            ...aiConfig.bashConfig,
+            ...(Array.isArray(aiConfig.bashConfig.allow)
+              ? { allow: [...aiConfig.bashConfig.allow] }
+              : {}),
+            ...(Array.isArray(aiConfig.bashConfig.deny)
+              ? { deny: [...aiConfig.bashConfig.deny] }
+              : {}),
+          }
+        : {};
+      if (dynamicBashConfig.allow?.length) {
+        baseBashConfig.allow = [
+          ...(baseBashConfig.allow || []),
+          ...dynamicBashConfig.allow,
+        ];
+      }
+      if (dynamicBashConfig.deny?.length) {
+        baseBashConfig.deny = [
+          ...(baseBashConfig.deny || []),
+          ...dynamicBashConfig.deny,
+        ];
+      }
+      aiConfig.bashConfig = baseBashConfig;
+      // Also enable bash if dynamic config provides commands
+      if (dynamicBashConfig.allow?.length || dynamicBashConfig.deny?.length) {
+        aiConfig.allowBash = true;
       }
     }
 
@@ -2662,10 +2679,9 @@ export class AICheckProvider extends CheckProvider {
 
       // Validate result is an object (not array, not null)
       if (typeof result !== 'object' || result === null || Array.isArray(result)) {
-        logger.warn(
+        throw new Error(
           `[AICheckProvider] ai_bash_config_js must return an object, got ${Array.isArray(result) ? 'array' : typeof result}`
         );
-        return {};
       }
 
       const cfg = result as Record<string, unknown>;
@@ -2679,7 +2695,7 @@ export class AICheckProvider extends CheckProvider {
         ) {
           validConfig.allow = cfg.allow as string[];
         } else {
-          logger.warn(`[AICheckProvider] ai_bash_config_js: 'allow' must be a string array`);
+          throw new Error(`[AICheckProvider] ai_bash_config_js: 'allow' must be a string array`);
         }
       }
       if (cfg.deny !== undefined) {
@@ -2689,7 +2705,7 @@ export class AICheckProvider extends CheckProvider {
         ) {
           validConfig.deny = cfg.deny as string[];
         } else {
-          logger.warn(`[AICheckProvider] ai_bash_config_js: 'deny' must be a string array`);
+          throw new Error(`[AICheckProvider] ai_bash_config_js: 'deny' must be a string array`);
         }
       }
 
@@ -2698,10 +2714,9 @@ export class AICheckProvider extends CheckProvider {
       );
       return validConfig;
     } catch (error) {
-      logger.error(
+      throw new Error(
         `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
-      return {};
     }
   }
 
