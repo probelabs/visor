@@ -240,7 +240,7 @@ subgraphs:
     checks:
       review-native-item:
         type: ai
-        timeout: 300000
+        timeout: 540000
         criticality: policy
         schema: plain
         consumes:
@@ -264,6 +264,18 @@ subgraphs:
           {{ outputs | json }}
           --- end runtime role and item claim ---
 
+          This node independently reviews the semantic consistency of exactly
+          one supplied native snapshot.  It is not a full-campaign or Proof
+          admission pass.  Treat `req_show` and `spec_graph` above as the
+          recorded Proof state; do not rerun Proof CLI commands.  Do not
+          inspect `.proof` internals, history, global audits, or checklists,
+          and do not execute builds, tests, or vet.  Use targeted read-only
+          source, test, vars, and annotation reads only to resolve a specific
+          uncertainty.  Stop broad rescanning and report missing evidence or
+          unresolved questions instead of expanding scope.  Return a concise
+          final candidate response, aiming for about three minutes; this is a
+          timebox hint, not a fixed call quota or a successful-call gate.
+
           Keep implementation behavior unchanged.  Check applicability to the
           parser slice and leave unrelated DeFi obligations deferred.  Do not
           claim admission, full-project coverage, or a green checklist from a
@@ -275,7 +287,7 @@ subgraphs:
           allowBash: false
           allowedTools: [search, extract, listFiles]
           max_iterations: 12
-          timeout: 240000
+          timeout: 480000
           retry:
             maxRetries: 0
 

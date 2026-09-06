@@ -128,7 +128,19 @@ file hash, rejects stale inputs, then calls the existing
 provided read-only `CODEX_HOME` for the latter modes; this example never
 copies or prints authentication.
 
+For this B workflow, provide `REQUEST_TIMEOUT=480000`; Milestone A retains its
+separate longer budget. Each B review has an AI timebox of 480000 ms and a
+540000 ms check envelope. These are execution timeboxes and scope guidance,
+not a guarantee that an external provider or sandbox will honor an outer
+timeout. The reviewer is asked to aim for about three minutes and return a
+concise candidate; this is not a fixed call quota or a success gate. The
+phase-specific brief keeps the worker on one supplied Proof snapshot: it uses
+the recorded `req_show`/`spec_graph`, targeted read-only source/test/vars/
+annotation reads, and reports unresolved evidence rather than rescanning
+`.proof` internals, history, global checks, builds, tests, or vet.
+
 ```sh
+export REQUEST_TIMEOUT=480000
 node -r ./node_modules/ts-node/register/transpile-only \
   examples/agent-governance/native-onboarding/run-milestone-b.ts prepare \
   --subject-root /path/to/isolated-subject \
