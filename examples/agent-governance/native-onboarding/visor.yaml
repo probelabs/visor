@@ -71,6 +71,11 @@ steps:
     depends_on: [preflight-init]
     timeout: 120000
     criticality: policy
+    schema: plain
+    # Preserve raw stdout: role docs contain JSON examples that the command
+    # provider otherwise extracts instead of forwarding the full instructions.
+    transform_js: |
+      return String(output);
     exec: |
       set -eu
       printf 'PROOF_EXECUTABLE=%s\n' "$PROOF_BIN"
@@ -198,6 +203,10 @@ steps:
     depends_on: [onboard-evidence]
     timeout: 120000
     criticality: policy
+    schema: plain
+    # Keep this role document intact for the independent review worker too.
+    transform_js: |
+      return String(output);
     exec: |
       set -eu
       printf 'PROOF_EXECUTABLE=%s\n' "$PROOF_BIN"

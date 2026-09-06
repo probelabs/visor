@@ -11,6 +11,9 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as yaml from 'js-yaml';
 import { ConfigManager } from '../../src/config';
+import { CommandCheckProvider } from '../../src/providers/command-check-provider';
+import { AICheckProvider } from '../../src/providers/ai-check-provider';
+import type { PRInfo } from '../../src/pr-analyzer';
 
 // The repository test setup mocks only asynchronous spawn by default.  This
 // integration test intentionally exercises the real helper child process so it
@@ -92,6 +95,10 @@ describe('native onboarding milestone A', () => {
     const review = raw.steps['native-spec-review'];
     expect(raw.steps['role-onboard'].exec).toContain('role show onboard --format agent');
     expect(raw.steps['role-spec-review'].exec).toContain('role show spec-review --format agent');
+    expect(raw.steps['role-onboard'].schema).toBe('plain');
+    expect(raw.steps['role-spec-review'].schema).toBe('plain');
+    expect(raw.steps['role-onboard'].transform_js).toContain('return String(output);');
+    expect(raw.steps['role-spec-review'].transform_js).toContain('return String(output);');
     expect(onboard.prompt).toContain("outputs['role-onboard']");
     expect(review.prompt).toContain("outputs['role-spec-review']");
     expect(onboard.prompt).not.toContain('ROLE: onboard');
@@ -115,6 +122,52 @@ describe('native onboarding milestone A', () => {
     expect(helper.childCommand('/tmp/visor.ts', PROFILE, '1000', false).args).toEqual(
       expect.arrayContaining(['--check', 'final-evidence', '--tags', 'native-onboarding'])
     );
+  });
+
+  it('preserves complete built-in role text through the real command provider and dependent prompt', async () => {
+    const raw: any = yaml.load(readFileSync(PROFILE, 'utf8'));
+    const provider = new CommandCheckProvider();
+    const aiProvider = new AICheckProvider();
+    const prInfo: PRInfo = {
+      number: 1,
+      title: 'native role handoff',
+      body: '',
+      author: 'test-user',
+      base: 'main',
+      head: 'fixture',
+      files: [],
+      totalAdditions: 0,
+      totalDeletions: 0,
+    };
+    const embedded =
+      'ROLE PREFIX before JSON {"caller-module":"error-handling-pattern"} ROLE SUFFIX after JSON';
+
+    for (const roleCheck of ['role-onboard', 'role-spec-review']) {
+      const roleResult = await provider.execute(
+        prInfo,
+        {
+          type: 'command',
+          checkName: roleCheck,
+          exec: `printf '%s' '${embedded}'`,
+          schema: raw.steps[roleCheck].schema,
+          transform_js: raw.steps[roleCheck].transform_js,
+        },
+        undefined
+      );
+
+      expect((roleResult as any).output).toBe(embedded);
+      expect((roleResult as any).output).toContain('ROLE PREFIX before JSON');
+      expect((roleResult as any).output).toContain('{"caller-module":"error-handling-pattern"}');
+      expect((roleResult as any).output).toContain('ROLE SUFFIX after JSON');
+
+      const renderedPrompt = await (aiProvider as any).renderPromptTemplate(
+        `Role handoff:\n{{ outputs["${roleCheck}"] }}`,
+        prInfo,
+        undefined,
+        new Map([[roleCheck, roleResult]])
+      );
+      expect(renderedPrompt).toContain(`Role handoff:\n${embedded}`);
+    }
   });
 
   it('fails closed before launch when roots are unavailable or outside the allowed boundary', () => {
