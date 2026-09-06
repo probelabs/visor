@@ -33,7 +33,7 @@ const VISOR_COMMIT = '025f53ce';
 const BASELINE_COMMIT = 'cb835d480ac58e1b4be76afeac49e89ed651c3b5';
 const FIX_COMMIT = '3980c9c9b9919e643bd095fa4469bfa19e29f20c';
 const PROOF_COMMIT = '543994bd68f2b6d6217749c4c19be737021b993a';
-const PROBE_VERSION = '0.6.0-rc336';
+const PROBE_VERSION = '0.6.0-rc337';
 // The retained upstream preflight was authenticated under rc334.  Keep that
 // historical source pin separate from the current execution dependency.
 const FOCUSED_RETAINED_PROBE_VERSION = '0.6.0-rc334';

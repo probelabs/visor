@@ -23,7 +23,7 @@ const PROFILE = path.join(ROOT, 'examples/agent-governance/exp-0210-jsonparser-s
 const PINS = {
   visor: '025f53ce', baseline: 'cb835d480ac58e1b4be76afeac49e89ed651c3b5',
   fix: '3980c9c9b9919e643bd095fa4469bfa19e29f20c', proof: '543994bd68f2b6d6217749c4c19be737021b993a',
-  probe: '0.6.0-rc336', codex: '0.150.1', profile: 'luna-xhigh-readonly-v1',
+  probe: '0.6.0-rc337', codex: '0.150.1', profile: 'luna-xhigh-readonly-v1',
 };
 const RETAINED_PROBE_VERSION = '0.6.0-rc334';
 const STAGES = ['inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify'];
