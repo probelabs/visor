@@ -281,6 +281,34 @@ function hasSymlinkComponent(subject, relative) {
   return false;
 }
 
+function isApprovedSpecPath(relative) {
+  return NATIVE_SPEC_ROOTS.some(
+    root => relative === root || relative.startsWith(`${root}${path.sep}`)
+  );
+}
+
+function variableProjectionTarget(subject, relative) {
+  if (!relative.endsWith('.vars.yaml') || !isApprovedSpecPath(relative)) return null;
+  const source = path.join(subject, relative);
+  try {
+    if (!fs.lstatSync(source).isSymbolicLink()) return null;
+    if (hasSymlinkComponent(subject, path.dirname(relative))) return null;
+    const canonicalAbsolute = fs.realpathSync(source);
+    const canonical = path.relative(subject, canonicalAbsolute);
+    if (
+      !canonical ||
+      !isApprovedSpecPath(canonical) ||
+      !canonical.endsWith('.vars.yaml') ||
+      !isRegularFile(canonicalAbsolute)
+    ) {
+      return null;
+    }
+    return canonical === relative ? null : canonical;
+  } catch {
+    return null;
+  }
+}
+
 function collectNativeBundleFiles(subject) {
   const files = new Set();
   const collect = (relativeRoot, predicate) => {
@@ -304,7 +332,10 @@ function collectNativeBundleFiles(subject) {
         } catch {
           continue;
         }
-        if (stat.isSymbolicLink()) continue;
+        if (stat.isSymbolicLink()) {
+          if (variableProjectionTarget(subject, child)) files.add(child);
+          continue;
+        }
         if (stat.isDirectory()) walk(child);
         else if (stat.isFile() && predicate(child)) files.add(child);
       }
@@ -332,6 +363,7 @@ function collectNativeBundleFiles(subject) {
     collect(root, relative => relative.endsWith('.req.yaml') || relative.endsWith('.vars.yaml'));
   }
   collectDirect('proof/checklists', relative => relative.endsWith('.state.yaml'));
+  collectDirect('proof/reviews', relative => relative.endsWith('.yaml'));
   for (const relative of ['proof.yaml', 'docs/get-string-requirements.md']) {
     if (!hasSymlinkComponent(subject, relative) && isRegularFile(path.join(subject, relative))) {
       files.add(relative);
@@ -342,11 +374,24 @@ function collectNativeBundleFiles(subject) {
 
 function copyNativeArtifacts(subject, output) {
   const copied = [];
-  for (const relative of collectNativeBundleFiles(subject)) {
+  const selected = collectNativeBundleFiles(subject);
+  const copy = relative => {
     const source = path.join(subject, relative);
     const destination = path.join(output, 'native', relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
     fs.copyFileSync(source, destination);
+    copied.push(path.join('native', relative));
+  };
+  for (const relative of selected) {
+    if (!variableProjectionTarget(subject, relative)) copy(relative);
+  }
+  for (const relative of selected) {
+    const canonical = variableProjectionTarget(subject, relative);
+    if (!canonical) continue;
+    const destination = path.join(output, 'native', relative);
+    const canonicalDestination = path.join(output, 'native', canonical);
+    fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+    fs.symlinkSync(path.relative(path.dirname(destination), canonicalDestination), destination);
     copied.push(path.join('native', relative));
   }
   return copied.sort();

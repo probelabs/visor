@@ -68,10 +68,14 @@ contains incremental `visor.stdout.log` and `visor.stderr.log`, a redacted
 The `native/` bundle is deliberately whitelisted: regular `*.req.yaml` and
 `*.vars.yaml` files under `specs/stakeholder`, `specs/system`,
 `specs/software`, and `specs/integration`; direct `proof/checklists/*.state.yaml`;
-`proof.yaml`; and `docs/get-string-requirements.md`. Symlinks, `.proof`, and
-unrelated repository files are excluded. `source-annotations.patch` is a
-separate bounded diff for `.gitignore`, `parser.go`, and `parser_test.go`, so
-source annotations remain inspectable even when native collection fails.
+direct `proof/reviews/*.yaml`; `proof.yaml`; and
+`docs/get-string-requirements.md`. Symlinks, `.proof`, and unrelated repository
+files are excluded, except an in-scope leaf `*.vars.yaml` projection whose
+canonical regular target is also selected under an approved specs root; that
+projection is preserved as a relative symlink to the copied canonical file.
+`source-annotations.patch` is a separate bounded diff for `.gitignore`,
+`parser.go`, and `parser_test.go`, so source annotations remain inspectable even
+when native collection fails.
 The subject checkout contains the readable native files, annotations, traces,
 and Proof state. Inspect `report.json` first, then the native diff and selected
 audit/checklist output. Failed commands retain their diagnostics; an exit code

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readlinkSync,
   readFileSync,
   symlinkSync,
   writeFileSync,
@@ -320,13 +321,18 @@ describe('native onboarding milestone A', () => {
       [
         '#!/bin/sh',
         'mkdir -p "$SUBJECT_ROOT/specs/stakeholder" "$SUBJECT_ROOT/specs/system" "$SUBJECT_ROOT/specs/software" "$SUBJECT_ROOT/specs/integration"',
-        'mkdir -p "$SUBJECT_ROOT/specs/other" "$SUBJECT_ROOT/proof/checklists/nested" "$SUBJECT_ROOT/docs"',
+        'mkdir -p "$SUBJECT_ROOT/specs/other" "$SUBJECT_ROOT/proof/checklists/nested" "$SUBJECT_ROOT/proof/reviews" "$SUBJECT_ROOT/docs"',
         'printf \'req\\n\' >"$SUBJECT_ROOT/specs/system/REQ-001.req.yaml"',
         'printf \'vars\\n\' >"$SUBJECT_ROOT/specs/system/REQ-001.vars.yaml"',
+        'printf \'canonical vars\\n\' >"$SUBJECT_ROOT/specs/system/get_string.vars.yaml"',
+        'ln -s ../system/get_string.vars.yaml "$SUBJECT_ROOT/specs/software/get_string.vars.yaml"',
+        'printf \'outside vars\\n\' >"$SUBJECT_ROOT/../outside.vars.yaml"',
+        'ln -s "$SUBJECT_ROOT/../outside.vars.yaml" "$SUBJECT_ROOT/specs/software/outside.vars.yaml"',
         'printf \'other\\n\' >"$SUBJECT_ROOT/specs/other/ignored.req.yaml"',
         'ln -s ../system/REQ-001.req.yaml "$SUBJECT_ROOT/specs/software/linked.req.yaml"',
         'printf \'state\\n\' >"$SUBJECT_ROOT/proof/checklists/onboard_v1.state.yaml"',
         'printf \'nested\\n\' >"$SUBJECT_ROOT/proof/checklists/nested/ignored.state.yaml"',
+        'printf \'review\\n\' >"$SUBJECT_ROOT/proof/reviews/REVIEW-1.yaml"',
         'printf \'scope doc\\n\' >"$SUBJECT_ROOT/docs/get-string-requirements.md"',
         'printf \'irrelevant doc\\n\' >"$SUBJECT_ROOT/docs/other.md"',
         'printf \'proof\\n\' >"$SUBJECT_ROOT/proof.yaml"',
@@ -351,11 +357,20 @@ describe('native onboarding milestone A', () => {
       'native/docs/get-string-requirements.md',
       'native/proof.yaml',
       'native/proof/checklists/onboard_v1.state.yaml',
+      'native/proof/reviews/REVIEW-1.yaml',
+      'native/specs/software/get_string.vars.yaml',
       'native/specs/system/REQ-001.req.yaml',
       'native/specs/system/REQ-001.vars.yaml',
+      'native/specs/system/get_string.vars.yaml',
     ]);
+    expect(readlinkSync(join(output, 'native', 'specs', 'software', 'get_string.vars.yaml'))).toBe(
+      '../system/get_string.vars.yaml'
+    );
     expect(existsSync(join(output, 'native', 'specs', 'software', 'linked.req.yaml'))).toBe(false);
     expect(existsSync(join(output, 'native', 'specs', 'other', 'ignored.req.yaml'))).toBe(false);
+    expect(existsSync(join(output, 'native', 'specs', 'software', 'outside.vars.yaml'))).toBe(
+      false
+    );
     expect(
       existsSync(join(output, 'native', 'proof', 'checklists', 'nested', 'ignored.state.yaml'))
     ).toBe(false);
