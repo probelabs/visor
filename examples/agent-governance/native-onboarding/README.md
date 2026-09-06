@@ -23,14 +23,26 @@ historical commit first. The current jsonparser HEAD already contains native
 Proof files and is intentionally rejected by the preflight; never run this
 example from the original source checkout:
 
+The demonstrated runtime used local Probe source `36c6cf04`, which contains
+[Probe PR #597](https://github.com/probelabs/probe/pull/597). This is a source
+fix, not an npm release: the package metadata's historical `0.6.0-rc332`
+base (tagged here as `rc337`) does not publish that fix. Use a Probe source or
+build containing that change before launching; older packages retain a hard
+`600000` ms inner Codex request cap even when the outer Visor timeout is larger.
+The wrapper inherits `REQUEST_TIMEOUT` from its environment and adds no timeout
+control of its own. The reproducible budget below sets the Probe request cap to
+`1400000` ms, below each worker's `ai.timeout` of `1500000` ms and the outer
+Visor timeout of `1800000` ms.
+
 ```sh
 git clone --no-hardlinks /path/to/jsonparser /tmp/jsonparser-native-onboarding
 git -C /tmp/jsonparser-native-onboarding checkout --detach <verified-unannotated-commit>
-node examples/agent-governance/native-onboarding/run-demo.cjs \
+REQUEST_TIMEOUT=1400000 node examples/agent-governance/native-onboarding/run-demo.cjs \
   --subject-root /tmp/jsonparser-native-onboarding \
   --original-root /path/to/jsonparser \
   --proof-bin /absolute/path/to/proof \
   --visor /path/to/visor/src/index.ts \
+  --timeout 1800000 \
   --output /tmp/jsonparser-native-onboarding-run
 ```
 
@@ -84,9 +96,13 @@ of zero is not a declaration of full success.
 The report distinguishes materialized requirement files from validated and
 reviewed state. The gate rejects an empty native requirement set even when the
 AI process exits zero. Unresolved audit findings are allowed for this demo and
-must remain visible. A known runtime limitation is that an inner Probe/Codex
-tool call may impose a ten-minute cap; the outer launcher timeout does not
-promise to override that inner cap.
+must remain visible.
+
+The current evidence was recovered by manually tailing a retained subject and
+its output after the run stopped. It is not evidence of a successful
+uninterrupted fresh run, and it does not demonstrate durable B resume or
+recovery. Treat the retained Proof files, traces, and logs as the curated
+evidence to inspect; use a fresh subject for a new run.
 
 ## Scope and deferred risk
 
