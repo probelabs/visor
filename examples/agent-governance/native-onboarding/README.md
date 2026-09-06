@@ -65,8 +65,13 @@ recovery or resume protocol.
 The output directory is created outside both subject and original roots. It
 contains incremental `visor.stdout.log` and `visor.stderr.log`, a redacted
 `launch.json`, `report.json`, and command-specific Proof streams/artifacts.
-`native/` copies the actual generated `proof.yaml` and native requirement files
-for inspection even when they are untracked (ordinary `git diff` omits those).
+The `native/` bundle is deliberately whitelisted: regular `*.req.yaml` and
+`*.vars.yaml` files under `specs/stakeholder`, `specs/system`,
+`specs/software`, and `specs/integration`; direct `proof/checklists/*.state.yaml`;
+`proof.yaml`; and `docs/get-string-requirements.md`. Symlinks, `.proof`, and
+unrelated repository files are excluded. `source-annotations.patch` is a
+separate bounded diff for `.gitignore`, `parser.go`, and `parser_test.go`, so
+source annotations remain inspectable even when native collection fails.
 The subject checkout contains the readable native files, annotations, traces,
 and Proof state. Inspect `report.json` first, then the native diff and selected
 audit/checklist output. Failed commands retain their diagnostics; an exit code
@@ -75,7 +80,9 @@ of zero is not a declaration of full success.
 The report distinguishes materialized requirement files from validated and
 reviewed state. The gate rejects an empty native requirement set even when the
 AI process exits zero. Unresolved audit findings are allowed for this demo and
-must remain visible.
+must remain visible. A known runtime limitation is that an inner Probe/Codex
+tool call may impose a ten-minute cap; the outer launcher timeout does not
+promise to override that inner cap.
 
 ## Scope and deferred risk
 

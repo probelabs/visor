@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -227,6 +228,166 @@ describe('native onboarding milestone A', () => {
     expect(result.report.materialized.native_requirement_count).toBe(0);
     expect(result.report.terminal_status).toBe('failed-empty-native-requirements');
     expect(result.report.admission.status).toBe('not_claimed');
+  });
+
+  it('reports retained native artifacts when execution exits zero without final evidence', async () => {
+    const fixture = gitFixture('native-onboarding-artifacts-');
+    const output = join(fixture.root, '..', 'run-output');
+    const fakeVisor = join(fixture.root, '..', 'fake-visor-artifacts.sh');
+    writeFileSync(
+      fakeVisor,
+      [
+        '#!/bin/sh',
+        'mkdir -p "$SUBJECT_ROOT/specs/system"',
+        'printf \'[]\\n\' >"$NATIVE_ONBOARDING_OUTPUT_DIR/requirements-baseline.json"',
+        'printf \'native requirement\\n\' >"$SUBJECT_ROOT/specs/system/REQ-001.req.yaml"',
+        "printf 'partial success\\n'",
+        "printf 'partial diagnostic\\n' >&2",
+        'exit 0',
+      ].join('\n'),
+      { mode: 0o700 }
+    );
+    chmodSync(fakeVisor, 0o700);
+    const result = await helper.runDemo({
+      subjectRoot: fixture.root,
+      originalRoot: fixture.original,
+      output,
+      visorBin: fakeVisor,
+      proofBin: fixture.proof,
+      config: PROFILE,
+      timeout: '1000',
+    });
+    expect(result.report.exit_code).toBe(0);
+    expect(result.report.execution_status).toBe('execution-succeeded');
+    expect(result.report.terminal_status).toBe('failed-execution-with-artifacts');
+    expect(result.report.materialized.native_requirement_count).toBe(1);
+    expect(result.report.materialized.native_requirement_delta_after_init).toBeNull();
+    expect(result.report.materialized.native_requirement_delta_status).toBe('unknown');
+    expect(result.report.materialized.native_requirement_delta_reason).toContain(
+      'requirements-final.json is missing'
+    );
+    expect(readFileSync(join(output, 'visor.stdout.log'), 'utf8')).toContain('partial success');
+    expect(readFileSync(join(output, 'visor.stderr.log'), 'utf8')).toContain('partial diagnostic');
+    expect(existsSync(join(output, 'native', 'specs', 'system', 'REQ-001.req.yaml'))).toBe(true);
+    const launch = JSON.parse(readFileSync(join(output, 'launch.json'), 'utf8'));
+    expect(launch.environment.debug_ai_sessions).toBe(true);
+  });
+
+  it('does not claim completion from inventory delta when no native files exist', async () => {
+    const fixture = gitFixture('native-onboarding-inventory-only-');
+    const output = join(fixture.root, '..', 'run-output');
+    const fakeVisor = join(fixture.root, '..', 'fake-visor-inventory-only.sh');
+    writeFileSync(
+      fakeVisor,
+      [
+        '#!/bin/sh',
+        'printf \'[]\\n\' >"$NATIVE_ONBOARDING_OUTPUT_DIR/requirements-baseline.json"',
+        'printf \'[{"id":"REQ-001"}]\\n\' >"$NATIVE_ONBOARDING_OUTPUT_DIR/requirements-final.json"',
+        'printf final-evidence-complete >"$NATIVE_ONBOARDING_OUTPUT_DIR/final-evidence-complete"',
+        'exit 0',
+      ].join('\n'),
+      { mode: 0o700 }
+    );
+    chmodSync(fakeVisor, 0o700);
+    const result = await helper.runDemo({
+      subjectRoot: fixture.root,
+      originalRoot: fixture.original,
+      output,
+      visorBin: fakeVisor,
+      proofBin: fixture.proof,
+      config: PROFILE,
+      timeout: '1000',
+    });
+    expect(result.report.exit_code).toBe(0);
+    expect(result.report.execution_status).toBe('execution-succeeded');
+    expect(result.report.materialized.native_requirement_count).toBe(0);
+    expect(result.report.materialized.native_requirement_delta_after_init).toBe(1);
+    expect(result.report.materialized.native_requirement_delta_status).toBe('computed');
+    expect(result.report.terminal_status).toBe('failed-empty-native-requirements');
+  });
+
+  it('bundles only the approved native artifacts and preserves source annotation diff', async () => {
+    const fixture = gitFixture('native-onboarding-bundle-');
+    const output = join(fixture.root, '..', 'run-output');
+    const fakeVisor = join(fixture.root, '..', 'fake-visor-bundle.sh');
+    writeFileSync(join(fixture.root, 'parser.go'), 'package parser\n');
+    writeFileSync(join(fixture.root, 'parser_test.go'), 'package parser\n');
+    writeFileSync(join(fixture.root, '.gitignore'), '.proof/\n');
+    git(fixture.root, ['add', 'parser.go', 'parser_test.go', '.gitignore']);
+    git(fixture.root, ['commit', '-qm', 'parser fixture']);
+    writeFileSync(
+      fakeVisor,
+      [
+        '#!/bin/sh',
+        'mkdir -p "$SUBJECT_ROOT/specs/stakeholder" "$SUBJECT_ROOT/specs/system" "$SUBJECT_ROOT/specs/software" "$SUBJECT_ROOT/specs/integration"',
+        'mkdir -p "$SUBJECT_ROOT/specs/other" "$SUBJECT_ROOT/proof/checklists/nested" "$SUBJECT_ROOT/docs"',
+        'printf \'req\\n\' >"$SUBJECT_ROOT/specs/system/REQ-001.req.yaml"',
+        'printf \'vars\\n\' >"$SUBJECT_ROOT/specs/system/REQ-001.vars.yaml"',
+        'printf \'other\\n\' >"$SUBJECT_ROOT/specs/other/ignored.req.yaml"',
+        'ln -s ../system/REQ-001.req.yaml "$SUBJECT_ROOT/specs/software/linked.req.yaml"',
+        'printf \'state\\n\' >"$SUBJECT_ROOT/proof/checklists/onboard_v1.state.yaml"',
+        'printf \'nested\\n\' >"$SUBJECT_ROOT/proof/checklists/nested/ignored.state.yaml"',
+        'printf \'scope doc\\n\' >"$SUBJECT_ROOT/docs/get-string-requirements.md"',
+        'printf \'irrelevant doc\\n\' >"$SUBJECT_ROOT/docs/other.md"',
+        'printf \'proof\\n\' >"$SUBJECT_ROOT/proof.yaml"',
+        'printf \'// annotation\\n\' >>"$SUBJECT_ROOT/parser.go"',
+        'printf \'// test annotation\\n\' >>"$SUBJECT_ROOT/parser_test.go"',
+        'printf \'# annotation\\n\' >>"$SUBJECT_ROOT/.gitignore"',
+        'exit 17',
+      ].join('\n'),
+      { mode: 0o700 }
+    );
+    chmodSync(fakeVisor, 0o700);
+    const result = await helper.runDemo({
+      subjectRoot: fixture.root,
+      originalRoot: fixture.original,
+      output,
+      visorBin: fakeVisor,
+      proofBin: fixture.proof,
+      config: PROFILE,
+      timeout: '1000',
+    });
+    expect(result.report.materialized.copied_native_artifacts).toEqual([
+      'native/docs/get-string-requirements.md',
+      'native/proof.yaml',
+      'native/proof/checklists/onboard_v1.state.yaml',
+      'native/specs/system/REQ-001.req.yaml',
+      'native/specs/system/REQ-001.vars.yaml',
+    ]);
+    expect(existsSync(join(output, 'native', 'specs', 'software', 'linked.req.yaml'))).toBe(false);
+    expect(existsSync(join(output, 'native', 'specs', 'other', 'ignored.req.yaml'))).toBe(false);
+    expect(
+      existsSync(join(output, 'native', 'proof', 'checklists', 'nested', 'ignored.state.yaml'))
+    ).toBe(false);
+    const sourcePatch = readFileSync(join(output, 'source-annotations.patch'), 'utf8');
+    expect(sourcePatch).toContain('parser.go');
+    expect(sourcePatch).toContain('parser_test.go');
+    expect(result.report.artifacts.source_annotations.status).toBe('captured');
+  });
+
+  it('does not follow an allowed spec root symlink outside the subject', async () => {
+    const fixture = gitFixture('native-onboarding-symlink-root-');
+    const output = join(fixture.root, '..', 'run-output');
+    const fakeVisor = join(fixture.root, '..', 'fake-visor-symlink-root.sh');
+    const outside = join(fixture.root, '..', 'outside-native');
+    mkdirSync(join(fixture.root, 'specs'), { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'secret.req.yaml'), 'outside native data\n');
+    symlinkSync(outside, join(fixture.root, 'specs', 'system'));
+    writeFileSync(fakeVisor, '#!/bin/sh\nprintf symlink-check\nexit 0\n', { mode: 0o700 });
+    chmodSync(fakeVisor, 0o700);
+    const result = await helper.runDemo({
+      subjectRoot: fixture.root,
+      originalRoot: fixture.original,
+      output,
+      visorBin: fakeVisor,
+      proofBin: fixture.proof,
+      config: PROFILE,
+      timeout: '1000',
+    });
+    expect(result.report.materialized.copied_native_artifacts).toEqual([]);
+    expect(result.report.materialized.native_requirement_count).toBe(0);
+    expect(existsSync(join(output, 'native', 'specs', 'system', 'secret.req.yaml'))).toBe(false);
   });
 
   it('requires a run-owned completion marker for zero-model preflight success', async () => {

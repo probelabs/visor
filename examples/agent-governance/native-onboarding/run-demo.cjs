@@ -207,38 +207,180 @@ function stableJson(value) {
 
 function nativeRequirementDelta(output) {
   const load = name => {
+    const file = path.join(output, name);
     try {
-      const rows = JSON.parse(fs.readFileSync(path.join(output, name), 'utf8'));
-      return Array.isArray(rows) ? rows : [];
-    } catch {
-      return [];
+      if (!fs.existsSync(file)) {
+        return { status: 'unknown', rows: null, reason: `${name} is missing` };
+      }
+      const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!Array.isArray(rows)) {
+        return { status: 'invalid', rows: null, reason: `${name} is not a JSON array` };
+      }
+      return { status: 'ok', rows, reason: null };
+    } catch (error) {
+      return {
+        status: 'invalid',
+        rows: null,
+        reason: `${name} is not valid JSON: ${error.message}`,
+      };
     }
   };
   const key = row => String(row.file_path || row.path || row.id || row.slug || stableJson(row));
-  const before = new Map(
-    load('requirements-baseline.json').map(row => [key(row), stableJson(row)])
-  );
-  return load('requirements-final.json').filter(
-    row => !before.has(key(row)) || before.get(key(row)) !== stableJson(row)
-  ).length;
+  const baseline = load('requirements-baseline.json');
+  const final = load('requirements-final.json');
+  if (baseline.status !== 'ok') {
+    return {
+      value: null,
+      status: baseline.status,
+      reason: baseline.reason,
+    };
+  }
+  if (final.status !== 'ok') {
+    return {
+      value: null,
+      status: final.status,
+      reason: final.reason,
+    };
+  }
+  const before = new Map(baseline.rows.map(row => [key(row), stableJson(row)]));
+  return {
+    value: final.rows.filter(
+      row => !before.has(key(row)) || before.get(key(row)) !== stableJson(row)
+    ).length,
+    status: 'computed',
+    reason: null,
+  };
 }
 
-function copyNativeArtifacts(subject, output, artifacts) {
+const NATIVE_SPEC_ROOTS = [
+  'specs/stakeholder',
+  'specs/system',
+  'specs/software',
+  'specs/integration',
+];
+
+function isRegularFile(file) {
+  try {
+    return fs.lstatSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function hasSymlinkComponent(subject, relative) {
+  let current = subject;
+  for (const component of relative.split(path.sep)) {
+    if (!component || component === '.') continue;
+    current = path.join(current, component);
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function collectNativeBundleFiles(subject) {
+  const files = new Set();
+  const collect = (relativeRoot, predicate) => {
+    if (hasSymlinkComponent(subject, relativeRoot)) return;
+    const walk = relative => {
+      const absolute = path.join(subject, relative);
+      let entries;
+      try {
+        entries = fs.readdirSync(absolute, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const child = path.join(relative, entry.name);
+        const childAbsolute = path.join(subject, child);
+        // lstat intentionally prevents symlinked files/directories from
+        // escaping the explicit bundle whitelist.
+        let stat;
+        try {
+          stat = fs.lstatSync(childAbsolute);
+        } catch {
+          continue;
+        }
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) walk(child);
+        else if (stat.isFile() && predicate(child)) files.add(child);
+      }
+    };
+    walk(relativeRoot);
+  };
+  const collectDirect = (relativeRoot, predicate) => {
+    if (hasSymlinkComponent(subject, relativeRoot)) return;
+    const absoluteRoot = path.join(subject, relativeRoot);
+    let entries;
+    try {
+      entries = fs.readdirSync(absoluteRoot, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const relative = path.join(relativeRoot, entry.name);
+      const absolute = path.join(subject, relative);
+      if (!isRegularFile(absolute)) continue;
+      if (predicate(relative)) files.add(relative);
+    }
+  };
+
+  for (const root of NATIVE_SPEC_ROOTS) {
+    collect(root, relative => relative.endsWith('.req.yaml') || relative.endsWith('.vars.yaml'));
+  }
+  collectDirect('proof/checklists', relative => relative.endsWith('.state.yaml'));
+  for (const relative of ['proof.yaml', 'docs/get-string-requirements.md']) {
+    if (!hasSymlinkComponent(subject, relative) && isRegularFile(path.join(subject, relative))) {
+      files.add(relative);
+    }
+  }
+  return [...files].sort();
+}
+
+function copyNativeArtifacts(subject, output) {
   const copied = [];
-  for (const relative of artifacts.files) {
+  for (const relative of collectNativeBundleFiles(subject)) {
     const source = path.join(subject, relative);
     const destination = path.join(output, 'native', relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
     fs.copyFileSync(source, destination);
     copied.push(path.join('native', relative));
   }
-  const proof = path.join(subject, 'proof.yaml');
-  if (fs.existsSync(proof)) {
-    fs.mkdirSync(path.join(output, 'native'), { recursive: true, mode: 0o700 });
-    fs.copyFileSync(proof, path.join(output, 'native', 'proof.yaml'));
-    copied.push(path.join('native', 'proof.yaml'));
-  }
   return copied.sort();
+}
+
+function captureSourceAnnotations(subject, output) {
+  const relativePaths = ['.gitignore', 'parser.go', 'parser_test.go'];
+  const relativeOutput = 'source-annotations.patch';
+  const destination = path.join(output, relativeOutput);
+  try {
+    const diff = spawnSync(
+      'git',
+      ['-C', subject, 'diff', '--no-ext-diff', '--unified=3', '--', ...relativePaths],
+      { encoding: 'utf8', maxBuffer: 1024 * 1024 }
+    );
+    if (diff.error) throw diff.error;
+    if (diff.status !== 0) {
+      const reason = String(diff.stderr || `git diff exited with ${diff.status}`).trim();
+      fs.writeFileSync(destination, `source annotation diff unavailable: ${reason}\n`, {
+        mode: 0o600,
+      });
+      return { path: relativeOutput, status: 'error', reason };
+    }
+    fs.writeFileSync(destination, diff.stdout || '', { mode: 0o600 });
+    return { path: relativeOutput, status: 'captured', reason: null };
+  } catch (error) {
+    const reason = String(error && error.message ? error.message : error);
+    try {
+      fs.writeFileSync(destination, `source annotation diff unavailable: ${reason}\n`, {
+        mode: 0o600,
+      });
+    } catch {}
+    return { path: relativeOutput, status: 'error', reason };
+  }
 }
 
 function redactedEnvironment(env, subject, original, output) {
@@ -248,6 +390,7 @@ function redactedEnvironment(env, subject, original, output) {
     original_root: original,
     output_directory: output,
     use_codex: env.USE_CODEX === 'true',
+    debug_ai_sessions: env.VISOR_DEBUG_AI_SESSIONS === 'true',
     proof_bin: env.PROOF_BIN,
     visor_bin: env.VISOR_BIN,
     ts_node_project: env.TS_NODE_PROJECT,
@@ -287,6 +430,7 @@ async function runDemo(input) {
     PROTECTED_ORIGINAL: roots.original,
     NATIVE_ONBOARDING_OUTPUT_DIR: output,
     VISOR_BIN: visor,
+    VISOR_DEBUG_AI_SESSIONS: 'true',
     VISOR_TRACE_DIR: process.env.VISOR_TRACE_DIR || path.join(output, 'traces'),
     VISOR_DEBUG_ARTIFACTS: process.env.VISOR_DEBUG_ARTIFACTS || path.join(output, 'ai'),
   };
@@ -334,15 +478,17 @@ async function runDemo(input) {
   const artifacts = countNativeRequirements(roots.subject);
   let copiedNativeArtifacts = [];
   try {
-    copiedNativeArtifacts = copyNativeArtifacts(roots.subject, output, artifacts);
+    copiedNativeArtifacts = copyNativeArtifacts(roots.subject, output);
   } catch (error) {
     // Preserve the primary run report even if a concurrently removed artifact
     // cannot be copied into the evidence directory.
     copiedNativeArtifacts = [`copy-error: ${error.message}`];
   }
+  const sourceAnnotations = captureSourceAnnotations(roots.subject, output);
   const hasPreflightMarker = fs.existsSync(path.join(output, 'preflight-complete'));
   const hasFinalMarker = fs.existsSync(path.join(output, 'final-evidence-complete'));
   const requirementDelta = nativeRequirementDelta(output);
+  const hasNativeArtifacts = artifacts.count > 0;
   const executionStatus =
     interrupted || result.signal
       ? 'interrupted'
@@ -359,12 +505,16 @@ async function runDemo(input) {
           ? 'failed-preflight'
           : 'preflight-complete'
         : result.error || result.code !== 0 || !hasFinalMarker
-          ? requirementDelta === 0
+          ? !hasNativeArtifacts
             ? 'failed-empty-native-requirements'
             : 'failed-execution-with-artifacts'
-          : requirementDelta === 0
+          : !hasNativeArtifacts
             ? 'failed-empty-native-requirements'
-            : 'execution-complete-review-required';
+            : requirementDelta.status !== 'computed'
+              ? 'failed-final-inventory-unknown'
+              : requirementDelta.value === 0
+                ? 'failed-empty-native-requirements'
+                : 'execution-complete-review-required';
   const report = {
     version: 'urn:reqproof:agent-governance:native-onboarding:v1',
     started_at: startedAt,
@@ -385,7 +535,9 @@ async function runDemo(input) {
     materialized: {
       native_requirement_count: artifacts.count,
       native_requirement_files: artifacts.files,
-      native_requirement_delta_after_init: requirementDelta,
+      native_requirement_delta_after_init: requirementDelta.value,
+      native_requirement_delta_status: requirementDelta.status,
+      native_requirement_delta_reason: requirementDelta.reason,
       copied_native_artifacts: copiedNativeArtifacts,
       proof_artifacts_present: fs.existsSync(path.join(roots.subject, 'proof.yaml')),
     },
@@ -408,6 +560,7 @@ async function runDemo(input) {
       command_output_directory: output,
       preflight_marker: hasPreflightMarker ? 'preflight-complete' : null,
       final_evidence_marker: hasFinalMarker ? 'final-evidence-complete' : null,
+      source_annotations: sourceAnnotations,
     },
   };
   fs.writeFileSync(path.join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, {
