@@ -1,0 +1,353 @@
+# Milestone B prototype: Graph-v2 native review progression.
+#
+# This is deliberately an ordinary command -> ai graph.  C2 expansion turns
+# the current Proof catalog into one natural component and then one generated
+# item per native requirement.  The Graph-v2 frontier, rather than legacy
+# forEach/workflow barriers, owns the scopes and dependencies.
+version: "1.0"
+max_parallelism: 2
+fail_fast: false
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+
+claim_types:
+  native.component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, spec_review_role]
+            properties:
+              id: {type: string, minLength: 1}
+              spec_review_role: {type: string, minLength: 1}
+
+  native.component.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, spec_review_role]
+      properties:
+        id: {type: string, minLength: 1}
+        spec_review_role: {type: string, minLength: 1}
+
+  native.spec.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, spec, component, status, req_type, file_path, proof_file_hash, proof_snapshot, spec_review_role]
+            properties:
+              id: {type: string, minLength: 1}
+              spec: {type: string, minLength: 1}
+              component: {type: string, minLength: 1}
+              status: {type: string}
+              req_type: {type: string}
+              file_path: {type: string, minLength: 1}
+              assurance_level: {type: string}
+              fretish: {type: string}
+              description: {type: string}
+              parse_status: {type: string}
+              neighborhood: {type: object}
+              proof_file_hash: {type: string, minLength: 1}
+              proof_snapshot: {type: object}
+              spec_review_role: {type: string, minLength: 1}
+
+  native.spec.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, spec, component, status, req_type, file_path, proof_file_hash, proof_snapshot, spec_review_role]
+      properties:
+        id: {type: string, minLength: 1}
+        spec: {type: string, minLength: 1}
+        component: {type: string, minLength: 1}
+        status: {type: string}
+        req_type: {type: string}
+        file_path: {type: string, minLength: 1}
+        assurance_level: {type: string}
+        fretish: {type: string}
+        description: {type: string}
+        parse_status: {type: string}
+        neighborhood: {type: object}
+        proof_file_hash: {type: string, minLength: 1}
+        proof_snapshot: {type: object}
+        spec_review_role: {type: string, minLength: 1}
+
+  native.role.spec-review@1:
+    schema:
+      type: string
+      minLength: 1
+
+  native.review.candidate@1:
+    # Candidate prose is intentionally unconstrained here.  It is evidence,
+    # not a Proof admission or a substitute for materialized native files.
+    schema: {}
+
+  native.review.candidate.packet@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, candidate, req_show, spec_graph, freshness]
+      properties:
+        id: {type: string, minLength: 1}
+        candidate: {}
+        req_show: {type: object}
+        spec_graph: {type: object}
+        freshness: {const: pending_component_fan_in}
+
+  native.component.summary@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [component, freshness, validation, audit, checklist, status]
+      properties:
+        component: {type: string, minLength: 1}
+        freshness: {type: array}
+        validation: {type: object}
+        audit: {type: object}
+        checklist: {type: object}
+        status: {type: object}
+
+subgraphs:
+  native-component:
+    input: {name: component, claim: native.component.item@1}
+    checks:
+      enumerate-native-specs:
+        type: command
+        timeout: 180000
+        schema: plain
+        consumes:
+          - {claim: native.component.item@1, as: component}
+        emits:
+          - {claim: native.spec.catalog@1, from: output}
+        expand:
+          claim: native.spec.catalog@1
+          template: native-spec-item
+          items_pointer: /items
+          key_pointer: /id
+          item_claim: native.spec.item@1
+        exec: |
+          set -eu
+          node - "$PROOF_BIN" <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const proof = process.argv[2];
+          const component = {{ outputs['discover-native-components'] | json }};
+          const componentId = component.id;
+          const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], { encoding: 'utf8' }));
+          const items = rows.filter(row => row && row.component === componentId).map(row => {
+            const reqShow = JSON.parse(execFileSync(proof, ['req', 'show', row.id, '--with', 'file', '--format', 'json'], { encoding: 'utf8' }));
+            const requirement = reqShow && reqShow.requirement;
+            if (!requirement || requirement.id !== row.id || reqShow.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the catalog row`);
+            const hash = requirement && requirement._computed && requirement._computed.file_hash;
+            if (typeof hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(hash)) throw new Error(`Proof req show ${row.id} has no computed sha256 file hash`);
+              const specGraph = JSON.parse(execFileSync(proof, ['spec', 'graph', '--focus', row.id, '--format', 'json'], { encoding: 'utf8' }));
+            if (!specGraph || typeof specGraph !== 'object') throw new Error(`Proof spec graph ${row.id} is not an object`);
+            return { ...row, spec_review_role: component.spec_review_role, proof_file_hash: hash, proof_snapshot: { req_show: reqShow, spec_graph: specGraph } };
+          });
+          if (!items.length) throw new Error(`Proof catalog has no requirements for ${componentId}`);
+          process.stdout.write(JSON.stringify({ items }));
+          NODE
+
+      wait-for-native-items:
+        type: command
+        depends_on: enumerate-native-specs
+        timeout: 900000
+        schema: plain
+        wait_for_expansion:
+          owner: enumerate-native-specs
+          terminal_node: collect-proof-evidence
+        emits:
+          - {claim: native.component.summary@1, from: output}
+        exec: |
+          set -eu
+          node - "$PROOF_BIN" <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const proof = process.argv[2];
+          const baselinePath = process.env.VISOR_NATIVE_B_PREPARE_SUMMARY;
+          if (!baselinePath) throw new Error('runner did not provide its prepare catalog summary');
+          const baseline = JSON.parse(require('node:fs').readFileSync(baselinePath, 'utf8'));
+          const expected = { items: baseline.items.map(item => ({ ...item, proof_file_hash: item.file_hash })) };
+          const componentId = baseline.component;
+          if (typeof componentId !== 'string' || !componentId || !Array.isArray(expected.items) || !expected.items.length) {
+            throw new Error('runner prepare catalog summary is incomplete');
+          }
+          const run = args => {
+            try {
+              const stdout = execFileSync(proof, args, { encoding: 'utf8' });
+              return { exit_code: 0, value: JSON.parse(stdout) };
+            } catch (error) {
+              return {
+                exit_code: typeof error.status === 'number' ? error.status : 1,
+                stdout: String(error.stdout || ''),
+                stderr: String(error.stderr || error.message || error),
+              };
+            }
+          };
+          if (!expected || !Array.isArray(expected.items) || !expected.items.length) throw new Error('expanded Proof catalog is empty');
+          const listed = run(['req', 'list', '--format', 'json']);
+          if (listed.exit_code !== 0 || !Array.isArray(listed.value)) throw new Error('Proof req list failed at component fan-in');
+          const currentItems = listed.value.filter(row => row && row.component === componentId);
+          const expectedIds = expected.items.map(item => item.id).sort();
+          const currentIds = currentItems.map(item => item.id).sort();
+          if (JSON.stringify(expectedIds) !== JSON.stringify(currentIds)) throw new Error('Proof requirement ID set changed before fan-in');
+          for (const item of expected.items) {
+            const current = currentItems.find(row => row.id === item.id);
+            if (!current || current.file_path !== item.file_path) throw new Error(`Proof requirement path changed before fan-in for ${item.id}`);
+          }
+          const freshness = [];
+          for (const item of expected.items) {
+            const shown = run(['req', 'show', item.id, '--with', 'file', '--format', 'json']);
+            const requirement = shown.value && shown.value.requirement;
+            if (shown.exit_code !== 0 || !requirement || typeof requirement._computed?.file_hash !== 'string') {
+              throw new Error(`Proof req show ${item.id} failed or has no computed file hash`);
+            }
+            if (requirement._computed.file_hash !== item.proof_file_hash || requirement.id !== item.id || shown.value.file_path !== item.file_path) {
+              throw new Error(`Proof input changed before fan-in for ${item.id}`);
+            }
+            freshness.push({ id: item.id, file_path: item.file_path, file_hash: requirement._computed.file_hash });
+          }
+          const validation = run(['validate', '--variable-drift', '--format', 'json']);
+          if (validation.exit_code !== 0) throw new Error(`Proof validate failed at component fan-in with exit ${validation.exit_code}`);
+          const status = run(['status', '--format', 'json']);
+          if (status.exit_code !== 0) throw new Error(`Proof status failed at component fan-in with exit ${status.exit_code}`);
+          process.stdout.write(JSON.stringify({
+            component: componentId,
+            freshness,
+            validation,
+            audit: run(['audit', '--no-cache', '--check', 'validate_passes', '--check', 'role_prompt_hygiene', '--check', 'levels_connected', '--check', 'annotation_validity', '--check', 'orphan_code_clean', '--check', 'orphan_tests_clean', '--check', 'variables_declared', '--check', 'variable_drift', '--check', 'spec_lint_formalization_quality', '--format', 'json']),
+            checklist: run(['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json']),
+            status,
+          }));
+          NODE
+
+  native-spec-item:
+    input: {name: item, claim: native.spec.item@1}
+    checks:
+      review-native-item:
+        type: ai
+        timeout: 300000
+        criticality: policy
+        schema: plain
+        consumes:
+          - {claim: native.spec.item@1, as: item}
+        emits:
+          - {claim: native.review.candidate@1, from: output}
+        prompt: |
+          Perform a read-only, independent review of exactly one materialized
+          Proof requirement item in the current authorized checkout.  Use the
+          built-in spec-review role below as operating guidance, but do not
+          copy role doctrine into the graph and do not author, edit, or admit
+          any Proof files.  Read only the relevant source, native spec, vars,
+          annotations, and existing trace context.  Return concise candidate
+          findings and unresolved questions; candidate prose is not validated
+          Proof state.
+
+          --- runtime role and exact Proof item claim ---
+          The `spec_review_role` field below is the built-in role text supplied
+          by Proof through the exact generated input claim.  Use it as guidance
+          and review only the same item.
+          {{ outputs | json }}
+          --- end runtime role and item claim ---
+
+          Keep implementation behavior unchanged.  Check applicability to the
+          parser slice and leave unrelated DeFi obligations deferred.  Do not
+          claim admission, full-project coverage, or a green checklist from a
+          successful model call.
+        ai:
+          model: gpt-5.6-luna
+          prompt_type: engineer
+          allowEdit: false
+          allowBash: false
+          allowedTools: [search, extract, listFiles]
+          max_iterations: 12
+          timeout: 240000
+          retry:
+            maxRetries: 0
+
+      collect-proof-evidence:
+        type: command
+        depends_on: review-native-item
+        timeout: 900000
+        schema: plain
+        consumes:
+          - {claim: native.spec.item@1, as: item}
+          - {claim: native.review.candidate@1, as: candidate}
+        emits:
+          - {claim: native.review.candidate.packet@1, from: output}
+        exec: |
+          set -eu
+          node - "$PROOF_BIN" <<'NODE'
+          const dependencyOutputs = {{ outputs | json }};
+          const itemCandidates = Object.values(dependencyOutputs).filter(value => value && value.proof_snapshot && typeof value.proof_file_hash === 'string');
+          if (itemCandidates.length !== 1) throw new Error(`expected one exact native item claim, found ${itemCandidates.length}`);
+          const item = itemCandidates[0];
+          const candidate = {{ outputs['review-native-item'] | json }};
+          if (!item || !item.proof_snapshot || !item.proof_snapshot.req_show || !item.proof_snapshot.spec_graph) {
+            throw new Error('generated Proof item is missing its native snapshot');
+          }
+          process.stdout.write(JSON.stringify({
+            id: item.id,
+            candidate,
+            req_show: item.proof_snapshot.req_show,
+            spec_graph: item.proof_snapshot.spec_graph,
+            freshness: 'pending_component_fan_in',
+          }));
+          NODE
+
+checks:
+  role-spec-review:
+    type: command
+    timeout: 120000
+    schema: plain
+    transform_js: |
+      return String(output);
+    emits:
+      - {claim: native.role.spec-review@1, from: output}
+    exec: |
+      set -eu
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      printf 'PROOF_EXECUTABLE=%s\n' "$PROOF_BIN"
+      "$PROOF_BIN" role show spec-review --format agent
+
+  discover-native-components:
+    type: command
+    depends_on: [role-spec-review]
+    timeout: 180000
+    schema: plain
+    consumes:
+      - {claim: native.role.spec-review@1, as: role, cardinality: one}
+    emits:
+      - {claim: native.component.catalog@1, from: output}
+    expand:
+      claim: native.component.catalog@1
+      template: native-component
+      items_pointer: /components
+      key_pointer: /id
+      item_claim: native.component.item@1
+    exec: |
+      set -eu
+      node - "$PROOF_BIN" <<'NODE'
+      const { execFileSync } = require('node:child_process');
+      const proof = process.argv[2];
+      const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], { encoding: 'utf8' }));
+      const role = {{ outputs['role-spec-review'] | json }};
+      const components = [...new Set(rows.filter(row => row && row.component === 'get_string').map(row => row.component))]
+        .map(id => ({ id, spec_review_role: role }));
+      if (!components.length) throw new Error('Proof catalog has no selected native component');
+      process.stdout.write(JSON.stringify({ components }));
+      NODE

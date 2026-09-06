@@ -104,6 +104,66 @@ uninterrupted fresh run, and it does not demonstrate durable B resume or
 recovery. Treat the retained Proof files, traces, and logs as the curated
 evidence to inspect; use a fresh subject for a new run.
 
+## Milestone B: Graph-v2 review progression
+
+`visor-milestone-b.yaml` is a small read-only review prototype over the same
+native subject. It uses ordinary command and AI providers, Graph-v2 keyed
+`expand`, nested per-requirement scopes, and the existing
+`wait_for_expansion` fan-in. It does not use legacy `forEach`, a workflow
+barrier, governed-proof-inspect, Proof admission, or a second scheduler.
+
+The thin SDK runner has three explicit modes. `prepare` is zero-model: it
+renders the built-in `spec-review` role and collects the actual component
+catalog, each requirement's `req show` result (including Proof's computed
+file hash), and its focused spec graph. Read-only AI workers review one exact
+item in parallel; the post-AI command persists a review-candidate packet with
+that scheduled snapshot, not observed current Proof state. The component
+fan-in then serially re-lists/re-shows every item and runs Proof validation,
+audits, checklist, and status, keeping warnings and incompleteness visible.
+`pause` holds one natural generated requirement at the ready frontier while
+other dispatched work may progress and exports the existing canonical Graph
+checkpoint. `resume` is a new process invocation: it re-fetches each Proof
+file hash, rejects stale inputs, then calls the existing
+`resumeGraphCheckpoint` API. Use an isolated subject and a private caller-
+provided read-only `CODEX_HOME` for the latter modes; this example never
+copies or prints authentication.
+
+```sh
+node -r ./node_modules/ts-node/register/transpile-only \
+  examples/agent-governance/native-onboarding/run-milestone-b.ts prepare \
+  --subject-root /path/to/isolated-subject \
+  --original-root /path/to/protected-original \
+  --proof-bin /absolute/path/to/proof \
+  --output /tmp/native-onboarding-b
+
+node -r ./node_modules/ts-node/register/transpile-only \
+  examples/agent-governance/native-onboarding/run-milestone-b.ts pause \
+  --subject-root /path/to/isolated-subject \
+  --original-root /path/to/protected-original \
+  --proof-bin /absolute/path/to/proof \
+  --output /tmp/native-onboarding-b
+
+node -r ./node_modules/ts-node/register/transpile-only \
+  examples/agent-governance/native-onboarding/run-milestone-b.ts resume \
+  --subject-root /path/to/isolated-subject \
+  --original-root /path/to/protected-original \
+  --proof-bin /absolute/path/to/proof \
+  --output /tmp/native-onboarding-b
+```
+
+Inspect `prepare/`, `paused/`, `resumed/`, and incremental `commands/` output.
+The runner also preserves post-execution checkpoint/observation diagnostics
+under `diagnostic/` when a mechanical assertion fails. For a no-model
+integration check only, set `NODE_ENV=test VISOR_NATIVE_B_ZERO_MODEL_TEST=true`;
+this explicitly swaps the nested reviewer for the built-in mock and writes
+rendered prompt witnesses under `diagnostic/zero-model-prompts/`. The flag is
+rejected outside test mode and is never part of the live Luna path.
+Candidate review prose, materialized native state, Proof validation/audit/
+checklist results, and execution completion remain separate. A ready-frontier
+pause is not in-flight overlap or demonstrated interruption recovery. This
+prototype does not claim concurrent per-spec Proof validation; selective
+reruns, project reconciliation, and full-campaign admission remain deferred.
+
 ## Scope and deferred risk
 
 The slice is parser iteration/extraction, selected from the actual checkout by
@@ -115,4 +175,5 @@ This is not full onboarding. Hazard analysis, broad coverage, history mining,
 interruption/recovery, selective reruns, parallel component scheduling,
 continuous maintenance, and full-campaign admission are deferred. The helper
 does not claim candidate prose is materialized, does not synthesize semantic
-fixtures, and does not implement Milestone B recovery or a new protocol.
+fixtures, and does not claim Milestone B completion or introduce a new
+protocol.
