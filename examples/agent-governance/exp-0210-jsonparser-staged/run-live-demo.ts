@@ -21,7 +21,8 @@ import type { VisorConfig } from '../../../src/types/config';
 
 type AnyRecord = Record<string, any>;
 type FrozenPins = { visor_base: string; visor_head: string; frozen_head: string; visor_clean: boolean; repo_status_digest: string; yaml_sha256: string; runner_sha256: string };
-type Prepared = { stage: string; privateDir: string; configPath: string; proofBinary: string; baselineWorkspace: string; fixedWorkspace: string; config: VisorConfig; preflight: AnyRecord; pins: FrozenPins };
+type WorkspaceLineage = { baseline_head: string; fixed_head: string; baseline_root: string; fixed_root: string; fixed_descends_from_baseline: true };
+type Prepared = { stage: string; privateDir: string; configPath: string; proofBinary: string; baselineWorkspace: string; fixedWorkspace: string; config: VisorConfig; preflight: AnyRecord; pins: FrozenPins; lineage: WorkspaceLineage };
 type ChildResult = { checkpoint: AnyRecord; component_ids?: string[]; held_component_id?: string; completed_component_ids?: string[]; refreshed?: AnyRecord };
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
@@ -413,12 +414,13 @@ function run(executable: string, args: string[], cwd = REPO_ROOT, input?: Buffer
   return execFileSync(executable, args, { cwd, input, maxBuffer: 512 * 1024 * 1024, env: { ...process.env, ...OFFLINE_ENV } });
 }
 
-function archive(repo: string, revision: string, destination: string, deterministicRoot = false): void {
+function archive(repo: string, revision: string, destination: string, deterministicRoot = false, reuseGitFrom?: string): void {
   fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
   const tar = run('git', ['-C', repo, 'archive', revision, '--', ...SUBJECT_FILES]);
   run('tar', ['-xf', '-', '-C', destination], REPO_ROOT, tar);
   writePrivateText(path.join(destination, 'proof.yaml'), 'project:\n  name: jsonparser\n  version: "1.0"\n');
-  run('git', ['init', '-q'], destination);
+  if (reuseGitFrom) fs.cpSync(path.join(reuseGitFrom, '.git'), path.join(destination, '.git'), { recursive: true });
+  else run('git', ['init', '-q'], destination);
   run('git', ['config', 'user.email', 'visor-exp0210@example.invalid'], destination);
   run('git', ['config', 'user.name', 'Visor EXP-0210'], destination);
   run('git', ['add', '--', ...SUBJECT_FILES, 'proof.yaml'], destination);
@@ -434,6 +436,31 @@ function archive(repo: string, revision: string, destination: string, determinis
   if (commit.status !== 0) throw new Error('focused baseline archive commit failed');
   const root = run('git', ['rev-list', '--max-parents=0', 'HEAD'], destination).toString('utf8').trim();
   if (root !== FOCUSED_BASELINE_ROOT) throw new Error('focused baseline root commit does not match retained lineage');
+}
+
+function workspaceLineage(baselineWorkspace: string, fixedWorkspace: string): WorkspaceLineage {
+  const head = (workspace: string): string => run('git', ['rev-parse', 'HEAD'], workspace).toString('utf8').trim();
+  const root = (workspace: string): string => run('git', ['rev-list', '--max-parents=0', 'HEAD'], workspace).toString('utf8').trim();
+  const clean = (workspace: string): boolean => command('git', ['status', '--porcelain=v1', '--untracked-files=all'], workspace).stdout.trim() === '';
+  const baselineHead = head(baselineWorkspace);
+  const fixedHead = head(fixedWorkspace);
+  const baselineRoot = root(baselineWorkspace);
+  const fixedRoot = root(fixedWorkspace);
+  const ancestry = command('git', ['merge-base', '--is-ancestor', baselineHead, fixedHead], fixedWorkspace).status === 0;
+  const baselineGit = path.join(baselineWorkspace, '.git');
+  const fixedGit = path.join(fixedWorkspace, '.git');
+  const independentGit = fs.lstatSync(baselineGit).isDirectory() && fs.lstatSync(fixedGit).isDirectory()
+    && !fs.lstatSync(baselineGit).isSymbolicLink() && !fs.lstatSync(fixedGit).isSymbolicLink()
+    && fs.realpathSync(baselineGit) !== fs.realpathSync(fixedGit)
+    && (fs.statSync(baselineGit).dev !== fs.statSync(fixedGit).dev || fs.statSync(baselineGit).ino !== fs.statSync(fixedGit).ino);
+  const parent = run('git', ['rev-parse', `${fixedHead}^`], fixedWorkspace).toString('utf8').trim();
+  const tracked = run('git', ['ls-tree', '-r', '--name-only', fixedHead], fixedWorkspace).toString('utf8').trim().split('\n').filter(Boolean).sort();
+  const expected = [...SUBJECT_FILES, 'proof.yaml'].sort();
+  const changed = run('git', ['diff', '--name-only', baselineHead, fixedHead], fixedWorkspace).toString('utf8').trim().split('\n').filter(Boolean).sort();
+  if (!independentGit || baselineHead !== head(baselineWorkspace) || parent !== baselineHead || baselineRoot !== fixedRoot || !ancestry || !clean(baselineWorkspace) || !clean(fixedWorkspace) || canonicalJson(tracked) !== canonicalJson(expected) || canonicalJson(changed) !== canonicalJson(['parser.go', 'parser_test.go'])) {
+    throw new Error('fixed workspace lineage or source snapshot is invalid');
+  }
+  return { baseline_head: baselineHead, fixed_head: fixedHead, baseline_root: baselineRoot, fixed_root: fixedRoot, fixed_descends_from_baseline: true };
 }
 
 function buildProof(destination: string): string {
@@ -600,7 +627,7 @@ async function resolveFocusedSpecReviewRole(binary: string, workspace: string, d
   };
 }
 
-function preflightReport(config: AnyRecord, graphDigest: string, inventory: AnyRecord, codex: AnyRecord, probe: AnyRecord, baseline: AnyRecord, fixed: AnyRecord, pins: FrozenPins): AnyRecord {
+function preflightReport(config: AnyRecord, graphDigest: string, inventory: AnyRecord, codex: AnyRecord, probe: AnyRecord, baseline: AnyRecord, fixed: AnyRecord, lineage: WorkspaceLineage, pins: FrozenPins): AnyRecord {
   return {
     schema: 'urn:reqproof:agent-governance:exp-0210-live-preflight:v1', status: 'passed', mode: 'preflight-only',
     governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false,
@@ -608,7 +635,7 @@ function preflightReport(config: AnyRecord, graphDigest: string, inventory: AnyR
     contract: { components_min: 2, components_max: MAX_COMPONENTS, call_budget: '1 + 2N + 2|C|', maximum_calls: MAX_CALLS, stages: [...STAGES], model: 'gpt-5.6-luna', reasoning_effort: 'xhigh', sandbox: 'read-only', approval_policy: 'never' },
     graph: { semantic_digest: graphDigest, compiled: true, dynamic_expansion: true, staged_profile: true },
     discovery: { project_id: inventory.authority?.project_id, subject_fingerprint: inventory.authority?.subject_fingerprint },
-    source: { baseline_revision: BASELINE_COMMIT, fix_revision: FIX_COMMIT, file_count: SUBJECT_FILES.length, baseline_manifest_sha256: baseline.manifest_sha256, fix_manifest_sha256: fixed.manifest_sha256 },
+    source: { baseline_revision: BASELINE_COMMIT, fix_revision: FIX_COMMIT, file_count: SUBJECT_FILES.length, baseline_manifest_sha256: baseline.manifest_sha256, fix_manifest_sha256: fixed.manifest_sha256, lineage },
     codex, probe,
     evidence: 'preflight performs no Probe-agent initialization or governed/model/network dispatch',
     config: { max_parallelism: config.max_parallelism },
@@ -623,7 +650,8 @@ function prepare(stage: string, requireFrozen = false, focused = false, codexEvi
   const baselineWorkspace = path.join(work, 'baseline');
   const fixedWorkspace = path.join(work, 'fixed');
   archive(SUBJECT_REPO, BASELINE_COMMIT, baselineWorkspace, focused);
-  archive(SUBJECT_REPO, FIX_COMMIT, fixedWorkspace);
+  archive(SUBJECT_REPO, FIX_COMMIT, fixedWorkspace, false, baselineWorkspace);
+  const lineage = workspaceLineage(baselineWorkspace, fixedWorkspace);
   const proofBinary = buildProof(path.join(work, 'proof'));
   const config = yaml.load(fs.readFileSync(PROFILE, 'utf8')) as VisorConfig;
   const inventory = resolveProjectRole(proofBinary, baselineWorkspace, config);
@@ -638,9 +666,9 @@ function prepare(stage: string, requireFrozen = false, focused = false, codexEvi
   writePrivateJson(configPath, config);
   const input = { configPath, proofBinary, baselineWorkspace, fixedWorkspace, discoveryCheckpoint: path.join(privateDir, 'discovery.checkpoint.json'), baselineCheckpoint: path.join(privateDir, 'baseline.checkpoint.json'), pauseCheckpoint: path.join(privateDir, 'pause.checkpoint.json'), replacementCheckpoint: path.join(privateDir, 'replacement.checkpoint.json') };
   writePrivateJson(path.join(privateDir, 'run-input.json'), input);
-  const preflight = preflightReport(config, graphDigest, inventory, codex, probe, baseline, fixed, pins);
+  const preflight = preflightReport(config, graphDigest, inventory, codex, probe, baseline, fixed, lineage, pins);
   writePrivateJson(path.join(stage, 'preflight.json'), preflight);
-  return { stage, privateDir, configPath, proofBinary, baselineWorkspace, fixedWorkspace, config, preflight, pins };
+  return { stage, privateDir, configPath, proofBinary, baselineWorkspace, fixedWorkspace, config, preflight, pins, lineage };
 }
 
 function cleanupPrivate(prepared: Prepared): void { fs.rmSync(prepared.privateDir, { recursive: true, force: true }); }
@@ -1309,7 +1337,7 @@ function publicArtifacts(prepared: Prepared, stats: AnyRecord, pause: ChildResul
     proof_commit: PROOF_COMMIT, visor_base: VISOR_COMMIT, probe_version: PROBE_VERSION, codex_version: CODEX_VERSION, profile_id: PROFILE_ID, probe_tools: [...PROBE_TOOLS],
     pins: prepared.pins,
     model_calls: stats.governed_calls, network_calls: stats.governed_calls, network_dispatches_requested: stats.governed_calls, retries: 0, fallback: false,
-    ...stats, source: { git_status: before.git_status, git_status_after: after.git_status, head_before: before.head, head_after: after.head, tree_sha256_before: before.tree_sha256, tree_sha256_after: after.tree_sha256 },
+    ...stats, source: { git_status: before.git_status, git_status_after: after.git_status, head_before: before.head, head_after: after.head, tree_sha256_before: before.tree_sha256, tree_sha256_after: after.tree_sha256, lineage: prepared.lineage },
     artifacts: { effective_config: 'effective-config.yaml', graph: ['graph.dot', 'graph.svg', 'graph.png'], baseline_checkpoint: 'baseline.checkpoint.json', pause_checkpoint: 'pause.checkpoint.json', replacement_checkpoint: 'replacement.checkpoint.json', source_manifests: ['baseline-source-manifest.json', 'fix-source-manifest.json'] },
   };
   writePrivateJson(path.join(stage, 'demo-report.json'), report);

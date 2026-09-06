@@ -146,6 +146,44 @@ describe('EXP-0210 live preflight', () => {
     }
   });
 
+  it('builds an independent fixed descendant with exact source lineage before any governed work', () => {
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-lineage-preflight-'));
+    try {
+      const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+      const yamlSha = createHash('sha256').update(fs.readFileSync(PROFILE)).digest('hex');
+      const runnerSha = createHash('sha256').update(fs.readFileSync(LIVE)).digest('hex');
+      const child = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', LIVE, '--preflight-only', '--output', output], {
+        cwd: ROOT,
+        env: {
+          ...process.env,
+          PATH: '/tmp/codex-0.150.1-exp0210.n6IrWC/node_modules/.bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+          VISOR_EXP0210_EXPECTED_VISOR_HEAD: head,
+          VISOR_EXP0210_EXPECTED_YAML_SHA256: yamlSha,
+          VISOR_EXP0210_EXPECTED_RUNNER_SHA256: runnerSha,
+        },
+        encoding: 'utf8', timeout: 120_000,
+      });
+      expect(child.status).toBe(0);
+      const report = JSON.parse(fs.readFileSync(path.join(output, 'preflight.json'), 'utf8')) as AnyRecord;
+      expect(report).toEqual(expect.objectContaining({ status: 'passed', mode: 'preflight-only', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0 }));
+      expect(report.pins.probe_version).toBe(PINS.probe);
+      expect(report.source.file_count).toBe(13);
+      expect(report.source.baseline_manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(report.source.fix_manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(report.source.baseline_manifest_sha256).not.toBe(report.source.fix_manifest_sha256);
+      expect(report.source.lineage).toEqual(expect.objectContaining({
+        baseline_head: expect.stringMatching(/^[0-9a-f]{40}$/),
+        fixed_head: expect.stringMatching(/^[0-9a-f]{40}$/),
+        baseline_root: expect.stringMatching(/^[0-9a-f]{40}$/),
+        fixed_root: expect.stringMatching(/^[0-9a-f]{40}$/),
+        fixed_descends_from_baseline: true,
+      }));
+      expect(report.source.lineage.baseline_root).toBe(report.source.lineage.fixed_root);
+      expect(report.source.lineage.fixed_head).not.toBe(report.source.lineage.baseline_head);
+      expect(fs.statSync(path.join(output, 'preflight.json')).mode & 0o777).toBe(0o600);
+    } finally { fs.rmSync(output, { recursive: true, force: true }); }
+  }, 30_000);
+
   it('rejects mixed/unknown CLI modes before claiming an absent output', () => {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-cli-'));
     try {
@@ -181,7 +219,30 @@ describe('EXP-0210 live preflight', () => {
     try {
       const result = await runJsonparserStagedDemo(output);
       expect(result.report).toEqual(expect.objectContaining({ model_calls: 0, network_calls: 0, current_reconciliation: true }));
+      expect(result.report.proof_commit).toBe(PINS.proof);
       const config = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'effective-config.json'), 'utf8')) as AnyRecord;
+      const candidate = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'candidate.json'), 'utf8')) as AnyRecord;
+      const admission = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'admission.json'), 'utf8')) as AnyRecord;
+      const revalidation = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'revalidation.json'), 'utf8')) as AnyRecord;
+      const workItems = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'work-items.json'), 'utf8')) as AnyRecord;
+      const baselineManifest = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'baseline-source-manifest.json'), 'utf8')) as AnyRecord;
+      const fixManifest = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'fix-source-manifest.json'), 'utf8')) as AnyRecord;
+      expect(candidate.version).toBe('proof.component-catalog-candidate/v1');
+      expect(admission.Version).toBe('proof.role-result-candidate-admission/v2');
+      expect(admission.Status).toBe('ADMITTED');
+      expect(revalidation.version).toBe('proof.catalog-revalidation/v2');
+      expect(revalidation.receipt.decision).toBe('accepted');
+      expect(workItems.version).toBe('proof.onboarding-work-item-projection/v1');
+      expect(workItems.work_items).toHaveLength(result.report.component_count);
+      const parserEngineItems = workItems.work_items.filter((item: AnyRecord) => item.sorted_owned_paths.includes('parser.go') && item.sorted_owned_paths.includes('parser_test.go'));
+      expect(parserEngineItems).toHaveLength(1);
+      expect(parserEngineItems[0].authority).toEqual(expect.objectContaining({ component_id: parserEngineItems[0].component_id, work_item_digest: expect.stringMatching(/^sha256:/), subject: expect.any(Object) }));
+      expect(baselineManifest.file_count).toBe(13);
+      expect(fixManifest.file_count).toBe(13);
+      expect(baselineManifest.revision).toBe(PINS.baseline);
+      expect(fixManifest.revision).toBe(PINS.fix);
+      expect(Object.keys(baselineManifest.file_sha256)).toEqual(Object.keys(fixManifest.file_sha256));
+      expect(Object.keys(baselineManifest.file_sha256).filter(file => baselineManifest.file_sha256[file] !== fixManifest.file_sha256[file]).sort()).toEqual(['parser.go', 'parser_test.go']);
       const pause = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'pause.checkpoint.json'), 'utf8')) as AnyRecord;
       const resumed = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'continued.checkpoint.json'), 'utf8')) as AnyRecord;
       const final = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'replacement.checkpoint.json'), 'utf8')) as AnyRecord;
@@ -345,6 +406,10 @@ describe('EXP-0210 live preflight', () => {
     expect(source).toContain('withGovernedProbeRunnerBudget(pauseBudget');
     expect(source).toContain('withGovernedProbeRunnerBudget(RESUME_CALLS');
     expect(source).toContain('withGovernedProbeRunnerBudget(REPLACEMENT_CALLS');
+    expect(source).toContain("fs.cpSync(path.join(reuseGitFrom, '.git'), path.join(destination, '.git'), { recursive: true })");
+    expect(source).toContain("['merge-base', '--is-ancestor', baselineHead, fixedHead]");
+    expect(source).toContain("run('git', ['rev-parse', `${fixedHead}^`], fixedWorkspace)");
+    expect(source).toContain("canonicalJson(changed) !== canonicalJson(['parser.go', 'parser_test.go'])");
 
     const failure = source.slice(source.indexOf('function failureReceipt'), source.indexOf('export function runPreflight'));
     expect(failure).toContain("status: 'failed'");
