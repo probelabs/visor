@@ -513,7 +513,7 @@ describe('EXP-0210 live preflight', () => {
     }
   }, 120_000);
 
-  it('runs the child-isolated boundary guard through Proof and Probe setup only', () => {
+  it('localizes prompt size with one preview and no model boundary', () => {
     if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
     const run = focusedSubprocess('boundary');
     try {
@@ -521,30 +521,30 @@ describe('EXP-0210 live preflight', () => {
       expect(run.result.stderr).toBe('');
       const report = JSON.parse(fs.readFileSync(path.join(run.output, 'focused-boundary-report.json'), 'utf8')) as AnyRecord;
       expect(report).toEqual(expect.objectContaining({ schema: 'urn:reqproof:agent-governance:exp-0210-focused-boundary:v1', status: 'passed', mode: 'focused-diagnostic-boundary', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
-      expect(report.outcome).toEqual(expect.objectContaining({ status: 'blocked_before_model', error_class: 'unknown', taxonomy: { answerFailureStage: 'unknown' } }));
-      expect(report.lifecycle).toEqual(expect.objectContaining({ close_status: 'clean', answer_guard_hits: 1, forbidden_process_hits: 0, forbidden_network_hits: 0, checkpoint_sha256: `sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249` }));
+      expect(report.outcome).toEqual(expect.objectContaining({ status: 'preview_captured', preview: expect.objectContaining({ source: 'probe-host-tools-call', tool: 'codex', promptBytes: expect.any(Number), promptDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) }), prompt_size: expect.objectContaining({ thresholdBytes: 131072, comparison: expect.stringMatching(/^(within|exceeds)$/), exceeds: expect.any(Boolean) }) }));
+      expect(report.lifecycle).toEqual(expect.objectContaining({ close_status: 'clean', preview_calls: 1, initialize_hits: 0, answer_guard_hits: 0, forbidden_process_hits: 0, forbidden_network_hits: 0, checkpoint_sha256_before: `sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249`, checkpoint_sha256_after: `sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249`, checkpoint_unchanged: true }));
+      expect(report.counters).toEqual({ preview: 1, initialize: 0, answer: 0, forbidden_process: 0, forbidden_network: 0 });
       const events = report.timeline.map((event: AnyRecord) => `${event.event}:${event.status}`);
       expect(events).toEqual([
         'derivation:validated', 'proof_resolution:started', 'provider_acquisition:started',
         'provider_acquisition:handle_created', 'managed_run:started', 'runner_construction:observed',
-        'proof_resolution:completed', 'provider_acquisition:completed', 'runner_answer:entered',
-        'probe_initialize:entered', 'probe_initialize:completed', 'probe_answer_governed:blocked',
-        'runner_answer:failed', 'provider_outcome:failed', 'runner_close:entered',
+        'proof_resolution:completed', 'provider_acquisition:completed', 'runner_preview:entered',
+        'probe_preview:entered', 'probe_preview:completed', 'runner_preview:completed', 'provider_outcome:failed', 'runner_close:entered',
         'runner_close:completed', 'provider_close:clean',
       ]);
       expect(events.filter(value => value === 'proof_resolution:started')).toHaveLength(1);
       expect(events).not.toContain('probe_answer_governed:entered');
       expect(events).not.toContain('probe_answer_governed:completed');
-      expect(events).not.toContain('runner_preview:entered');
-      expect(events).not.toContain('runner_preview:completed');
-      expect(events).not.toContain('probe_preview:entered');
-      expect(events).not.toContain('probe_preview:completed');
+      expect(events).not.toContain('runner_answer:entered');
+      expect(events).not.toContain('runner_answer:completed');
+      expect(events).not.toContain('probe_initialize:entered');
+      expect(events).not.toContain('probe_initialize:completed');
       expect(events).not.toContain('fetch_guard:blocked');
       expect(events).not.toContain('network_guard:blocked');
       expect(events).not.toContain('process_guard:blocked');
       expect(fs.existsSync(path.join(run.output, '.private'))).toBe(false);
       for (const file of fs.readdirSync(run.output)) expect(fs.statSync(path.join(run.output, file)).mode & 0o777).toBe(0o600);
-      expect(JSON.stringify(report)).not.toMatch(/secret|private|prompt|raw output/i);
+      expect(JSON.stringify(report)).not.toMatch(/secret|private|raw output|output_schema|instructions/i);
     } finally { fs.rmSync(run.output, { recursive: true, force: true }); fs.rmSync(run.root, { recursive: true, force: true }); }
   }, 120_000);
 });
