@@ -13,7 +13,12 @@ import * as yaml from 'js-yaml';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
-import { validateProofCandidateEvidence } from '../../../src/providers/governed-proof-inspect-check-provider';
+import {
+  governedProofComponentReinspectionContextDigest,
+  validateGovernedProofComponentReinspectionContext,
+  validateProofCandidateEvidence,
+  type GovernedProofComponentReinspectionContextV1,
+} from '../../../src/providers/governed-proof-inspect-check-provider';
 import { validateProofCurrentCatalogAuthorityBytes } from '../../../src/providers/proof-catalog-check-providers';
 import { proofCanonicalJson } from '../../../src/providers/proof-wire';
 import type { PRInfo } from '../../../src/pr-analyzer';
@@ -86,6 +91,23 @@ const FOCUSED_NETWORK_SENTINEL = new Error('focused network boundary sentinel');
 const FOCUSED_PREVIEW_SENTINEL = new Error('focused preview localization sentinel');
 const FOCUSED_PROMPT_BYTES_LIMIT = 131072;
 
+/**
+ * The normal engine already binds the replacement WorkItem and prior Proof
+ * candidate through visor.proof-component-reinspection-context/v1.  The live
+ * demo keeps the historical source bytes in a separate, deliberately small
+ * prompt-side envelope.  It is derived from the two authenticated Git
+ * workspaces below and is never accepted from model output or YAML.
+ */
+const CHANGE_HUNK_CONTEXT_VERSION = 'visor.proof-component-change-hunk-context/v1';
+const CHANGE_HUNK_CONTEXT_MAX_BYTES = 64 * 1024;
+const CHANGE_HUNK_MAX_COUNT = 64;
+const CHANGE_HUNK_MAX_LINES = 2048;
+const CHANGE_HUNK_MAX_LINE_BYTES = 16 * 1024;
+const CHANGE_HUNK_PATH_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/;
+const SEMANTIC_CANDIDATE_FIELDS = ['requirements', 'interfaces', 'findings'] as const;
+const COORDINATE_CANDIDATE_FIELDS = ['reviewedFiles', ...SEMANTIC_CANDIDATE_FIELDS] as const;
+const COMPONENT_COORDINATE_PROMPT = 'For every coordinate, name an authorized non-empty file and an existing 1-based line in that file.';
+
 const CHILD_FAILURE_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-child-failure:v1';
 const CHILD_FAILURE_PHASES = new Set(['discovery', 'pause', 'resume', 'replacement']);
 const CHILD_FAILURE_BOUNDARIES = new Set([
@@ -108,6 +130,287 @@ export type ChildFailureProjection = Readonly<{
 const requireFromRepo = createRequire(path.join(REPO_ROOT, 'package.json'));
 
 function sha256(value: Buffer | string): string { return createHash('sha256').update(value).digest('hex'); }
+
+type SourceCoordinate = Readonly<{ path: string; line: number }>;
+type ChangedHunk = Readonly<{
+  path: string;
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  lines: readonly string[];
+}>;
+export type ChangedHunkContext = Readonly<{
+  version: typeof CHANGE_HUNK_CONTEXT_VERSION;
+  component_id: string;
+  baseline_revision: string;
+  fixed_revision: string;
+  changed_paths: readonly string[];
+  reinspection_context_digest: string;
+  hunks: readonly ChangedHunk[];
+}>;
+export type BoundChangedHunkContext = Readonly<ChangedHunkContext & { context_digest: string }>;
+
+function failChangeContext(detail: string): never { throw new Error(`CHANGE_HUNK_CONTEXT_INVALID: ${detail}`); }
+
+function byteCompare(left: string, right: string): number {
+  return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
+}
+
+function sortedSourcePaths(paths: readonly string[]): string[] {
+  return [...paths].map(String).sort(byteCompare);
+}
+
+function safeRevision(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/i.test(value);
+}
+
+function safeChangedPath(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= 4096 && CHANGE_HUNK_PATH_PATTERN.test(value);
+}
+
+function exactKeys(value: unknown, keys: readonly string[]): value is AnyRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function changedHunkBody(value: BoundChangedHunkContext): ChangedHunkContext {
+  const body = { ...value } as AnyRecord;
+  delete body.context_digest;
+  return body as ChangedHunkContext;
+}
+
+export function changedHunkContextDigest(value: ChangedHunkContext): string {
+  return `sha256:${sha256(canonicalJson(value))}`;
+}
+
+export function validateChangedHunkContext(value: unknown): BoundChangedHunkContext {
+  if (!exactKeys(value, ['version', 'component_id', 'baseline_revision', 'fixed_revision', 'changed_paths', 'reinspection_context_digest', 'hunks', 'context_digest'])) failChangeContext('envelope shape is invalid');
+  const envelope = value as AnyRecord;
+  if (envelope.version !== CHANGE_HUNK_CONTEXT_VERSION || typeof envelope.component_id !== 'string' || envelope.component_id.length === 0 || Buffer.byteLength(envelope.component_id, 'utf8') > 256) failChangeContext('header is invalid');
+  if (!safeRevision(envelope.baseline_revision) || !safeRevision(envelope.fixed_revision) || envelope.baseline_revision === envelope.fixed_revision) failChangeContext('revisions are invalid');
+  if (!/^sha256:[0-9a-f]{64}$/.test(String(envelope.reinspection_context_digest))) failChangeContext('reinspection context digest is invalid');
+  if (!Array.isArray(envelope.changed_paths) || envelope.changed_paths.length === 0 || envelope.changed_paths.length > CHANGE_HUNK_MAX_COUNT || envelope.changed_paths.some((entry: unknown) => !safeChangedPath(entry))) failChangeContext('changed paths are invalid');
+  const paths = envelope.changed_paths as string[];
+  if (JSON.stringify(paths) !== JSON.stringify(sortedSourcePaths(paths))) failChangeContext('changed paths are not canonically sorted');
+  if (!Array.isArray(envelope.hunks) || envelope.hunks.length === 0 || envelope.hunks.length > CHANGE_HUNK_MAX_COUNT) failChangeContext('hunks are outside the bound');
+  const hunks = envelope.hunks as AnyRecord[];
+  let lineCount = 0;
+  for (const hunk of hunks) {
+    if (!exactKeys(hunk, ['path', 'old_start', 'old_count', 'new_start', 'new_count', 'lines']) || !safeChangedPath(hunk.path) || !paths.includes(hunk.path)) failChangeContext('hunk path or shape is invalid');
+    for (const name of ['old_start', 'old_count', 'new_start', 'new_count']) {
+      if (!Number.isSafeInteger(hunk[name]) || hunk[name] < 0) failChangeContext('hunk coordinates are invalid');
+    }
+    if ((hunk.old_count > 0 && hunk.old_start < 1) || (hunk.new_count > 0 && hunk.new_start < 1)) failChangeContext('hunk start is invalid');
+    if (hunk.new_count === 0) failChangeContext('deletion-only hunks are unsupported');
+    if (!Array.isArray(hunk.lines) || hunk.lines.length === 0 || hunk.lines.length > CHANGE_HUNK_MAX_LINES) failChangeContext('hunk lines are outside the bound');
+    for (const line of hunk.lines) {
+      if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > CHANGE_HUNK_MAX_LINE_BYTES || (!/^[ +\\-]/.test(line) && line !== '\\ No newline at end of file')) failChangeContext('hunk line is invalid');
+    }
+    lineCount += hunk.lines.length;
+  }
+  if (lineCount > CHANGE_HUNK_MAX_LINES * 2) failChangeContext('hunk line budget is exceeded');
+  const body = envelope as BoundChangedHunkContext;
+  if (envelope.context_digest !== changedHunkContextDigest(changedHunkBody(body))) failChangeContext('context digest is detached');
+  if (Buffer.byteLength(canonicalJson(envelope), 'utf8') > CHANGE_HUNK_CONTEXT_MAX_BYTES) failChangeContext('context exceeds bounded byte limit');
+  return Object.freeze(JSON.parse(JSON.stringify(envelope)) as BoundChangedHunkContext);
+}
+
+function workspaceRevision(workspace: string): string {
+  const revision = run('git', ['rev-parse', 'HEAD'], workspace).toString('utf8').trim();
+  if (!safeRevision(revision)) failChangeContext('workspace revision is unavailable');
+  return revision;
+}
+
+function assertCleanWorkspace(workspace: string): void {
+  const status = command('git', ['status', '--porcelain=v1', '--untracked-files=all'], workspace);
+  if (status.status !== 0 || status.stdout.trim() !== '') failChangeContext('source workspace is not clean');
+}
+
+function parseChangedHunks(pathName: string, diff: string): ChangedHunk[] {
+  const lines = diff.split('\n');
+  const hunks: ChangedHunk[] = [];
+  let current: AnyRecord | undefined;
+  const finish = (): void => {
+    if (!current) return;
+    if (current.lines.length === 0 || current.old_seen !== current.old_count || current.new_seen !== current.new_count) failChangeContext('Git hunk counts are invalid');
+    hunks.push(Object.freeze({ path: pathName, old_start: current.old_start, old_count: current.old_count, new_start: current.new_start, new_count: current.new_count, lines: Object.freeze([...current.lines]) }));
+    current = undefined;
+  };
+  for (const line of lines) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)?$/.exec(line);
+    if (header) {
+      finish();
+      current = { old_start: Number(header[1]), old_count: Number(header[2] || 1), new_start: Number(header[3]), new_count: Number(header[4] || 1), old_seen: 0, new_seen: 0, lines: [] };
+      continue;
+    }
+    if (!current) continue;
+    if (/^[ +\-]/.test(line)) {
+      current.lines.push(line);
+      if (line[0] !== '+') current.old_seen += 1;
+      if (line[0] !== '-') current.new_seen += 1;
+    }
+    else if (line === '\\ No newline at end of file') current.lines.push(line);
+    else if (line.length > 0) failChangeContext('unexpected Git hunk output');
+  }
+  finish();
+  for (let index = 1; index < hunks.length; index += 1) {
+    const previous = hunks[index - 1], currentHunk = hunks[index];
+    if (currentHunk.old_start < previous.old_start + previous.old_count || currentHunk.new_start < previous.new_start + previous.new_count) failChangeContext('Git hunk ordering is invalid');
+  }
+  return hunks;
+}
+
+function assertModifiedTextPath(workspace: string, baselineRevision: string, fixedRevision: string, pathName: string): void {
+  const result = spawnSync('git', ['diff', '--no-ext-diff', '--no-renames', '--name-status', baselineRevision, fixedRevision, '--', pathName], {
+    cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: 4096, env: { ...process.env, ...OFFLINE_ENV },
+  });
+  if (result.error || result.status !== 0 || String(result.stdout || '') !== `M\t${pathName}\n`) failChangeContext(`changed path is not one text modification: ${pathName}`);
+}
+
+function boundedChangedPathDiff(workspace: string, baselineRevision: string, fixedRevision: string, pathName: string): string {
+  const result = spawnSync('git', ['diff', '--no-ext-diff', '--no-color', '--no-renames', '--unified=3', baselineRevision, fixedRevision, '--', pathName], {
+    cwd: workspace, encoding: 'utf8', timeout: 30_000, maxBuffer: CHANGE_HUNK_CONTEXT_MAX_BYTES, env: { ...process.env, ...OFFLINE_ENV },
+  });
+  if (result.error || result.status !== 0) failChangeContext(`changed path diff is unavailable or exceeds the bounded limit: ${pathName}`);
+  return String(result.stdout || '');
+}
+
+/** Derive a bounded, digest-bound context from the authenticated Git lineage. */
+export function deriveChangedHunkContext(
+  baselineWorkspace: string,
+  fixedWorkspace: string,
+  lineage: WorkspaceLineage,
+  reinspection: unknown,
+): BoundChangedHunkContext {
+  const context = validateGovernedProofComponentReinspectionContext(reinspection);
+  if (!safeRevision(lineage.baseline_head) || !safeRevision(lineage.fixed_head) || lineage.fixed_descends_from_baseline !== true) failChangeContext('workspace lineage binding is invalid');
+  assertCleanWorkspace(baselineWorkspace); assertCleanWorkspace(fixedWorkspace);
+  const baselineRevision = workspaceRevision(baselineWorkspace);
+  const fixedRevision = workspaceRevision(fixedWorkspace);
+  if (baselineRevision !== lineage.baseline_head || fixedRevision !== lineage.fixed_head) failChangeContext('workspace revisions are detached from lineage');
+  if (command('git', ['merge-base', '--is-ancestor', baselineRevision, fixedRevision], fixedWorkspace).status !== 0 || run('git', ['rev-parse', `${fixedRevision}^`], fixedWorkspace).toString('utf8').trim() !== baselineRevision) failChangeContext('fixed revision is not the validated baseline descendant');
+  const changedPaths = sortedSourcePaths(context.changed_paths);
+  const actualPaths = run('git', ['diff', '--name-only', '--no-ext-diff', baselineRevision, fixedRevision, '--'], fixedWorkspace).toString('utf8').trim().split('\n').filter(Boolean).sort(byteCompare);
+  if (JSON.stringify(actualPaths) !== JSON.stringify(changedPaths) || changedPaths.some(pathName => !safeChangedPath(pathName))) failChangeContext('Git delta is not exactly the Proof-selected owned paths');
+  const hunks = changedPaths.flatMap(pathName => {
+    assertModifiedTextPath(fixedWorkspace, baselineRevision, fixedRevision, pathName);
+    const parsed = parseChangedHunks(pathName, boundedChangedPathDiff(fixedWorkspace, baselineRevision, fixedRevision, pathName));
+    if (parsed.length === 0) failChangeContext(`changed path has no text hunks: ${pathName}`);
+    return parsed;
+  });
+  if (hunks.length === 0 || hunks.length > CHANGE_HUNK_MAX_COUNT) failChangeContext('Git delta has no bounded hunks');
+  const body: ChangedHunkContext = {
+    version: CHANGE_HUNK_CONTEXT_VERSION,
+    component_id: context.component_id,
+    baseline_revision: baselineRevision,
+    fixed_revision: fixedRevision,
+    changed_paths: changedPaths,
+    reinspection_context_digest: governedProofComponentReinspectionContextDigest(context),
+    hunks,
+  };
+  const envelope = { ...body, context_digest: changedHunkContextDigest(body) };
+  return validateChangedHunkContext(envelope);
+}
+
+function sourceLineCounts(sourceRoot: string, authorizedPaths: readonly string[]): Record<string, number> {
+  const root = fs.realpathSync(sourceRoot);
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  const result: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const pathName of sortedSourcePaths(authorizedPaths)) {
+    if (!safeChangedPath(pathName)) failChangeContext('authorized source path is invalid');
+    let bytes: Buffer;
+    try {
+      const target = fs.realpathSync(path.join(root, pathName));
+      if (!target.startsWith(prefix) || !fs.statSync(target).isFile()) failChangeContext(`authorized source path is unavailable: ${pathName}`);
+      bytes = fs.readFileSync(target);
+    } catch { failChangeContext(`authorized source path is unavailable: ${pathName}`); }
+    const text = bytes!.toString('utf8');
+    result[pathName] = text.length === 0 ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+  }
+  return result;
+}
+
+function candidateCoordinates(candidate: AnyRecord, fields: readonly string[]): SourceCoordinate[] {
+  const coordinates: SourceCoordinate[] = [];
+  for (const field of fields) {
+    const entries = candidate[field];
+    if (!Array.isArray(entries)) failChangeContext(`candidate ${field} is not an array`);
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) || !Array.isArray(entry.coordinates) || entry.coordinates.length === 0) failChangeContext(`candidate ${field} has no coordinates`);
+      for (const coordinate of entry.coordinates) {
+        if (!coordinate || typeof coordinate !== 'object' || Array.isArray(coordinate) || typeof coordinate.path !== 'string' || !Number.isSafeInteger(coordinate.line)) failChangeContext(`candidate ${field} has an invalid coordinate`);
+        coordinates.push({ path: coordinate.path, line: coordinate.line });
+      }
+    }
+  }
+  return coordinates;
+}
+
+/** Reject empty files, out-of-range lines, or coordinates outside the authenticated WorkItem. */
+export function validateSourceCoordinates(candidate: unknown, authorizedPaths: readonly string[], linesByPath: Record<string, number>): void {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) failChangeContext('candidate is not an object');
+  const value = candidate as AnyRecord;
+  const owned = new Set(authorizedPaths);
+  if (owned.size === 0 || authorizedPaths.some(pathName => !safeChangedPath(pathName)) || Object.keys(linesByPath).some(pathName => !owned.has(pathName))) failChangeContext('authorized source set is invalid');
+  for (const field of COORDINATE_CANDIDATE_FIELDS) {
+    const entries = value[field];
+    if (!Array.isArray(entries)) failChangeContext(`candidate ${field} is not an array`);
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) || (field === 'reviewedFiles' && (typeof entry.path !== 'string' || !owned.has(entry.path)))) failChangeContext(`candidate ${field} path is not owned`);
+      if (!Array.isArray(entry.coordinates) || entry.coordinates.length === 0) failChangeContext(`candidate ${field} has no coordinates`);
+      for (const coordinate of entry.coordinates) {
+        const lines = coordinate && typeof coordinate === 'object' && !Array.isArray(coordinate) && typeof coordinate.path === 'string' && Object.prototype.hasOwnProperty.call(linesByPath, coordinate.path) ? linesByPath[coordinate.path] : 0;
+        if (!coordinate || typeof coordinate !== 'object' || Array.isArray(coordinate) || typeof coordinate.path !== 'string' || !owned.has(coordinate.path) || !Number.isSafeInteger(coordinate.line) || coordinate.line < 1 || lines < 1 || coordinate.line > lines) failChangeContext(`candidate ${field} coordinate is out of range or unauthorized`);
+        if (field === 'reviewedFiles' && coordinate.path !== entry.path) failChangeContext('reviewed file coordinate path is detached');
+      }
+    }
+  }
+}
+
+function addedHunkLines(hunk: ChangedHunk): number[] {
+  const lines: number[] = [];
+  let current = hunk.new_start;
+  for (const line of hunk.lines) {
+    if (line.startsWith('+')) { lines.push(current); current += 1; }
+    else if (line.startsWith(' ')) current += 1;
+  }
+  if (lines.length === 0) failChangeContext(`changed hunk has no added lines: ${hunk.path}:${hunk.new_start}`);
+  return lines;
+}
+
+/** Every changed hunk must be cited on an added line by a requirement, interface, or finding. */
+export function validateReplacementSemanticCoverage(candidate: unknown, changeContext: unknown): void {
+  const context = validateChangedHunkContext(changeContext);
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) failChangeContext('candidate is not an object');
+  const coordinates = candidateCoordinates(candidate as AnyRecord, SEMANTIC_CANDIDATE_FIELDS);
+  for (const hunk of context.hunks) {
+    const added = addedHunkLines(hunk);
+    if (!coordinates.some(coordinate => coordinate.path === hunk.path && added.includes(coordinate.line))) failChangeContext(`changed hunk is not cited: ${hunk.path}:${added[0]}`);
+  }
+}
+
+export function validateReplacementCandidate(candidate: unknown, changeContext: unknown, sourceRoot: string, authorizedPaths: readonly string[]): void {
+  const context = validateChangedHunkContext(changeContext);
+  const lines = sourceLineCounts(sourceRoot, authorizedPaths);
+  validateSourceCoordinates(candidate, authorizedPaths, lines);
+  validateReplacementSemanticCoverage(candidate, context);
+}
+
+/** Every active component candidate is constrained by its authenticated dependency closure. */
+export function validateActiveComponentCandidateCoordinates(view: AnyRecord, sourceRoot: string): void {
+  const workItems = Object.values(view.claimsById).filter((claim: any) => claim.claim === 'component.work_item@1' && claim.active && claim.scope?.length === 2) as AnyRecord[];
+  const workItemByComponent = new Map(workItems.map(item => [String(item.scope.at(-1)?.key || ''), item]));
+  const candidates = Object.values(view.claimsById).filter((claim: any) => claim.active && claim.scope?.length === 2 && (claim.claim === 'proof.candidate@1' || claim.claim === 'proof.component_spec_review_candidate@1')) as AnyRecord[];
+  if (candidates.length === 0) throw new Error('active component candidates are unavailable');
+  for (const candidate of candidates) {
+    const componentID = String(candidate.scope.at(-1)?.key || '');
+    const workItem = workItemByComponent.get(componentID);
+    const coordinatePaths = Array.isArray(workItem?.payload?.sorted_dependency_closure) ? workItem.payload.sorted_dependency_closure.map(String) : [];
+    if (!componentID || coordinatePaths.length === 0) throw new Error('active component candidate lacks authenticated dependency closure');
+    validateSourceCoordinates(candidate.payload, coordinatePaths, sourceLineCounts(sourceRoot, coordinatePaths));
+  }
+}
 
 function writePrivateJson(file: string, value: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
@@ -664,7 +967,7 @@ function prepare(stage: string, requireFrozen = false, focused = false, codexEvi
   exactSourceDelta(baseline, fixed);
   const configPath = path.join(privateDir, 'effective-config.json');
   writePrivateJson(configPath, config);
-  const input = { configPath, proofBinary, baselineWorkspace, fixedWorkspace, discoveryCheckpoint: path.join(privateDir, 'discovery.checkpoint.json'), baselineCheckpoint: path.join(privateDir, 'baseline.checkpoint.json'), pauseCheckpoint: path.join(privateDir, 'pause.checkpoint.json'), replacementCheckpoint: path.join(privateDir, 'replacement.checkpoint.json') };
+  const input = { configPath, proofBinary, baselineWorkspace, fixedWorkspace, lineage, discoveryCheckpoint: path.join(privateDir, 'discovery.checkpoint.json'), baselineCheckpoint: path.join(privateDir, 'baseline.checkpoint.json'), pauseCheckpoint: path.join(privateDir, 'pause.checkpoint.json'), replacementCheckpoint: path.join(privateDir, 'replacement.checkpoint.json') };
   writePrivateJson(path.join(privateDir, 'run-input.json'), input);
   const preflight = preflightReport(config, graphDigest, inventory, codex, probe, baseline, fixed, lineage, pins);
   writePrivateJson(path.join(stage, 'preflight.json'), preflight);
@@ -774,6 +1077,42 @@ function proofRefresh(binary: string, workspace: string, checkpoint: AnyRecord, 
 
 function childEnvironment(): NodeJS.ProcessEnv { return Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(API_KEY|ACCESS_TOKEN|SECRET|PASSWORD|EVALUATOR|SUBJECT)/i.test(key))); }
 
+/**
+ * The production engine supplies the authenticated reinspection context to
+ * the governed provider. This demo-only wrapper replaces the factory captured
+ * by that provider after its Proof bootstrap, adding separately derived source
+ * hunks at the runner boundary. Component requests also receive a short
+ * coordinate rule; project discovery requests remain byte-for-byte unchanged.
+ */
+export function installReplacementChangeHunkPrompt(input: AnyRecord, provider: AnyRecord): () => void {
+  const key = typeof provider?.factory === 'function' ? 'factory' : 'createGovernedProbeRunner';
+  const descriptor = Object.getOwnPropertyDescriptor(provider, key);
+  const original = provider?.[key];
+  if (!descriptor || typeof original !== 'function' || (!descriptor.configurable && descriptor.writable !== true)) throw new Error('governed Probe runner factory is unavailable');
+  const replacement = (request: AnyRecord): unknown => {
+    const componentRequest = request?.reinspectionContext || request?.invocation?.subject?.kind === 'component';
+    if (!componentRequest) return original(request);
+    let message = `${request.message}\n\n${COMPONENT_COORDINATE_PROMPT}`;
+    if (request.reinspectionContext) {
+      if (!input.baselineWorkspace || !input.fixedWorkspace || !input.lineage) failChangeContext('replacement hunk prompt lacks source lineage');
+      const changeContext = deriveChangedHunkContext(String(input.baselineWorkspace), String(input.fixedWorkspace), input.lineage as WorkspaceLineage, request.reinspectionContext as GovernedProofComponentReinspectionContextV1);
+      const serialized = canonicalJson(changeContext);
+      message += `\n\nBound changed-hunk context (canonical JSON; immutable, digest-bound; replacement only):\n${serialized}\n\nChanged-hunk context digest: ${changeContext.context_digest}`;
+    }
+    if (Buffer.byteLength(message, 'utf8') > 32768) failChangeContext('replacement prompt exceeds governed message bound');
+    return original({ ...request, message });
+  };
+  if (descriptor.configurable) Object.defineProperty(provider, key, { configurable: descriptor.configurable, enumerable: descriptor.enumerable, writable: true, value: replacement });
+  else provider[key] = replacement;
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    if (descriptor.configurable) Object.defineProperty(provider, key, descriptor);
+    else provider[key] = original;
+  };
+}
+
 export function childProcess(mode: 'discovery' | 'pause' | 'resume' | 'replacement', stage: string): ChildResult {
   const timeout = mode === 'discovery' ? DISCOVERY_TIMEOUT_MS : COMPONENT_TIMEOUT_MS;
   const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', CHILD_ENTRY, '--child', mode, '--output', stage, '--controller-pid', String(process.pid)], { cwd: REPO_ROOT, env: childEnvironment(), encoding: 'utf8', timeout, maxBuffer: 128 * 1024 * 1024 });
@@ -812,7 +1151,7 @@ function focusedUpstreamPreflightReceipt(): AnyRecord {
   if (sha256(bytes) !== FOCUSED_PREFLIGHT_SHA256) throw new Error('focused preflight receipt pin does not match');
   const receipt = JSON.parse(bytes.toString('utf8')) as AnyRecord;
   if (receipt.schema !== 'urn:reqproof:agent-governance:exp-0210-live-preflight:v1' || receipt.status !== 'passed' || receipt.mode !== 'preflight-only' || receipt.governed_calls !== 0 || receipt.model_calls !== 0 || receipt.retries !== 0 || receipt.fallback !== false || receipt.graph?.semantic_digest !== FOCUSED_GRAPH_DIGEST || receipt.pins?.proof_commit !== PROOF_COMMIT || receipt.pins?.probe_version !== FOCUSED_RETAINED_PROBE_VERSION || receipt.pins?.codex_version !== CODEX_VERSION || receipt.pins?.profile_id !== PROFILE_ID || canonicalJson(receipt.pins?.probe_tools) !== canonicalJson([...PROBE_TOOLS])) throw new Error('focused preflight receipt is not an exact zero-call pin');
-  return { sha256: `sha256:${FOCUSED_PREFLIGHT_SHA256}`, graph_semantic_digest: receipt.graph.semantic_digest };
+  return { sha256: `sha256:${FOCUSED_PREFLIGHT_SHA256}`, graph_semantic_digest: receipt.graph.semantic_digest, codex: receipt.codex };
 }
 
 function focusedAuthorizationReceipt(): AnyRecord {
@@ -1128,7 +1467,7 @@ async function runFocusedDiagnosticPreflight(outputDirectory: string): Promise<A
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-focused-preflight-')); fs.chmodSync(stage, 0o700);
   try {
     const receipt = focusedUpstreamPreflightReceipt();
-    const prepared = prepare(stage, true, true);
+    const prepared = prepare(stage, true, true, receipt.codex);
     const checkpointBytes = focusedCheckpointBytes();
     verifyFocusedBaselineLineage(prepared.proofBinary, prepared.baselineWorkspace, JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord);
     resolveHistoricalProjectRole(prepared.proofBinary, prepared.baselineWorkspace, prepared.config, JSON.parse(checkpointBytes.toString('utf8')) as AnyRecord);
@@ -1221,6 +1560,17 @@ function validateRun(prepared: Prepared, pause: ChildResult, resumed: ChildResul
   const stagedReceipt = Object.values(finalView.claimsById).filter((value: any) => value.claim === 'proof.component_spec_review_admitted_receipt@1' && value.active && value.scope?.at(-1)?.key === changed) as AnyRecord[];
   const verify = generationsFor(finalView, changed).find(value => value.checkId === 'verify' && value.status === 'completed') as AnyRecord | undefined;
   if (stagedCandidate.length !== 1 || stagedReceipt.length !== 1 || stagedCandidate[0].parentClaimIds.length !== 3 || stagedReceipt[0].parentClaimIds.length !== 1 || !verify || verify.activeInputClaimIds.length !== 4) throw new Error('staged receipt or four-input verify evidence is invalid');
+  const changedWorkItem = Object.values(finalView.claimsById).find((value: any) => value.claim === 'component.work_item@1' && value.active && value.scope?.at(-1)?.key === changed) as AnyRecord | undefined;
+  const replacementInspectCandidate = Object.values(finalView.claimsById).filter((value: any) => value.claim === 'proof.candidate@1' && value.active && value.scope?.at(-1)?.key === changed) as AnyRecord[];
+  const replacementCandidates = replacement.checkpoint.events.filter((event: any) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope?.at(-1)?.key === changed && event.proofCandidateEvidence?.reinspectionContext) as AnyRecord[];
+  if (!changedWorkItem || replacementInspectCandidate.length !== 1 || replacementCandidates.length !== 1) throw new Error('replacement candidate lacks one authenticated reinspection context');
+  const changeContext = deriveChangedHunkContext(prepared.baselineWorkspace, prepared.fixedWorkspace, prepared.lineage, replacementCandidates[0].proofCandidateEvidence.reinspectionContext);
+  const ownedPaths = Array.isArray(changedWorkItem.payload?.sorted_owned_paths) ? changedWorkItem.payload.sorted_owned_paths.map(String) : [];
+  const coordinatePaths = Array.isArray(changedWorkItem.payload?.sorted_dependency_closure) ? changedWorkItem.payload.sorted_dependency_closure.map(String) : [];
+  if (ownedPaths.length === 0 || coordinatePaths.length === 0 || changeContext.changed_paths.some(pathName => !ownedPaths.includes(pathName))) throw new Error('replacement hunks are detached from the authenticated changed owned paths');
+  validateActiveComponentCandidateCoordinates(finalView, prepared.fixedWorkspace);
+  validateReplacementCandidate(replacementInspectCandidate[0].payload, changeContext, prepared.fixedWorkspace, coordinatePaths);
+  validateReplacementCandidate(stagedCandidate[0].payload, changeContext, prepared.fixedWorkspace, coordinatePaths);
   const attestedEvents = replacement.checkpoint.events.filter((event: any) => event.type === 'ClaimPublished' && event.proofCandidateEvidence);
   const expectedAttestations = 1 + 2 * ids.length + 2;
   if (attestedEvents.length !== expectedAttestations) throw new Error('governed Probe candidate evidence count is invalid');
@@ -1260,7 +1610,7 @@ function validateRun(prepared: Prepared, pause: ChildResult, resumed: ChildResul
   if (expectedCalls > MAX_CALLS || pauseCalls !== 1 + 2 * (ids.length - 1) || resumeCalls !== RESUME_CALLS || replacementCalls !== REPLACEMENT_CALLS || pauseCalls + resumeCalls + replacementCalls !== expectedCalls) throw new Error('live governed call budget mismatch');
   const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(prepared.config), replacement.checkpoint);
   if (canonicalGraphCheckpointJson(restored.getInstanceProjection()) !== canonicalGraphCheckpointJson(restored.replayInstanceProjection()) || canonicalGraphCheckpointJson(restored.exportGraphCheckpoint(replacement.checkpoint.sessionId)) !== canonicalGraphCheckpointJson(replacement.checkpoint)) throw new Error('replacement restore/replay/re-export mismatch');
-  return { component_count: ids.length, component_ids: ids, changed_component_id: changed, held_component_id: pause.held_component_id, governed_calls: expectedCalls, staged_candidate_parents: 3, staged_receipt_parents: 1, verify_inputs: 4 };
+  return { component_count: ids.length, component_ids: ids, changed_component_id: changed, held_component_id: pause.held_component_id, governed_calls: expectedCalls, staged_candidate_parents: 3, staged_receipt_parents: 1, verify_inputs: 4, replacement_hunk_context_digest: changeContext.context_digest, replacement_hunk_count: changeContext.hunks.length };
 }
 
 function catalogArtifacts(checkpoint: AnyRecord, config: AnyRecord): AnyRecord {
@@ -1586,6 +1936,7 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
   let failureBoundary: ChildFailureProjection['boundary'] = 'restore';
   let primaryError: unknown;
   let hasPrimaryError = false;
+  let restoreChangeHunkPrompt: (() => void) | undefined;
   try {
     const input = privateInput(stage);
     const config = JSON.parse(fs.readFileSync(input.configPath, 'utf8')) as VisorConfig;
@@ -1594,6 +1945,10 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
     const { createProofAdmissionCapability } = require('../../../src/providers/proof-admission-cli-child') as typeof import('../../../src/providers/proof-admission-cli-child');
     const { GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } = require('../../../src/providers/governed-probe-runner') as typeof import('../../../src/providers/governed-probe-runner');
     const registry = CheckProviderRegistry.getInstance(); registry.bootstrapProofAdmission(createProofAdmissionCapability(input.proofBinary));
+    // Bootstrap constructs the governed provider and captures its original
+    // factory. Wrap that exact provider instance for this child transaction;
+    // the wrapper changes component prompts only and preserves project discovery.
+    restoreChangeHunkPrompt = installReplacementChangeHunkPrompt(input, registry.getProvider('governed-proof-inspect') as AnyRecord);
     const engine = new StateMachineExecutionEngine(mode === 'replacement' ? input.fixedWorkspace : input.baselineWorkspace);
     let result: AnyRecord;
     const restoreProbeDiagnostics = installProbeFailureDiagnostics(mode, stage, GovernedProbeAgentRunner);
@@ -1659,6 +2014,8 @@ async function runChildMode(mode: 'discovery' | 'pause' | 'resume' | 'replacemen
     const selected = selectPrimaryFailure(hasPrimaryError, primaryError, failureBoundary, error, childBoundary);
     try { writeChildFailureProjection(stage, mode, selected.boundary, selected.error); } catch { /* Failure projection never masks the child failure. */ }
     throw error;
+  } finally {
+    restoreChangeHunkPrompt?.();
   }
 }
 

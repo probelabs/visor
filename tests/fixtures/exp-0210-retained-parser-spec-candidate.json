@@ -1,0 +1,40 @@
+{
+  "provenance": {
+    "bundle": "/tmp/visor-exp0210-final-lineage-run.Zag2Eh/output",
+    "checkpoint": "replacement.checkpoint.json",
+    "report": "demo-report.json",
+    "candidate_claim": "proof.component_spec_review_candidate@1",
+    "component_id": "parser-core",
+    "source_commits": {
+      "baseline": "cb835d480ac58e1b4be76afeac49e89ed651c3b5",
+      "fixed": "3980c9c9b9919e643bd095fa4469bfa19e29f20c"
+    }
+  },
+  "coordinate_paths": [
+    "bytes.go",
+    "bytes_safe.go",
+    "bytes_unsafe.go",
+    "escape.go",
+    "fuzz.go",
+    "go.mod",
+    "parser.go",
+    "parser_error_test.go",
+    "parser_test.go"
+  ],
+  "candidate": {
+    "reviewedFiles": [
+      { "path": "bytes.go", "coordinates": [{ "path": "bytes.go", "line": 11 }] },
+      { "path": "bytes_safe.go", "coordinates": [{ "path": "bytes_safe.go", "line": 23 }] },
+      { "path": "bytes_unsafe.go", "coordinates": [{ "path": "bytes_unsafe.go", "line": 35 }] },
+      { "path": "escape.go", "coordinates": [{ "path": "escape.go", "line": 62 }] },
+      { "path": "fuzz.go", "coordinates": [{ "path": "fuzz.go", "line": 3 }] },
+      { "path": "go.mod", "coordinates": [{ "path": "go.mod", "line": 1 }] },
+      { "path": "parser.go", "coordinates": [{ "path": "parser.go", "line": 382 }] },
+      { "path": "parser_error_test.go", "coordinates": [{ "path": "parser_error_test.go", "line": 24 }] },
+      { "path": "parser_test.go", "coordinates": [{ "path": "parser_test.go", "line": 1245 }] }
+    ],
+    "requirements": [{ "coordinates": [{ "path": "parser.go", "line": 878 }, { "path": "parser.go", "line": 890 }] }],
+    "interfaces": [{ "coordinates": [{ "path": "parser.go", "line": 890 }, { "path": "parser.go", "line": 1125 }] }],
+    "findings": [{ "coordinates": [{ "path": "parser.go", "line": 674 }, { "path": "parser.go", "line": 680 }, { "path": "parser_test.go", "line": 1678 }] }]
+  }
+}

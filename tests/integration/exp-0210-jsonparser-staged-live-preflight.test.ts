@@ -7,7 +7,10 @@ import { createHash } from 'node:crypto';
 import * as yaml from 'js-yaml';
 import {
   aggregateFailureDiagnostics,
+  changedHunkContextDigest,
+  deriveChangedHunkContext,
   installProbeFailureDiagnostics,
+  installReplacementChangeHunkPrompt,
   childProcess,
   failureReceipt,
   projectChildFailure,
@@ -17,10 +20,15 @@ import {
   sanitizeProbeFailureTaxonomy,
   selectPrimaryFailure,
   serializeFailureDiagnostics,
+  validateChangedHunkContext,
+  validateActiveComponentCandidateCoordinates,
+  validateReplacementCandidate,
+  validateReplacementSemanticCoverage,
+  validateSourceCoordinates,
   validateChildFailureProjection,
 } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
 import { runJsonparserStagedDemo } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-demo';
-import { validateProofCandidateEvidence } from '../../src/providers/governed-proof-inspect-check-provider';
+import { governedProofComponentReinspectionContextDigest, GovernedProofInspectCheckProvider, validateProofCandidateEvidence } from '../../src/providers/governed-proof-inspect-check-provider';
 import { ExecutionJournal } from '../../src/snapshot-store';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
@@ -43,6 +51,103 @@ const SCHEMA_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatc
 const SCHEMA_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'];
 const RETAINED_CHECKPOINT = '/tmp/visor-exp0210-live-luna.fom5fO/output/failure.checkpoint.json';
 const RETAINED_PREFLIGHT = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
+const RETAINED_PARSER_CANDIDATE = path.join(ROOT, 'tests/fixtures/exp-0210-retained-parser-spec-candidate.json');
+
+function git(cwd: string, args: string[]): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return String(result.stdout || '').trim();
+}
+
+function reinspectionContext(): AnyRecord {
+  const payload = { finding: 'prior' };
+  return {
+    version: 'visor.proof-component-reinspection-context/v1', component_id: 'parser-core', changed_paths: ['parser.go', 'parser_test.go'],
+    historical_work_item: { claim_id: '1'.repeat(64), payload_fingerprint: '2'.repeat(64) }, current_work_item: { claim_id: '3'.repeat(64), payload_fingerprint: '4'.repeat(64) },
+    prior_candidate: { claim_id: '5'.repeat(64), payload_fingerprint: createHash('sha256').update(JSON.stringify(payload)).digest('hex'), result_digest: `sha256:${'6'.repeat(64)}`, payload },
+    prior_admission: { claim_id: '7'.repeat(64), payload_fingerprint: '8'.repeat(64) },
+  };
+}
+
+function changeHunkFixture(): { root: string; baseline: string; fixed: string; lineage: AnyRecord; context: AnyRecord } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-hunks-'));
+  const baseline = path.join(root, 'baseline'); const fixed = path.join(root, 'fixed');
+  fs.mkdirSync(baseline); git(baseline, ['init', '-q']); git(baseline, ['config', 'user.email', 'test@example.invalid']); git(baseline, ['config', 'user.name', 'test']);
+  fs.writeFileSync(path.join(baseline, 'parser.go'), 'package p\nfunc Parse() int { return 1 }\n');
+  fs.writeFileSync(path.join(baseline, 'parser_test.go'), 'package p\nfunc TestParse(t *T) {}\n');
+  fs.writeFileSync(path.join(baseline, 'go.sum'), '');
+  git(baseline, ['add', '.']); git(baseline, ['commit', '-qm', 'baseline']);
+  fs.cpSync(baseline, fixed, { recursive: true });
+  fs.writeFileSync(path.join(fixed, 'parser.go'), 'package p\nfunc Parse() int { return 2 }\n');
+  fs.writeFileSync(path.join(fixed, 'parser_test.go'), 'package p\nfunc TestParse(t *T) { _ = Parse() }\n');
+  git(fixed, ['add', '.']); git(fixed, ['commit', '-qm', 'fixed']);
+  const lineage = { baseline_head: git(baseline, ['rev-parse', 'HEAD']), fixed_head: git(fixed, ['rev-parse', 'HEAD']), baseline_root: git(baseline, ['rev-list', '--max-parents=0', 'HEAD']), fixed_root: git(fixed, ['rev-list', '--max-parents=0', 'HEAD']), fixed_descends_from_baseline: true };
+  return { root, baseline, fixed, lineage, context: reinspectionContext() };
+}
+
+function genericReplacementCandidate(): AnyRecord {
+  const coordinate = (pathName: string, line: number) => ({ path: pathName, line });
+  return {
+    reviewedFiles: [{ path: 'parser.go', coordinates: [coordinate('parser.go', 2)] }, { path: 'parser_test.go', coordinates: [coordinate('parser_test.go', 2)] }],
+    requirements: [{ coordinates: [coordinate('parser.go', 2)] }, { coordinates: [coordinate('parser_test.go', 2)] }],
+    interfaces: [{ coordinates: [coordinate('parser.go', 2)] }, { coordinates: [coordinate('parser_test.go', 2)] }],
+    findings: [{ coordinates: [coordinate('parser.go', 2)] }, { coordinates: [coordinate('parser_test.go', 2)] }],
+  };
+}
+
+function fixtureInput(fixture: ReturnType<typeof changeHunkFixture>): AnyRecord {
+  return { baselineWorkspace: fixture.baseline, fixedWorkspace: fixture.fixed, lineage: fixture.lineage };
+}
+
+function retainedReplacementCandidate(): { candidate: AnyRecord; coordinatePaths: string[] } {
+  const fixture = JSON.parse(fs.readFileSync(RETAINED_PARSER_CANDIDATE, 'utf8')) as AnyRecord;
+  if (!fixture?.candidate || !Array.isArray(fixture.coordinate_paths)) throw new Error('retained replacement candidate fixture is incomplete');
+  return { candidate: fixture.candidate, coordinatePaths: fixture.coordinate_paths.map(String) };
+}
+
+function realChangedHunkFixture(paths: readonly string[]): ReturnType<typeof changeHunkFixture> {
+  const source = '/Users/buger/go/src/jsonparser';
+  if (!fs.existsSync(source)) throw new Error('pinned jsonparser source repository is unavailable');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-real-hunks-'));
+  const baseline = path.join(root, 'baseline'); const fixed = path.join(root, 'fixed');
+  const archive = (revision: string, destination: string): void => {
+    fs.mkdirSync(destination, { recursive: true });
+    const result = spawnSync('git', ['archive', revision, '--', ...paths], { cwd: source, encoding: null });
+    if (result.status !== 0 || !result.stdout || spawnSync('tar', ['-xf', '-', '-C', destination], { input: result.stdout }).status !== 0) throw new Error('unable to archive pinned changed sources');
+  };
+  archive(PINS.baseline, baseline); git(baseline, ['init', '-q']); git(baseline, ['config', 'user.email', 'test@example.invalid']); git(baseline, ['config', 'user.name', 'test']); git(baseline, ['add', '.']); git(baseline, ['commit', '-qm', 'baseline']);
+  fs.cpSync(baseline, fixed, { recursive: true }); archive(PINS.fix, fixed); git(fixed, ['add', '.']); git(fixed, ['commit', '-qm', 'fixed']);
+  const lineage = { baseline_head: git(baseline, ['rev-parse', 'HEAD']), fixed_head: git(fixed, ['rev-parse', 'HEAD']), baseline_root: git(baseline, ['rev-list', '--max-parents=0', 'HEAD']), fixed_root: git(fixed, ['rev-list', '--max-parents=0', 'HEAD']), fixed_descends_from_baseline: true };
+  return { root, baseline, fixed, lineage, context: {} };
+}
+
+function genericReplacementCandidateForHunks(context: AnyRecord, addedOnly = true): AnyRecord {
+  const coordinate = (hunk: AnyRecord) => {
+    let line = hunk.new_start;
+    if (addedOnly) {
+      for (const text of hunk.lines) {
+        if (text.startsWith('+')) return { path: hunk.path, line };
+        if (text.startsWith(' ')) line += 1;
+      }
+      throw new Error('fixture hunk has no added line');
+    }
+    return { path: hunk.path, line };
+  };
+  const coordinates = context.hunks.map(coordinate);
+  return {
+    reviewedFiles: context.changed_paths.map((pathName: string) => ({ path: pathName, coordinates: [coordinates.find((entry: AnyRecord) => entry.path === pathName)] })),
+    requirements: coordinates.map((entry: AnyRecord) => ({ coordinates: [entry] })),
+    interfaces: [{ coordinates }],
+    findings: [{ coordinates }],
+  };
+}
+
+function lineCounts(sourceRoot: string, paths: readonly string[]): Record<string, number> {
+  return Object.fromEntries(paths.map(pathName => {
+    const text = fs.readFileSync(path.join(sourceRoot, pathName), 'utf8');
+    return [pathName, text.length === 0 ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)];
+  }));
+}
 
 function focusedSubprocess(kind: 'valid' | 'checkpoint' | 'preflight' | 'boundary'): { root: string; output: string; runner: string; result: ReturnType<typeof spawnSync> } {
   const shadow = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-focused-shadow-'));
@@ -752,4 +857,107 @@ describe('EXP-0210 live preflight', () => {
       expect(JSON.stringify(report)).not.toMatch(/secret|private|raw output|output_schema|instructions/i);
     } finally { fs.rmSync(run.output, { recursive: true, force: true }); fs.rmSync(run.root, { recursive: true, force: true }); }
   }, 120_000);
+
+  it('derives deterministic bounded replacement hunks and rejects tamper/oversize', () => {
+    const fixture = changeHunkFixture();
+    try {
+      const first = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, fixture.context);
+      const second = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, fixture.context);
+      expect(first).toEqual(second);
+      expect(first.changed_paths).toEqual(['parser.go', 'parser_test.go']);
+      expect(first.hunks.length).toBeGreaterThanOrEqual(2);
+      const { context_digest: digest, ...body } = first;
+      expect(digest).toBe(changedHunkContextDigest(body));
+      expect(first.reinspection_context_digest).toBe(governedProofComponentReinspectionContextDigest(fixture.context));
+      expect(() => validateChangedHunkContext({ ...first, hunks: first.hunks.map(hunk => ({ ...hunk, lines: ['+tampered'] })) })).toThrow(/digest/i);
+      expect(() => validateChangedHunkContext({ ...first, reinspection_context_digest: `sha256:${'9'.repeat(64)}` })).toThrow(/digest/i);
+      expect(() => validateChangedHunkContext({ ...first, changed_paths: ['parser.go', 'wrong.go'] })).toThrow(/digest|path/i);
+      expect(() => validateChangedHunkContext({ ...first, fixed_revision: 'a'.repeat(40) })).toThrow(/digest|revision/i);
+      const oversized = { ...first, hunks: Array.from({ length: 65 }, () => first.hunks[0]), context_digest: '' } as any;
+      oversized.context_digest = changedHunkContextDigest(oversized);
+      expect(() => validateChangedHunkContext(oversized)).toThrow(/bound/i);
+      const deletionOnly = { ...first, hunks: [{ ...first.hunks[0], old_count: 1, new_count: 0, lines: ['-deleted'] }], context_digest: '' } as any;
+      deletionOnly.context_digest = changedHunkContextDigest(deletionOnly);
+      expect(() => validateChangedHunkContext(deletionOnly)).toThrow(/deletion-only/i);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('gates generic replacement coordinates and requires every implementation/test hunk citation', () => {
+    const fixture = changeHunkFixture();
+    try {
+      const context = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, fixture.context);
+      const candidate = genericReplacementCandidate();
+      validateReplacementCandidate(candidate, context, fixture.fixed, ['parser.go', 'parser_test.go', 'go.sum']);
+      validateActiveComponentCandidateCoordinates({ claimsById: {
+        workItem: { claim: 'component.work_item@1', active: true, scope: [{ key: 'jsonparser' }, { key: 'parser-core' }], payload: { sorted_dependency_closure: ['parser.go', 'parser_test.go'] } },
+        inspect: { claim: 'proof.candidate@1', active: true, scope: [{ key: 'jsonparser' }, { key: 'parser-core' }], payload: candidate },
+        specReview: { claim: 'proof.component_spec_review_candidate@1', active: true, scope: [{ key: 'jsonparser' }, { key: 'parser-core' }], payload: candidate },
+      } }, fixture.fixed);
+      expect(() => validateReplacementSemanticCoverage({ ...candidate, requirements: [{ coordinates: [{ path: 'parser.go', line: 2 }] }], interfaces: [], findings: [] }, context)).toThrow(/hunk/i);
+      expect(() => validateSourceCoordinates({ ...candidate, reviewedFiles: [...candidate.reviewedFiles, { path: 'go.sum', coordinates: [{ path: 'go.sum', line: 1 }] }] }, ['parser.go', 'parser_test.go', 'go.sum'], { 'parser.go': 2, 'parser_test.go': 2, 'go.sum': 0 })).toThrow(/range|empty|unauthorized/i);
+      expect(() => validateSourceCoordinates({ ...candidate, requirements: [{ coordinates: [{ path: 'parser.go', line: 99 }] }] }, ['parser.go', 'parser_test.go'], { 'parser.go': 2, 'parser_test.go': 2 })).toThrow(/range|out/i);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('rejects changed paths without one bounded text modification hunk', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-mode-only-'));
+    const baseline = path.join(root, 'baseline'); const fixed = path.join(root, 'fixed');
+    try {
+      fs.mkdirSync(baseline); git(baseline, ['init', '-q']); git(baseline, ['config', 'user.email', 'test@example.invalid']); git(baseline, ['config', 'user.name', 'test']);
+      fs.writeFileSync(path.join(baseline, 'parser.go'), 'package p\n'); git(baseline, ['add', '.']); git(baseline, ['commit', '-qm', 'baseline']);
+      fs.cpSync(baseline, fixed, { recursive: true }); fs.writeFileSync(path.join(fixed, 'added.go'), 'package p\n'); git(fixed, ['add', '.']); git(fixed, ['commit', '-qm', 'added']);
+      const lineage = { baseline_head: git(baseline, ['rev-parse', 'HEAD']), fixed_head: git(fixed, ['rev-parse', 'HEAD']), baseline_root: git(baseline, ['rev-list', '--max-parents=0', 'HEAD']), fixed_root: git(fixed, ['rev-list', '--max-parents=0', 'HEAD']), fixed_descends_from_baseline: true };
+      expect(() => deriveChangedHunkContext(baseline, fixed, lineage, { ...reinspectionContext(), changed_paths: ['added.go'] })).toThrow(/not one text modification/i);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('injects hunk context only for replacement requests at the demo runner boundary', () => {
+    const fixture = changeHunkFixture();
+    const original = (request: AnyRecord) => request;
+    const captured: AnyRecord[] = [];
+    const stub = (request: AnyRecord) => { captured.push(request); return request; };
+    const runnerModule = { createGovernedProbeRunner: stub };
+    try {
+      const restore = installReplacementChangeHunkPrompt(fixtureInput(fixture), runnerModule);
+      const wrapped = runnerModule.createGovernedProbeRunner({ message: 'review', reinspectionContext: fixture.context });
+      const component = runnerModule.createGovernedProbeRunner({ message: 'review', invocation: { subject: { kind: 'component' } } });
+      const plain = runnerModule.createGovernedProbeRunner({ message: 'review', invocation: { subject: { kind: 'project' } } });
+      restore();
+      expect((wrapped as AnyRecord).message).toContain('Bound changed-hunk context');
+      expect((wrapped as AnyRecord).message).toContain('Changed-hunk context digest');
+      expect((component as AnyRecord).message).toContain('authorized non-empty file');
+      expect((plain as AnyRecord).message).toBe('review');
+      expect(captured).toHaveLength(3);
+      expect(captured[0].message).toContain('Bound changed-hunk context');
+      expect(captured[1].message).toContain('authorized non-empty file');
+      expect(captured[2].message).toBe('review');
+    } finally { runnerModule.createGovernedProbeRunner = original; fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('routes replacement hunks through the real bootstrapped provider factory', () => {
+    const fixture = changeHunkFixture();
+    let restore: (() => void) | undefined;
+    try {
+      const provider = new GovernedProofInspectCheckProvider();
+      restore = installReplacementChangeHunkPrompt(fixtureInput(fixture), provider as AnyRecord);
+      const factory = (provider as AnyRecord).factory as (request: AnyRecord) => AnyRecord;
+      const worker = factory({ message: 'review', instructions: 'review', invocation: {}, invocationDigest: 'a'.repeat(64), resultSchema: '{}', executionConfigDigest: 'b'.repeat(64), binding: {}, workingDirectory: fixture.fixed, reinspectionContext: fixture.context });
+      expect(worker.constructor.name).toBe('GovernedProbeAgentRunner');
+      expect((worker as AnyRecord).userMessage).toContain('Bound changed-hunk context');
+      const componentWorker = factory({ message: 'review', instructions: 'review', invocation: { subject: { kind: 'component' } }, invocationDigest: 'a'.repeat(64), resultSchema: '{}', executionConfigDigest: 'b'.repeat(64), binding: {}, workingDirectory: fixture.fixed });
+      expect((componentWorker as AnyRecord).userMessage).toContain('authorized non-empty file');
+    } finally { restore?.(); fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('rejects the retained replacement candidate offline while a generic hunk-complete candidate passes', () => {
+    const retained = retainedReplacementCandidate();
+    const fixture = realChangedHunkFixture(retained.coordinatePaths);
+    try {
+      const context = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, reinspectionContext());
+      validateSourceCoordinates(retained.candidate, retained.coordinatePaths, lineCounts(fixture.fixed, retained.coordinatePaths));
+      expect(() => validateReplacementSemanticCoverage(retained.candidate, context)).toThrow(/changed hunk is not cited/);
+      expect(() => validateReplacementCandidate(genericReplacementCandidateForHunks(context, false), context, fixture.fixed, retained.coordinatePaths)).toThrow(/changed hunk is not cited/);
+      validateReplacementCandidate(genericReplacementCandidateForHunks(context), context, fixture.fixed, retained.coordinatePaths);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
 });
