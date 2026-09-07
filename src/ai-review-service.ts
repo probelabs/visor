@@ -29,6 +29,8 @@ const PROBE_GRACEFUL_MARGIN_MS = 90_000;
  * as-is because there isn't enough room for a meaningful margin.
  */
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
+const PROBE_REQUEST_TIMEOUT_MIN_MS = 1_000;
+const PROBE_REQUEST_TIMEOUT_MAX_MS = 3_600_000;
 
 const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
 const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
@@ -2957,6 +2959,27 @@ If you receive a message that the time limit has been reached or your operation 
         (options as any).retry = undefined;
         (options as any).fallback = undefined;
         options.governedCodexProfile = governedCodexProfile;
+      }
+
+      // Governed Codex calls must not inherit Probe's ambient REQUEST_TIMEOUT:
+      // bind the per-request timeout to the already-derived inner AI budget.
+      // Probe validates the same inclusive range, but fail closed here before
+      // constructing the agent so an invalid profile cannot dispatch or fall
+      // back to another provider.
+      if (
+        this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+        this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+      ) {
+        if (
+          !Number.isInteger(aiTimeout) ||
+          aiTimeout < PROBE_REQUEST_TIMEOUT_MIN_MS ||
+          aiTimeout > PROBE_REQUEST_TIMEOUT_MAX_MS
+        ) {
+          throw new Error(
+            `codex_execution_profile ${this.config.codexExecutionProfile} requires Probe requestTimeout between ${PROBE_REQUEST_TIMEOUT_MIN_MS} and ${PROBE_REQUEST_TIMEOUT_MAX_MS}ms; received ${String(aiTimeout)}`
+          );
+        }
+        options.requestTimeout = aiTimeout;
       }
 
       log(

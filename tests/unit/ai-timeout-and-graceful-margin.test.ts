@@ -103,6 +103,17 @@ describe('ai_timeout and graceful margin', () => {
       const visor = 1800000;
       expect(deriveProbeTimeout(visor, visor)).toBe(visor);
     });
+
+    it('should derive the native onboarding author and reviewer request budgets', () => {
+      // The YAML keeps the check timeout larger than the inner AI budget;
+      // governed profiles receive these derived values as Probe requestTimeout.
+      expect(deriveProbeTimeout(1500000)).toBe(1410000);
+      expect(deriveProbeTimeout(480000)).toBe(390000);
+    });
+
+    it.each([1000, 3600000])('should preserve Probe request boundary %s', requestTimeout => {
+      expect(deriveProbeTimeout(1800000, requestTimeout)).toBe(requestTimeout);
+    });
   });
 
   describe('negotiated timeout config fields', () => {

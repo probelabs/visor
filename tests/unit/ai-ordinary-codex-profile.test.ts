@@ -71,9 +71,11 @@ function createWorktreeFixture(): {
 
 describe('ordinary Luna Codex execution profile', () => {
   let cwd: string;
+  let originalRequestTimeout: string | undefined;
 
   beforeEach(() => {
     cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-luna-profile-'));
+    originalRequestTimeout = process.env.REQUEST_TIMEOUT;
     jest.clearAllMocks();
     delete process.env.GOOGLE_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
@@ -86,16 +88,21 @@ describe('ordinary Luna Codex execution profile', () => {
 
   afterEach(() => {
     fs.rmSync(cwd, { recursive: true, force: true });
+    if (originalRequestTimeout === undefined) delete process.env.REQUEST_TIMEOUT;
+    else process.env.REQUEST_TIMEOUT = originalRequestTimeout;
     delete process.env.USE_CLAUDE_CODE;
     delete process.env.VISOR_DEBUG;
   });
 
   it('passes an exact governed profile to ordinary ProbeAgent.answer', async () => {
     mockAgent();
+    process.env.REQUEST_TIMEOUT = '480000';
     const service = new AIReviewService({
       codexExecutionProfile: PROFILE,
       path: cwd,
       allowedFolders: [cwd],
+      timeout: 540000,
+      aiTimeout: 390000,
     });
 
     await service.executeReview(prInfo, 'Read the project and report findings');
@@ -104,6 +111,8 @@ describe('ordinary Luna Codex execution profile', () => {
     expect(options).toMatchObject({
       provider: 'codex',
       model: 'gpt-5.6-luna',
+      requestTimeout: 390000,
+      maxOperationTimeout: 390000,
       path: fs.realpathSync(cwd),
       cwd: fs.realpathSync(cwd),
       allowedFolders: [fs.realpathSync(cwd)],
@@ -140,6 +149,7 @@ describe('ordinary Luna Codex execution profile', () => {
 
   it('keeps ordinary AI defaults unchanged when the profile is omitted', async () => {
     mockAgent();
+    process.env.REQUEST_TIMEOUT = '480000';
     const service = new AIReviewService({ provider: 'google', apiKey: 'test-key' });
 
     await service.executeReview(prInfo, 'Review normally');
@@ -150,6 +160,35 @@ describe('ordinary Luna Codex execution profile', () => {
     expect(options).not.toHaveProperty('governedCodexProfile');
     expect(options).not.toHaveProperty('model');
     expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('requestTimeout');
+  });
+
+  it.each([
+    [1000, true],
+    [3600000, true],
+    [999, false],
+    [3600001, false],
+    [1000.5, false],
+  ])('enforces Probe requestTimeout boundary %s before governed dispatch', async (requestTimeout, valid) => {
+    mockAgent();
+    const service = new AIReviewService({
+      codexExecutionProfile: PROFILE,
+      path: cwd,
+      timeout: 1800000,
+      aiTimeout: requestTimeout,
+    });
+
+    if (valid) {
+      await expect(service.executeReview(prInfo, 'Read the project')).resolves.toEqual(
+        expect.objectContaining({ issues: [] })
+      );
+      expect((ProbeAgent as jest.Mock).mock.calls[0][0].requestTimeout).toBe(requestTimeout);
+    } else {
+      await expect(service.executeReview(prInfo, 'Read the project')).rejects.toThrow(
+        /requires Probe requestTimeout between 1000 and 3600000ms/
+      );
+      expect(ProbeAgent).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -225,11 +264,13 @@ describe('ordinary Luna Codex execution profile', () => {
   it('constructs the real Probe profile and previews dispatch without a model call', async () => {
     // Bypass Jest's package mapper intentionally: this checks the installed
     // patched SDK, not the unit-test ProbeAgent double above.
+    process.env.REQUEST_TIMEOUT = '480000';
     const realProbe = require(
       path.resolve(process.cwd(), 'node_modules/@probelabs/probe/cjs/index.cjs')
     );
     const realAgent = new realProbe.ProbeAgent({
       provider: 'codex',
+      requestTimeout: 390000,
       path: cwd,
       cwd,
       allowEdit: false,
@@ -255,6 +296,7 @@ describe('ordinary Luna Codex execution profile', () => {
     });
 
     expect(realAgent.governedCodexProfile.profileId).toBe(PROFILE);
+    expect(realAgent.requestTimeout).toBe(390000);
     const dispatch = await realAgent.previewGovernedAnswerDispatch('inspect only', {
       schema: JSON.stringify({ type: 'object', properties: {} }),
     });
@@ -277,6 +319,7 @@ describe('ordinary Luna Codex execution profile', () => {
 
   it('passes the exact isolated writer v3 profile to ordinary ProbeAgent.answer', async () => {
     mockAgent();
+    process.env.REQUEST_TIMEOUT = '480000';
     const fixture = createWorktreeFixture();
     try {
       const cwd = fs.realpathSync(fixture.worktreeRoot);
@@ -288,6 +331,7 @@ describe('ordinary Luna Codex execution profile', () => {
         workspacePath: cwd,
         allowedFolders: [cwd],
         allowEdit: true,
+        timeout: 1500000,
       });
 
       await service.executeReview(prInfo, 'Implement the scoped change');
@@ -296,6 +340,8 @@ describe('ordinary Luna Codex execution profile', () => {
       expect(options).toMatchObject({
         provider: 'codex',
         model: 'gpt-5.6-luna',
+        requestTimeout: 1410000,
+        maxOperationTimeout: 1410000,
         path: cwd,
         cwd,
         workspacePath: cwd,
