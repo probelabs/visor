@@ -328,6 +328,76 @@ const SAFE_TIMEOUT_REQUEST_KEYS = [
   'sessionId',
 ] as const;
 const SAFE_TIMEOUT_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SAFE_GOVERNED_INVOCATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const GOVERNED_RAW_ITEM_FAILURE_PREDICATES = new Set([
+  'shape',
+  'type',
+  'id',
+  'duplicate',
+  'phase',
+  'content',
+  'passthrough',
+  'tool_name_or_allow',
+  'status',
+  'input',
+  'call_output_pairing',
+  'event_limit',
+  'final_answer_cardinality',
+]);
+
+/**
+ * Preserve the small, public part of a governed Probe raw-item rejection
+ * before callProbeAgent wraps the typed error for callers. Probe owns the
+ * closed predicate vocabulary; this projection deliberately never includes
+ * the error message, name, payload, or any transport data.
+ */
+function warnGovernedRawItemFailure(
+  error: unknown,
+  checkName?: string,
+  nodeGenerationId?: string
+): void {
+  try {
+    if (
+      error === null ||
+      (typeof error !== 'object' && typeof error !== 'function') ||
+      typeof checkName !== 'string' ||
+      !SAFE_GOVERNED_INVOCATION_ID.test(checkName) ||
+      typeof nodeGenerationId !== 'string' ||
+      !SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
+    ) {
+      return;
+    }
+
+    const descriptors = Object.getOwnPropertyDescriptors(error);
+    const ownValue = (key: string): unknown => {
+      const descriptor = descriptors[key];
+      return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+    };
+    if (
+      ownValue('answerFailureStage') !== 'native_event_grammar' ||
+      ownValue('nativeEventFailureBoundary') !== 'raw_item_predicate'
+    ) {
+      return;
+    }
+    const predicate = ownValue('nativeEventFailureRawItemPredicate');
+    if (typeof predicate !== 'string' || !GOVERNED_RAW_ITEM_FAILURE_PREDICATES.has(predicate)) {
+      return;
+    }
+
+    logger.warn(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName,
+        nodeGenerationId,
+        stage: 'native_event_grammar',
+        boundary: 'raw_item_predicate',
+        predicate,
+      })
+    );
+  } catch {
+    // Failure diagnostics must never mask or alter the governed failure.
+  }
+}
 
 /**
  * Keep provider request-timeout telemetry to a fixed, non-sensitive record.
@@ -3460,6 +3530,7 @@ ${'='.repeat(60)}
 
       return { response, effectiveSchema, sessionId };
     } catch (error) {
+      warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
       console.error('❌ ProbeAgent failed:', error);
       throw new Error(formatUserFacingExecutionError(error));
     } finally {

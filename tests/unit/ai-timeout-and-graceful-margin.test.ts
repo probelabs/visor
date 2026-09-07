@@ -310,3 +310,113 @@ describe('safe Probe request timeout events', () => {
     expect(warningLog.mock.calls.flat().join(' ')).not.toContain('must-not-be-logged');
   });
 });
+
+describe('public governed raw-item failure warning', () => {
+  let warningLog: jest.SpyInstance;
+  let consoleError: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('logs one fixed warning with the governed raw-item predicate and invocation identity', async () => {
+    const failure = Object.assign(new Error('raw model payload must not be public'), {
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'call_output_pairing',
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-123'
+      )
+    ).rejects.toThrow('raw model payload must not be public');
+
+    expect(warningLog).toHaveBeenCalledTimes(1);
+    expect(warningLog).toHaveBeenCalledWith(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName: 'spec_review',
+        nodeGenerationId: 'generation-123',
+        stage: 'native_event_grammar',
+        boundary: 'raw_item_predicate',
+        predicate: 'call_output_pairing',
+      })
+    );
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not normalize an unknown predicate or leak hostile error data', async () => {
+    const failure = Object.assign(new Error('secret raw payload /private/project'), {
+      name: 'SecretError',
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'secret_predicate',
+      payload: { token: 'secret-token' },
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-123'
+      )
+    ).rejects.toThrow('secret raw payload /private/project');
+
+    expect(warningLog).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the wrapped Probe failure when warning logging throws', async () => {
+    const failure = Object.assign(new Error('original governed failure'), {
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'shape',
+    });
+    warningLog.mockImplementation(() => {
+      throw new Error('warning sink failed');
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-123'
+      )
+    ).rejects.toThrow('original governed failure');
+    expect(warningLog).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+});
