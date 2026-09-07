@@ -81,7 +81,8 @@ export interface CompiledSubgraphTemplate {
 
 export interface CompiledExpansion {
   readonly expansionOwnerCheck: string;
-  readonly depth: 1 | 2;
+  /** Static nesting depth of the first reachable path to this declaration. */
+  readonly depth: number;
   readonly parentTemplateName: string | null;
   readonly parentTemplateNodeKey: string | null;
   readonly catalogClaimRef: string;
@@ -1160,148 +1161,173 @@ export function compileExpansionPlan(
     });
   }
 
-  const nestedDeclarations = Object.values(templatesByName).flatMap(template =>
-    template.templateNodeKeys
-      .filter(nodeKey => hasOwn(template.nodesByKey[nodeKey].check, 'expand'))
-      .map(nodeKey => ({ template, nodeKey, check: template.nodesByKey[nodeKey].check }))
-  );
-  if (nestedDeclarations.length > 1) {
-    throw new InstancePlanError(
-      'NESTED_EXPANSION_AMBIGUOUS',
-      'Graph v2 C4 admits exactly one generated expansion owner'
-    );
-  }
-
   const byNestedOwner: Record<string, CompiledExpansion> = {};
-  if (nestedDeclarations.length === 1) {
-    const { template: parentTemplate, nodeKey, check } = nestedDeclarations[0];
-    if (!precompiled.some(candidate => candidate.template.name === parentTemplate.name)) {
-      throw new InstancePlanError(
-        'UNREACHABLE_NESTED_EXPANSION',
-        `Nested expansion owner "${parentTemplate.name}.${nodeKey}" is not in a root-expanded template`
-      );
-    }
-    const expansion = check.expand;
-    if (!expansion || typeof expansion !== 'object' || Array.isArray(expansion)) {
-      throw new InstancePlanError(
-        'INVALID_EXPANSION_CONFIG',
-        `Template check "${parentTemplate.name}.${nodeKey}" expand must be an object`
-      );
-    }
-    const ownerAddress = qualifiedNestedExpansionOwner(parentTemplate.name, nodeKey);
-    const catalogClaim = requireNonEmptyString(
-      expansion.claim,
-      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.claim`
-    );
-    if (!CLAIM_REF_PATTERN.test(catalogClaim) || !authority.validatorsByClaim[catalogClaim]) {
-      throw new InstancePlanError(
-        'UNKNOWN_EXPANSION_CLAIM',
-        `Template check "${parentTemplate.name}.${nodeKey}" expands undeclared catalog claim "${catalogClaim}"`
-      );
-    }
-    const matchingEmissions = (check.emits || []).filter(
-      emission => emission.claim === catalogClaim
-    );
-    if (
-      matchingEmissions.length !== 1 ||
-      parentTemplate.emitterByClaim[catalogClaim] !== nodeKey
-    ) {
-      throw new InstancePlanError(
-        'INVALID_EXPANSION_OWNER',
-        `Template check "${parentTemplate.name}.${nodeKey}" must be the sole template emitter of expanded claim "${catalogClaim}"`
-      );
-    }
-    const itemClaim = requireNonEmptyString(
-      expansion.item_claim,
-      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.item_claim`
-    );
-    if (!CLAIM_REF_PATTERN.test(itemClaim) || !authority.validatorsByClaim[itemClaim]) {
-      throw new InstancePlanError(
-        'UNKNOWN_ITEM_CLAIM',
-        `Template check "${parentTemplate.name}.${nodeKey}" references undeclared item claim "${itemClaim}"`
-      );
-    }
-    if (
-      authority.rootEmitterByClaim[itemClaim] ||
-      Object.values(templatesByName).some(candidate => candidate.emitterByClaim[itemClaim])
-    ) {
-      throw new InstancePlanError(
-        'FORGED_CONTROLLER_ITEM_CLAIM',
-        `Nested item claim "${itemClaim}" is controller-owned and cannot have an emitter`
-      );
-    }
-    const templateName = requireNonEmptyString(
-      expansion.template,
-      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.template`
-    );
-    const childTemplate = templatesByName[templateName];
-    if (!childTemplate) {
-      throw new InstancePlanError(
-        'UNKNOWN_SUBGRAPH_TEMPLATE',
-        `Template check "${parentTemplate.name}.${nodeKey}" references unknown subgraph template "${templateName}"`
-      );
-    }
-    if (
-      childTemplate.name === parentTemplate.name ||
-      childTemplate.templateNodeKeys.some(childNodeKey =>
-        hasOwn(childTemplate.nodesByKey[childNodeKey].check, 'expand')
-      )
-    ) {
+  const reachableTemplates = new Set<string>();
+  const visitingTemplates = new Set<string>();
+
+  /**
+   * Compile every expansion declaration reachable from a root expansion.
+   * The declaration address is local to its parent template, so the same
+   * template may safely be reused by several parents while its static owner
+   * identity remains unambiguous. A DFS supplies the finite acyclic bound.
+   */
+  const compileReachableTemplate = (parentTemplate: CompiledSubgraphTemplate, depth: number): void => {
+    if (visitingTemplates.has(parentTemplate.name)) {
       throw new InstancePlanError(
         'NESTED_EXPANSION_DEPTH_EXCEEDED',
-        'Graph v2 C4 rejects recursive, cyclic, or depth-three expansion'
+        `Graph v2 expansion templates contain a recursive cycle at "${parentTemplate.name}"`
       );
     }
-    if (childTemplate.input.claim !== itemClaim) {
+    if (reachableTemplates.has(parentTemplate.name)) return;
+    visitingTemplates.add(parentTemplate.name);
+    reachableTemplates.add(parentTemplate.name);
+
+    for (const nodeKey of parentTemplate.templateNodeKeys) {
+      const check = parentTemplate.nodesByKey[nodeKey].check;
+      if (!hasOwn(check, 'expand')) continue;
+      const expansion = check.expand;
+      const ownerAddress = qualifiedNestedExpansionOwner(parentTemplate.name, nodeKey);
+      if (!expansion || typeof expansion !== 'object' || Array.isArray(expansion)) {
+        throw new InstancePlanError(
+          'INVALID_EXPANSION_CONFIG',
+          `Template check "${parentTemplate.name}.${nodeKey}" expand must be an object`
+        );
+      }
+      const fieldPrefix = `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand`;
+      const catalogClaim = requireNonEmptyString(expansion.claim, `${fieldPrefix}.claim`);
+      if (!CLAIM_REF_PATTERN.test(catalogClaim) || !authority.validatorsByClaim[catalogClaim]) {
+        throw new InstancePlanError(
+          'UNKNOWN_EXPANSION_CLAIM',
+          `Template check "${parentTemplate.name}.${nodeKey}" expands undeclared catalog claim "${catalogClaim}"`
+        );
+      }
+      const matchingEmissions = (check.emits || []).filter(emission => emission.claim === catalogClaim);
+      if (matchingEmissions.length !== 1 || parentTemplate.emitterByClaim[catalogClaim] !== nodeKey) {
+        throw new InstancePlanError(
+          'INVALID_EXPANSION_OWNER',
+          `Template check "${parentTemplate.name}.${nodeKey}" must be the sole template emitter of expanded claim "${catalogClaim}"`
+        );
+      }
+      const itemClaim = requireNonEmptyString(expansion.item_claim, `${fieldPrefix}.item_claim`);
+      if (!CLAIM_REF_PATTERN.test(itemClaim) || !authority.validatorsByClaim[itemClaim]) {
+        throw new InstancePlanError(
+          'UNKNOWN_ITEM_CLAIM',
+          `Template check "${parentTemplate.name}.${nodeKey}" references undeclared item claim "${itemClaim}"`
+        );
+      }
+      if (
+        authority.rootEmitterByClaim[itemClaim] ||
+        Object.values(templatesByName).some(candidate => candidate.emitterByClaim[itemClaim])
+      ) {
+        throw new InstancePlanError(
+          'FORGED_CONTROLLER_ITEM_CLAIM',
+          `Nested item claim "${itemClaim}" is controller-owned and cannot have an emitter`
+        );
+      }
+      const templateName = requireNonEmptyString(expansion.template, `${fieldPrefix}.template`);
+      const childTemplate = templatesByName[templateName];
+      if (!childTemplate) {
+        throw new InstancePlanError(
+          'UNKNOWN_SUBGRAPH_TEMPLATE',
+          `Template check "${parentTemplate.name}.${nodeKey}" references unknown subgraph template "${templateName}"`
+        );
+      }
+      if (childTemplate.input.claim !== itemClaim) {
+        throw new InstancePlanError(
+          'ITEM_CLAIM_MISMATCH',
+          `Nested item claim "${itemClaim}" does not match template input "${childTemplate.input.claim}"`
+        );
+      }
+      const itemsPointer = compileJsonPointer(expansion.items_pointer, `${fieldPrefix}.items_pointer`);
+      const keyPointer = compileJsonPointer(expansion.key_pointer, `${fieldPrefix}.key_pointer`);
+      let coverage: CompiledExpansion['coverage'];
+      if (expansion.coverage !== undefined) {
+        if (!expansion.coverage || typeof expansion.coverage !== 'object' || Array.isArray(expansion.coverage)) {
+          throw new InstancePlanError('INVALID_COVERAGE_CONFIG', `Template check "${parentTemplate.name}.${nodeKey}" coverage must be an object`);
+        }
+        const outcomeClaimRef = requireNonEmptyString(
+          expansion.coverage.outcome_claim,
+          `${fieldPrefix}.coverage.outcome_claim`
+        );
+        if (!CLAIM_REF_PATTERN.test(outcomeClaimRef) || !authority.validatorsByClaim[outcomeClaimRef] ||
+            outcomeClaimRef === catalogClaim || outcomeClaimRef === itemClaim || outcomeClaimRef === childTemplate.input.claim) {
+          throw new InstancePlanError(
+            'INVALID_COVERAGE_OUTCOME_CLAIM',
+            `Template check "${parentTemplate.name}.${nodeKey}" coverage outcome must be a distinct declared template claim`
+          );
+        }
+        const emitterNodeKey = childTemplate.emitterByClaim[outcomeClaimRef];
+        if (!emitterNodeKey || childTemplate.dependentsByNode[emitterNodeKey].length !== 0) {
+          throw new InstancePlanError(
+            'INVALID_COVERAGE_OUTCOME_EMITTER',
+            `Template check "${parentTemplate.name}.${nodeKey}" coverage outcome must have exactly one sink emitter`
+          );
+        }
+        coverage = Object.freeze({
+          outcomeClaimRef,
+          emitterNodeKey,
+          classPointer: compileJsonPointer(expansion.coverage.class_pointer, `${fieldPrefix}.coverage.class_pointer`),
+        });
+      }
+      const expansionSpecDigest = sha256Canonical({
+        v: 1,
+        expansionOwnerCheck: ownerAddress,
+        parentTemplateName: parentTemplate.name,
+        parentTemplateNodeKey: nodeKey,
+        catalogClaimRef: catalogClaim,
+        templateName,
+        templateDigest: childTemplate.templateDigest,
+        itemsPointer: itemsPointer.source,
+        keyPointer: keyPointer.source,
+        itemClaimRef: itemClaim,
+        ...(coverage
+          ? {
+              coverage: {
+                outcomeClaimRef: coverage.outcomeClaimRef,
+                classPointer: coverage.classPointer.source,
+                emitterNodeKey: coverage.emitterNodeKey,
+              },
+            }
+          : {}),
+      });
+      byNestedOwner[ownerAddress] = Object.freeze({
+        expansionOwnerCheck: ownerAddress,
+        depth,
+        parentTemplateName: parentTemplate.name,
+        parentTemplateNodeKey: nodeKey,
+        catalogClaimRef: catalogClaim,
+        catalogValidator: authority.validatorsByClaim[catalogClaim],
+        templateName,
+        templateDigest: childTemplate.templateDigest,
+        expansionSpecDigest,
+        itemsPointer,
+        keyPointer,
+        itemClaimRef: itemClaim,
+        itemValidator: authority.validatorsByClaim[itemClaim],
+        template: childTemplate,
+        ...(coverage ? { coverage } : {}),
+        graphSemanticDigest,
+      });
+      compileReachableTemplate(childTemplate, depth + 1);
+    }
+    visitingTemplates.delete(parentTemplate.name);
+  };
+
+  for (const compiled of precompiled) compileReachableTemplate(compiled.template, 2);
+  for (const templateName of Object.keys(templatesByName)) {
+    if (!reachableTemplates.has(templateName)) {
       throw new InstancePlanError(
-        'ITEM_CLAIM_MISMATCH',
-        `Nested item claim "${itemClaim}" does not match template input "${childTemplate.input.claim}"`
+        'UNREACHABLE_SUBGRAPH_TEMPLATE',
+        `Subgraph template "${templateName}" is not reachable from a root expansion`
       );
     }
-    const itemsPointer = compileJsonPointer(
-      expansion.items_pointer,
-      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.items_pointer`
-    );
-    const keyPointer = compileJsonPointer(
-      expansion.key_pointer,
-      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.key_pointer`
-    );
-    const expansionSpecDigest = sha256Canonical({
-      v: 1,
-      expansionOwnerCheck: ownerAddress,
-      parentTemplateName: parentTemplate.name,
-      parentTemplateNodeKey: nodeKey,
-      catalogClaimRef: catalogClaim,
-      templateName,
-      templateDigest: childTemplate.templateDigest,
-      itemsPointer: itemsPointer.source,
-      keyPointer: keyPointer.source,
-      itemClaimRef: itemClaim,
-    });
-    byNestedOwner[ownerAddress] = Object.freeze({
-      expansionOwnerCheck: ownerAddress,
-      depth: 2,
-      parentTemplateName: parentTemplate.name,
-      parentTemplateNodeKey: nodeKey,
-      catalogClaimRef: catalogClaim,
-      catalogValidator: authority.validatorsByClaim[catalogClaim],
-      templateName,
-      templateDigest: childTemplate.templateDigest,
-      expansionSpecDigest,
-      itemsPointer,
-      keyPointer,
-      itemClaimRef: itemClaim,
-      itemValidator: authority.validatorsByClaim[itemClaim],
-      template: childTemplate,
-      graphSemanticDigest,
-    });
   }
 
-  // A wait barrier is intentionally a narrow binding: it can only observe
-  // the one already-compiled depth-2 expansion owned by a sibling in this
-  // exact parent template, and its terminal node must be a child-template
-  // node. This keeps readiness in the existing graph authority rather than
-  // introducing a second fan-in topology.
+  // A wait barrier is intentionally a narrow binding: it can only observe an
+  // already-compiled expansion owned by a sibling in this exact parent
+  // template, and its terminal node must be a child-template sink. This keeps
+  // readiness in the existing graph authority rather than introducing a
+  // second fan-in topology.
   const waitOwnerByTemplate = new Set<string>();
   for (const template of Object.values(templatesByName)) {
     for (const nodeKey of template.templateNodeKeys) {
@@ -1311,7 +1337,7 @@ export function compileExpansionPlan(
       if (!nested) {
         throw new InstancePlanError(
           'INVALID_WAIT_FOR_EXPANSION',
-          `Template check "${template.name}.${nodeKey}" wait_for_expansion.owner must own the compiled depth-2 expansion`
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.owner must own a compiled expansion`
         );
       }
       if (!nested.template.nodesByKey[wait.terminal_node]) {

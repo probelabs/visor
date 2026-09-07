@@ -61,7 +61,8 @@ export type TaggedScopePath = readonly TaggedScopeSegment[];
 export type RootScopePath = readonly [];
 export type LevelOneKeyedScopePath = readonly [KeyedScopeSegment];
 export type LevelTwoKeyedScopePath = readonly [KeyedScopeSegment, KeyedScopeSegment];
-export type KeyedScopePath = LevelOneKeyedScopePath | LevelTwoKeyedScopePath;
+/** A generated instance has one keyed segment per expansion ancestor. */
+export type KeyedScopePath = readonly [KeyedScopeSegment, ...KeyedScopeSegment[]];
 
 export type NodeGenerationStatus = 'ready' | 'running' | 'completed' | 'failed' | 'inactive';
 export type CatalogRequestStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -102,7 +103,8 @@ export function canonicalCatalogKey(value: unknown): string {
 
 /**
  * Validate and clone a tagged scope. Root and legacy indexed paths are valid;
- * a graph-v2 keyed path has exactly one or two segments. Mixed paths fail closed.
+ * a graph-v2 keyed path has one segment per reachable expansion ancestor.
+ * Mixed paths fail closed.
  */
 export function validateTaggedScopePath(value: unknown): TaggedScopePath {
   if (!Array.isArray(value)) {
@@ -165,8 +167,15 @@ export function validateTaggedScopePath(value: unknown): TaggedScopePath {
   if (kinds.size !== 1) {
     throw new InstanceKernelError('INVALID_SCOPE', 'Indexed and keyed scope segments cannot mix');
   }
-  if (segments[0].kind === 'keyed' && segments.length > 2) {
-    throw new InstanceKernelError('INVALID_SCOPE', 'Graph v2 supports at most two keyed scope segments');
+  if (segments[0].kind === 'keyed') {
+    const keyedSegments = segments as KeyedScopeSegment[];
+    const instanceIds = keyedSegments.map(segment => segment.subgraphInstanceId);
+    if (new Set(instanceIds).size !== instanceIds.length) {
+      throw new InstanceKernelError(
+        'INVALID_SCOPE',
+        'Keyed scope segments cannot repeat a subgraph instance ID'
+      );
+    }
   }
   return Object.freeze(segments);
 }
@@ -184,7 +193,7 @@ export function requireKeyedScopePath(
   expected?: KeyedScopeSegment | KeyedScopePath
 ): KeyedScopePath {
   const scope = validateTaggedScopePath(value);
-  if ((scope.length !== 1 && scope.length !== 2) || scope.some(segment => segment.kind !== 'keyed')) {
+  if (scope.length < 1 || scope.some(segment => segment.kind !== 'keyed')) {
     throw new InstanceKernelError('INVALID_SCOPE', 'Expected exact graph-v2 keyed scope');
   }
   const expectedScope = expected
@@ -1666,16 +1675,16 @@ function requireInstance(
     throw new InstanceKernelError('INVALID_SCOPE', 'Instance scope leaf is not exact');
   }
   if (instance.parentSubgraphInstanceId) {
-    if (exactScope.length !== 2 || !instance.expansionOwnerNodeInstanceId) {
+    if (exactScope.length < 2 || !instance.expansionOwnerNodeInstanceId) {
       throw new InstanceKernelError('INVALID_SCOPE', 'Nested instance lacks its exact parent chain');
     }
     const parent = projection.instancesById[instance.parentSubgraphInstanceId];
     const ownerNode = projection.nodesById[instance.expansionOwnerNodeInstanceId];
+    const parentScope = exactScope.slice(0, -1);
     if (
       !parent ||
       parent.status !== 'active' ||
-      parent.scope.length !== 1 ||
-      !scopePathEquals([exactScope[0]], parent.scope) ||
+      !scopePathEquals(parentScope, parent.scope) ||
       !ownerNode ||
       ownerNode.subgraphInstanceId !== parent.subgraphInstanceId ||
       !scopePathEquals(ownerNode.scope, parent.scope)
@@ -3564,7 +3573,7 @@ export function reduceInstanceEventBatch(
             event.binding.scope.length > 1 &&
             staged.scope.length === event.binding.scope.length - 1 &&
             scopePathEquals(staged.scope, event.binding.scope.slice(0, -1)) &&
-            staged.subgraphInstanceId === event.binding.scope[0].subgraphInstanceId
+            staged.subgraphInstanceId === event.binding.scope[event.binding.scope.length - 2].subgraphInstanceId
           ) {
             stagedProjection = reduceInstanceEvent(stagedProjection, staged);
             continue;

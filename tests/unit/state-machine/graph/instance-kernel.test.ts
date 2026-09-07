@@ -409,6 +409,25 @@ describe('Graph v2 C2 instance kernel', () => {
         subgraphInstanceId: childId,
       },
     ];
+    const grandchildId = deriveSubgraphInstanceId({
+      graphSemanticDigest,
+      parentSubgraphInstanceId: childId,
+      expansionOwnerNodeInstanceId: deriveNodeInstanceId({
+        subgraphInstanceId: childId,
+        templateNodeKey: 'expand-spec',
+      }),
+      templateDigest,
+      itemKey: 'child',
+    });
+    const depthThreeScope: KeyedScopePath = [
+      ...childScope,
+      {
+        kind: 'keyed',
+        expansionOwnerCheck: 'nested-owner',
+        key: 'child',
+        subgraphInstanceId: grandchildId,
+      },
+    ];
     expect(validateTaggedScopePath([])).toEqual([]);
     expect(
       validateTaggedScopePath([
@@ -418,6 +437,7 @@ describe('Graph v2 C2 instance kernel', () => {
     ).toHaveLength(2);
     expect(requireKeyedScopePath(instanceIdentity().scope)).toEqual(instanceIdentity().scope);
     expect(requireKeyedScopePath(childScope, childScope)).toEqual(childScope);
+    expect(validateTaggedScopePath(depthThreeScope)).toEqual(depthThreeScope);
     expectKernelError(
       () => requireKeyedScopePath(childScope, [childScope[1]]),
       'INVALID_SCOPE'
