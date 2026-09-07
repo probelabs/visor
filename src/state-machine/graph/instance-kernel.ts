@@ -579,6 +579,32 @@ export interface GeneratedAttemptFailedEvent extends BoundAttemptEventBase {
   readonly reason: string;
 }
 
+/**
+ * Explicit operator-authorized retry of one failed generated attempt.  This
+ * event never rewrites the failed attempt: it records the exact failed
+ * generation/input identity and only reopens that generation for a fresh
+ * allocator-issued attempt.  The caller must have independently established
+ * that the prior operation had no external side effects (or is safely
+ * idempotent).
+ */
+export type GeneratedAttemptRetrySideEffects = 'absent' | 'safely_idempotent';
+
+export interface GeneratedAttemptRetryRequestedEvent extends InstanceEventBase {
+  readonly type: 'AttemptRetryRequested';
+  readonly scope: KeyedScopePath;
+  readonly nodeInstanceId: string;
+  readonly nodeGenerationId: string;
+  readonly checkId: string;
+  readonly incarnation: number;
+  readonly itemFingerprint: string;
+  readonly executionConfigDigest: string;
+  readonly activeInputClaimIds: readonly string[];
+  readonly priorAttemptId: string;
+  readonly priorFence: number;
+  readonly priorFailureReason: string;
+  readonly externalSideEffects: GeneratedAttemptRetrySideEffects;
+}
+
 interface ManagedRunEventBase extends InstanceEventBase {
   readonly scope: KeyedScopePath;
   readonly binding: ManagedRunBindingV1;
@@ -657,6 +683,7 @@ export type InstanceRuntimeEvent =
   | GeneratedClaimPublishedEvent
   | GeneratedAttemptCompletedEvent
   | GeneratedAttemptFailedEvent
+  | GeneratedAttemptRetryRequestedEvent
   | ManagedRunAcquisitionFailedEvent
   | ManagedRunAcquiredEvent
   | ManagedRunStartedEvent
@@ -2245,6 +2272,94 @@ function hasReadyOrRunningGeneration(projection: InstanceProjection): boolean {
   );
 }
 
+function hasActiveDescendantInstance(
+  projection: InstanceProjection,
+  subgraphInstanceId: string,
+): boolean {
+  const pending = [subgraphInstanceId];
+  while (pending.length > 0) {
+    const parent = pending.shift()!;
+    if (Object.values(projection.instancesById).some(instance => {
+      if (instance.status !== 'active' || instance.parentSubgraphInstanceId !== parent) return false;
+      pending.push(instance.subgraphInstanceId);
+      return true;
+    })) return true;
+  }
+  return false;
+}
+
+function reduceGeneratedAttemptRetry(
+  projection: InstanceProjection,
+  next: ReturnType<typeof mutableProjection>,
+  event: GeneratedAttemptRetryRequestedEvent,
+): void {
+  const generation = requireGeneration(projection, event);
+  const instance = requireInstance(projection, generation.subgraphInstanceId, event.scope);
+  const expectedKeys = [
+    'version', 'type', 'eventId', 'sessionId', 'scope', 'nodeInstanceId',
+    'nodeGenerationId', 'checkId', 'incarnation', 'itemFingerprint',
+    'executionConfigDigest', 'activeInputClaimIds', 'priorAttemptId',
+    'priorFence', 'priorFailureReason', 'externalSideEffects',
+  ];
+  if (!hasExactKeys(event as unknown as Record<string, unknown>, expectedKeys)) {
+    throw new InstanceKernelError('INVALID_RETRY', 'Retry event has unknown or missing fields');
+  }
+  if (event.sessionId !== instance.sessionId ||
+      event.checkId !== generation.checkId ||
+      event.incarnation !== generation.incarnation ||
+      event.itemFingerprint !== generation.itemFingerprint ||
+      event.executionConfigDigest !== generation.executionConfigDigest ||
+      event.nodeInstanceId !== generation.nodeInstanceId ||
+      event.nodeGenerationId !== generation.nodeGenerationId ||
+      generation.status !== 'failed' ||
+      generation.scheduled !== true ||
+      generation.attemptId !== event.priorAttemptId ||
+      generation.fence !== event.priorFence ||
+      generation.reason !== event.priorFailureReason ||
+      generation.completedOutputClaimIds.length !== 0 ||
+      (event.externalSideEffects !== 'absent' && event.externalSideEffects !== 'safely_idempotent')) {
+    throw new InstanceKernelError(
+      'INVALID_RETRY',
+      'Retry event is not bound to the exact failed generated attempt'
+    );
+  }
+  const inputClaimIds = sortedUnique(event.activeInputClaimIds, 'Retry input claim IDs');
+  if (!sameStrings(inputClaimIds, generation.activeInputClaimIds)) {
+    throw new InstanceKernelError('INVALID_RETRY', 'Retry input claims are not the exact generation inputs');
+  }
+  for (const claimId of inputClaimIds) {
+    const claim = projection.claimsById[claimId];
+    if (!claim || !claim.active) {
+      throw new InstanceKernelError('INVALID_RETRY', 'Retry input claim is no longer active');
+    }
+  }
+  if (hasActiveDescendantInstance(projection, generation.subgraphInstanceId)) {
+    throw new InstanceKernelError('INVALID_RETRY', 'Retry generation has active descendant instances');
+  }
+  const managed = projection.managedRunsByAttemptId[event.priorAttemptId];
+  if (managed && (managed.status !== 'terminated' || managed.cleanupStatus !== 'clean')) {
+    throw new InstanceKernelError('INVALID_RETRY', 'Retry prior managed run is not cleanly terminal');
+  }
+
+  // Keep the failed event and old attempt/fence binding in the journal for
+  // stale-event rejection.  Only fields describing the current attempt and
+  // terminal failure are cleared before a normal fresh AttemptStarted.
+  const {
+    attemptId: _attemptId,
+    fence: _fence,
+    reason: _reason,
+    ...withoutCurrentAttempt
+  } = generation;
+  void _attemptId;
+  void _fence;
+  void _reason;
+  next.generationsById[event.nodeGenerationId] = {
+    ...withoutCurrentAttempt,
+    status: 'ready',
+    scheduled: false,
+  };
+}
+
 function reduceRequestLifecycle(
   projection: InstanceProjection,
   next: ReturnType<typeof mutableProjection>,
@@ -3239,6 +3354,9 @@ function reduceInstanceEventInternal(
     }
     case 'ClaimPublished':
       reduceGeneratedLifecycle(projection, next, event);
+      break;
+    case 'AttemptRetryRequested':
+      reduceGeneratedAttemptRetry(projection, next, event);
       break;
     case 'ManagedRunAcquisitionFailed':
     case 'ManagedRunAcquired':

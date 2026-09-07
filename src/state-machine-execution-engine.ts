@@ -6,7 +6,10 @@ import { StateMachineRunner } from './state-machine/runner';
 import type { EngineContext, RunState, GeneratedDispatchGate } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
 import type { GraphJournalCheckpointV1 } from './snapshot-store';
-import type { InstanceProjection } from './state-machine/graph/instance-kernel';
+import type {
+  InstanceProjection,
+  GeneratedAttemptRetrySideEffects,
+} from './state-machine/graph/instance-kernel';
 import { compileClaimPlan } from './state-machine/graph/claim-plan';
 import { logger } from './logger';
 import type { DebugVisualizerServer } from './debug-visualizer/ws-server';
@@ -48,6 +51,20 @@ export interface GraphCheckpointResumeInput {
 }
 
 export type GraphCheckpointResumeResult = Omit<GraphCheckpointContinuationResult, 'requestId'>;
+
+export interface GraphCheckpointRetryInput extends GraphCheckpointResumeInput {
+  /** Exact failed generated node-generation IDs selected by the operator. */
+  retryGenerationIds: readonly string[];
+  /** External side effects were checked before reopening the generation. */
+  externalSideEffects: GeneratedAttemptRetrySideEffects;
+  /** Persist the retry prefix before resumed dispatch is allowed to start. */
+  onRetryCheckpoint: (checkpoint: GraphJournalCheckpointV1) => void | Promise<void>;
+}
+
+export interface GraphCheckpointRetryResult extends GraphCheckpointResumeResult {
+  /** The immutable old checkpoint prefix plus retry transition events, before dispatch. */
+  retryCheckpoint: GraphJournalCheckpointV1;
+}
 
 export interface ProofCurrentCatalogCheckpointInput {
   checkpoint: unknown;
@@ -93,6 +110,7 @@ type PreparedEngineRun =
       readonly kind: 'graph-resume';
       readonly context: EngineContext;
       readonly result: ExecutionResult;
+      readonly retryCheckpoint?: GraphJournalCheckpointV1;
     };
 
 /**
@@ -366,7 +384,10 @@ export class StateMachineExecutionEngine {
     failFast?: boolean,
     tagFilter?: import('./types/config').TagFilter,
     graphCheckpointBootstrap?: CheckpointBootstrap,
-    generatedDispatchGate?: GeneratedDispatchGate
+    generatedDispatchGate?: GeneratedDispatchGate,
+    retryGenerationIds?: readonly string[],
+    retryExternalSideEffects?: GeneratedAttemptRetrySideEffects,
+    onRetryCheckpoint?: (checkpoint: GraphJournalCheckpointV1) => void | Promise<void>,
   ): Promise<PreparedEngineRun> {
     if (debug) {
       logger.info('[StateMachine] Using state machine engine');
@@ -404,6 +425,27 @@ export class StateMachineExecutionEngine {
     const context = graphCheckpointBootstrap
       ? (builtContext as BuiltGraphCheckpointContext).context
       : (builtContext as EngineContext);
+
+    // Reopen selected failed generations only after the checkpoint has passed
+    // the normal restore/plan gates and before registries, providers, or the
+    // runner become observable.  ExecutionJournal validates the complete
+    // selection atomically and returns a fresh immutable prefix for audit.
+    let retryCheckpoint: GraphJournalCheckpointV1 | undefined;
+    if (retryGenerationIds !== undefined) {
+      if (!graphCheckpointBootstrap || graphCheckpointBootstrap.kind !== 'graph-resume') {
+        throw new Error('Failed-generation retry requires a restored Graph-v2 checkpoint');
+      }
+      if (retryExternalSideEffects === undefined || !onRetryCheckpoint) {
+        throw new Error('Failed-generation retry requires side-effect confirmation and durable prefix persistence');
+      }
+      context.journal.retryFailedGeneratedAttempts({
+        sessionId: context.sessionId,
+        nodeGenerationIds: retryGenerationIds,
+        externalSideEffects: retryExternalSideEffects,
+      });
+      retryCheckpoint = context.journal.exportGraphCheckpoint(context.sessionId);
+      if (onRetryCheckpoint) await onRetryCheckpoint(retryCheckpoint);
+    }
 
     // Register global custom tools once per run so MCP custom transport can resolve them.
     try {
@@ -761,7 +803,7 @@ export class StateMachineExecutionEngine {
         return { kind: 'graph', context, result, requestId: continuation.requestId };
       }
       if (continuation.kind === 'graph-resume') {
-        return { kind: 'graph-resume', context, result };
+        return { kind: 'graph-resume', context, result, retryCheckpoint };
       }
       return {
         kind: 'proof-current-catalog',
@@ -866,6 +908,41 @@ export class StateMachineExecutionEngine {
     }
     return {
       result: prepared.result,
+      checkpoint: prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId),
+    };
+  }
+
+  /**
+   * Explicitly reopen selected failed generated leaves, then use the normal
+   * ready-frontier runner in a fresh engine process.  No failed author or
+   * arbitrary generation is inferred; the journal validates the exact IDs and
+   * side-effect confirmation before any provider dispatch.
+   */
+  public async retryGraphCheckpoint(
+    input: GraphCheckpointRetryInput
+  ): Promise<GraphCheckpointRetryResult> {
+    const prepared = await this.executeGroupedChecksInternal(
+      input.prInfo,
+      [],
+      undefined,
+      input.config,
+      undefined,
+      input.debug,
+      input.maxParallelism,
+      input.failFast,
+      undefined,
+      { kind: 'graph-resume', checkpoint: input.checkpoint } satisfies GraphCheckpointResumeBootstrap,
+      undefined,
+      input.retryGenerationIds,
+      input.externalSideEffects,
+      input.onRetryCheckpoint,
+    );
+    if (prepared.kind !== 'graph-resume' || !prepared.retryCheckpoint) {
+      throw new Error('Graph checkpoint retry did not produce a retry prefix');
+    }
+    return {
+      result: prepared.result,
+      retryCheckpoint: prepared.retryCheckpoint,
       checkpoint: prepared.context.journal.exportGraphCheckpoint(prepared.context.sessionId),
     };
   }

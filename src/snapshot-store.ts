@@ -61,6 +61,8 @@ import {
   type LevelOneKeyedScopePath,
   type RootScopePath,
   type GeneratedAttemptStartedEvent,
+  type GeneratedAttemptRetryRequestedEvent,
+  type GeneratedAttemptRetrySideEffects,
   type GeneratedCheckScheduledEvent,
   type GeneratedClaimPublishedEvent,
   type ManagedRunAcquisitionFailureCode,
@@ -875,6 +877,25 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
       base();
       if (!isRecord(event.binding) || (event.cleanupStatus !== 'clean' && event.cleanupStatus !== 'unverified') || (event.controllerDecision !== 'completed' && event.controllerDecision !== 'failed') || (event.failureCode !== null && typeof event.failureCode !== 'string')) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Managed terminal event has invalid fields');
       return event as unknown as InstanceRuntimeEvent;
+    case 'AttemptRetryRequested':
+      exact([
+        'version', 'type', 'eventId', 'sessionId', 'scope', 'nodeInstanceId',
+        'nodeGenerationId', 'checkId', 'incarnation', 'itemFingerprint',
+        'executionConfigDigest', 'activeInputClaimIds', 'priorAttemptId',
+        'priorFence', 'priorFailureReason', 'externalSideEffects',
+      ]);
+      base();
+      if (typeof event.nodeInstanceId !== 'string' || typeof event.nodeGenerationId !== 'string' ||
+          typeof event.checkId !== 'string' || typeof event.incarnation !== 'number' ||
+          !Number.isSafeInteger(event.incarnation) || event.incarnation < 0 ||
+          typeof event.itemFingerprint !== 'string' || typeof event.executionConfigDigest !== 'string' ||
+          !Array.isArray(event.activeInputClaimIds) || typeof event.priorAttemptId !== 'string' ||
+          typeof event.priorFence !== 'number' || !Number.isSafeInteger(event.priorFence) ||
+          event.priorFence < 1 || typeof event.priorFailureReason !== 'string' ||
+          (event.externalSideEffects !== 'absent' && event.externalSideEffects !== 'safely_idempotent')) {
+        throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generated retry event has invalid fields');
+      }
+      return event as unknown as InstanceRuntimeEvent;
     case 'AttemptStarted':
     case 'CheckScheduled':
     case 'AttemptCompleted':
@@ -1222,6 +1243,29 @@ function validateCheckpointPlanAuthority(
     }
     return;
   }
+  if (event.type === 'AttemptRetryRequested') {
+    const generation = instanceProjection.generationsById[event.nodeGenerationId];
+    const instance = generation
+      ? instanceProjection.instancesById[generation.subgraphInstanceId]
+      : undefined;
+    if (!generation || !instance || instance.status !== 'active' ||
+        generation.templateNodeKey !== event.checkId ||
+        generation.nodeInstanceId !== event.nodeInstanceId ||
+        generation.subgraphInstanceId !== instance.subgraphInstanceId) {
+      checkpointAuthorityFailure('Generated retry is not bound to the compiled active generation');
+    }
+    const expansion = expansionForCheckpoint(
+      plan,
+      instance.expansionOwnerCheck,
+      !!instance.parentSubgraphInstanceId,
+    );
+    const node = expansion.template.nodesByKey[event.checkId];
+    if (!node || node.executionConfigDigest !== event.executionConfigDigest ||
+        event.activeInputClaimIds.some(claimId => typeof claimId !== 'string' || claimId.length === 0)) {
+      checkpointAuthorityFailure('Generated retry does not match the compiled node authority');
+    }
+    return;
+  }
   if (event.type === 'ControllerItemClaimPublished') {
     const instance = instanceProjection.instancesById[event.subgraphInstanceId];
     if (!instance) checkpointAuthorityFailure('Controller item claim references an unknown instance');
@@ -1456,7 +1500,7 @@ function reconstructCheckpointAllocators(
   let nextFence = 0;
   const attemptOrdinals = new Map<string, number>();
   const requestOrdinals = new Map<string, number>();
-  const generatedStarts = new Set<string>();
+  const generatedAttemptOrdinals = new Map<string, number>();
   for (const event of events) {
     if (event.type === 'CatalogReconciliationRequested') {
       const prior = requestOrdinals.get(event.expansionOwnerCheck) || 0;
@@ -1474,10 +1518,15 @@ function reconstructCheckpointAllocators(
     if (event.fence !== nextFence) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Attempt fences must be one contiguous global sequence');
     if ('nodeGenerationId' in event) {
       const generatedKey = canonicalJson({ nodeGenerationId: event.nodeGenerationId, scope: event.scope });
-      if (generatedStarts.has(generatedKey) || event.attemptId !== sha256Canonical({ nodeGenerationId: event.nodeGenerationId, ordinal: 1 })) {
+      const ordinal = (generatedAttemptOrdinals.get(generatedKey) || 0) + 1;
+      if (event.attemptId !== sha256Canonical({ nodeGenerationId: event.nodeGenerationId, ordinal })) {
         throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generated attempt identity or ordinal is invalid');
       }
-      generatedStarts.add(generatedKey);
+      generatedAttemptOrdinals.set(generatedKey, ordinal);
+      // ExecutionJournal uses its shared ordinal map for the next generated
+      // start after restore; retain the reconstructed generated ordinal there
+      // alongside root/catalog attempt ordinals.
+      attemptOrdinals.set(generatedKey, ordinal);
       continue;
     }
     const authority = { sessionId: event.sessionId, checkId: event.checkId, scope: event.scope };
@@ -2014,6 +2063,85 @@ export class ExecutionJournal {
       nodeInstanceId: generation.nodeInstanceId,
       nodeGenerationId,
     });
+  }
+
+  /**
+   * Atomically reopen explicitly selected failed generated generations.  All
+   * candidates are validated against the same immutable projection before any
+   * retry event is appended, so a stale or mixed selection cannot partially
+   * advance the journal.
+   */
+  retryFailedGeneratedAttempts(input: {
+    readonly sessionId: string;
+    readonly nodeGenerationIds: readonly string[];
+    readonly externalSideEffects: GeneratedAttemptRetrySideEffects;
+  }): readonly GeneratedAttemptRetryRequestedEvent[] {
+    this.requireClaimPlan();
+    if (typeof input.sessionId !== 'string' || input.sessionId.length === 0) {
+      throw new ClaimKernelError('INVALID_RETRY', 'Retry session ID is required');
+    }
+    if (input.externalSideEffects !== 'absent' && input.externalSideEffects !== 'safely_idempotent') {
+      throw new ClaimKernelError('INVALID_RETRY', 'Retry requires an explicit side-effect disposition');
+    }
+    const generationIds = [...input.nodeGenerationIds].sort();
+    if (generationIds.length === 0 || generationIds.some(id => typeof id !== 'string' || id.length === 0) ||
+        new Set(generationIds).size !== generationIds.length ||
+        input.nodeGenerationIds.some((id, index) => id !== generationIds[index])) {
+      throw new ClaimKernelError('INVALID_RETRY', 'Retry generation IDs must be non-empty, unique, and sorted');
+    }
+
+    const events: GeneratedAttemptRetryRequestedEvent[] = generationIds.map(nodeGenerationId => {
+      const generation = this.instanceProjection.generationsById[nodeGenerationId];
+      const instance = generation
+        ? this.instanceProjection.instancesById[generation.subgraphInstanceId]
+        : undefined;
+      if (!generation || !instance || instance.status !== 'active' || instance.sessionId !== input.sessionId ||
+          generation.status !== 'failed' || !generation.scheduled ||
+          generation.attemptId === undefined || generation.fence === undefined || generation.reason === undefined ||
+          generation.completedOutputClaimIds.length !== 0) {
+        throw new ClaimKernelError('INVALID_RETRY', `Generation ${nodeGenerationId} is not an eligible failed leaf`);
+      }
+      if (Object.values(this.instanceProjection.instancesById).some(candidate =>
+        candidate.status === 'active' && candidate.parentSubgraphInstanceId === generation.subgraphInstanceId
+      )) {
+        throw new ClaimKernelError('INVALID_RETRY', `Generation ${nodeGenerationId} has active descendants`);
+      }
+      const managed = this.instanceProjection.managedRunsByAttemptId[generation.attemptId];
+      if (managed && (managed.status !== 'terminated' || managed.cleanupStatus !== 'clean')) {
+        throw new ClaimKernelError('INVALID_RETRY', `Generation ${nodeGenerationId} has an unclean prior managed run`);
+      }
+      return {
+        version: 1,
+        type: 'AttemptRetryRequested',
+        eventId: 0,
+        sessionId: input.sessionId,
+        scope: generation.scope,
+        nodeInstanceId: generation.nodeInstanceId,
+        nodeGenerationId: generation.nodeGenerationId,
+        checkId: generation.checkId,
+        incarnation: generation.incarnation,
+        itemFingerprint: generation.itemFingerprint,
+        executionConfigDigest: generation.executionConfigDigest,
+        activeInputClaimIds: [...generation.activeInputClaimIds],
+        priorAttemptId: generation.attemptId,
+        priorFence: generation.fence,
+        priorFailureReason: generation.reason,
+        externalSideEffects: input.externalSideEffects,
+      };
+    });
+
+    let nextEventId = this.nextRuntimeEventId();
+    const staged = events.map(event => ({ ...event, eventId: nextEventId++ }));
+    // reduceInstanceEventBatch is deliberately called before mutating either
+    // the event lane or cached projection: failure leaves the journal intact.
+    const projected = reduceInstanceEventBatch(
+      this.instanceProjection,
+      staged.map(event => immutableInstanceEvent(event)),
+    );
+    const stored = staged.map(event => immutableInstanceEvent(event));
+    this.runtimeEvents.push(...stored);
+    this.instanceProjection = projected;
+    return Object.freeze(stored);
   }
 
   scheduleGeneratedAttempt(input: GeneratedScheduleAuthority): GeneratedCheckScheduledEvent {

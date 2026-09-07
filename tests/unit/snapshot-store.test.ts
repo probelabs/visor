@@ -1407,6 +1407,103 @@ describe('Graph-v2 journal checkpoints', () => {
     return source;
   }
 
+  it('atomically reopens an explicitly selected failed generated leaf for a fresh attempt', () => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = source.queryReadyWork().find(value => value.checkId === 'inspect')!;
+    const firstAttempt = source.startGeneratedAttempt(generation.nodeGenerationId);
+    source.scheduleGeneratedAttempt(firstAttempt);
+    source.failGeneratedAttempt(firstAttempt, 'MANAGED_START_FAILED');
+    const failedEvents = source.readRuntimeEvents();
+    const failedProjection = source.getInstanceProjection();
+    const failedCheckpoint = source.exportGraphCheckpoint('c2-session');
+
+    const retryEvents = source.retryFailedGeneratedAttempts({
+      sessionId: 'c2-session',
+      nodeGenerationIds: [generation.nodeGenerationId],
+      externalSideEffects: 'absent',
+    });
+    expect(retryEvents).toHaveLength(1);
+    expect(retryEvents[0]).toEqual(expect.objectContaining({
+      type: 'AttemptRetryRequested',
+      nodeGenerationId: generation.nodeGenerationId,
+      priorAttemptId: firstAttempt.attemptId,
+      priorFence: firstAttempt.fence,
+      priorFailureReason: 'MANAGED_START_FAILED',
+      externalSideEffects: 'absent',
+    }));
+    expect(source.readRuntimeEvents().slice(0, failedEvents.length)).toEqual(failedEvents);
+    const reopened = source.getInstanceProjection().generationsById[generation.nodeGenerationId];
+    expect(reopened.status).toBe('ready');
+    expect(reopened.scheduled).toBe(false);
+    expect(reopened.attemptId).toBeUndefined();
+    expect(reopened.fence).toBeUndefined();
+    expect(reopened.reason).toBeUndefined();
+
+    const retriedCheckpoint = source.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(
+      compileClaimPlan(c2Config()),
+      JSON.parse(JSON.stringify(retriedCheckpoint)),
+    );
+    const secondAttempt = restored.startGeneratedAttempt(generation.nodeGenerationId);
+    expect(secondAttempt.attemptId).toBe(sha256Canonical({
+      nodeGenerationId: generation.nodeGenerationId,
+      ordinal: 2,
+    }));
+    expect(secondAttempt.attemptId).not.toBe(firstAttempt.attemptId);
+    expect(secondAttempt.fence).toBe(firstAttempt.fence + 1);
+    restored.scheduleGeneratedAttempt(secondAttempt);
+    restored.completeGeneratedAttempt({
+      attempt: secondAttempt,
+      payload: { id: 'A', findings: [] },
+    });
+    expect(restored.getInstanceProjection().generationsById[generation.nodeGenerationId].status).toBe('completed');
+    expect(failedProjection.generationsById[generation.nodeGenerationId].status).toBe('failed');
+    expect(failedCheckpoint.events).toEqual(failedEvents);
+  });
+
+  it('rejects mixed, duplicate, stale, or output-bearing retry selections atomically', () => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }, { id: 'B', path: 'packages/b' }] });
+    const generations = source.queryReadyWork().filter(value => value.checkId === 'inspect');
+    expect(generations).toHaveLength(2);
+    const generation = generations[0];
+    const secondGeneration = generations[1];
+    for (const candidate of generations) {
+      const attempt = source.startGeneratedAttempt(candidate.nodeGenerationId);
+      source.scheduleGeneratedAttempt(attempt);
+      source.failGeneratedAttempt(attempt, 'pre-side-effect failure');
+    }
+    const beforeEvents = source.readRuntimeEvents();
+    const beforeProjection = source.getInstanceProjection();
+    for (const ids of [
+      [generation.nodeGenerationId, generation.nodeGenerationId],
+      ['missing-generation'],
+      [generation.nodeGenerationId, 'missing-generation'].sort(),
+    ]) {
+      expect(() => source.retryFailedGeneratedAttempts({
+        sessionId: 'c2-session',
+        nodeGenerationIds: ids,
+        externalSideEffects: 'absent',
+      })).toThrow();
+      expect(source.readRuntimeEvents()).toEqual(beforeEvents);
+      expect(source.getInstanceProjection()).toEqual(beforeProjection);
+    }
+    source.retryFailedGeneratedAttempts({
+      sessionId: 'c2-session',
+      nodeGenerationIds: [generation.nodeGenerationId, secondGeneration.nodeGenerationId].sort(),
+      externalSideEffects: 'absent',
+    });
+    expect(source.readRuntimeEvents().slice(0, beforeEvents.length)).toEqual(beforeEvents);
+    expect(source.readRuntimeEvents().filter(event => event.type === 'AttemptRetryRequested')).toHaveLength(2);
+    expect(source.queryReadyWork().filter(candidate => candidate.checkId === 'inspect')).toHaveLength(2);
+    expect(() => source.retryFailedGeneratedAttempts({
+      sessionId: 'c2-session',
+      nodeGenerationIds: [generation.nodeGenerationId],
+      externalSideEffects: 'absent',
+    })).toThrow();
+  });
+
   function completeC2Work(journal: ExecutionJournal): void {
     while (journal.queryReadyWork().length > 0) {
       const generation = journal.queryReadyWork()[0];
