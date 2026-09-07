@@ -33,7 +33,7 @@ function proof(root: string, args: string[]): string {
   );
 }
 
-function createFixture(): {
+function createFixture(options: {seedComponentBAliases?: boolean} = {}): {
   canonicalRoot: string;
   writerRoot: string;
   baselineCommit: string;
@@ -115,6 +115,15 @@ function createFixture(): {
     '--description',
     'Component A state',
   ]);
+  if (options.seedComponentBAliases) {
+    for (const alias of [
+      'specs/software/variables/component_b.vars.yaml',
+      'specs/integration/variables/component_b.vars.yaml',
+    ]) {
+      fs.mkdirSync(path.dirname(path.join(canonicalRoot, alias)), {recursive: true});
+      fs.symlinkSync('../../system/variables/component_b.vars.yaml', path.join(canonicalRoot, alias));
+    }
+  }
   const checklistPath = '.proof/onboard-checklist-state.json';
   fs.mkdirSync(path.join(canonicalRoot, '.proof'), {recursive: true});
   const checklistState = proof(canonicalRoot, ['checklist', 'show', 'onboard_v1', '--format', 'json']);
@@ -199,7 +208,6 @@ describeNative('native onboarding promotion boundary', () => {
       fs.appendFileSync(varsFile, '# component-B native annotation\n');
 
       const result = promoteNativeDelta(promotionInput(fixture));
-
       expect(result.status).toBe('promoted');
       expect(result.accepted_paths.sort()).toEqual(
         ['b.go', `specs/system/requirements/${reqFile}`, 'specs/system/variables/component_b.vars.yaml'].sort()
@@ -212,6 +220,159 @@ describeNative('native onboarding promotion boundary', () => {
       expect(git(fixture.canonicalRoot, ['log', '-1', '--format=%s'])).toContain('promote native component_b artifacts');
     } finally {
       fixture.cleanup();
+    }
+  });
+
+  it('promotes a Proof-owned regular variable file with exact same-component aliases', () => {
+    const fixture = createFixture();
+    try {
+      const target = 'specs/system/variables/component_b.vars.yaml';
+      const aliases = [
+        'specs/software/variables/component_b.vars.yaml',
+        'specs/integration/variables/component_b.vars.yaml',
+      ];
+      for (const alias of aliases) fs.mkdirSync(path.dirname(path.join(fixture.writerRoot, alias)), {recursive: true});
+      for (const alias of aliases) {
+        fs.symlinkSync('../../system/variables/component_b.vars.yaml', path.join(fixture.writerRoot, alias));
+      }
+      fs.appendFileSync(path.join(fixture.writerRoot, target), '\n# component-B alias promotion\n');
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('promoted');
+      expect(result.accepted_paths.sort()).toEqual([target, ...aliases].sort());
+      const targetBytes = fs.readFileSync(path.join(fixture.canonicalRoot, target));
+      for (const alias of aliases) {
+        const aliasPath = path.join(fixture.canonicalRoot, alias);
+        expect(fs.lstatSync(aliasPath).isSymbolicLink()).toBe(true);
+        expect(fs.readlinkSync(aliasPath)).toBe('../../system/variables/component_b.vars.yaml');
+        expect(fs.readFileSync(aliasPath)).toEqual(targetBytes);
+        expect(git(fixture.canonicalRoot, ['ls-tree', 'HEAD', '--', alias])).toMatch(/^120000\s/);
+      }
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('promotes aliases when their Proof-owned regular target is unchanged at the baseline', () => {
+    const fixture = createFixture();
+    const alias = 'specs/software/variables/component_b.vars.yaml';
+    const target = 'specs/system/variables/component_b.vars.yaml';
+    try {
+      const aliasPath = path.join(fixture.writerRoot, alias);
+      fs.mkdirSync(path.dirname(aliasPath), {recursive: true});
+      fs.symlinkSync('../../system/variables/component_b.vars.yaml', aliasPath);
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('promoted');
+      expect(result.accepted_paths).toEqual([alias]);
+      expect(fs.readlinkSync(path.join(fixture.canonicalRoot, alias))).toBe('../../system/variables/component_b.vars.yaml');
+      expect(fs.readFileSync(path.join(fixture.canonicalRoot, target))).toEqual(
+        fs.readFileSync(path.join(fixture.writerRoot, target))
+      );
+      expect(git(fixture.canonicalRoot, ['ls-tree', 'HEAD', '--', alias])).toMatch(/^120000\s/);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    ['unreported projection', 'specs/other/component_b.vars.yaml', '../../system/variables/component_b.vars.yaml'],
+    ['absolute target', 'specs/software/variables/component_b.vars.yaml', '/tmp/component_b.vars.yaml'],
+    ['escaping target', 'specs/software/variables/component_b.vars.yaml', '../../../../outside.vars.yaml'],
+    ['dangling target', 'specs/software/variables/component_b.vars.yaml', '../../system/variables/missing.vars.yaml'],
+    ['cross-component target', 'specs/software/variables/component_b.vars.yaml', '../../system/variables/component_a.vars.yaml'],
+  ])('rejects a %s alias without changing canonical data', (_label, alias, target) => {
+    const fixture = createFixture();
+    try {
+      const aliasPath = path.join(fixture.writerRoot, alias);
+      fs.mkdirSync(path.dirname(aliasPath), {recursive: true});
+      fs.symlinkSync(target, aliasPath);
+      const canonicalBefore = canonicalBytes(fixture.canonicalRoot, [
+        'b.go',
+        fixture.componentBRequirementPath,
+        'specs/system/variables/component_b.vars.yaml',
+      ]);
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/alias|outside|escapes|owned|no such file|rebuilding index/);
+      expect(canonicalBytes(fixture.canonicalRoot, [
+        'b.go',
+        fixture.componentBRequirementPath,
+        'specs/system/variables/component_b.vars.yaml',
+      ])).toEqual(canonicalBefore);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('compares an existing canonical alias by exact Git link text before promotion', () => {
+    const fixture = createFixture({seedComponentBAliases: true});
+    const alias = 'specs/software/variables/component_b.vars.yaml';
+    try {
+      const writerAlias = path.join(fixture.writerRoot, alias);
+      fs.unlinkSync(writerAlias);
+      fs.symlinkSync('./../../system/variables/component_b.vars.yaml', writerAlias);
+      const canonicalAlias = path.join(fixture.canonicalRoot, alias);
+      fs.unlinkSync(canonicalAlias);
+      fs.symlinkSync('./../../system/variables/component_b.vars.yaml', canonicalAlias);
+      git(fixture.canonicalRoot, ['add', '--', alias]);
+      git(fixture.canonicalRoot, ['commit', '--quiet', '-m', 'canonical alias changed']);
+      const canonicalHeadBefore = git(fixture.canonicalRoot, ['rev-parse', 'HEAD']);
+      const canonicalLinkBefore = fs.readlinkSync(canonicalAlias);
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/canonical path .*changed after writer baseline/);
+      expect(fs.readlinkSync(canonicalAlias)).toBe(canonicalLinkBefore);
+      expect(git(fixture.canonicalRoot, ['rev-parse', 'HEAD'])).toBe(canonicalHeadBefore);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects a non-variable symlink in an owned source path without writing canonical data', () => {
+    const fixture = createFixture();
+    try {
+      const before = canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths]);
+      fs.rmSync(path.join(fixture.writerRoot, 'b.go'));
+      fs.symlinkSync('a.go', path.join(fixture.writerRoot, 'b.go'));
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/symlink/);
+      expect(canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths])).toEqual(before);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects a symlink-parent path before it can reach canonical promotion', () => {
+    const fixture = createFixture();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-native-promotion-outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'component_b.vars.yaml'), 'outside native data\n');
+      fs.symlinkSync(outside, path.join(fixture.writerRoot, 'escaped-parent'), 'dir');
+      const before = canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths]);
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('rejected');
+      expect(result.rejected_paths).toContain('escaped-parent');
+      expect(canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths])).toEqual(before);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+      fs.rmSync(outside, {recursive: true, force: true});
     }
   });
 

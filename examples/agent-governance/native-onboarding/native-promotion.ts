@@ -82,6 +82,17 @@ interface NativeSurface {
   variableFiles: Set<string>;
 }
 
+interface VariableAlias {
+  targetPath: string;
+  linkText: string;
+}
+
+interface FileSnapshot {
+  kind: 'file' | 'symlink';
+  bytes?: Buffer;
+  linkText?: string;
+}
+
 const DEFAULT_TIMEOUT_MS = 120_000;
 const SHA256_FILE_HASH = /^sha256:[0-9a-f]{64}$/;
 
@@ -174,6 +185,68 @@ function ensureRelativePath(value: unknown, label: string): string {
 function inside(child: string, parent: string): boolean {
   const relative = path.relative(parent, child);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function lstatOrUndefined(file: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    throw error;
+  }
+}
+
+function verifyExistingParent(root: string, relativePath: string, label: string): string {
+  const verifiedRoot = fs.realpathSync(root);
+  const absolute = path.join(verifiedRoot, relativePath);
+  let parent = path.dirname(absolute);
+  while (parent !== verifiedRoot && !lstatOrUndefined(parent)) {
+    const next = path.dirname(parent);
+    if (next === parent) throw new Error(`${label} has no existing parent: ${relativePath}`);
+    parent = next;
+  }
+  if (!inside(parent, verifiedRoot)) throw new Error(`${label} escapes its checkout: ${relativePath}`);
+  const realParent = fs.realpathSync(parent);
+  if (!inside(realParent, verifiedRoot)) throw new Error(`${label} has a symlink-parent escape: ${relativePath}`);
+  return realParent;
+}
+
+function pathIsAbsoluteLink(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function fileSnapshot(root: string, relativePath: string): FileSnapshot | undefined {
+  const absolute = path.join(root, relativePath);
+  const details = lstatOrUndefined(absolute);
+  if (!details) return undefined;
+  if (details.isSymbolicLink()) return {kind: 'symlink', linkText: fs.readlinkSync(absolute)};
+  if (details.isFile()) return {kind: 'file', bytes: fs.readFileSync(absolute)};
+  throw new Error(`native path is not a regular file or symlink: ${relativePath}`);
+}
+
+function gitSnapshotAtCommit(root: string, commit: string, relativePath: string): FileSnapshot | undefined {
+  const treeResult = spawnSync('git', ['-C', root, 'ls-tree', '-z', commit, '--', relativePath], {
+    cwd: root,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'buffer',
+  });
+  if (treeResult.status !== 0) return undefined;
+  const record = Buffer.from(treeResult.stdout || '').toString('utf8').split('\0')[0];
+  const tab = record.indexOf('\t');
+  if (tab < 0) return undefined;
+  const mode = record.slice(0, tab).split(' ')[0];
+  const bytes = gitFileAtCommit(root, commit, relativePath);
+  if (bytes === undefined) return undefined;
+  if (mode === '120000') return {kind: 'symlink', linkText: bytes.toString('utf8')};
+  return {kind: 'file', bytes};
+}
+
+function snapshotsEqual(left: FileSnapshot | undefined, right: FileSnapshot | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'symlink') return left.linkText === right.linkText;
+  return buffersEqual(left.bytes, right.bytes);
 }
 
 function fileHash(file: string): string {
@@ -344,6 +417,78 @@ function collectNativeSurface(
   };
 }
 
+function isVariablePath(relativePath: string): boolean {
+  return relativePath.endsWith('.vars.yaml') || relativePath.endsWith('.vars.yml');
+}
+
+function inspectVariableAlias(
+  root: string,
+  relativePath: string,
+  componentId: string,
+  surface: NativeSurface
+): VariableAlias | undefined {
+  const source = path.join(root, relativePath);
+  const sourceStat = lstatOrUndefined(source);
+  if (!sourceStat?.isSymbolicLink()) return undefined;
+  verifyExistingParent(root, relativePath, 'variable alias source');
+  const linkText = fs.readlinkSync(source);
+  if (!linkText || linkText.includes('\0') || pathIsAbsoluteLink(linkText)) {
+    throw new Error(`Proof variable alias ${relativePath} must use a relative target`);
+  }
+  const targetAbsolute = path.resolve(path.dirname(source), linkText);
+  if (!inside(targetAbsolute, root)) {
+    throw new Error(`Proof variable alias ${relativePath} escapes the writer checkout`);
+  }
+  const targetPath = ensureRelativePath(path.relative(root, targetAbsolute), 'Proof variable alias target');
+  if (!isVariablePath(targetPath)) {
+    throw new Error(`Proof variable alias ${relativePath} target is not a .vars.yaml/.vars.yml file`);
+  }
+  if (!surface.variableFiles.has(relativePath)) {
+    throw new Error(`Proof variable alias ${relativePath} is not an owned variable projection for component ${componentId}`);
+  }
+  if (!surface.variableFiles.has(targetPath)) {
+    throw new Error(`Proof variable alias ${relativePath} target is not owned by component ${componentId}`);
+  }
+  verifyExistingParent(root, targetPath, 'variable alias target');
+  const target = path.join(root, targetPath);
+  const targetStat = lstatOrUndefined(target);
+  if (!targetStat?.isFile()) {
+    throw new Error(`Proof variable alias ${relativePath} target is not an existing regular file`);
+  }
+  const targetReal = fs.realpathSync(target);
+  if (!inside(targetReal, root)) {
+    throw new Error(`Proof variable alias ${relativePath} target escapes the writer checkout`);
+  }
+  return {targetPath, linkText};
+}
+
+function canonicalVariableTargetUnchanged(
+  canonicalRoot: string,
+  baselineCommit: string,
+  canonicalSurface: NativeSurface,
+  targetPath: string
+): boolean {
+  if (!canonicalSurface.variableFiles.has(targetPath)) return false;
+  verifyExistingParent(canonicalRoot, targetPath, 'canonical variable target');
+  const baseline = gitSnapshotAtCommit(canonicalRoot, baselineCommit, targetPath);
+  const current = fileSnapshot(canonicalRoot, targetPath);
+  if (!baseline || baseline.kind !== 'file' || !current || current.kind !== 'file') return false;
+  return snapshotsEqual(baseline, current);
+}
+
+function validateVariableAliasTarget(
+  alias: VariableAlias,
+  changedVariablePaths: Set<string>,
+  canonicalRoot: string,
+  baselineCommit: string,
+  canonicalSurface: NativeSurface
+): void {
+  if (changedVariablePaths.has(alias.targetPath)) return;
+  if (!canonicalVariableTargetUnchanged(canonicalRoot, baselineCommit, canonicalSurface, alias.targetPath)) {
+    throw new Error(`Proof variable alias target ${alias.targetPath} is not selected in this delta or unchanged native-owned canonical data`);
+  }
+}
+
 function verifyGitRoot(root: string, label: string): string {
   const resolved = realDirectory(root, label);
   const gitRoot = realDirectory(git(resolved, ['rev-parse', '--show-toplevel']), `${label} Git root`);
@@ -370,15 +515,35 @@ function verifyWriterCheckout(input: NativePromotionInput, canonicalRoot: string
   return writerRoot;
 }
 
-function copySelectedFiles(sourceRoot: string, stagingRoot: string, acceptedPaths: string[]): void {
+function copySelectedFiles(
+  sourceRoot: string,
+  stagingRoot: string,
+  acceptedPaths: string[],
+  variableAliases: Map<string, VariableAlias>
+): void {
   for (const relativePath of acceptedPaths) {
     const source = path.join(sourceRoot, relativePath);
     const destination = path.join(stagingRoot, relativePath);
-    const sourceStat = fs.lstatSync(source);
-    if (!sourceStat.isFile()) throw new Error(`selected writer path is not a regular file: ${relativePath}`);
-    if (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) {
-      throw new Error(`staging destination is a symlink: ${relativePath}`);
+    verifyExistingParent(sourceRoot, relativePath, 'selected writer path');
+    verifyExistingParent(stagingRoot, relativePath, 'staging destination');
+    const sourceStat = lstatOrUndefined(source);
+    if (!sourceStat) throw new Error(`selected writer path disappeared: ${relativePath}`);
+    const destinationStat = lstatOrUndefined(destination);
+    const alias = variableAliases.get(relativePath);
+    if (sourceStat.isSymbolicLink()) {
+      if (!alias) throw new Error(`selected writer symlink is not an approved variable alias: ${relativePath}`);
+      const linkText = fs.readlinkSync(source);
+      if (linkText !== alias.linkText) throw new Error(`selected variable alias changed before staging: ${relativePath}`);
+      if (destinationStat?.isDirectory()) throw new Error(`staging destination is a directory: ${relativePath}`);
+      if (destinationStat) fs.unlinkSync(destination);
+      fs.mkdirSync(path.dirname(destination), {recursive: true});
+      fs.symlinkSync(linkText, destination);
+      continue;
     }
+    if (!sourceStat.isFile()) throw new Error(`selected writer path is not a regular file: ${relativePath}`);
+    if (alias) throw new Error(`selected variable alias is no longer a symlink: ${relativePath}`);
+    if (destinationStat?.isSymbolicLink()) throw new Error(`staging destination is a symlink: ${relativePath}`);
+    if (destinationStat?.isDirectory()) throw new Error(`staging destination is a directory: ${relativePath}`);
     fs.mkdirSync(path.dirname(destination), {recursive: true});
     fs.copyFileSync(source, destination);
   }
@@ -389,11 +554,20 @@ function validateStaging(
   stagingRoot: string,
   componentId: string,
   acceptedPaths: string[],
+  variableAliases: Map<string, VariableAlias>,
   timeoutMs: number
 ): {validation: CommandResult; surface: NativeSurface} {
   const verifiedStagingRoot = verifyGitRoot(stagingRoot, 'native promotion staging root');
   const collected = collectNativeSurface(proofBin, verifiedStagingRoot, componentId, timeoutMs);
   for (const relativePath of acceptedPaths) {
+    const alias = variableAliases.get(relativePath);
+    if (alias) {
+      const stagedAlias = inspectVariableAlias(verifiedStagingRoot, relativePath, componentId, collected.surface);
+      if (!stagedAlias || stagedAlias.targetPath !== alias.targetPath || stagedAlias.linkText !== alias.linkText) {
+        throw new Error(`staged Proof variable alias changed for ${relativePath}`);
+      }
+      continue;
+    }
     if (relativePath.endsWith('.req.yaml') || relativePath.endsWith('.req.yml')) {
       const row = requirementRowForPath(collected.surface, relativePath, componentId);
       const show = proof(proofBin, verifiedStagingRoot, ['req', 'show', String(row.id), '--with', 'file', '--format', 'json'], timeoutMs);
@@ -412,7 +586,7 @@ function validateStaging(
         throw new Error(`staged Proof requirement hash changed for ${relativePath}`);
       }
     }
-    if (relativePath.endsWith('.vars.yaml') || relativePath.endsWith('.vars.yml')) {
+    if (isVariablePath(relativePath)) {
       if (!collected.surface.variableFiles.has(relativePath)) {
         throw new Error(`staged Proof variable file ${relativePath} is not owned by component ${componentId}`);
       }
@@ -457,6 +631,7 @@ function applyAcceptedFiles(
   canonicalRoot: string,
   stagingRoot: string,
   acceptedPaths: string[],
+  variableAliases: Map<string, VariableAlias>,
   canonicalCommit: string,
   canonicalTree: string,
   markApplicationStarted: () => void
@@ -464,18 +639,38 @@ function applyAcceptedFiles(
   assertCanonicalStillBaseline(canonicalRoot, canonicalCommit, canonicalTree);
   for (const relativePath of acceptedPaths) {
     const stagedFile = path.join(stagingRoot, relativePath);
-    if (!fs.existsSync(stagedFile) || !fs.lstatSync(stagedFile).isFile()) {
+    verifyExistingParent(stagingRoot, relativePath, 'staged selected path');
+    const stagedStat = lstatOrUndefined(stagedFile);
+    if (!stagedStat || (!stagedStat.isFile() && !stagedStat.isSymbolicLink())) {
       throw new Error(`staged selected path disappeared before promotion: ${relativePath}`);
     }
+    if (stagedStat.isSymbolicLink() && !variableAliases.has(relativePath)) {
+      throw new Error(`staged selected path is an unapproved symlink: ${relativePath}`);
+    }
+    verifyExistingParent(canonicalRoot, relativePath, 'canonical promotion destination');
   }
   markApplicationStarted();
   for (const relativePath of acceptedPaths) {
     const destination = path.join(canonicalRoot, relativePath);
-    if (fs.existsSync(destination) && fs.lstatSync(destination).isSymbolicLink()) {
+    const stagedFile = path.join(stagingRoot, relativePath);
+    const stagedStat = fs.lstatSync(stagedFile);
+    const destinationStat = lstatOrUndefined(destination);
+    if (stagedStat.isSymbolicLink()) {
+      if (!variableAliases.has(relativePath)) throw new Error(`canonical source is an unapproved symlink: ${relativePath}`);
+      if (destinationStat?.isDirectory()) throw new Error(`canonical destination is a directory: ${relativePath}`);
+      if (destinationStat) fs.unlinkSync(destination);
+      fs.mkdirSync(path.dirname(destination), {recursive: true});
+      fs.symlinkSync(fs.readlinkSync(stagedFile), destination);
+      continue;
+    }
+    if (destinationStat?.isSymbolicLink()) {
       throw new Error(`canonical destination is a symlink: ${relativePath}`);
     }
+    if (destinationStat?.isDirectory()) {
+      throw new Error(`canonical destination is a directory: ${relativePath}`);
+    }
     fs.mkdirSync(path.dirname(destination), {recursive: true});
-    fs.copyFileSync(path.join(stagingRoot, relativePath), destination);
+    fs.copyFileSync(stagedFile, destination);
   }
   execFileSync('git', ['-C', canonicalRoot, 'add', '--', ...acceptedPaths], {
     encoding: 'utf8',
@@ -531,6 +726,7 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     const acceptedPaths: string[] = [];
     const reqCandidates: string[] = [];
     for (const entry of changed) {
+      verifyExistingParent(writerRoot, entry.path, 'writer delta path');
       if (entry.status.startsWith('D') || entry.status.startsWith('R') || entry.status.startsWith('C')) {
         rejectedPaths.push(entry.path);
         continue;
@@ -547,7 +743,7 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
         reqCandidates.push(entry.path);
         continue;
       }
-      if (entry.path.endsWith('.vars.yaml') || entry.path.endsWith('.vars.yml')) {
+      if (isVariablePath(entry.path)) {
         // Proof var list/diagnose establish ownership below.
         continue;
       }
@@ -563,6 +759,7 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
 
     const componentId = input.workItem.component_id;
     const writerSurface = collectNativeSurface(input.proofBin, writerRoot, componentId, timeoutMs).surface;
+    const canonicalSurface = collectNativeSurface(input.proofBin, canonicalRoot, componentId, timeoutMs).surface;
     for (const relativePath of reqCandidates) {
       const row = requirementRowForPath(writerSurface, relativePath, componentId);
       const show = proof(input.proofBin, writerRoot, ['req', 'show', String(row.id), '--with', 'file', '--format', 'json'], timeoutMs);
@@ -580,10 +777,32 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       }
       acceptedPaths.push(relativePath);
     }
-    const variableCandidates = changed.filter(entry => entry.path.endsWith('.vars.yaml') || entry.path.endsWith('.vars.yml')).map(entry => entry.path);
+    const variableCandidates = changed.filter(entry => isVariablePath(entry.path)).map(entry => entry.path);
     const variableFiles = writerSurface.variableFiles;
+    const changedVariablePaths = new Set(variableCandidates);
+    const variableAliases = new Map<string, VariableAlias>();
     for (const relativePath of variableCandidates) {
-      if (!variableFiles.has(relativePath)) {
+      const source = path.join(writerRoot, relativePath);
+      const sourceStat = lstatOrUndefined(source);
+      if (!sourceStat) {
+        return rejected(input, `selected writer variable path disappeared: ${relativePath}`, [], ignoredPaths, [relativePath]);
+      }
+      if (sourceStat.isSymbolicLink()) {
+        try {
+          const alias = inspectVariableAlias(writerRoot, relativePath, componentId, writerSurface);
+          if (!alias) throw new Error(`Proof variable alias ${relativePath} is not a symlink`);
+          validateVariableAliasTarget(
+            alias,
+            changedVariablePaths,
+            canonicalRoot,
+            input.baselineCommit,
+            canonicalSurface
+          );
+          variableAliases.set(relativePath, alias);
+        } catch (error) {
+          return rejected(input, error instanceof Error ? error.message : String(error), [], ignoredPaths, [relativePath]);
+        }
+      } else if (!sourceStat.isFile() || !variableFiles.has(relativePath)) {
         return rejected(input, `Proof variable list/diagnose does not prove ownership of ${relativePath}`, [], ignoredPaths, [relativePath]);
       }
       acceptedPaths.push(relativePath);
@@ -592,14 +811,15 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     if (!dedupedAccepted.length) {
       return rejected(input, 'writer delta contains no promotable native authored files', [], ignoredPaths, []);
     }
-
-    const canonicalSurface = collectNativeSurface(input.proofBin, canonicalRoot, componentId, timeoutMs).surface;
     const preOwnerRejectedPaths: string[] = [];
     for (const relativePath of [...reqCandidates, ...variableCandidates]) {
       if (gitFileAtCommit(canonicalRoot, input.baselineCommit, relativePath) === undefined) continue;
+      const writerSource = path.join(writerRoot, relativePath);
       const ownedBeforeWriterEdit = relativePath.endsWith('.req.yaml') || relativePath.endsWith('.req.yml')
         ? canonicalRequirementOwned(input.proofBin, canonicalRoot, canonicalSurface, relativePath, componentId, timeoutMs)
-        : canonicalSurface.variableFiles.has(relativePath);
+        : lstatOrUndefined(writerSource)?.isSymbolicLink()
+          ? Boolean(inspectVariableAlias(canonicalRoot, relativePath, componentId, canonicalSurface))
+          : canonicalSurface.variableFiles.has(relativePath);
       if (!ownedBeforeWriterEdit) {
         preOwnerRejectedPaths.push(relativePath);
       }
@@ -615,10 +835,9 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     }
 
     for (const relativePath of dedupedAccepted) {
-      const baselineBytes = gitFileAtCommit(canonicalRoot, input.baselineCommit, relativePath);
-      const canonicalFile = path.join(canonicalRoot, relativePath);
-      const canonicalBytes = fs.existsSync(canonicalFile) ? fs.readFileSync(canonicalFile) : undefined;
-      if (!buffersEqual(baselineBytes, canonicalBytes)) {
+      const baselineSnapshot = gitSnapshotAtCommit(canonicalRoot, input.baselineCommit, relativePath);
+      const canonicalSnapshot = fileSnapshot(canonicalRoot, relativePath);
+      if (!snapshotsEqual(baselineSnapshot, canonicalSnapshot)) {
         return rejected(
           input,
           `canonical path ${relativePath} changed after writer baseline; refusing conflicting promotion`,
@@ -635,8 +854,8 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      copySelectedFiles(writerRoot, stagingRoot, dedupedAccepted);
-      const staged = validateStaging(input.proofBin, stagingRoot, componentId, dedupedAccepted, timeoutMs);
+      copySelectedFiles(writerRoot, stagingRoot, dedupedAccepted, variableAliases);
+      const staged = validateStaging(input.proofBin, stagingRoot, componentId, dedupedAccepted, variableAliases, timeoutMs);
       const validation = {
         status: staged.validation.status,
         stdout: staged.validation.stdout,
@@ -650,6 +869,7 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
         canonicalRoot,
         stagingRoot,
         dedupedAccepted,
+        variableAliases,
         canonicalCommit,
         canonicalTree,
         () => {
