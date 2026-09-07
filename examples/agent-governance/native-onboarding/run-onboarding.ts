@@ -114,7 +114,13 @@ export function configurePublicPromptCapture(aiDirectory: string): (info: Public
 
 export type NativePostflightSummary = {
   hard_failures: string[];
-  open_native_checks: Array<{name: string; exit_code: number}>;
+  open_native_checks: Array<{name: string; exit_code: number; component_id?: string}>;
+};
+
+type NativeComponentOpenCheck = {
+  component_id: string;
+  name: string;
+  exit_code: number;
 };
 
 export type NativeOnboardingCompletionCounts = Readonly<{
@@ -1740,7 +1746,42 @@ function writeCheckpoint(file: string, checkpoint: unknown): void {
   JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-export function summarizeNativePostflight(postflight: Json): NativePostflightSummary {
+export function collectNativeComponentOpenChecks(projection: unknown): NativeComponentOpenCheck[] {
+  if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return [];
+  const claimsById = (projection as Json).claimsById;
+  if (!claimsById || typeof claimsById !== 'object' || Array.isArray(claimsById)) return [];
+  const checks: NativeComponentOpenCheck[] = [];
+  for (const claim of Object.values(claimsById as Record<string, unknown>)) {
+    if (!claim || typeof claim !== 'object' || Array.isArray(claim)) continue;
+    const claimObject = claim as Json;
+    if (claimObject.active !== true || claimObject.claim !== 'native.component.summary@1') continue;
+    const scope = claimObject.scope;
+    const componentScope = Array.isArray(scope) ? scope[scope.length - 1] : undefined;
+    const payload = claimObject.payload && typeof claimObject.payload === 'object' && !Array.isArray(claimObject.payload)
+      ? claimObject.payload as Json
+      : undefined;
+    const componentId = payload?.component_id;
+    if (typeof componentId !== 'string' || componentId.length === 0 ||
+        !componentScope || typeof componentScope !== 'object' || Array.isArray(componentScope) ||
+        (componentScope as Json).kind !== 'keyed' || (componentScope as Json).key !== componentId) continue;
+    const openChecks = payload.open_native_checks;
+    if (!Array.isArray(openChecks)) continue;
+    for (const check of openChecks) {
+      if (!check || typeof check !== 'object' || Array.isArray(check)) continue;
+      const name = (check as Json).name;
+      const exitCode = (check as Json).exit_code;
+      if (typeof name === 'string' && name.length > 0 && Number.isSafeInteger(exitCode)) {
+        checks.push({component_id: componentId, name, exit_code: exitCode as number});
+      }
+    }
+  }
+  return checks.sort((left, right) =>
+    left.component_id.localeCompare(right.component_id) ||
+    left.name.localeCompare(right.name) || left.exit_code - right.exit_code,
+  );
+}
+
+export function summarizeNativePostflight(postflight: Json, projection?: unknown): NativePostflightSummary {
   const checkNames = ['requirements', 'validation', 'audit', 'checklist', 'status'];
   const open_native_checks = checkNames.flatMap(name => {
     const value = postflight[name];
@@ -1750,11 +1791,15 @@ export function summarizeNativePostflight(postflight: Json): NativePostflightSum
       : -1;
     return exitCode === 0 ? [] : [{name, exit_code: exitCode}];
   });
+  const componentOpenChecks = collectNativeComponentOpenChecks(projection);
   return {
     hard_failures: open_native_checks
       .filter(check => check.name === 'validation' || check.name === 'status')
-      .map(check => check.name),
-    open_native_checks,
+      .map(check => check.name)
+      .concat(componentOpenChecks
+        .filter(check => check.name === 'validation' || check.name === 'validate' || check.name === 'status')
+        .map(check => `${check.component_id}:${check.name}`)),
+    open_native_checks: open_native_checks.concat(componentOpenChecks),
   };
 }
 
@@ -1993,7 +2038,7 @@ async function runRecovery(
     postflight[name] = {exit_code: run.status, stdout_file: 'commands/postflight/' + commandName(args) + '.stdout', stderr_file: 'commands/postflight/' + commandName(args) + '.stderr'};
   }
   writeJson(path.join(roots.output, 'postflight.json'), postflight);
-  const postflightSummary = summarizeNativePostflight(postflight);
+  const postflightSummary = summarizeNativePostflight(postflight, finalProjection);
   const summary = {
     status: postflightSummary.hard_failures.length > 0
       ? 'recovery-retry-failed-postflight'
@@ -2192,7 +2237,7 @@ async function main(): Promise<void> {
     try { postflightValues[name] = JSON.parse(run.stdout); } catch { postflightValues[name] = undefined; }
   }
   writeJson(path.join(roots.output, 'postflight.json'), postflight);
-  const postflightSummary = summarizeNativePostflight(postflight);
+  const postflightSummary = summarizeNativePostflight(postflight, engine.getInstanceProjection());
   const checkpointSummary = summarizeCheckpoint(checkpoint);
   checkpointSummary.mode = 'export-only-no-resume-wired';
   let expectedComponents = 0;

@@ -10,6 +10,7 @@ import {
   assertCurrentProofRequirementHash,
   assertRecoveryRoots,
   commitInitializedProofBaseline,
+  collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
   inventoryAuthorDraft,
   loadRetainedOnboardingConfig,
@@ -165,6 +166,55 @@ describe('native onboarding runner boundaries', () => {
       checklist: {exit_code: 0},
       status: {exit_code: 7},
     }).hard_failures).toEqual(['status']);
+  });
+
+  it('merges active component gaps without hiding hard native failures or escalating audit/checklist gaps', () => {
+    const projection = {
+      claimsById: {
+        active: {
+          active: true,
+          claim: 'native.component.summary@1',
+          scope: [{kind: 'keyed', key: 'component-a'}],
+          payload: {
+            component_id: 'component-a',
+            open_native_checks: [
+              {name: 'checklist', exit_code: 4},
+              {name: 'audit', exit_code: 3},
+              {name: 'status', exit_code: 6},
+              {name: 'validate', exit_code: 5},
+            ],
+          },
+        },
+        inactive: {
+          active: false,
+          claim: 'native.component.summary@1',
+          scope: [{kind: 'keyed', key: 'component-old'}],
+          payload: {component_id: 'component-old', open_native_checks: [{name: 'audit', exit_code: 9}]},
+        },
+      },
+    };
+
+    expect(collectNativeComponentOpenChecks(projection)).toEqual([
+      {component_id: 'component-a', name: 'audit', exit_code: 3},
+      {component_id: 'component-a', name: 'checklist', exit_code: 4},
+      {component_id: 'component-a', name: 'status', exit_code: 6},
+      {component_id: 'component-a', name: 'validate', exit_code: 5},
+    ]);
+    const summary = summarizeNativePostflight({
+      requirements: {exit_code: 0},
+      validation: {exit_code: 2},
+      audit: {exit_code: 0},
+      checklist: {exit_code: 0},
+      status: {exit_code: 0},
+    }, projection);
+    expect(summary.open_native_checks).toEqual([
+      {name: 'validation', exit_code: 2},
+      {component_id: 'component-a', name: 'audit', exit_code: 3},
+      {component_id: 'component-a', name: 'checklist', exit_code: 4},
+      {component_id: 'component-a', name: 'status', exit_code: 6},
+      {component_id: 'component-a', name: 'validate', exit_code: 5},
+    ]);
+    expect(summary.hard_failures).toEqual(['validation', 'component-a:status', 'component-a:validate']);
   });
 
   it('captures same-step prompts in distinct public files and disables inherited private history', () => {
