@@ -123,14 +123,16 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [success, path, commit, worktree_id, is_worktree]
+      required: [success, path, ref, commit, worktree_id, repository, is_worktree]
       properties:
         success: {const: true}
         path: {type: string, minLength: 1}
+        ref: {type: string, minLength: 1}
         commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
         worktree_id: {type: string, minLength: 1}
         repository: {type: string, minLength: 1}
         is_worktree: {const: true}
+        workspace_path: {type: string, minLength: 1}
   native.promotion@1:
     schema:
       type: object
@@ -417,6 +419,7 @@ subgraphs:
         depends_on: [checkout-target]
         timeout: 900000
         criticality: internal
+        resource_group: native-checkout-cache
         repository: "{{ env.VISOR_WORKSPACE_MAIN_PROJECT }}"
         ref: "{{ outputs.target.baseline_commit }}"
         working_directory: "{{ outputs.target.worktree_root }}"

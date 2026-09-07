@@ -3,8 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
+import Ajv from 'ajv';
 import {loadConfig} from '../../src/sdk';
 import {createExtendedLiquid} from '../../src/liquid-extensions';
+import {GitCheckoutProvider} from '../../src/providers/git-checkout-provider';
+import {worktreeManager} from '../../src/utils/worktree-manager';
 
 type Json = Record<string, any>;
 
@@ -27,7 +30,9 @@ describe('native onboarding isolated writer wiring', () => {
     expect(checks['checkout-worktree'].type).toBe('git-checkout');
     expect(checks['checkout-worktree'].use_worktree).toBe(true);
     expect(checks['checkout-worktree'].persist_worktree).toBe(true);
+    expect(checks['checkout-worktree'].resource_group).toBe('native-checkout-cache');
     expect(checks['author-native-component'].depends_on).toEqual(['role-onboard-component', 'checkout-worktree']);
+    expect(checks['author-native-component'].resource_group).toBeUndefined();
     expect(checks['promote-native-component'].resource_group).toBe('proof-workspace-mutation');
     expect(checks['enumerate-native-requirements'].depends_on).toEqual(['promote-native-component']);
   });
@@ -58,7 +63,7 @@ describe('native onboarding isolated writer wiring', () => {
     const rendered = await liquid.parseAndRender(author.prompt, {
       outputs: {
         work_item: {component_id: 'component-a', sorted_owned_paths: ['a.go'], baseline_commit: 'a'.repeat(40)},
-        checkout: {success: true, path: '/owned/worktrees/a', commit: 'a'.repeat(40), worktree_id: 'wt-a', is_worktree: true},
+        checkout: {success: true, path: '/owned/worktrees/a', ref: 'a'.repeat(40), commit: 'a'.repeat(40), worktree_id: 'wt-a', repository: '/owned/repository', is_worktree: true},
         role: 'built-in role text',
       },
     });
@@ -119,6 +124,61 @@ describe('native onboarding isolated writer wiring', () => {
     expect(enumeration.exec).toContain("promotion.status !== 'promoted'");
     expect(enumeration.exec).toContain('deps.work_item');
     expect(enumeration.exec).toContain('deps.promotion');
+  });
+
+  it('records the real GitCheckoutProvider success envelope against the closed checkout claim', async () => {
+    const config = readConfig();
+    const checkout = config.subgraphs['onboard-component'].checks['checkout-worktree'];
+    const worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-native-checkout-envelope-'));
+    const previousRepository = process.env.VISOR_WORKSPACE_MAIN_PROJECT;
+    process.env.VISOR_WORKSPACE_MAIN_PROJECT = process.cwd();
+    const provider = new GitCheckoutProvider();
+    const spy = jest.spyOn(worktreeManager, 'createWorktree').mockResolvedValue({
+      id: 'fixture-worktree',
+      path: worktreeRoot,
+      ref: 'a'.repeat(40),
+      commit: 'a'.repeat(40),
+      metadata: {} as any,
+      locked: false,
+    } as any);
+    try {
+      const result = await provider.execute(
+        {number: 1, title: 'checkout envelope', author: 'test', base: 'main', head: 'fixture', files: [], totalAdditions: 0, totalDeletions: 0} as any,
+        {
+          ...checkout,
+          checkName: 'checkout-worktree',
+        } as any,
+        new Map([['target', {issues: [], output: {
+          component_id: 'component-a',
+          baseline_commit: 'a'.repeat(40),
+          worktree_root: worktreeRoot,
+        }} as any]]),
+        {} as any,
+      );
+      const output = (result as any).output;
+      const validate = new Ajv({allErrors: true, strict: false}).compile(config.claim_types['component.checkout@1'].schema);
+      expect(validate(output)).toBe(true);
+      expect(output).toEqual({
+        success: true,
+        path: worktreeRoot,
+        ref: 'a'.repeat(40),
+        commit: 'a'.repeat(40),
+        worktree_id: 'fixture-worktree',
+        repository: process.cwd(),
+        is_worktree: true,
+      });
+      expect(spy).toHaveBeenCalledWith(
+        process.cwd(),
+        process.cwd(),
+        'a'.repeat(40),
+        expect.objectContaining({workingDirectory: worktreeRoot, clean: false, persistWorktree: true}),
+      );
+    } finally {
+      spy.mockRestore();
+      if (previousRepository === undefined) delete process.env.VISOR_WORKSPACE_MAIN_PROJECT;
+      else process.env.VISOR_WORKSPACE_MAIN_PROJECT = previousRepository;
+      fs.rmSync(worktreeRoot, {recursive: true, force: true});
+    }
   });
 
   it('records initialized Proof baseline before exposing worktree runtime paths', () => {
