@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import * as ProbeModule from '@probelabs/probe';
-import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE, GovernedProbeAgentRunner, renderGovernedProbePublicRequest, sanitizeGovernedAnswerFailure, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
+import { createGovernedProbeRunner, governedCandidateShape, GOVERNED_PROOF_ROLE_MESSAGE, GovernedProbeAgentRunner, renderGovernedProbePublicRequest, sanitizeGovernedAnswerFailure, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
 import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GovernedProbeRunnerRequest } from '../../../src/providers/governed-proof-inspect-check-provider';
 
@@ -46,6 +47,36 @@ function governedFailure(fields: Record<string, unknown>): Error {
   Object.defineProperty(failure, 'cause', { value: 'secret cause', enumerable: true, configurable: true });
   for (const [key, value] of Object.entries(fields)) Object.defineProperty(failure, key, { value, enumerable: true, configurable: true });
   return failure;
+}
+
+function candidatePayload(text: string, overrides: Record<string, unknown> = {}): object {
+  const bytes = Buffer.byteLength(text, 'utf8');
+  return Object.freeze({
+    version: 'probe.governed-answer-candidate/v1',
+    text,
+    boundary: Object.freeze({
+      selectedOrigin: 'result_content',
+      selectedChunkCount: bytes === 0 ? 0 : 1,
+      selectedBytes: bytes,
+      resultTextItemCount: bytes === 0 ? 0 : 1,
+      resultTextBytes: bytes,
+      rawFinalMessageCount: 0,
+      rawFinalPartCount: 0,
+      rawFinalBytes: 0,
+      ...overrides,
+    }),
+  });
+}
+
+function emitCandidateAndFail(answerMock: { mockImplementationOnce: (implementation: () => Promise<never>) => unknown }, payload: unknown, failure: Error, capture: (payload: unknown) => void): void {
+  answerMock.mockImplementationOnce(async () => {
+    capture(payload);
+    throw failure;
+  });
+}
+
+function rawSha256(value: string): string {
+  return `sha256:${createHash('sha256').update(value, 'utf8').digest('hex')}`;
 }
 
 describe('private governed Probe runner', () => {
@@ -155,6 +186,112 @@ describe('private governed Probe runner', () => {
       expect(writes).toHaveLength(1);
       expect(JSON.parse(writes[0])).toEqual(expect.objectContaining({ phase, failure: { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query' } }));
       expect(writes[0]).not.toContain('secret');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('emits the closed public candidate record only for a schema validation failure', async () => {
+    const text = '{"ok":false}';
+    const failure = governedFailure({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword: 'type' });
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      emitCandidateAndFail(answerGoverned, candidatePayload(text), failure, payload => (runner as any).captureCandidate(payload));
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(writes).toHaveLength(2);
+      expect(JSON.parse(writes[0])).toEqual({
+        schema: 'governed-probe-public-candidate/v1',
+        provider: 'governed-proof-inspect',
+        phase: 'answer',
+        check_id: 'inspect',
+        scope: [],
+        selectedOrigin: 'result_content',
+        candidateChunkCount: 1,
+        candidateBytes: Buffer.byteLength(text, 'utf8'),
+        candidateSha256: rawSha256(text),
+        candidateShape: 'valid_json',
+        captureTruncated: false,
+        candidateText: text,
+        resultTextItemCount: 1,
+        resultTextBytes: Buffer.byteLength(text, 'utf8'),
+        rawFinalMessageCount: 0,
+        rawFinalPartCount: 0,
+        rawFinalBytes: 0,
+      });
+      expect(JSON.parse(writes[1])).toEqual(expect.objectContaining({ schema: 'governed-probe-failure/v1', phase: 'answer' }));
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('emits an exact empty candidate record and keeps parser shape labels bounded', async () => {
+    const failure = governedFailure({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'response_json' });
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      emitCandidateAndFail(answerGoverned, candidatePayload('', { selectedOrigin: 'none' }), failure, payload => (runner as any).captureCandidate(payload));
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(writes).toHaveLength(2);
+      expect(JSON.parse(writes[0])).toEqual(expect.objectContaining({
+        schema: 'governed-probe-public-candidate/v1',
+        selectedOrigin: 'none',
+        candidateChunkCount: 0,
+        candidateBytes: 0,
+        candidateSha256: rawSha256(''),
+        candidateShape: 'empty',
+        captureTruncated: false,
+        candidateText: '',
+      }));
+      expect(governedCandidateShape('not JSON')).toBe('non_json');
+      expect(governedCandidateShape('{"ok":')).toBe('malformed_json');
+      expect(governedCandidateShape('{"ok":true}')).toBe('valid_json');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('hashes oversized candidate text but redacts its public text capture', async () => {
+    const text = `{"value":"${'x'.repeat(131100)}"}`;
+    const failure = governedFailure({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'response_json' });
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      emitCandidateAndFail(answerGoverned, candidatePayload(text), failure, payload => (runner as any).captureCandidate(payload));
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(writes).toHaveLength(2);
+      const record = JSON.parse(writes[0]) as Record<string, unknown>;
+      expect(record.candidateBytes).toBe(Buffer.byteLength(text, 'utf8'));
+      expect(record.candidateSha256).toBe(rawSha256(text));
+      expect(record.candidateShape).toBe('valid_json');
+      expect(record.captureTruncated).toBe(true);
+      expect(record.candidateText).toBeNull();
+      expect(writes[0]).not.toContain(text);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('rejects hostile candidate payloads without masking the original failure', async () => {
+    let versionRead = false;
+    const hostile = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(hostile, 'version', { enumerable: true, get() { versionRead = true; throw new Error('getter must not run'); } });
+    Object.defineProperty(hostile, 'text', { enumerable: true, value: '{}' });
+    Object.defineProperty(hostile, 'boundary', { enumerable: true, value: Object.freeze({}) });
+    Object.freeze(hostile);
+    const failure = governedFailure({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'response_json' });
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      emitCandidateAndFail(answerGoverned, hostile, failure, payload => (runner as any).captureCandidate(payload));
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(versionRead).toBe(false);
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(writes[0])).toEqual(expect.objectContaining({ schema: 'governed-probe-failure/v1', phase: 'answer' }));
     } finally {
       stderr.mockRestore();
     }

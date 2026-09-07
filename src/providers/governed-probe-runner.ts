@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { realpathSync, statSync } from 'node:fs';
 import {
@@ -50,10 +51,58 @@ const NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES = [
 ] as const;
 const SCHEMA_RESULT_VALIDATION_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity'] as const;
 const SCHEMA_RESULT_VALIDATION_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'] as const;
+const GOVERNED_CANDIDATE_VERSIONS = ['probe.governed-answer-candidate/v1'] as const;
+const GOVERNED_CANDIDATE_ORIGINS = ['result_content', 'raw_final', 'none'] as const;
+const GOVERNED_CANDIDATE_SHAPES = ['empty', 'non_json', 'malformed_json', 'valid_json'] as const;
+const GOVERNED_CANDIDATE_CAPTURE_LIMIT = 131072;
+const GOVERNED_CANDIDATE_BOUNDARY_KEYS = [
+  'selectedOrigin', 'selectedChunkCount', 'selectedBytes', 'resultTextItemCount', 'resultTextBytes',
+  'rawFinalMessageCount', 'rawFinalPartCount', 'rawFinalBytes',
+] as const;
+const GOVERNED_CANDIDATE_KEYS = ['version', 'text', 'boundary'] as const;
 
 type GovernedProbeFailureStage = typeof ANSWER_FAILURE_STAGES[number];
 type GovernedProbeFailureProjection = Readonly<Record<string, GovernedProbeFailureStage | string | null>>;
 export type GovernedProbeFailurePhase = 'acquire' | 'preview' | 'initialize' | 'answer';
+export type GovernedCandidateOrigin = typeof GOVERNED_CANDIDATE_ORIGINS[number];
+export type GovernedCandidateShape = typeof GOVERNED_CANDIDATE_SHAPES[number];
+
+type GovernedCandidateBoundary = Readonly<{
+  selectedOrigin: GovernedCandidateOrigin;
+  selectedChunkCount: number;
+  selectedBytes: number;
+  resultTextItemCount: number;
+  resultTextBytes: number;
+  rawFinalMessageCount: number;
+  rawFinalPartCount: number;
+  rawFinalBytes: number;
+}>;
+
+type GovernedCandidateObservation = Readonly<{
+  version: typeof GOVERNED_CANDIDATE_VERSIONS[number];
+  text: string;
+  boundary: GovernedCandidateBoundary;
+}>;
+
+export type GovernedProbePublicCandidateRecord = Readonly<{
+  schema: 'governed-probe-public-candidate/v1';
+  provider: 'governed-proof-inspect';
+  phase: 'answer';
+  check_id: string;
+  scope: readonly unknown[];
+  selectedOrigin: GovernedCandidateOrigin;
+  candidateChunkCount: number;
+  candidateBytes: number;
+  candidateSha256: `sha256:${string}`;
+  candidateShape: GovernedCandidateShape;
+  captureTruncated: boolean;
+  candidateText: string | null;
+  resultTextItemCount: number;
+  resultTextBytes: number;
+  rawFinalMessageCount: number;
+  rawFinalPartCount: number;
+  rawFinalBytes: number;
+}>;
 
 function ownDataValue(value: unknown, key: string, enumerable = true): unknown {
   if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
@@ -63,6 +112,97 @@ function ownDataValue(value: unknown, key: string, enumerable = true): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Read a closed object without invoking getters, proxy-backed accessors, or
+ * inherited values. Probe freezes the event before emitting it; the runner
+ * still copies only primitive data so the observation cannot be mutated by a
+ * hostile hook caller after the callback returns.
+ */
+function closedDataObject(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  try {
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.length !== keys.length || ownKeys.some(key => typeof key !== 'string' || !keys.includes(key))) return null;
+    const output: Record<string, unknown> = {};
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return null;
+      output[key] = descriptor.value;
+    }
+    return output;
+  } catch {
+    return null;
+  }
+}
+
+function nonnegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function candidateBoundary(value: unknown, text: string, version: typeof GOVERNED_CANDIDATE_VERSIONS[number]): GovernedCandidateObservation | null {
+  const boundary = closedDataObject(value, GOVERNED_CANDIDATE_BOUNDARY_KEYS);
+  if (!boundary || typeof text !== 'string') return null;
+  const selectedOrigin = enumValue(boundary.selectedOrigin, GOVERNED_CANDIDATE_ORIGINS);
+  const countKeys = GOVERNED_CANDIDATE_BOUNDARY_KEYS.slice(1);
+  if (!selectedOrigin || countKeys.some(key => !nonnegativeSafeInteger(boundary[key]))) return null;
+  const selectedChunkCount = boundary.selectedChunkCount as number;
+  const selectedBytes = boundary.selectedBytes as number;
+  const resultTextItemCount = boundary.resultTextItemCount as number;
+  const resultTextBytes = boundary.resultTextBytes as number;
+  const rawFinalMessageCount = boundary.rawFinalMessageCount as number;
+  const rawFinalPartCount = boundary.rawFinalPartCount as number;
+  const rawFinalBytes = boundary.rawFinalBytes as number;
+  const textBytes = Buffer.byteLength(text, 'utf8');
+
+  // The selected byte count is the UTF-8 length of exactly the text supplied
+  // to the JSON validator. Empty candidates cannot have selected chunks.
+  if (selectedBytes !== textBytes || (textBytes === 0 ? selectedChunkCount !== 0 : selectedChunkCount === 0)) return null;
+  if (selectedOrigin === 'none' && (selectedChunkCount !== 0 || selectedBytes !== 0 || text.length !== 0)) return null;
+
+  return Object.freeze({
+    version,
+    text,
+    boundary: Object.freeze({
+      selectedOrigin,
+      selectedChunkCount,
+      selectedBytes,
+      resultTextItemCount,
+      resultTextBytes,
+      rawFinalMessageCount,
+      rawFinalPartCount,
+      rawFinalBytes,
+    }),
+  });
+}
+
+/**
+ * Classify candidate text without reimplementing JSON parsing. Incomplete
+ * syntax is deliberately folded into malformed_json: a generic parser error
+ * cannot establish that a Proof/provider output was truncated.
+ */
+export function governedCandidateShape(text: string): GovernedCandidateShape {
+  if (text.length === 0) return enumValue('empty', GOVERNED_CANDIDATE_SHAPES)!;
+  try {
+    JSON.parse(text);
+    return enumValue('valid_json', GOVERNED_CANDIDATE_SHAPES)!;
+  } catch {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return enumValue('non_json', GOVERNED_CANDIDATE_SHAPES)!;
+    const firstNonWhitespace = trimmed[0];
+    if (firstNonWhitespace !== '{' && firstNonWhitespace !== '[') return enumValue('non_json', GOVERNED_CANDIDATE_SHAPES)!;
+    // Incomplete syntax is deliberately folded into malformed_json. The
+    // runner must not infer that a Proof/provider output was truncated from a
+    // generic JSON parser error; only the Probe boundary can make that claim.
+    return enumValue('malformed_json', GOVERNED_CANDIDATE_SHAPES)!;
+  }
+}
+
+function observeGovernedCandidate(payload: unknown): GovernedCandidateObservation | null {
+  const envelope = closedDataObject(payload, GOVERNED_CANDIDATE_KEYS);
+  if (!envelope || typeof envelope.version !== 'string' || !GOVERNED_CANDIDATE_VERSIONS.includes(envelope.version as typeof GOVERNED_CANDIDATE_VERSIONS[number]) || typeof envelope.text !== 'string') return null;
+  return candidateBoundary(envelope.boundary, envelope.text, envelope.version as typeof GOVERNED_CANDIDATE_VERSIONS[number]);
 }
 
 function enumValue<T extends readonly string[]>(value: unknown, values: T): T[number] | null {
@@ -148,6 +288,47 @@ export function emitGovernedProbeFailure(binding: GovernedProbeRunnerRequest['bi
   }
 }
 
+function publicCandidateScope(binding: GovernedProbeRunnerRequest['binding']): readonly unknown[] {
+  try {
+    return Object.freeze(binding.scope.map(segment => Object.freeze({ ...segment })));
+  } catch {
+    return Object.freeze([]);
+  }
+}
+
+/** Emit the only public projection of a failed governed JSON candidate. */
+function emitGovernedProbePublicCandidate(
+  binding: GovernedProbeRunnerRequest['binding'],
+  observation: GovernedCandidateObservation,
+): void {
+  const candidateBytes = Buffer.byteLength(observation.text, 'utf8');
+  const candidateText = candidateBytes <= GOVERNED_CANDIDATE_CAPTURE_LIMIT ? observation.text : null;
+  const record: GovernedProbePublicCandidateRecord = Object.freeze({
+    schema: 'governed-probe-public-candidate/v1',
+    provider: 'governed-proof-inspect',
+    phase: 'answer',
+    check_id: binding.checkId,
+    scope: publicCandidateScope(binding),
+    selectedOrigin: observation.boundary.selectedOrigin,
+    candidateChunkCount: observation.boundary.selectedChunkCount,
+    candidateBytes,
+    candidateSha256: `sha256:${createHash('sha256').update(observation.text, 'utf8').digest('hex')}`,
+    candidateShape: governedCandidateShape(observation.text),
+    captureTruncated: candidateText === null,
+    candidateText,
+    resultTextItemCount: observation.boundary.resultTextItemCount,
+    resultTextBytes: observation.boundary.resultTextBytes,
+    rawFinalMessageCount: observation.boundary.rawFinalMessageCount,
+    rawFinalPartCount: observation.boundary.rawFinalPartCount,
+    rawFinalBytes: observation.boundary.rawFinalBytes,
+  });
+  try {
+    process.stderr.write(`${canonicalJson(record)}\n`);
+  } catch {
+    // Candidate diagnostics are observational and cannot change the Probe outcome.
+  }
+}
+
 const PROBE_TOOLS: ['search', 'extract', 'listFiles'] = [
   'search',
   'extract',
@@ -212,6 +393,8 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
   private cancelled = false;
   private closed = false;
   private closePromise: Promise<void> | undefined;
+  private candidateObservation: GovernedCandidateObservation | undefined;
+  private candidateFailureEmitted = false;
 
   constructor(request: GovernedProbeRunnerRequest) {
     const root = controllerRoot(request.workingDirectory);
@@ -236,8 +419,20 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
       allowSkills: false,
       allowedTools: PROBE_TOOLS,
       governedCodexProfile,
+      hooks: {
+        // This is the sole hook installed by the governed runner. Probe emits
+        // the frozen candidate immediately before JSON validation; this sync
+        // callback copies only its closed primitive observation.
+        'message:assistant': (payload: unknown): void => this.captureCandidate(payload),
+      },
     };
     this.agent = new ProbeAgent(options);
+  }
+
+  private captureCandidate(payload: unknown): void {
+    if (this.candidateObservation) return;
+    const observation = observeGovernedCandidate(payload);
+    if (observation) this.candidateObservation = observation;
   }
 
   async preview(_request: GovernedProbeRunnerRequest): Promise<GovernedProbeDispatchPreview> {
@@ -268,6 +463,8 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
       invocationDigest: this.invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
     };
+    this.candidateObservation = undefined;
+    this.candidateFailureEmitted = false;
     let identified: GovernedIdentifiedAnswerResult;
     try {
       identified = await this.agent.answerGoverned(this.userMessage, options);
@@ -283,6 +480,7 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
     if (wireMode === 'proof') {
       const data = immutableGovernedValue(identified.data, wireMode);
       const canonical = Buffer.from(governedCanonicalJson(data, wireMode), 'utf8');
+      this.candidateObservation = undefined;
       return Object.freeze({
         ...identified,
         data,
@@ -293,10 +491,19 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
         }),
       });
     }
+    this.candidateObservation = undefined;
     return identified;
   }
 
   private reportFailure(phase: Exclude<GovernedProbeFailurePhase, 'acquire'>, error: unknown): void {
+    const failure = sanitizeGovernedAnswerFailure(error);
+    const isSchemaResultFailure = phase === 'answer' && failure.answerFailureStage === 'schema_result_validation';
+    if (isSchemaResultFailure && this.candidateObservation && !this.candidateFailureEmitted) {
+      this.candidateFailureEmitted = true;
+      emitGovernedProbePublicCandidate(this.binding, this.candidateObservation);
+      this.candidateObservation = undefined;
+    }
+    if (isSchemaResultFailure) this.candidateObservation = undefined;
     if (this.failureEmitted) return;
     this.failureEmitted = true;
     emitGovernedProbeFailure(this.binding, phase, error);
