@@ -147,6 +147,39 @@ describe('AICheckProvider', () => {
       );
     });
 
+    it('passes journal generation identity only for generated diagnostic artifacts', async () => {
+      const mockReview = {
+        overallScore: 85,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+        issues: [],
+      };
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(() => mockService);
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'inspect generated output',
+        checkName: 'same-check',
+      };
+
+      await provider.execute(mockPRInfo, config, undefined, {
+        nodeGenerationId: 'generation-a',
+      } as any);
+
+      expect(mockService.executeReview).toHaveBeenCalledWith(
+        mockPRInfo,
+        'inspect generated output',
+        undefined,
+        'same-check',
+        undefined,
+        'generation-a'
+      );
+    });
+
     it('should map security prompt to security focus', async () => {
       const mockReview = {
         overallScore: 75,

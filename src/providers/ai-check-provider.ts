@@ -1011,7 +1011,12 @@ export class AICheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     _dependencyResults?: Map<string, ReviewSummary>,
-    sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    sessionInfo?: {
+      parentSessionId?: string;
+      reuseSession?: boolean;
+      /** Journal-owned identity used only to disambiguate generated diagnostics. */
+      nodeGenerationId?: string;
+    }
   ): Promise<ReviewSummary> {
     // Apply environment configuration if present
     if (config.env) {
@@ -2462,6 +2467,14 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
     const service = new AIReviewService(aiConfig);
 
+    // Generated graph executions already carry an immutable journal identity.
+    // Pass it to the service only for diagnostic filenames; ordinary calls keep
+    // the existing argument shape and artifact names unchanged.
+    const diagnosticNodeGenerationId =
+      typeof sessionInfo?.nodeGenerationId === 'string' && sessionInfo.nodeGenerationId.length > 0
+        ? sessionInfo.nodeGenerationId
+        : undefined;
+
     // Use the processed schema (with Liquid templates rendered)
     const schema = processedSchema;
 
@@ -2501,13 +2514,23 @@ export class AICheckProvider extends CheckProvider {
               }
               // Fall back to new session
               promptUsed = processedPrompt;
-              const fresh = await service.executeReview(
-                prInfo,
-                processedPrompt,
-                schema,
-                config.checkName,
-                config.sessionId
-              );
+              const fresh =
+                diagnosticNodeGenerationId === undefined
+                  ? await service.executeReview(
+                      prInfo,
+                      processedPrompt,
+                      schema,
+                      config.checkName,
+                      config.sessionId
+                    )
+                  : await service.executeReview(
+                      prInfo,
+                      processedPrompt,
+                      schema,
+                      config.checkName,
+                      config.sessionId,
+                      diagnosticNodeGenerationId
+                    );
               return {
                 ...fresh,
                 issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
@@ -2539,13 +2562,23 @@ export class AICheckProvider extends CheckProvider {
             console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
           }
           promptUsed = finalPrompt;
-          result = await service.executeReview(
-            prInfo,
-            finalPrompt,
-            schema,
-            config.checkName,
-            config.sessionId
-          );
+          result =
+            diagnosticNodeGenerationId === undefined
+              ? await service.executeReview(
+                  prInfo,
+                  finalPrompt,
+                  schema,
+                  config.checkName,
+                  config.sessionId
+                )
+              : await service.executeReview(
+                  prInfo,
+                  finalPrompt,
+                  schema,
+                  config.checkName,
+                  config.sessionId,
+                  diagnosticNodeGenerationId
+                );
         }
 
         // Apply issue suppression filtering

@@ -1083,7 +1083,8 @@ export class AIReviewService {
     customPrompt: string,
     schema?: string | Record<string, unknown>,
     checkName?: string,
-    sessionId?: string
+    sessionId?: string,
+    nodeGenerationId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -1159,7 +1160,15 @@ export class AIReviewService {
       // Create an extender so withTimeout can be dynamically extended when the
       // agent's negotiated timeout observer grants more time (timeout.extended event).
       const extender = new TimeoutExtender();
-      const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId, extender);
+      const call = this.callProbeAgent(
+        prompt,
+        schema,
+        debugInfo,
+        checkName,
+        sessionId,
+        extender,
+        nodeGenerationId
+      );
       const timeoutMs = Math.max(0, this.config.timeout || 0);
       const {
         response,
@@ -2686,7 +2695,8 @@ ${'='.repeat(60)}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     providedSessionId?: string,
-    extender?: TimeoutExtender
+    extender?: TimeoutExtender,
+    nodeGenerationId?: string
   ): Promise<{ response: string; effectiveSchema?: string; sessionId: string }> {
     // Derive a stable session ID for this call so the engine can reuse it later
     const sessionId =
@@ -2729,6 +2739,17 @@ ${'='.repeat(60)}
     };
 
     try {
+      // Generated graph nodes can execute the same check concurrently in a
+      // single millisecond. Keep their debug artifacts distinct without
+      // changing ordinary check filenames or session/registry behavior.
+      const diagnosticIdentity =
+        typeof nodeGenerationId === 'string' && nodeGenerationId.length > 0
+          ? nodeGenerationId
+          : undefined;
+      const diagnosticSuffix = diagnosticIdentity
+        ? `-${diagnosticIdentity.replace(/[^A-Za-z0-9._-]/g, '_')}`
+        : '';
+
       // Set environment variables for ProbeAgent
       // ProbeAgent SDK expects these to be in the environment
       if (this.config.provider === 'claude-code' && this.config.apiKey) {
@@ -3144,6 +3165,7 @@ If you receive a message that the time limit has been reached or your operation 
               isSessionReuse: false,
               isNewSession: true,
             },
+            ...(diagnosticIdentity ? { nodeGenerationId: diagnosticIdentity } : {}),
             promptLength: prompt.length,
             prompt: prompt,
           };
@@ -3185,7 +3207,7 @@ If you receive a message that the time limit has been reached or your operation 
 
           // Save to temp directory
           const tempDir = os.tmpdir();
-          const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
+          const promptFile = path.join(tempDir, `visor-prompt-${timestamp}${diagnosticSuffix}.txt`);
           fs.writeFileSync(promptFile, prompt, 'utf-8');
           log(`\n💾 Prompt saved to: ${promptFile}`);
 
@@ -3196,7 +3218,7 @@ If you receive a message that the time limit has been reached or your operation 
             // do not enforce fs permissions here
             const base = path.join(
               debugArtifactsDir,
-              `prompt-${_checkName || 'unknown'}-${timestamp}`
+              `prompt-${_checkName || 'unknown'}-${timestamp}${diagnosticSuffix}`
             );
             fs.writeFileSync(base + '.json', debugJson, 'utf-8');
             fs.writeFileSync(base + '.summary.txt', readableVersion, 'utf-8');
@@ -3288,7 +3310,7 @@ If you receive a message that the time limit has been reached or your operation 
           // Save complete session history (all messages sent and received)
           const sessionBase = path.join(
             debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}`
+            `session-${_checkName || 'unknown'}-${timestamp}${diagnosticSuffix}`
           );
           const sessionData = {
             timestamp,
@@ -3297,6 +3319,7 @@ If you receive a message that the time limit has been reached or your operation 
             model: this.config.model || 'default',
             schema: effectiveSchema,
             totalMessages: fullHistory.length,
+            ...(diagnosticIdentity ? { nodeGenerationId: diagnosticIdentity } : {}),
           };
           fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
@@ -3351,7 +3374,7 @@ ${'='.repeat(60)}
           // Create a response file
           const responseFile = path.join(
             debugArtifactsDir,
-            `response-${_checkName || 'unknown'}-${timestamp}.txt`
+            `response-${_checkName || 'unknown'}-${timestamp}${diagnosticSuffix}.txt`
           );
 
           let responseContent = `=============================================================\n`;
@@ -3359,6 +3382,9 @@ ${'='.repeat(60)}
           responseContent += `=============================================================\n`;
           responseContent += `Timestamp: ${timestamp}\n`;
           responseContent += `Check Name: ${_checkName || 'unknown'}\n`;
+          if (diagnosticIdentity) {
+            responseContent += `Node Generation ID: ${diagnosticIdentity}\n`;
+          }
           responseContent += `Response Length: ${response.length} characters\n`;
           responseContent += `=============================================================\n\n`;
           responseContent += `${'='.repeat(60)}\n`;
