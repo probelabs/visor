@@ -9,6 +9,8 @@ import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { execFileSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { commandExecutor } from './command-executor';
 import { isChildProcessIOError } from './child-process-error-handler';
 import { logger } from '../logger';
@@ -111,10 +113,40 @@ export class WorktreeManager {
    * (legacy behavior).
    */
   private generateWorktreeId(repository: string, ref: string, sessionId?: string): string {
+    return this.generateWorktreeIdForDirectory(repository, ref, sessionId);
+  }
+
+  /**
+   * Generate an ID while preserving the historical identity when no explicit
+   * working directory was requested.  A rendered directory is part of the
+   * worktree identity because two components can legitimately use the same
+   * repository/ref/session but must never reuse each other's checkout.
+   */
+  private generateWorktreeIdForDirectory(
+    repository: string,
+    ref: string,
+    sessionId?: string,
+    workingDirectory?: string
+  ): string {
+    const hashInput = [repository, ref, sessionId, workingDirectory]
+      .filter(value => value !== undefined)
+      .join(':');
+    const hash = crypto.createHash('md5').update(hashInput).digest('hex').substring(0, 8);
+    if (path.isAbsolute(repository)) {
+      const repoLabel = (path.basename(repository).replace(/[^a-zA-Z0-9-]/g, '-') || 'repo').slice(
+        0,
+        48
+      );
+      const repoPathHash = crypto
+        .createHash('sha256')
+        .update(repository)
+        .digest('hex')
+        .slice(0, 12);
+      const refLabel = ref.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 48);
+      return `${repoLabel}-${repoPathHash}-${refLabel}-${hash}`;
+    }
     const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, '-');
     const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, '-');
-    const hashInput = sessionId ? `${repository}:${ref}:${sessionId}` : `${repository}:${ref}`;
-    const hash = crypto.createHash('md5').update(hashInput).digest('hex').substring(0, 8);
     return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
   }
 
@@ -128,9 +160,7 @@ export class WorktreeManager {
     fetchDepth?: number,
     cloneTimeoutMs?: number
   ): Promise<string> {
-    const reposDir = this.getReposDir();
-    const repoName = repository.replace(/\//g, '-');
-    const bareRepoPath = path.join(reposDir, `${repoName}.git`);
+    const bareRepoPath = this.getBareRepoPath(repository);
 
     // Check if bare repo exists
     if (fs.existsSync(bareRepoPath)) {
@@ -406,10 +436,57 @@ export class WorktreeManager {
       sessionId?: string;
       fetchDepth?: number;
       cloneTimeoutMs?: number;
+      persistWorktree?: boolean;
     } = {}
   ): Promise<WorktreeInfo> {
+    // Local repositories are valid sources for native Proof baselines.  Use
+    // their canonical Git root as both the cache identity and clone source;
+    // never reinterpret an absolute path as a GitHub owner/repository name.
+    const canonicalRepository = this.tryCanonicalizeLocalRepository(repository);
+    if (canonicalRepository) {
+      repository = canonicalRepository;
+    }
+    const canonicalRepoUrl = this.tryCanonicalizeLocalRepository(repoUrl);
+    if (canonicalRepoUrl) {
+      repoUrl = canonicalRepoUrl;
+    }
+
     // Validate ref to prevent command injection
     this.validateRef(ref);
+
+    let worktreePath = options.workingDirectory || '';
+
+    // Validate path if user-provided
+    if (options.workingDirectory) {
+      worktreePath = this.canonicalizeWorktreeDestination(options.workingDirectory);
+    }
+
+    // Generate worktree ID and path — scoped by sessionId for cross-run
+    // isolation, and by an explicitly rendered directory when supplied.
+    const worktreeId = this.generateWorktreeIdForDirectory(
+      repository,
+      ref,
+      options.sessionId,
+      options.workingDirectory ? worktreePath : undefined
+    );
+    if (!options.workingDirectory) {
+      worktreePath = path.join(this.getWorktreesDir(), worktreeId);
+    }
+
+    // An explicit existing directory is caller-owned unless it carries exact
+    // metadata written by this manager for this repository/ref/identity. Do
+    // this check before cloning/fetching and, crucially, before any cleanup.
+    let explicitMetadata: WorktreeMetadata | null = null;
+    if (options.workingDirectory && fs.existsSync(worktreePath)) {
+      explicitMetadata = await this.loadMetadata(worktreePath);
+      this.assertExplicitWorktreeOwnership(
+        explicitMetadata,
+        worktreePath,
+        worktreeId,
+        repository,
+        ref
+      );
+    }
 
     // Get or create bare repository
     const bareRepoPath = await this.getOrCreateBareRepo(
@@ -420,14 +497,11 @@ export class WorktreeManager {
       options.cloneTimeoutMs
     );
 
-    // Generate worktree ID and path — scoped by sessionId for cross-run isolation
-    const worktreeId = this.generateWorktreeId(repository, ref, options.sessionId);
-    let worktreePath = options.workingDirectory || path.join(this.getWorktreesDir(), worktreeId);
-
-    // Validate path if user-provided
-    if (options.workingDirectory) {
-      worktreePath = this.validatePath(options.workingDirectory);
+    if (explicitMetadata) {
+      await this.assertExplicitWorktreeGitOwnership(worktreePath, bareRepoPath);
     }
+
+    const cleanupOnExit = options.persistWorktree !== true;
 
     // Flag: set to true when a stale worktree for a common branch (main/master)
     // fails to refresh — triggers removal + fresh creation instead of serving stale data
@@ -472,6 +546,7 @@ export class WorktreeManager {
                   ...metadata,
                   commit: latestCommit,
                   created_at: new Date().toISOString(),
+                  cleanup_on_exit: cleanupOnExit,
                 };
                 await this.saveMetadata(worktreePath, updatedMetadata);
                 if (options.clean) {
@@ -514,17 +589,24 @@ export class WorktreeManager {
 
           if (!refreshFailedNeedsRecreate) {
             // Same ref - reuse existing worktree (already up to date or refresh failed)
+            const reusedMetadata: WorktreeMetadata = {
+              ...metadata,
+              cleanup_on_exit: cleanupOnExit,
+            };
+            if (reusedMetadata.cleanup_on_exit !== metadata.cleanup_on_exit) {
+              await this.saveMetadata(worktreePath, reusedMetadata);
+            }
             if (options.clean) {
               logger.debug(`Cleaning existing worktree`);
-              await this.cleanWorktree(worktreePath, metadata.commit);
+              await this.cleanWorktree(worktreePath, reusedMetadata.commit);
             }
-            this.activeWorktrees.set(worktreeId, metadata);
+            this.activeWorktrees.set(worktreeId, reusedMetadata);
             return {
               id: worktreeId,
               path: worktreePath,
-              ref: metadata.ref,
-              commit: metadata.commit,
-              metadata,
+              ref: reusedMetadata.ref,
+              commit: reusedMetadata.commit,
+              metadata: reusedMetadata,
               locked: false,
             };
           }
@@ -567,6 +649,7 @@ export class WorktreeManager {
               ref,
               commit: newCommit,
               created_at: new Date().toISOString(),
+              cleanup_on_exit: cleanupOnExit,
             };
 
             await this.saveMetadata(worktreePath, updatedMetadata);
@@ -646,7 +729,7 @@ export class WorktreeManager {
       commit,
       repository,
       pid: process.pid,
-      cleanup_on_exit: true,
+      cleanup_on_exit: cleanupOnExit,
       bare_repo_path: bareRepoPath,
       worktree_path: worktreePath,
     };
@@ -918,6 +1001,111 @@ export class WorktreeManager {
   }
 
   /**
+   * Resolve the deterministic managed bare-repository cache path.
+   * Remote repository identities retain their historical names. Local paths
+   * use a bounded basename plus a hash of the canonical path so long paths
+   * and same-basename repositories cannot collide or exceed NAME_MAX.
+   */
+  private getBareRepoPath(repository: string): string {
+    const repoName = path.isAbsolute(repository)
+      ? `${(path.basename(repository).replace(/[^a-zA-Z0-9._-]/g, '-') || 'repo').slice(0, 72)}-${crypto
+          .createHash('sha256')
+          .update(repository)
+          .digest('hex')
+          .slice(0, 16)}`
+      : repository.replace(/\//g, '-');
+    return path.join(this.getReposDir(), `${repoName}.git`);
+  }
+
+  /**
+   * Reject an explicit existing target unless its manager metadata proves
+   * exact ownership. The caller's directory and bytes remain untouched on
+   * every rejection path.
+   */
+  private assertExplicitWorktreeOwnership(
+    metadata: WorktreeMetadata | null,
+    worktreePath: string,
+    worktreeId: string,
+    repository: string,
+    ref: string
+  ): void {
+    const expectedBareRepoPath = path.resolve(this.getBareRepoPath(repository));
+    const expectedWorktreePath = path.resolve(worktreePath);
+    if (!metadata) {
+      throw new Error(
+        `Refusing to use existing explicit working_directory without manager metadata: ${worktreePath}`
+      );
+    }
+
+    let metadataWorktreePath: string;
+    try {
+      metadataWorktreePath = fs.realpathSync(metadata.worktree_path);
+    } catch {
+      throw new Error(`Refusing explicit working_directory with invalid manager metadata: ${worktreePath}`);
+    }
+    const actualWorktreePath = fs.realpathSync(worktreePath);
+    const metadataBareRepoPath = path.resolve(metadata.bare_repo_path || '');
+    if (
+      metadata.worktree_id !== worktreeId ||
+      metadata.repository !== repository ||
+      metadata.ref !== ref ||
+      metadataWorktreePath !== actualWorktreePath ||
+      metadataWorktreePath !== expectedWorktreePath ||
+      metadataBareRepoPath !== expectedBareRepoPath
+    ) {
+      throw new Error(
+        `Refusing existing explicit working_directory with mismatched manager metadata: ${worktreePath}`
+      );
+    }
+  }
+
+  /**
+   * Metadata fields are not sufficient proof of ownership: a caller could
+   * place a forged metadata file beside an unrelated checkout. Verify Git's
+   * common directory before any refresh, reset, or cleanup operation.
+   */
+  private async assertExplicitWorktreeGitOwnership(
+    worktreePath: string,
+    bareRepoPath: string
+  ): Promise<void> {
+    const result = await this.executeGitCommand(
+      `git -C ${this.escapeShellArg(worktreePath)} rev-parse --git-common-dir`,
+      { timeout: 10000 }
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(`Refusing explicit working_directory that is not a Git worktree: ${worktreePath}`);
+    }
+    const commonDir = result.stdout.trim();
+    if (!commonDir) {
+      throw new Error(`Refusing explicit working_directory with no Git common directory: ${worktreePath}`);
+    }
+    const resolvedCommonDir = fs.realpathSync(
+      path.isAbsolute(commonDir) ? commonDir : path.resolve(worktreePath, commonDir)
+    );
+    const expectedBareRepo = fs.realpathSync(bareRepoPath);
+    if (resolvedCommonDir !== expectedBareRepo) {
+      throw new Error(
+        `Refusing explicit working_directory bound to an unexpected Git repository: ${worktreePath}`
+      );
+    }
+  }
+
+  /**
+   * Resolve an explicit destination without following an untrusted target
+   * into a different tree. Existing targets use their real path; new targets
+   * canonicalize only the already-existing parent and retain the final name.
+   */
+  private canonicalizeWorktreeDestination(userPath: string): string {
+    const resolved = this.validatePath(userPath);
+    if (fs.existsSync(resolved)) {
+      return fs.realpathSync(resolved);
+    }
+    const parent = path.dirname(resolved);
+    const canonicalParent = fs.realpathSync(parent);
+    return path.join(canonicalParent, path.basename(resolved));
+  }
+
+  /**
    * Save worktree metadata
    */
   private async saveMetadata(worktreePath: string, metadata: WorktreeMetadata): Promise<void> {
@@ -1003,6 +1191,12 @@ export class WorktreeManager {
 
       // Skip if process is still alive
       if (worktree.locked) {
+        continue;
+      }
+
+      // Explicitly persisted worktrees are owned by the caller and must not
+      // be removed by age-based automatic cleanup.
+      if (!worktree.metadata.cleanup_on_exit) {
         continue;
       }
 
@@ -1241,6 +1435,11 @@ export class WorktreeManager {
    * Get repository URL from repository identifier
    */
   getRepositoryUrl(repository: string, _token?: string): string {
+    const localRepository = this.tryCanonicalizeLocalRepository(repository);
+    if (localRepository) {
+      return localRepository;
+    }
+
     // If it looks like a URL, return as-is
     if (
       repository.startsWith('http://') ||
@@ -1252,6 +1451,53 @@ export class WorktreeManager {
 
     // Assume it's a GitHub repository (owner/repo format)
     return `https://github.com/${repository}.git`;
+  }
+
+  /**
+   * Resolve an absolute path or file:// URL to a real Git repository root.
+   * Returns undefined for ordinary owner/repository and network URLs so the
+   * existing remote checkout behavior remains unchanged.
+   */
+  private tryCanonicalizeLocalRepository(repository: string): string | undefined {
+    const isFileUrl = repository.startsWith('file://');
+    if (!isFileUrl && !path.isAbsolute(repository)) {
+      return undefined;
+    }
+
+    let candidatePath = repository;
+    try {
+      if (isFileUrl) {
+        const parsed = new URL(repository);
+        if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+          throw new Error('file repository URL must not contain credentials or query parameters');
+        }
+        if (parsed.hostname && parsed.hostname !== 'localhost') {
+          throw new Error('file repository URL must use localhost or an empty host');
+        }
+        candidatePath = fileURLToPath(parsed);
+      }
+
+      const existingPath = fs.realpathSync(candidatePath);
+      if (!fs.statSync(existingPath).isDirectory()) {
+        throw new Error('repository path is not a directory');
+      }
+
+      const gitRoot = execFileSync(
+        'git',
+        ['-C', existingPath, 'rev-parse', '--show-toplevel'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim();
+      const canonicalRoot = fs.realpathSync(gitRoot);
+      execFileSync(
+        'git',
+        ['-C', canonicalRoot, 'rev-parse', '--verify', 'HEAD^{commit}'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      return canonicalRoot;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid local Git repository '${repository}': ${message}`);
+    }
   }
 }
 
