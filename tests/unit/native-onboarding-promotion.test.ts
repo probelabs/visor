@@ -279,7 +279,7 @@ describeNative('native onboarding promotion boundary', () => {
   });
 
   it.each([
-    ['unreported projection', 'specs/other/component_b.vars.yaml', '../../system/variables/component_b.vars.yaml'],
+    ['unreported projection', 'specs/other/component_b.vars.yaml', '../system/variables/component_b.vars.yaml'],
     ['absolute target', 'specs/software/variables/component_b.vars.yaml', '/tmp/component_b.vars.yaml'],
     ['escaping target', 'specs/software/variables/component_b.vars.yaml', '../../../../outside.vars.yaml'],
     ['dangling target', 'specs/software/variables/component_b.vars.yaml', '../../system/variables/missing.vars.yaml'],
@@ -299,7 +299,11 @@ describeNative('native onboarding promotion boundary', () => {
       const result = promoteNativeDelta(promotionInput(fixture));
 
       expect(result.status).toBe('rejected');
-      expect(result.reason).toMatch(/alias|outside|escapes|owned|no such file|rebuilding index/);
+      if (_label === 'unreported projection') {
+        expect(result.reason).toMatch(/not an owned variable projection for component component_b/);
+      } else {
+        expect(result.reason).toMatch(/alias|outside|escapes|owned|no such file|rebuilding index/);
+      }
       expect(canonicalBytes(fixture.canonicalRoot, [
         'b.go',
         fixture.componentBRequirementPath,
