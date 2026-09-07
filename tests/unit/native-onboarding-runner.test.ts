@@ -4,6 +4,8 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
+import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
+import {sha256Canonical} from '../../src/state-machine/graph/claim-kernel';
 import {
   assertPrivateCodexHome,
   assertCanonicalOwnedPathsUnchanged,
@@ -13,12 +15,15 @@ import {
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
   inventoryAuthorDraft,
+  buildRetainedReviewedAggregate,
   loadRetainedOnboardingConfig,
   parseRecoveryArguments,
+  readRetainedReviewExport,
   readRecoveryReviewPackets,
   serializeRoleInvocation,
   stageRecoveryReviewPackets,
   summarizeNativePostflight,
+  validateRetainedReviewExportAgainstCurrentProof,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
 
 function recoveryReviewPacketFixture(root: string): {
@@ -106,6 +111,25 @@ function recoveryReviewPacketFixture(root: string): {
   const packetPath = path.join(componentDir, token(item.id) + '.json');
   fs.writeFileSync(packetPath, JSON.stringify(packet, null, 2) + '\n', 'utf8');
   return {checkpointRoot, component, componentScope, item, packet, projection, catalog, workItem, plan, packetPath};
+}
+
+function shippedClaimPlan(): any {
+  const configPath = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml');
+  const raw = yaml.load(fs.readFileSync(configPath, 'utf8')) as any;
+  const materializeResultSchemas = (value: any): any => {
+    if (Array.isArray(value)) return value.map(materializeResultSchemas);
+    if (!value || typeof value !== 'object') return value;
+    const materialized = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, materializeResultSchemas(child)]));
+    if (materialized.type === 'governed-proof-inspect' && typeof materialized.result_schema === 'string' &&
+        materialized.invocation && typeof materialized.invocation === 'object') {
+      materialized.invocation = {
+        ...materialized.invocation,
+        output_schema: Buffer.from(materialized.result_schema, 'utf8').toString('base64'),
+      };
+    }
+    return materialized;
+  };
+  return compileClaimPlan(materializeResultSchemas(raw));
 }
 
 describe('native onboarding runner boundaries', () => {
@@ -596,7 +620,9 @@ describe('native onboarding runner boundaries', () => {
   it('documents the Proof inventory path contract in both discovery schemas', () => {
     const file = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml');
     const config = yaml.load(fs.readFileSync(file, 'utf8')) as any;
-    const claimProperties = config.claim_types['proof.candidate@1'].schema.properties.components.items.properties;
+    const candidateSchema = config.claim_types['proof.candidate@1'].schema;
+    const catalogSchema = candidateSchema.oneOf.find((branch: any) => branch.properties?.components);
+    const claimProperties = catalogSchema.properties.components.items.properties;
     const resultSchema = JSON.parse(config.subgraphs['discover-project'].checks.inspect.result_schema);
     const resultProperties = resultSchema.properties.components.items.properties;
     for (const properties of [claimProperties, resultProperties]) {
@@ -607,6 +633,33 @@ describe('native onboarding runner boundaries', () => {
     }
     expect(config.subgraphs['discover-project'].checks.inspect.message).toContain('owned_paths');
     expect(config.subgraphs['discover-project'].checks.inspect.message).toContain('transitive in-repository dependency files');
+  });
+
+  it('declares the closed reviewed aggregate and permanent native admission suffix', () => {
+    const file = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml');
+    const config = yaml.load(fs.readFileSync(file, 'utf8')) as any;
+    const checks = config.subgraphs['onboard-component'].checks;
+    expect(Object.keys(checks).slice(-6)).toEqual([
+      'native-validation', 'inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify',
+    ]);
+    expect(checks.inspect.depends_on).toEqual(['native-validation']);
+    expect(checks.inspect.consumes).toEqual([
+      {claim: 'component.work_item@1', as: 'component'},
+      {claim: 'native.component.reviewed@1', as: 'reviewed'},
+    ]);
+    expect(checks.verify.consumes).toEqual([
+      {claim: 'proof.candidate@1', as: 'candidate'},
+      {claim: 'proof.admitted_receipt@1', as: 'receipt'},
+      {claim: 'proof.component_spec_review_candidate@1', as: 'spec_candidate'},
+      {claim: 'proof.component_spec_review_admitted_receipt@1', as: 'spec_receipt'},
+    ]);
+    const reviewed = config.claim_types['native.component.reviewed@1'].schema;
+    expect(reviewed.additionalProperties).toBe(false);
+    expect(reviewed.required).toEqual(['version', 'component_id', 'status', 'item_count', 'source', 'reviews']);
+    const review = reviewed.properties.reviews.items;
+    expect(review.additionalProperties).toBe(false);
+    expect(review.required).toContain('retained_claim');
+    expect(review.properties.retained_claim.type).toEqual(['object', 'null']);
   });
 
   it('matches retained native review packets to claims and stages exact bytes', () => {
@@ -728,5 +781,156 @@ describe('native onboarding runner boundaries', () => {
       scopeFixture.projection,
       scopeFixture.plan,
     )).toThrow(/scope/);
+  });
+
+  it('validates a portable retained export and emits the same closed aggregate shape', async () => {
+    const fixture = recoveryReviewPacketFixture(path.join(root, 'portable-export-source'));
+    const exportRoot = path.join(root, 'portable-export');
+    const relative = path.join('review-packets', Buffer.from(fixture.component).toString('base64url'), `${Buffer.from(fixture.item.id).toString('base64url')}.json`);
+    const packetBytes = fs.readFileSync(fixture.packetPath);
+    fs.mkdirSync(path.dirname(path.join(exportRoot, relative)), {recursive: true});
+    fs.writeFileSync(path.join(exportRoot, relative), packetBytes);
+    const packetSha256 = `sha256:${createHash('sha256').update(packetBytes).digest('hex')}`;
+    const plan = shippedClaimPlan();
+    const manifest = {
+      version: 1,
+      kind: 'retained-native-review-packet-export',
+      status: 'validated-reference-only',
+      source: {
+        checkpoint: '/retained/checkpoint.json',
+        checkpoint_sha256: `sha256:${'1'.repeat(64)}`,
+        checkpoint_bytes: 123,
+        graph_semantic_digest: '2'.repeat(64),
+        config_authority_files_sha256: `sha256:${'4'.repeat(64)}`,
+        config_authority_files: [{name: 'inventory', source: 'preflight/inventory.json', bytes: 1, sha256: `sha256:${'5'.repeat(64)}`}],
+        packet_sources: [{
+          component_id: fixture.component,
+          item_count: 1,
+          source_root: '/retained/checkpoint',
+          source_aggregate_present: false,
+          helper_input: 'validated-packet-files-only',
+        }],
+      },
+      packet_count: 1,
+      packets: [{
+        claim_id: fixture.projection.claimsById['e'.repeat(64)].claimId,
+        payload_fingerprint: sha256Canonical(fixture.packet),
+        component_id: fixture.component,
+        id: fixture.item.id,
+        file_path: fixture.item.file_path,
+        proof_file_hash: fixture.item.proof_file_hash,
+        source_relative_path: relative,
+        packet_bytes: packetBytes.byteLength,
+        packet_sha256: packetSha256,
+      }],
+      interpretation: {
+        old_graph_reference: true,
+        imported_journal_claims: false,
+        approval_or_admission_claimed: false,
+        current_proof_recheck_required: true,
+      },
+    };
+    fs.mkdirSync(path.join(exportRoot, 'recovery'), {recursive: true});
+    fs.writeFileSync(path.join(exportRoot, 'manifest.json'), JSON.stringify(manifest) + '\n');
+    fs.writeFileSync(path.join(exportRoot, 'recovery', 'review-packet-manifest.json'), JSON.stringify({
+      version: 1,
+      kind: 'retained-native-review-packet-manifest',
+      packets: [{
+        component_id: fixture.component,
+        id: fixture.item.id,
+        claim_id: 'e'.repeat(64),
+        source: relative,
+        destination: relative,
+        bytes: packetBytes.byteLength,
+        source_sha256: packetSha256,
+        destination_sha256: packetSha256,
+      }],
+    }) + '\n');
+
+    const retained = readRetainedReviewExport(exportRoot, plan, 1);
+    expect(retained.packetCount).toBe(1);
+    expect(retained.packets[0]).toEqual(expect.objectContaining({
+      componentId: fixture.component,
+      id: fixture.item.id,
+      claimId: 'e'.repeat(64),
+      packetSha256,
+    }));
+    const aggregate = buildRetainedReviewedAggregate(retained, fixture.component);
+    expect(aggregate).toMatchObject({
+      version: 'native.component.reviewed/v1',
+      component_id: fixture.component,
+      status: 'reviewed-native-requirement-items',
+      item_count: 1,
+      source: {
+        kind: 'retained_checkpoint',
+        checkpoint_sha256: `sha256:${'1'.repeat(64)}`,
+        graph_semantic_digest: '2'.repeat(64),
+      },
+    });
+    expect((aggregate.reviews as any[])[0].retained_claim).toEqual({
+      claim_id: 'e'.repeat(64),
+      payload_fingerprint: sha256Canonical(fixture.packet),
+    });
+
+    const subject = path.join(root, 'portable-proof-subject');
+    const proofOutput = path.join(root, 'portable-proof-output');
+    const proof = path.join(root, 'portable-proof');
+    fs.mkdirSync(subject);
+    const currentRow = {
+      id: fixture.item.id,
+      component: fixture.component,
+      file_path: fixture.item.file_path,
+      file_hash: fixture.item.proof_file_hash,
+    };
+    const writeProof = (rows: any[], showMismatch: 'id' | 'component' | undefined = undefined) => {
+      fs.writeFileSync(proof, `#!/usr/bin/env node\nconst rows = ${JSON.stringify(rows)};\n` +
+        `if (process.argv[2] === 'req' && process.argv[3] === 'list') process.stdout.write(JSON.stringify(rows));\n` +
+        `else if (process.argv[2] === 'req' && process.argv[3] === 'show') { const row = rows.find(candidate => candidate.id === process.argv[4]); if (!row) process.exit(2); const requirement = {id: row.id, component: row.component, _computed: {file_hash: row.file_hash}}; if (${JSON.stringify(showMismatch)} === 'id') requirement.id = 'wrong-id'; if (${JSON.stringify(showMismatch)} === 'component') requirement.component = 'wrong-component'; process.stdout.write(JSON.stringify({file_path: row.file_path, requirement})); }\n`,
+        'utf8');
+      fs.chmodSync(proof, 0o755);
+    };
+    writeProof([currentRow]);
+    await expect(validateRetainedReviewExportAgainstCurrentProof(
+      retained, proof, subject, proofOutput, 2000,
+    )).resolves.toHaveLength(1);
+    expect(Object.isFrozen(retained.packets[0].packet)).toBe(true);
+    expect(Object.isFrozen(retained.packets[0].packet.candidate)).toBe(true);
+    expect(Object.isFrozen((aggregate.reviews as any[])[0])).toBe(true);
+    expect(Object.isFrozen((aggregate.reviews as any[])[0].candidate)).toBe(true);
+    expect(() => Object.assign((aggregate.reviews as any[])[0].candidate, {decision: 'tampered'})).toThrow();
+    writeProof([currentRow], 'id');
+    await expect(validateRetainedReviewExportAgainstCurrentProof(
+      retained, proof, subject, path.join(root, 'portable-proof-output-show-id-mismatch'), 2000,
+    )).rejects.toThrow(/exact current file hash/);
+    writeProof([currentRow], 'component');
+    await expect(validateRetainedReviewExportAgainstCurrentProof(
+      retained, proof, subject, path.join(root, 'portable-proof-output-show-component-mismatch'), 2000,
+    )).rejects.toThrow(/exact current file hash/);
+    writeProof([]);
+    await expect(validateRetainedReviewExportAgainstCurrentProof(
+      retained, proof, subject, path.join(root, 'portable-proof-output-missing'), 2000,
+    )).rejects.toThrow(/requirement set does not match/);
+    writeProof([currentRow, {
+      id: 'SYS-REQ-EXTRA',
+      component: 'component-b',
+      file_path: 'specs/system/requirements/SYS-REQ-EXTRA.req.yaml',
+      file_hash: 'sha256:' + '2'.repeat(64),
+    }]);
+    await expect(validateRetainedReviewExportAgainstCurrentProof(
+      retained, proof, subject, path.join(root, 'portable-proof-output-extra'), 2000,
+    )).rejects.toThrow(/requirement set does not match/);
+
+    const wrongPayloadFingerprint = JSON.parse(fs.readFileSync(path.join(exportRoot, 'manifest.json'), 'utf8'));
+    wrongPayloadFingerprint.packets[0].payload_fingerprint = '3'.repeat(64);
+    fs.writeFileSync(path.join(exportRoot, 'manifest.json'), JSON.stringify(wrongPayloadFingerprint) + '\n');
+    expect(() => readRetainedReviewExport(exportRoot, plan, 1)).toThrow(/payload fingerprint/);
+
+    wrongPayloadFingerprint.packets[0].payload_fingerprint = sha256Canonical(fixture.packet);
+    wrongPayloadFingerprint.unexpected = true;
+    fs.writeFileSync(path.join(exportRoot, 'manifest.json'), JSON.stringify(wrongPayloadFingerprint) + '\n');
+    expect(() => readRetainedReviewExport(exportRoot, plan, 1)).toThrow(/closed shape/);
+    delete wrongPayloadFingerprint.unexpected;
+    fs.writeFileSync(path.join(exportRoot, 'manifest.json'), JSON.stringify(wrongPayloadFingerprint) + '\n');
+    expect(() => readRetainedReviewExport(exportRoot, plan, 2)).toThrow(/exactly 2 packets/);
   });
 });

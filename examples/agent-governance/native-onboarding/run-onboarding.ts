@@ -14,6 +14,7 @@ import { loadConfig, StateMachineExecutionEngine } from '../../../src/sdk';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../../src/snapshot-store';
 import type { GraphJournalCheckpointV1 } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
+import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 import { createProofAdmissionCapability, goCompatibleProofJson } from '../../../src/providers/proof-admission-cli-child';
 import type { PRInfo } from '../../../src/pr-analyzer';
@@ -748,6 +749,313 @@ export type RecoveryReviewPacket = Readonly<{
 
 type RecoverySideEffects = 'absent' | 'safely_idempotent' | 'isolated_draft_replay';
 
+/**
+ * A portable retained review export is input evidence for a fresh graph, not
+ * a Graph-v2 checkpoint. Keep the manifest and packet bytes together so a
+ * caller cannot silently substitute an older packet directory or relabel a
+ * historical claim as a newly produced review.
+ */
+export type RetainedReviewExportPacket = Readonly<{
+  componentId: string;
+  id: string;
+  filePath: string;
+  proofFileHash: string;
+  claimId: string;
+  payloadFingerprint: string;
+  packetSha256: string;
+  bytes: Buffer;
+  packet: Json;
+}>;
+
+export type RetainedReviewExport = Readonly<{
+  root: string;
+  manifestSha256: string;
+  checkpointSha256: string;
+  graphSemanticDigest: string;
+  packetCount: number;
+  packets: readonly RetainedReviewExportPacket[];
+}>;
+
+function retainedManifestPath(root: string): string {
+  const candidate = path.join(root, 'manifest.json');
+  let resolved: string;
+  try { resolved = fs.realpathSync(candidate); } catch { throw new Error('retained review export is missing manifest.json'); }
+  if (!inside(resolved, root) || resolved !== candidate) throw new Error('retained review export manifest escapes its root');
+  const stat = fs.lstatSync(candidate);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('retained review export manifest must be a regular file');
+  return resolved;
+}
+
+function retainedSafeRelative(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || path.isAbsolute(value) || value.includes('\\') ||
+      value.split('/').some(part => part.length === 0 || part === '..' || part === '.')) {
+    throw new Error(`retained review export ${label} is not a safe relative path`);
+  }
+  return value;
+}
+
+function retainedDigest(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(value)) {
+    throw new Error(`retained review export ${label} is not a sha256 digest`);
+  }
+  return value;
+}
+
+function retainedBareDigest(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error(`retained review export ${label} is not a bare digest`);
+  }
+  return value;
+}
+
+function retainedExactKeys(value: Json, expected: readonly string[], label: string): void {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  if (actual.length !== sortedExpected.length || actual.some((key, index) => key !== sortedExpected[index])) {
+    throw new Error(`retained review export ${label} has an unexpected closed shape`);
+  }
+}
+
+function retainedRegularFile(root: string, relativePath: string, label: string): {path: string; bytes: Buffer} {
+  const safe = retainedSafeRelative(relativePath, `${label} path`);
+  const candidate = path.join(root, safe);
+  let resolved: string;
+  try { resolved = fs.realpathSync(candidate); } catch { throw new Error(`retained review export ${label} is missing`); }
+  if (!inside(resolved, root)) throw new Error(`retained review export ${label} escapes its root`);
+  const stat = fs.lstatSync(candidate);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`retained review export ${label} must be a regular file`);
+  return {path: resolved, bytes: fs.readFileSync(resolved)};
+}
+
+/** Validate one portable, schema-shaped 92-packet input before graph launch. */
+export function readRetainedReviewExport(
+  inputRoot: string,
+  plan: ReturnType<typeof compileClaimPlan>,
+  expectedPacketCount?: number,
+): RetainedReviewExport {
+  const root = realDirectory(inputRoot, 'retained review export root');
+  const manifestFile = retainedManifestPath(root);
+  const manifestBytes = fs.readFileSync(manifestFile);
+  let manifest: Json;
+  try { manifest = JSON.parse(manifestBytes.toString('utf8')) as Json; } catch { throw new Error('retained review export manifest is not valid JSON'); }
+  if (manifest.version !== 1 || manifest.kind !== 'retained-native-review-packet-export' || manifest.status !== 'validated-reference-only' ||
+      !manifest.source || typeof manifest.source !== 'object' || Array.isArray(manifest.source) ||
+      !Array.isArray(manifest.packets) || !Number.isSafeInteger(manifest.packet_count) || manifest.packet_count !== manifest.packets.length) {
+    throw new Error('retained review export manifest envelope is invalid');
+  }
+  retainedExactKeys(manifest, ['version', 'kind', 'status', 'source', 'packet_count', 'packets', 'interpretation'], 'manifest');
+  const interpretation = manifest.interpretation;
+  if (!interpretation || typeof interpretation !== 'object' || Array.isArray(interpretation)) {
+    throw new Error('retained review export interpretation is invalid');
+  }
+  retainedExactKeys(interpretation as Json, [
+    'old_graph_reference', 'imported_journal_claims', 'approval_or_admission_claimed', 'current_proof_recheck_required',
+  ], 'interpretation');
+  if (interpretation.old_graph_reference !== true || interpretation.imported_journal_claims !== false ||
+      interpretation.approval_or_admission_claimed !== false || interpretation.current_proof_recheck_required !== true) {
+    throw new Error('retained review export interpretation is invalid');
+  }
+  const source = manifest.source as Json;
+  retainedExactKeys(source, [
+    'checkpoint', 'checkpoint_sha256', 'checkpoint_bytes', 'graph_semantic_digest',
+    'config_authority_files_sha256', 'config_authority_files', 'packet_sources',
+  ], 'manifest source');
+  if (typeof source.checkpoint !== 'string' || source.checkpoint.length === 0 ||
+      !Number.isSafeInteger(source.checkpoint_bytes) || (source.checkpoint_bytes as number) < 0) {
+    throw new Error('retained review export checkpoint declaration is invalid');
+  }
+  retainedDigest(source.checkpoint_sha256, 'checkpoint_sha256');
+  const checkpointSha256 = source.checkpoint_sha256 as string;
+  const graphSemanticDigest = retainedBareDigest(source.graph_semantic_digest, 'graph_semantic_digest');
+  retainedDigest(source.config_authority_files_sha256, 'config_authority_files_sha256');
+  if (!Array.isArray(source.config_authority_files) || source.config_authority_files.length === 0) {
+    throw new Error('retained review export config authority declaration is invalid');
+  }
+  for (const raw of source.config_authority_files) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('retained review export config authority declaration is invalid');
+    const record = raw as Json;
+    retainedExactKeys(record, ['name', 'source', 'bytes', 'sha256'], 'config authority file');
+    if (typeof record.name !== 'string' || record.name.length === 0 ||
+        !Number.isSafeInteger(record.bytes) || (record.bytes as number) < 0) {
+      throw new Error('retained review export config authority declaration is invalid');
+    }
+    retainedSafeRelative(record.source, 'config authority file source');
+    retainedDigest(record.sha256, 'config authority file sha256');
+  }
+  const expected = expectedPacketCount ?? (manifest.packet_count as number);
+  if (!Number.isSafeInteger(expected) || expected < 1 || manifest.packet_count !== expected) {
+    throw new Error(`retained review export must contain exactly ${expected} packets`);
+  }
+  if (!Array.isArray(source.packet_sources) || source.packet_sources.length === 0) {
+    throw new Error('retained review export manifest has no packet source declarations');
+  }
+  const sourceComponents = new Set<string>();
+  let declaredCount = 0;
+  for (const record of source.packet_sources) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      throw new Error('retained review export packet source declaration is invalid');
+    }
+    const sourceRecord = record as Json;
+    retainedExactKeys(sourceRecord, ['component_id', 'item_count', 'source_root', 'source_aggregate_present', 'helper_input'], 'packet source');
+    if (typeof sourceRecord.component_id !== 'string' || (sourceRecord.component_id as string).length === 0 ||
+        !Number.isSafeInteger(sourceRecord.item_count) || (sourceRecord.item_count as number) < 1 ||
+        typeof sourceRecord.source_root !== 'string' || (sourceRecord.source_root as string).length === 0 ||
+        typeof sourceRecord.source_aggregate_present !== 'boolean' || sourceRecord.helper_input !== 'validated-packet-files-only') {
+      throw new Error('retained review export packet source declaration is invalid');
+    }
+    const componentId = sourceRecord.component_id as string;
+    if (sourceComponents.has(componentId)) throw new Error(`retained review export duplicates component source ${componentId}`);
+    sourceComponents.add(componentId);
+    declaredCount += sourceRecord.item_count as number;
+  }
+  if (declaredCount !== expected) throw new Error('retained review export packet source counts do not match packet_count');
+  const recoveryManifest = retainedRegularFile(root, 'recovery/review-packet-manifest.json', 'recovery manifest');
+  let recovery: Json;
+  try { recovery = JSON.parse(recoveryManifest.bytes.toString('utf8')) as Json; } catch { throw new Error('retained recovery packet manifest is not valid JSON'); }
+  if (recovery.version !== 1 || recovery.kind !== 'retained-native-review-packet-manifest' || !Array.isArray(recovery.packets) || recovery.packets.length !== expected) {
+    throw new Error('retained recovery packet manifest envelope is invalid');
+  }
+  retainedExactKeys(recovery, ['version', 'kind', 'packets'], 'recovery manifest');
+  const recoveryByPath = new Map<string, Json>();
+  for (const entry of recovery.packets) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('retained recovery packet manifest entry is invalid');
+    const record = entry as Json;
+    retainedExactKeys(record, ['component_id', 'id', 'claim_id', 'source', 'destination', 'bytes', 'source_sha256', 'destination_sha256'], 'recovery manifest entry');
+    const sourceRelativePath = retainedSafeRelative(record.source, 'packet source');
+    const destination = retainedSafeRelative(record.destination, 'packet destination');
+    if (sourceRelativePath !== destination || recoveryByPath.has(sourceRelativePath) ||
+        typeof record.component_id !== 'string' || typeof record.id !== 'string' || typeof record.claim_id !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(record.claim_id as string) || !Number.isSafeInteger(record.bytes) || (record.bytes as number) < 0 ||
+        retainedDigest(record.source_sha256, 'packet source_sha256') !== record.destination_sha256) {
+      throw new Error('retained recovery packet manifest entry is detached');
+    }
+    recoveryByPath.set(sourceRelativePath, record);
+  }
+  const packets: RetainedReviewExportPacket[] = [];
+  const seen = new Set<string>();
+  let previousKey: string | undefined;
+  for (const raw of manifest.packets) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('retained review export packet entry is invalid');
+    const entry = raw as Json;
+    retainedExactKeys(entry, [
+      'claim_id', 'payload_fingerprint', 'component_id', 'id', 'file_path', 'proof_file_hash',
+      'source_relative_path', 'packet_bytes', 'packet_sha256',
+    ], 'packet entry');
+    const componentId = entry.component_id;
+    const id = entry.id;
+    if (typeof componentId !== 'string' || componentId.length === 0 || typeof id !== 'string' || id.length === 0) {
+      throw new Error('retained review export packet identity is invalid');
+    }
+    const key = `${componentId}\u0000${id}`;
+    if (seen.has(key) || (previousKey !== undefined && Buffer.from(previousKey, 'utf8').compare(Buffer.from(key, 'utf8')) >= 0)) {
+      throw new Error('retained review export packets must be UTF-8 ID sorted and unique');
+    }
+    seen.add(key); previousKey = key;
+    const sourceRelativePath = retainedSafeRelative(entry.source_relative_path, `packet ${id} source`);
+    const recoveryEntry = recoveryByPath.get(sourceRelativePath);
+    if (!recoveryEntry || recoveryEntry.component_id !== componentId || recoveryEntry.id !== id || recoveryEntry.claim_id !== entry.claim_id) {
+      throw new Error(`retained review export packet ${id} is detached from its recovery manifest`);
+    }
+    const packetFile = retainedRegularFile(root, sourceRelativePath, `packet ${id}`);
+    const packetSha256 = retainedDigest(entry.packet_sha256, `packet ${id} packet_sha256`);
+    const actualSha256 = `sha256:${createHash('sha256').update(packetFile.bytes).digest('hex')}`;
+    if (!Number.isSafeInteger(entry.packet_bytes) || (entry.packet_bytes as number) < 0 ||
+        actualSha256 !== packetSha256 || packetFile.bytes.byteLength !== entry.packet_bytes || recoveryEntry.bytes !== entry.packet_bytes || recoveryEntry.source_sha256 !== packetSha256) {
+      throw new Error(`retained review export packet ${id} bytes are detached from the manifest`);
+    }
+    let packet: Json;
+    try { packet = JSON.parse(packetFile.bytes.toString('utf8')) as Json; } catch { throw new Error(`retained review export packet ${id} is not valid JSON`); }
+    const packetValidator = plan.validatorsByClaim['native.review.packet@1'];
+    if (!packetValidator) throw new Error('retained review export has no compiled native.review.packet validator');
+    try {
+      packetValidator(packet);
+    } catch {
+      throw new Error(`retained review export packet ${id} failed its compiled validator`);
+    }
+    if (!packet || Array.isArray(packet) || packet.id !== id || packet.component_id !== componentId || packet.file_path !== entry.file_path || packet.proof_file_hash !== entry.proof_file_hash || !Object.prototype.hasOwnProperty.call(packet, 'candidate')) {
+      throw new Error(`retained review export packet ${id} identity is invalid`);
+    }
+    const filePath = retainedSafeRelative(entry.file_path, `packet ${id} file_path`);
+    const proofFileHash = retainedDigest(entry.proof_file_hash, `packet ${id} proof_file_hash`);
+    const claimId = retainedBareDigest(entry.claim_id, `packet ${id} claim_id`);
+    const payloadFingerprint = retainedBareDigest(entry.payload_fingerprint, `packet ${id} payload_fingerprint`);
+    if (entry.component_id !== componentId || !sourceComponents.has(componentId) || sha256Canonical(packet) !== payloadFingerprint) {
+      throw new Error(`retained review export packet ${id} payload fingerprint is detached`);
+    }
+    packets.push(Object.freeze({
+      componentId,
+      id,
+      filePath,
+      proofFileHash,
+      claimId,
+      payloadFingerprint,
+      packetSha256,
+      bytes: packetFile.bytes,
+      packet: immutableCanonicalValue(packet),
+    }));
+  }
+  if (recoveryByPath.size !== packets.length) throw new Error('retained recovery packet manifest contains an unreferenced packet');
+  const actualCounts = new Map<string, number>();
+  for (const packet of packets) actualCounts.set(packet.componentId, (actualCounts.get(packet.componentId) ?? 0) + 1);
+  for (const sourceRecord of source.packet_sources as Json[]) {
+    const componentId = sourceRecord.component_id as string;
+    if (actualCounts.get(componentId) !== sourceRecord.item_count) {
+      throw new Error(`retained review export packet source count is detached for ${componentId}`);
+    }
+  }
+  return Object.freeze({root, manifestSha256: `sha256:${createHash('sha256').update(manifestBytes).digest('hex')}`, checkpointSha256, graphSemanticDigest, packetCount: expected, packets: Object.freeze(packets)});
+}
+
+/** Emit the frozen reviewed claim payload from validated retained packet bytes. */
+export function buildRetainedReviewedAggregate(input: RetainedReviewExport, componentId: string): Json {
+  if (typeof componentId !== 'string' || componentId.length === 0) throw new Error('retained aggregate component ID is required');
+  const packets = input.packets.filter(packet => packet.componentId === componentId);
+  if (packets.length === 0) throw new Error(`retained review export has no packets for ${componentId}`);
+  const reviews = packets.map(packet => ({
+    id: packet.id,
+    component_id: packet.componentId,
+    file_path: packet.filePath,
+    proof_file_hash: packet.proofFileHash,
+    candidate: packet.packet.candidate,
+    candidate_fingerprint: `sha256:${sha256Canonical(packet.packet.candidate)}`,
+    packet_sha256: packet.packetSha256,
+    retained_claim: {claim_id: packet.claimId, payload_fingerprint: packet.payloadFingerprint},
+  }));
+  reviews.sort((left, right) => Buffer.from(left.id, 'utf8').compare(Buffer.from(right.id, 'utf8')));
+  return immutableCanonicalValue({
+    version: 'native.component.reviewed/v1',
+    component_id: componentId,
+    status: 'reviewed-native-requirement-items',
+    item_count: reviews.length,
+    source: {kind: 'retained_checkpoint', checkpoint_sha256: input.checkpointSha256, graph_semantic_digest: input.graphSemanticDigest, manifest_sha256: input.manifestSha256},
+    reviews,
+  }) as Json;
+}
+
+export async function validateRetainedReviewExportAgainstCurrentProof(
+  input: RetainedReviewExport,
+  proof: string,
+  subject: string,
+  output: string,
+  timeout: number,
+): Promise<readonly RecoveryProofRequirementHash[]> {
+  const ids = input.packets.map(packet => packet.id);
+  const current = await loadCurrentProofRequirementHashes(proof, subject, output, timeout, ids, true);
+  const currentIds = current.map(row => row.id);
+  if (current.length !== input.packets.length || new Set(ids).size !== ids.length || new Set(currentIds).size !== currentIds.length ||
+      [...currentIds].sort().join('\u0000') !== [...ids].sort().join('\u0000')) {
+    throw new Error('current Proof requirement set does not match retained review export');
+  }
+  const byId = new Map(current.map(row => [row.id, row]));
+  for (const packet of input.packets) {
+    const row = byId.get(packet.id);
+    if (!row || row.componentId !== packet.componentId || row.filePath !== packet.filePath || row.proofFileHash !== packet.proofFileHash) {
+      throw new Error(`current Proof requirement hash is stale for retained packet ${packet.id}`);
+    }
+  }
+  return Object.freeze(current);
+}
+
 export type RecoveryProofRequirementHash = Readonly<{
   id: string;
   componentId: string;
@@ -1096,8 +1404,9 @@ async function loadCurrentProofRequirementHashes(
   output: string,
   timeout: number,
   ids: readonly string[],
+  requireCompleteSet = false,
 ): Promise<readonly RecoveryProofRequirementHash[]> {
-  if (ids.length === 0) return [];
+  if (ids.length === 0 && !requireCompleteSet) return [];
   const listed = parseJson(runProof(proof, subject, output, 'preflight', ['req', 'list', '--format', 'json'], timeout), 'Proof req list');
   const rows = Array.isArray(listed)
     ? listed
@@ -1105,7 +1414,13 @@ async function loadCurrentProofRequirementHashes(
       ? (listed as Json).requirements as Json[]
       : undefined;
   if (!rows) throw new Error('Proof req list did not return a requirement array');
-  return ids.map(id => {
+  const listedIds = rows.map(candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate) && typeof candidate.id === 'string' ? candidate.id : undefined);
+  if (requireCompleteSet && listedIds.some(id => id === undefined)) {
+    throw new Error('Proof req list contains a requirement without an exact ID');
+  }
+  const selectedIds = requireCompleteSet ? listedIds as string[] : [...ids];
+  if (new Set(selectedIds).size !== selectedIds.length) throw new Error('Proof req list contains duplicate requirement IDs');
+  return selectedIds.map(id => {
     const matchingRows = rows.filter(candidate => candidate && typeof candidate === 'object' && !Array.isArray(candidate) && candidate.id === id) as Json[];
     const row = matchingRows.length === 1 ? matchingRows[0] : undefined;
     if (!row || typeof row.component !== 'string' || typeof row.file_path !== 'string' ||
@@ -1122,7 +1437,9 @@ async function loadCurrentProofRequirementHashes(
     const fileHash = computed && typeof computed === 'object' && !Array.isArray(computed)
       ? (computed as Json).file_hash
       : undefined;
-    if (shown.file_path !== row.file_path || typeof fileHash !== 'string' ||
+    const shownRequirement = requirement;
+    if (shown.file_path !== row.file_path || shownRequirement?.id !== id ||
+        shownRequirement?.component !== row.component || typeof fileHash !== 'string' ||
         !/^sha256:[0-9a-f]{64}$/.test(fileHash)) {
       throw new Error(`Proof req show ${id} did not return its exact current file hash`);
     }

@@ -37,42 +37,137 @@ claim_types:
   proof.structural_inventory@1: {schema: {}}
   proof.candidate@1:
     schema:
-      type: object
-      additionalProperties: false
-      required: [version, project_id, components]
-      properties:
-        version: {const: proof.component-catalog-candidate/v1}
-        project_id: {type: string, minLength: 1}
-        components:
-          type: array
-          minItems: 1
-          items:
-            type: object
-            additionalProperties: false
-            required: [id, responsibility, owned_paths]
-            properties:
-              id: {type: string, minLength: 1}
-              responsibility: {type: string, minLength: 1}
-              owned_paths:
-                type: array
-                minItems: 1
-                uniqueItems: true
-                description: Exact project-relative paths from Proof inventory.sorted_paths; include every file assigned to this component.
-                items:
-                  type: string
-                  minLength: 1
-                  description: "Exact project-relative inventory path, never a component ID, import name, package name, or prose."
-              dependency_closure:
-                type: array
-                description: If present and non-empty, exact project-relative inventory paths for the transitive in-repository closure and every owned_paths entry; omit or leave empty when unknown so Proof defaults it to owned_paths.
-                items:
-                  type: string
-                  minLength: 1
-                  description: "Exact project-relative inventory path, never a component ID, import name, package name, language label, or prose."
-              entry_points: {type: array, items: {type: string, minLength: 1}}
-              state_effects: {type: array, items: {type: string, minLength: 1}}
-              interfaces: {type: array, items: {}}
-              uncertainty: {type: array, items: {type: string, minLength: 1}}
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [version, project_id, components]
+          properties:
+            version: {const: proof.component-catalog-candidate/v1}
+            project_id: {type: string, minLength: 1}
+            components:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, responsibility, owned_paths]
+                properties:
+                  id: {type: string, minLength: 1}
+                  responsibility: {type: string, minLength: 1}
+                  owned_paths:
+                    type: array
+                    minItems: 1
+                    uniqueItems: true
+                    description: Exact project-relative paths from Proof inventory.sorted_paths; include every file assigned to this component.
+                    items:
+                      type: string
+                      minLength: 1
+                      description: "Exact project-relative inventory path, never a component ID, import name, package name, or prose."
+                  dependency_closure:
+                    type: array
+                    uniqueItems: true
+                    description: If present and non-empty, exact project-relative paths for the transitive in-repository closure and every owned_paths entry; omit or leave empty when unknown so Proof defaults it to owned_paths.
+                    items:
+                      type: string
+                      minLength: 1
+                      description: "Exact project-relative inventory path, never a component ID, import name, package name, language label, or prose."
+                  entry_points: {type: array, items: {type: string, minLength: 1}}
+                  state_effects: {type: array, items: {type: string, minLength: 1}}
+                  interfaces: {type: array, items: {}}
+                  uncertainty: {type: array, items: {type: string, minLength: 1}}
+        - type: object
+          additionalProperties: false
+          required: [schema, project, shard, reviewedFiles, requirements, interfaces, findings, unknowns, repositoryMutated, commandsExecuted, checklistCompleted]
+          properties:
+            schema: {const: reqproof.component-onboarding/v1}
+            project: {type: string}
+            shard: {type: string}
+            reviewedFiles:
+              type: array
+              minItems: 1
+              maxItems: 64
+              items:
+                type: object
+                additionalProperties: false
+                required: [path, coordinates]
+                properties:
+                  path: {type: string}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            requirements:
+              type: array
+              minItems: 4
+              maxItems: 16
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, text, coordinates]
+                properties:
+                  id: {type: string, pattern: '^(STK|SYS|SW|INT)-'}
+                  text: {type: string}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            interfaces:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [name, coordinates]
+                properties:
+                  name: {type: string}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            findings:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, severity, title, calibration, confidence, coordinates]
+                properties:
+                  id: {type: string}
+                  severity: {enum: [info, low, medium, high, critical]}
+                  title: {type: string}
+                  calibration: {enum: [confirmed, likely, possible]}
+                  confidence: {type: number, minimum: 0, maximum: 1}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            unknowns:
+              type: array
+              maxItems: 32
+              items: {type: string}
+            repositoryMutated: {const: false}
+            commandsExecuted: {const: false}
+            checklistCompleted: {const: false}
   proof.admitted_receipt@1: {schema: {}}
   proof.catalog_revalidation@1: {schema: {}}
   component.catalog@1:
@@ -230,12 +325,53 @@ claim_types:
   native.component.reviewed@1:
     schema:
       type: object
-      required: [component_id, status, item_count, packets]
+      additionalProperties: false
+      required: [version, component_id, status, item_count, source, reviews]
       properties:
+        version: {const: native.component.reviewed/v1}
         component_id: {type: string, minLength: 1}
-        status: {type: string, minLength: 1}
+        status: {const: reviewed-native-requirement-items}
         item_count: {type: integer, minimum: 1}
-        packets: {type: array, minItems: 1}
+        source:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [kind, checkpoint_sha256, graph_semantic_digest, manifest_sha256]
+              properties:
+                kind: {const: current_graph}
+                checkpoint_sha256: {const: null}
+                graph_semantic_digest: {const: null}
+                manifest_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+            - type: object
+              additionalProperties: false
+              required: [kind, checkpoint_sha256, graph_semantic_digest, manifest_sha256]
+              properties:
+                kind: {const: retained_checkpoint}
+                checkpoint_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+                graph_semantic_digest: {type: string, pattern: '^[0-9a-f]{64}$'}
+                manifest_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        reviews:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, component_id, file_path, proof_file_hash, candidate, candidate_fingerprint, packet_sha256, retained_claim]
+            properties:
+              id: {type: string, minLength: 1}
+              component_id: {type: string, minLength: 1}
+              file_path: {type: string, minLength: 1}
+              proof_file_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              candidate: {}
+              candidate_fingerprint: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              packet_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              retained_claim:
+                type: [object, 'null']
+                additionalProperties: false
+                required: [claim_id, payload_fingerprint]
+                properties:
+                  claim_id: {type: string, pattern: '^[0-9a-f]{64}$'}
+                  payload_fingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
   native.component.summary@1:
     schema:
       type: object
@@ -248,6 +384,8 @@ claim_types:
         audit: {type: object}
         checklist: {type: object}
         open_native_checks: {type: array, items: {type: object}}
+  proof.component_spec_review_candidate@1: {schema: {type: object, additionalProperties: true}}
+  proof.component_spec_review_admitted_receipt@1: {schema: {type: object, additionalProperties: true}}
 
 checks:
   project:
@@ -801,11 +939,43 @@ subgraphs:
             if (!packet || typeof packet !== 'object' || Array.isArray(packet) || packet.id !== item.id || packet.component_id !== componentId || packet.file_path !== item.file_path || packet.proof_file_hash !== item.proof_file_hash || packet.freshness !== 'pending_component_fan_in' || !same(packet.prepared_work_item, workItem) || !same(packet.catalog_entry, item.proof_snapshot.catalog_entry) || !same(packet.req_show, item.proof_snapshot.req_show) || !same(packet.spec_graph, item.proof_snapshot.spec_graph) || !Object.prototype.hasOwnProperty.call(packet, 'candidate')) throw new Error('review packet is not bound to the exact native item and WorkItem for ' + item.id);
             packetPaths.push(packetPath);
           }
-          const aggregate = {component_id: componentId, status: 'reviewed-native-requirement-items', item_count: catalog.items.length, freshness, packets: packetPaths, admission: 'not_claimed'};
+          const canonicalJson = value => JSON.stringify(canonical(value));
+          const reviews = [];
+          for (const item of catalog.items) {
+            const packetPath = path.join(packetDir, token(item.id) + '.json');
+            const packetBytes = fs.readFileSync(packetPath);
+            const packet = JSON.parse(packetBytes.toString('utf8'));
+            reviews.push({
+              id: item.id,
+              component_id: componentId,
+              file_path: item.file_path,
+              proof_file_hash: item.proof_file_hash,
+              candidate: packet.candidate,
+              candidate_fingerprint: 'sha256:' + require('node:crypto').createHash('sha256').update(canonicalJson(packet.candidate), 'utf8').digest('hex'),
+              packet_sha256: 'sha256:' + require('node:crypto').createHash('sha256').update(packetBytes).digest('hex'),
+              retained_claim: null,
+            });
+          }
+          reviews.sort((left, right) => Buffer.from(left.id, 'utf8').compare(Buffer.from(right.id, 'utf8')));
+          const manifestSha = 'sha256:' + require('node:crypto').createHash('sha256').update(canonicalJson(reviews), 'utf8').digest('hex');
+          const aggregate = {
+            version: 'native.component.reviewed/v1',
+            component_id: componentId,
+            status: 'reviewed-native-requirement-items',
+            item_count: reviews.length,
+            source: {
+              kind: 'current_graph',
+              checkpoint_sha256: null,
+              graph_semantic_digest: null,
+              manifest_sha256: manifestSha,
+            },
+            reviews,
+          };
           const aggregatePath = path.resolve(root, 'review-packets', token(componentId) + '.json');
           fs.mkdirSync(path.dirname(aggregatePath), {recursive: true, mode: 0o700});
           fs.writeFileSync(aggregatePath, JSON.stringify(aggregate, null, 2) + '\n', {encoding: 'utf8', mode: 0o600});
-          process.stdout.write(JSON.stringify({component_id: componentId, status: aggregate.status, item_count: catalog.items.length, packets: packetPaths}));
+          fs.chmodSync(aggregatePath, 0o600);
+          process.stdout.write(JSON.stringify(aggregate));
           NODE
 
       native-validation:
@@ -829,40 +999,117 @@ subgraphs:
           if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string') throw new Error('native validation missing exact materialized WorkItem');
           const componentId = workItem.component_id;
           const run = args => {
-            try { const stdout = execFileSync(proof, args, {encoding: 'utf8'}); return {exit_code: 0, value: JSON.parse(stdout)}; }
-            catch (error) { return {exit_code: typeof error.status === 'number' ? error.status : 1, stdout: String(error.stdout || ''), stderr: String(error.stderr || error.message || error)}; }
+            const child = require('node:child_process').spawnSync(proof, args, {encoding: 'utf8', maxBuffer: 128 * 1024 * 1024});
+            const stdout = String(child.stdout || '');
+            const stderr = String(child.stderr || (child.error && child.error.message) || '');
+            const exit_code = typeof child.status === 'number' ? child.status : 1;
+            return {exit_code, stdout, stderr};
           };
-          const listed = run(['req', 'list', '--format', 'json']);
+          const parseValue = result => {
+            try { return {...result, value: JSON.parse(result.stdout)}; }
+            catch { return {...result, value: undefined, parse_error: {code: 'json_parse_error'}}; }
+          };
+          const parseAudit = result => {
+            const events = [];
+            let parse_error = null;
+            if (!parse_error) {
+              const lines = result.stdout.split(/\r?\n/).filter(line => line.length > 0);
+              if (lines.length === 0) parse_error = {code: 'audit_jsonl_empty'};
+              for (let index = 0; index < lines.length; index += 1) {
+                try {
+                  const event = JSON.parse(lines[index]);
+                  if (!event || typeof event !== 'object' || Array.isArray(event)) throw new Error('event is not an object');
+                  events.push(event);
+                } catch {
+                  parse_error = {code: 'audit_jsonl_parse_error', line: index + 1};
+                  break;
+                }
+              }
+            }
+            const checkDone = events.filter(event => event.event === 'check_done');
+            const open_event = checkDone.some(event => event.status === 'warn' || event.status === 'error');
+            return {exit_code: result.exit_code, event_count: events.length, events, parse_error, open_event};
+          };
+          const listed = parseValue(run(['req', 'list', '--format', 'json']));
           if (listed.exit_code !== 0 || !Array.isArray(listed.value)) throw new Error('native validation req list failed');
           const items = listed.value.filter(row => row && row.component === componentId);
           if (!items.length) throw new Error('native validation found no requirements for ' + componentId);
           const freshness = items.map(row => {
-            const shown = run(['req', 'show', row.id, '--with', 'file', '--format', 'json']);
+            const shown = parseValue(run(['req', 'show', row.id, '--with', 'file', '--format', 'json']));
             const req = shown.value && shown.value.requirement;
             if (shown.exit_code !== 0 || !req || req.id !== row.id || shown.value.file_path !== row.file_path || typeof req._computed?.file_hash !== 'string') throw new Error('native validation req show failed for ' + row.id);
             return {id: row.id, file_path: row.file_path, file_hash: req._computed.file_hash};
           });
-          const validation = run(['validate', '--variable-drift', '--format', 'json']);
-          const audit = run(['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json']);
-          const checklist = run(['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json']);
-          const statusDetail = run(['status', '--format', 'json']);
+          const validation = parseValue(run(['validate', '--variable-drift', '--format', 'json']));
+          const audit = parseAudit(run(['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json']));
+          const checklist = parseValue(run(['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json']));
+          const statusDetail = parseValue(run(['status', '--format', 'json']));
           const openNativeChecks = [
             ['validate', validation],
             ['audit', audit],
             ['checklist', checklist],
             ['status', statusDetail],
-          ].filter(([, result]) => result.exit_code !== 0).map(([name, result]) => ({name, exit_code: result.exit_code}));
-          const output = {component_id: componentId, status: validation.exit_code !== 0 || statusDetail.exit_code !== 0 ? 'native-validation-failed' : 'validated-native-state-recorded', freshness, validation, audit, checklist, status_detail: statusDetail, open_native_checks: openNativeChecks, reviewed: deps.reviewed || null};
+          ].filter(([, result]) => result.exit_code !== 0 || result.parse_error || result.open_event).map(([name, result]) => ({name, exit_code: result.exit_code, ...(result.parse_error ? {parse_error: result.parse_error} : {})}));
+          const validationHardFailure = validation.exit_code !== 0 || !!validation.parse_error;
+          const statusHardFailure = statusDetail.exit_code !== 0 || !!statusDetail.parse_error;
+          const output = {component_id: componentId, status: validationHardFailure || statusHardFailure ? 'native-validation-failed' : 'validated-native-state-recorded', freshness, validation, audit, checklist, status_detail: statusDetail, open_native_checks: openNativeChecks, reviewed: deps.reviewed || null};
           process.stdout.write(JSON.stringify(output));
-          if (validation.exit_code !== 0 || statusDetail.exit_code !== 0) process.exitCode = 1;
+          if (validationHardFailure || statusHardFailure) process.exitCode = 1;
           NODE
+
+      inspect:
+        type: governed-proof-inspect
+        depends_on: [native-validation]
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject: {kind: component}
+          output_schema_id: reqproof.component-onboarding/v1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJzY2hlbWEiLCJwcm9qZWN0Iiwic2hhcmQiLCJyZXZpZXdlZEZpbGVzIiwicmVxdWlyZW1lbnRzIiwiaW50ZXJmYWNlcyIsImZpbmRpbmdzIiwidW5rbm93bnMiLCJyZXBvc2l0b3J5TXV0YXRlZCIsImNvbW1hbmRzRXhlY3V0ZWQiLCJjaGVja2xpc3RDb21wbGV0ZWQiXSwicHJvcGVydGllcyI6eyJzY2hlbWEiOnsiY29uc3QiOiJyZXFwcm9vZi5jb21wb25lbnQtb25ib2FyZGluZy92MSJ9LCJwcm9qZWN0Ijp7InR5cGUiOiJzdHJpbmcifSwic2hhcmQiOnsidHlwZSI6InN0cmluZyJ9LCJyZXZpZXdlZEZpbGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJtYXhJdGVtcyI6NjQsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbInBhdGgiLCJjb29yZGluYXRlcyJdLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9LCJjb29yZGluYXRlcyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MSwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsInJlcXVpcmVkIjpbInBhdGgiLCJsaW5lIl0sInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn0sImxpbmUiOnsidHlwZSI6ImludGVnZXIiLCJtaW5pbXVtIjoxfX19fX19fSwicmVxdWlyZW1lbnRzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjo0LCJtYXhJdGVtcyI6MTYsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwidGV4dCIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyIsInBhdHRlcm4iOiJeKFNUS3xTWVN8U1d8SU5UKS0ifSwidGV4dCI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJpbnRlcmZhY2VzIjp7InR5cGUiOiJhcnJheSIsIm1heEl0ZW1zIjozMiwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicmVxdWlyZWQiOlsibmFtZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsibmFtZSI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJmaW5kaW5ncyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwic2V2ZXJpdHkiLCJ0aXRsZSIsImNhbGlicmF0aW9uIiwiY29uZmlkZW5jZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyJ9LCJzZXZlcml0eSI6eyJlbnVtIjpbImluZm8iLCJsb3ciLCJtZWRpdW0iLCJoaWdoIiwiY3JpdGljYWwiXX0sInRpdGxlIjp7InR5cGUiOiJzdHJpbmcifSwiY2FsaWJyYXRpb24iOnsiZW51bSI6WyJjb25maXJtZWQiLCJsaWtlbHkiLCJwb3NzaWJsZSJdfSwiY29uZmlkZW5jZSI6eyJ0eXBlIjoibnVtYmVyIiwibWluaW11bSI6MCwibWF4aW11bSI6MX0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJ1bmtub3ducyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcG9zaXRvcnlNdXRhdGVkIjp7ImNvbnN0IjpmYWxzZX0sImNvbW1hbmRzRXhlY3V0ZWQiOnsiY29uc3QiOmZhbHNlfSwiY2hlY2tsaXN0Q29tcGxldGVkIjp7ImNvbnN0IjpmYWxzZX19fQ==
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: native.component.reviewed@1, as: reviewed}
+        emits:
+          - {claim: proof.candidate@1, from: output}
+
+      proof_admit:
+        type: proof-admit
+        consumes:
+          - {claim: proof.candidate@1, as: candidate}
+        emits:
+          - {claim: proof.admitted_receipt@1, from: output}
+
+      spec_review:
+        type: governed-proof-inspect
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: spec-review
+          stance: owner
+          subject: {kind: component}
+          output_schema_id: reqproof.component-onboarding/v1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJzY2hlbWEiLCJwcm9qZWN0Iiwic2hhcmQiLCJyZXZpZXdlZEZpbGVzIiwicmVxdWlyZW1lbnRzIiwiaW50ZXJmYWNlcyIsImZpbmRpbmdzIiwidW5rbm93bnMiLCJyZXBvc2l0b3J5TXV0YXRlZCIsImNvbW1hbmRzRXhlY3V0ZWQiLCJjaGVja2xpc3RDb21wbGV0ZWQiXSwicHJvcGVydGllcyI6eyJzY2hlbWEiOnsiY29uc3QiOiJyZXFwcm9vZi5jb21wb25lbnQtb25ib2FyZGluZy92MSJ9LCJwcm9qZWN0Ijp7InR5cGUiOiJzdHJpbmcifSwic2hhcmQiOnsidHlwZSI6InN0cmluZyJ9LCJyZXZpZXdlZEZpbGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJtYXhJdGVtcyI6NjQsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbInBhdGgiLCJjb29yZGluYXRlcyJdLCJwcm9wZXJ0aWVzIjp7InBhdGgiOnsidHlwZSI6InN0cmluZyJ9LCJjb29yZGluYXRlcyI6eyJ0eXBlIjoiYXJyYXkiLCJtaW5JdGVtcyI6MSwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsInJlcXVpcmVkIjpbInBhdGgiLCJsaW5lIl0sInByb3BlcnRpZXMiOnsicGF0aCI6eyJ0eXBlIjoic3RyaW5nIn0sImxpbmUiOnsidHlwZSI6ImludGVnZXIiLCJtaW5pbXVtIjoxfX19fX19fSwicmVxdWlyZW1lbnRzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjo0LCJtYXhJdGVtcyI6MTYsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwidGV4dCIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyIsInBhdHRlcm4iOiJeKFNUS3xTWVN8U1d8SU5UKS0ifSwidGV4dCI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJpbnRlcmZhY2VzIjp7InR5cGUiOiJhcnJheSIsIm1heEl0ZW1zIjozMiwiaXRlbXMiOnsidHlwZSI6Im9iamVjdCIsImFkZGl0aW9uYWxQcm9wZXJ0aWVzIjpmYWxzZSwicmVxdWlyZWQiOlsibmFtZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsibmFtZSI6eyJ0eXBlIjoic3RyaW5nIn0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJmaW5kaW5ncyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJvYmplY3QiLCJhZGRpdGlvbmFsUHJvcGVydGllcyI6ZmFsc2UsInJlcXVpcmVkIjpbImlkIiwic2V2ZXJpdHkiLCJ0aXRsZSIsImNhbGlicmF0aW9uIiwiY29uZmlkZW5jZSIsImNvb3JkaW5hdGVzIl0sInByb3BlcnRpZXMiOnsiaWQiOnsidHlwZSI6InN0cmluZyJ9LCJzZXZlcml0eSI6eyJlbnVtIjpbImluZm8iLCJsb3ciLCJtZWRpdW0iLCJoaWdoIiwiY3JpdGljYWwiXX0sInRpdGxlIjp7InR5cGUiOiJzdHJpbmcifSwiY2FsaWJyYXRpb24iOnsiZW51bSI6WyJjb25maXJtZWQiLCJsaWtlbHkiLCJwb3NzaWJsZSJdfSwiY29uZmlkZW5jZSI6eyJ0eXBlIjoibnVtYmVyIiwibWluaW11bSI6MCwibWF4aW11bSI6MX0sImNvb3JkaW5hdGVzIjp7InR5cGUiOiJhcnJheSIsIm1pbkl0ZW1zIjoxLCJpdGVtcyI6eyJ0eXBlIjoib2JqZWN0IiwicmVxdWlyZWQiOlsicGF0aCIsImxpbmUiXSwicHJvcGVydGllcyI6eyJwYXRoIjp7InR5cGUiOiJzdHJpbmcifSwibGluZSI6eyJ0eXBlIjoiaW50ZWdlciIsIm1pbmltdW0iOjF9fX19fX19LCJ1bmtub3ducyI6eyJ0eXBlIjoiYXJyYXkiLCJtYXhJdGVtcyI6MzIsIml0ZW1zIjp7InR5cGUiOiJzdHJpbmcifX0sInJlcG9zaXRvcnlNdXRhdGVkIjp7ImNvbnN0IjpmYWxzZX0sImNvbW1hbmRzRXhlY3V0ZWQiOnsiY29uc3QiOmZhbHNlfSwiY2hlY2tsaXN0Q29tcGxldGVkIjp7ImNvbnN0IjpmYWxzZX19fQ==
+        consumes:
+          - {claim: component.work_item@1, as: component}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: admission}
+        emits:
+          - {claim: proof.component_spec_review_candidate@1, from: output}
+
+      spec_review_admit:
+        type: proof-admit
+        consumes:
+          - {claim: proof.component_spec_review_candidate@1, as: candidate}
+        emits:
+          - {claim: proof.component_spec_review_admitted_receipt@1, from: output}
 
       verify:
         type: noop
-        depends_on: [native-validation]
         consumes:
-          - {claim: component.work_item@1, as: component}
-          - {claim: native.component.summary@1, as: summary}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+          - {claim: proof.component_spec_review_candidate@1, as: spec_candidate}
+          - {claim: proof.component_spec_review_admitted_receipt@1, as: spec_receipt}
 
   native-requirement-review:
     input: {name: item, claim: native.requirement.item@1}

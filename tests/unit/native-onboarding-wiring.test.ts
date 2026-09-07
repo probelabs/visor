@@ -5,8 +5,10 @@ import {spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import Ajv from 'ajv';
 import {loadConfig} from '../../src/sdk';
+import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
 import {createExtendedLiquid} from '../../src/liquid-extensions';
 import {GitCheckoutProvider} from '../../src/providers/git-checkout-provider';
+import {projectGovernedProofInspectConfig} from '../../src/providers/governed-proof-inspect-check-provider';
 import {worktreeManager} from '../../src/utils/worktree-manager';
 import {nativeOnboardingCountsAreConsistent} from '../../examples/agent-governance/native-onboarding/run-onboarding';
 
@@ -20,6 +22,40 @@ function readConfig(): Json {
 }
 
 describe('native onboarding isolated writer wiring', () => {
+  it('accepts the shipped native selector with graph-owned dependencies at managed-run projection', () => {
+    const config = readConfig();
+    const check = config.subgraphs['onboard-component'].checks.inspect;
+    expect(check.depends_on).toEqual(['native-validation']);
+    expect(projectGovernedProofInspectConfig(check)).toMatchObject({
+      type: 'governed-proof-inspect',
+      profile: 'luna-xhigh-readonly-v1',
+    });
+  });
+
+  it('keeps reviewed source provenance as a closed current-or-retained discriminator', async () => {
+    const config = readConfig();
+    const inspect = config.subgraphs['discover-project'].checks.inspect;
+    // The runner replaces this placeholder with the Proof-resolved schema
+    // before strict loading; mirror that deterministic preparation here.
+    inspect.invocation.output_schema = Buffer.from(inspect.result_schema, 'utf8').toString('base64');
+    const loaded = await loadConfig(config, {strict: true});
+    const validate = compileClaimPlan(loaded).validatorsByClaim['native.component.reviewed@1'];
+    const digest = 'sha256:' + 'a'.repeat(64);
+    const review = {
+      id: 'SYS-REQ-001', component_id: 'component-a', file_path: 'a.go', proof_file_hash: digest,
+      candidate: {}, candidate_fingerprint: digest, packet_sha256: digest, retained_claim: null,
+    };
+    const base = {
+      version: 'native.component.reviewed/v1', component_id: 'component-a',
+      status: 'reviewed-native-requirement-items', item_count: 1, reviews: [review],
+    };
+    expect(() => validate({...base, source: {kind: 'current_graph', checkpoint_sha256: null, graph_semantic_digest: null, manifest_sha256: digest}})).not.toThrow();
+    expect(() => validate({...base, source: {kind: 'retained_checkpoint', checkpoint_sha256: digest, graph_semantic_digest: 'b'.repeat(64), manifest_sha256: digest}})).not.toThrow();
+    expect(() => validate({...base, source: {kind: 'current_graph', checkpoint_sha256: digest, graph_semantic_digest: null, manifest_sha256: digest}})).toThrow();
+    expect(() => validate({...base, source: {kind: 'retained_checkpoint', checkpoint_sha256: null, graph_semantic_digest: 'b'.repeat(64), manifest_sha256: digest}})).toThrow();
+    expect(() => validate({...base, source: {kind: 'retained_checkpoint', checkpoint_sha256: digest, graph_semantic_digest: 'not-a-digest', manifest_sha256: digest}})).toThrow();
+  });
+
   it('passes strict claim-graph validation with the local checkout and promotion stages', async () => {
     const config = readConfig();
     const inspect = config.subgraphs['discover-project'].checks.inspect;

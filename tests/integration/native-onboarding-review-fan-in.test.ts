@@ -168,6 +168,26 @@ describeNative('native onboarding per-requirement fan-in', () => {
       const reviewedAggregatePath = aggregatePath(paths.output, 'component-a');
       const aggregateBeforeSibling = fs.readFileSync(reviewedAggregatePath, 'utf8');
 
+      // Execute the shipped native-validation carrier against the real Proof
+      // fixture. This catches heredoc/JSONL parser regressions that a string
+      // assertion on the graph cannot see.
+      const validation = await renderAndRun(checks['native-validation'].exec, {
+        component: workItem,
+        reviewed,
+      }, paths.subject, paths.output);
+      expect(validation.result.status).toBe(0);
+      const validationSummary = JSON.parse(validation.result.stdout);
+      expect(validationSummary.component_id).toBe('component-a');
+      expect(validationSummary.validation.exit_code).toBe(0);
+      expect(validationSummary.validation.value).toBeDefined();
+      // The fixture intentionally has no source annotations, so Proof reports
+      // an open audit. The carrier must preserve that real nonzero exit while
+      // still parsing every JSONL event instead of fabricating a parse error.
+      expect(validationSummary.audit.exit_code).toBeGreaterThan(0);
+      expect(validationSummary.audit.event_count).toBeGreaterThan(0);
+      expect(validationSummary.audit.parse_error).toBeNull();
+      expect(validationSummary.audit.events.some((event: any) => event.event === 'check_done')).toBe(true);
+
       proof(paths.subject, [
         'req', 'new', 'specs/system', '--component', 'component-b',
     '--fretish', 'the component_b shall always satisfy component_state > 0', '--format', 'json',
