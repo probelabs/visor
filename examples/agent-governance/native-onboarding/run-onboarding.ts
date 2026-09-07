@@ -283,8 +283,23 @@ export function assertRecoveryRoots(
   }
   const checkpointCandidate = path.resolve(checkpointArg);
   const checkpoint = fs.realpathSync(checkpointCandidate);
-  if (!fs.statSync(checkpoint).isFile() || !inside(checkpoint, priorOutput)) {
-    throw new Error('recovery checkpoint must be a file inside prior output');
+  if (!fs.statSync(checkpoint).isFile()) {
+    throw new Error('recovery checkpoint must be a retained checkpoint file');
+  }
+  if (!inside(checkpoint, priorOutput)) {
+    // A chained recovery may pass the exact checkpoint from the newest,
+    // separate recovery output. The explicit file is the authority; require
+    // its conventional name and keep its containing root disjoint rather
+    // than inferring ownership from marker files beside it.
+    if (path.basename(checkpoint) !== 'checkpoint.json') {
+      throw new Error('recovery checkpoint outside prior output must be named checkpoint.json');
+    }
+    const checkpointRoot = realDirectory(path.dirname(checkpoint), 'retained checkpoint root');
+    if (inside(checkpointRoot, subject) || inside(subject, checkpointRoot) ||
+        inside(checkpointRoot, original) || inside(original, checkpointRoot) ||
+        inside(checkpointRoot, priorOutput) || inside(priorOutput, checkpointRoot)) {
+      throw new Error('retained checkpoint root must be disjoint from subject, protected original, and prior output');
+    }
   }
   const output = path.resolve(outputArg);
   const parent = fs.realpathSync(path.dirname(output));
@@ -491,47 +506,211 @@ function encodeResultSchemas(value: unknown): unknown {
   return output;
 }
 
-export async function loadOnboardingConfig(proof: string, subject: string, output: string, timeout: number) {
+function onboardingConfigTemplate(): {prepared: Json; inspectCheck: Json} {
   const raw = yaml.load(fs.readFileSync(CONFIG_PATH, 'utf8'));
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('onboarding YAML must be an object');
   const prepared = encodeResultSchemas(raw) as Json;
   const inspect = ((prepared.subgraphs as Json)['discover-project'] as Json).checks as Json;
   const inspectCheck = inspect.inspect as Json;
-  const inventoryResult = runProof(proof, subject, output, 'preflight', ['onboarding', 'inventory'], timeout);
-  const inventory = parseJson(inventoryResult, 'Proof onboarding inventory') as Json;
-  writeJson(path.join(output, 'preflight', 'inventory.json'), inventory);
+  return {prepared, inspectCheck};
+}
+
+function assertAuthenticatedInventory(inventory: Json, label: string): Json {
   const authority = inventory.authority as Json | undefined;
   const projectId = authority && typeof authority.project_id === 'string' ? authority.project_id : undefined;
   const subjectFingerprint = authority && typeof authority.subject_fingerprint === 'string' ? authority.subject_fingerprint : undefined;
   if (!projectId || !subjectFingerprint || !/^sha256:[0-9a-f]{64}$/.test(subjectFingerprint)) {
-    throw new Error('Proof onboarding inventory did not provide an authenticated project id and subject fingerprint');
+    throw new Error(`${label} did not provide an authenticated project id and subject fingerprint`);
   }
+  return {project_id: projectId, subject_fingerprint: subjectFingerprint};
+}
+
+function bindResolvedOnboardingAuthority(
+  prepared: Json,
+  inspectCheck: Json,
+  inventory: Json,
+  resolved: Json,
+  label: string,
+): void {
+  const authority = assertAuthenticatedInventory(inventory, label);
+  const resolvedSubject = resolved.subject && typeof resolved.subject === 'object' && !Array.isArray(resolved.subject)
+    ? resolved.subject as Json
+    : undefined;
+  if (resolved.version !== 'proof.role-invocation/v1' || resolved.role_id !== 'onboard' ||
+      resolved.role_source !== 'builtin' || resolved.stance !== 'owner' || resolved.authority !== 'read-only' ||
+      !resolvedSubject || resolvedSubject.kind !== 'project' || resolvedSubject.id !== authority.project_id ||
+      resolvedSubject.fingerprint !== authority.subject_fingerprint ||
+      typeof resolved.output_schema_id !== 'string' || typeof resolved.output_schema !== 'string' ||
+      typeof resolved.instructions !== 'string' || resolved.instructions.length === 0 ||
+      typeof resolved.invocation_digest !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(resolved.invocation_digest)) {
+    throw new Error(`${label} returned an incomplete retained project authority`);
+  }
+  const templateInvocation = inspectCheck.invocation as Json;
+  if (!templateInvocation || resolved.output_schema_id !== templateInvocation.output_schema_id ||
+      resolved.output_schema !== templateInvocation.output_schema) {
+    throw new Error(`${label} output schema does not match the shipped onboarding graph`);
+  }
+  inspectCheck.invocation = {
+    role_id: resolved.role_id,
+    stance: resolved.stance,
+    subject: {
+      kind: resolvedSubject.kind,
+      id: resolvedSubject.id,
+      fingerprint: resolvedSubject.fingerprint,
+    },
+    output_schema_id: resolved.output_schema_id,
+    output_schema: resolved.output_schema,
+  };
+  inspectCheck.instructions = resolved.instructions;
+  inspectCheck.invocation_digest = resolved.invocation_digest;
+  inspectCheck.result_schema = Buffer.from(resolved.output_schema, 'base64').toString('utf8');
+  const projectValue = ((prepared.checks as Json).project as Json).value as Json;
+  const projects = projectValue.projects as Json[];
+  if (!Array.isArray(projects) || projects.length !== 1) throw new Error('onboarding graph must contain one project root');
+  projects[0].project_id = authority.project_id;
+  projects[0].root = '.';
+}
+
+async function loadCurrentOnboardingInventory(proof: string, subject: string, output: string, timeout: number): Promise<Json> {
+  const inventoryResult = runProof(proof, subject, output, 'preflight', ['onboarding', 'inventory'], timeout);
+  const inventory = parseJson(inventoryResult, 'Proof onboarding inventory') as Json;
+  writeJson(path.join(output, 'preflight', 'inventory.json'), inventory);
+  assertAuthenticatedInventory(inventory, 'Proof onboarding inventory');
+  return inventory;
+}
+
+async function loadResolvedOnboardingAuthority(
+  proof: string,
+  subject: string,
+  output: string,
+  timeout: number,
+  inventory: Json,
+  prepared: Json,
+  inspectCheck: Json,
+): Promise<Json> {
+  const authority = assertAuthenticatedInventory(inventory, 'Proof onboarding inventory');
   const invocation = {
     role_id: 'onboard',
     stance: 'owner',
-    subject: {kind: 'project', id: projectId, fingerprint: subjectFingerprint},
+    subject: {kind: 'project', id: authority.project_id, fingerprint: authority.subject_fingerprint},
     output_schema_id: (inspectCheck.invocation as Json).output_schema_id,
     output_schema: (inspectCheck.invocation as Json).output_schema,
   };
   const resolvedResult = runProof(proof, subject, output, 'preflight', ['resolve-role-invocation'], timeout, serializeRoleInvocation(invocation));
   const resolved = parseJson(resolvedResult, 'Proof resolve-role-invocation') as Json;
   if (resolvedResult.stderr !== '') throw new Error('Proof resolve-role-invocation emitted stderr: ' + resolvedResult.stderr.slice(0, 1000));
-  if (resolved.role_id !== invocation.role_id || resolved.output_schema_id !== invocation.output_schema_id ||
-      resolved.output_schema !== invocation.output_schema || typeof resolved.instructions !== 'string' ||
-      resolved.instructions.length === 0 || typeof resolved.invocation_digest !== 'string' ||
-      !/^sha256:[0-9a-f]{64}$/.test(resolved.invocation_digest)) {
-    throw new Error('Proof resolve-role-invocation returned an incomplete project authority');
-  }
-  inspectCheck.invocation = invocation;
-  inspectCheck.instructions = resolved.instructions;
-  inspectCheck.invocation_digest = resolved.invocation_digest;
-  inspectCheck.result_schema = Buffer.from(String(invocation.output_schema), 'base64').toString('utf8');
-  const projectValue = ((prepared.checks as Json).project as Json).value as Json;
-  const projects = projectValue.projects as Json[];
-  if (!Array.isArray(projects) || projects.length !== 1) throw new Error('onboarding graph must contain one project root');
-  projects[0].project_id = projectId;
-  projects[0].root = '.';
+  bindResolvedOnboardingAuthority(prepared, inspectCheck, inventory, resolved, 'Proof resolve-role-invocation');
+  return resolved;
+}
+
+export async function loadOnboardingConfig(proof: string, subject: string, output: string, timeout: number) {
+  const {prepared, inspectCheck} = onboardingConfigTemplate();
+  const inventory = await loadCurrentOnboardingInventory(proof, subject, output, timeout);
+  await loadResolvedOnboardingAuthority(proof, subject, output, timeout, inventory, prepared, inspectCheck);
   return loadConfig(prepared, {strict: true});
+}
+
+type RetainedAuthorityFiles = Readonly<{
+  inventory: Json;
+  resolved: Json;
+  manifest: Json;
+}>;
+
+function readRetainedAuthorityFile(priorOutput: string, relativePath: string): Buffer {
+  if (path.isAbsolute(relativePath) || relativePath.includes('..')) {
+    throw new Error('retained authority path is not a safe relative path');
+  }
+  const candidate = path.join(priorOutput, relativePath);
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(candidate);
+  } catch {
+    throw new Error(`retained recovery authority is missing: ${relativePath}`);
+  }
+  const canonicalPriorOutput = fs.realpathSync(priorOutput);
+  if (!inside(resolved, canonicalPriorOutput)) throw new Error(`retained recovery authority escapes prior output: ${relativePath}`);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) throw new Error(`retained recovery authority is not a regular file: ${relativePath}`);
+  return fs.readFileSync(resolved);
+}
+
+function copyRetainedAuthorityEvidence(priorOutput: string, output: string): RetainedAuthorityFiles {
+  const paths = {
+    inventory: 'preflight/inventory.json',
+    resolved: 'commands/preflight/resolve-role-invocation.stdout',
+    resolved_meta: 'commands/preflight/resolve-role-invocation.meta.json',
+    resolved_stderr: 'commands/preflight/resolve-role-invocation.stderr',
+  } as const;
+  const captured = {} as Record<keyof typeof paths, Buffer>;
+  const records = Object.entries(paths).map(([name, relativePath]) => {
+    const bytes = readRetainedAuthorityFile(priorOutput, relativePath);
+    captured[name as keyof typeof paths] = bytes;
+    const destination = path.join(output, 'recovery', 'config-authority', path.basename(relativePath));
+    fs.mkdirSync(path.dirname(destination), {recursive: true, mode: 0o700});
+    fs.writeFileSync(destination, bytes, {mode: 0o600});
+    fs.chmodSync(destination, 0o600);
+    return {
+      name,
+      source: relativePath,
+      retained_path: path.relative(output, destination),
+      bytes: bytes.byteLength,
+      sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+    };
+  });
+  const inventoryBytes = captured.inventory;
+  const resolvedBytes = captured.resolved;
+  const metaBytes = captured.resolved_meta;
+  const stderrBytes = captured.resolved_stderr;
+  if (stderrBytes.byteLength !== 0) throw new Error('retained Proof resolve-role-invocation stderr must be empty');
+  let inventory: Json;
+  let resolved: Json;
+  let meta: Json;
+  try {
+    inventory = JSON.parse(inventoryBytes.toString('utf8')) as Json;
+    resolved = JSON.parse(resolvedBytes.toString('utf8')) as Json;
+    meta = JSON.parse(metaBytes.toString('utf8')) as Json;
+  } catch {
+    throw new Error('retained recovery authority contains invalid JSON');
+  }
+  if (meta.status !== 0 || meta.timed_out !== false ||
+      !Array.isArray(meta.args) || meta.args.length !== 1 || meta.args[0] !== 'resolve-role-invocation') {
+    throw new Error('retained Proof resolve-role-invocation metadata is not a successful exact command');
+  }
+  const authority = assertAuthenticatedInventory(inventory, 'retained Proof onboarding inventory');
+  const resolvedSubject = resolved.subject && typeof resolved.subject === 'object' && !Array.isArray(resolved.subject)
+    ? resolved.subject as Json
+    : undefined;
+  if (!resolvedSubject || resolvedSubject.kind !== 'project' || resolvedSubject.id !== authority.project_id ||
+      resolvedSubject.fingerprint !== authority.subject_fingerprint) {
+    throw new Error('retained Proof role authority does not match retained inventory authority');
+  }
+  const manifest = {
+    source_root: priorOutput,
+    files: records,
+    authority: {
+      project_id: authority.project_id,
+      subject_fingerprint: authority.subject_fingerprint,
+    },
+  };
+  writeJson(path.join(output, 'recovery', 'config-authority', 'manifest.json'), manifest);
+  return {inventory, resolved, manifest};
+}
+
+export async function loadRetainedOnboardingConfig(priorOutput: string, output: string): Promise<{
+  config: VisorConfig;
+  authority: RetainedAuthorityFiles;
+}> {
+  const authority = copyRetainedAuthorityEvidence(priorOutput, output);
+  const {prepared, inspectCheck} = onboardingConfigTemplate();
+  bindResolvedOnboardingAuthority(
+    prepared,
+    inspectCheck,
+    authority.inventory,
+    authority.resolved,
+    'retained Proof resolve-role-invocation',
+  );
+  return {config: await loadConfig(prepared, {strict: true}), authority};
 }
 
 type RecoveryRoots = Readonly<{
@@ -547,6 +726,26 @@ type RecoveryBinding = Readonly<{
   workItemClaimId: string;
   checkoutClaimId: string;
   authorClaimId: string;
+  ownedSourcePaths?: readonly string[];
+  draftInventory?: RecoveryDraftInventory;
+}>;
+
+type RecoverySideEffects = 'absent' | 'safely_idempotent' | 'isolated_draft_replay';
+
+type RecoveryDraftInventoryEntry = Readonly<{
+  path: string;
+  status: string;
+  kind: 'file' | 'symlink' | 'missing';
+  sha256?: string;
+  link_target?: string;
+}>;
+
+type RecoveryDraftInventory = Readonly<{
+  root: string;
+  baseline_commit: string;
+  component_id: string;
+  files: readonly RecoveryDraftInventoryEntry[];
+  sha256: string;
 }>;
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -564,6 +763,243 @@ function gitScalar(root: string, args: string[], label: string): string {
 function assertCleanGit(root: string, label: string): void {
   const status = String(execFileSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}));
   if (status.trim()) throw new Error(label + ' must have a clean Git tree');
+}
+
+function gitSnapshotAtCommit(root: string, commit: string, relativePath: string):
+  {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | undefined {
+  const tree = spawnSync('git', ['-C', root, 'ls-tree', '-z', commit, '--', relativePath], {
+    encoding: 'buffer',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (tree.status !== 0) return undefined;
+  const record = Buffer.from(tree.stdout || '').toString('utf8').split('\0')[0];
+  const tab = record.indexOf('\t');
+  if (tab < 0) return undefined;
+  const mode = record.slice(0, tab).split(' ')[0];
+  const content = spawnSync('git', ['-C', root, 'show', `${commit}:${relativePath}`], {
+    encoding: 'buffer',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (content.status !== 0) return undefined;
+  const bytes = Buffer.from(content.stdout || '');
+  return mode === '120000'
+    ? {kind: 'symlink', link_target: bytes.toString('utf8')}
+    : {kind: 'file', bytes};
+}
+
+function parseGitStatusNul(root: string): Array<{path: string; status: string}> {
+  const output = String(execFileSync('git', [
+    '-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+  ], {encoding: 'utf8'}));
+  const entries: Array<{path: string; status: string}> = [];
+  const tokens = output.split('\0');
+  for (const token of tokens) {
+    if (!token) continue;
+    if (token.length < 4 || token[2] !== ' ') throw new Error('recovery checkout Git status has an invalid NUL record');
+    const status = token.slice(0, 2);
+    if (status.includes('R') || status.includes('C')) {
+      throw new Error('recovery author draft cannot contain renames or copies');
+    }
+    const relativePath = token.slice(3);
+    if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('\0')) {
+      throw new Error('recovery checkout Git status contains an invalid path');
+    }
+    const normalized = path.posix.normalize(relativePath.replaceAll(path.sep, '/'));
+    if (normalized === '.' || normalized.startsWith('../') || normalized.includes('/../')) {
+      throw new Error('recovery checkout Git status escapes its root');
+    }
+    entries.push({path: normalized, status});
+  }
+  const unique = new Map<string, {path: string; status: string}>();
+  for (const entry of entries) unique.set(entry.path, entry);
+  return [...unique.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function draftFileValue(root: string, relativePath: string, baselineCommit: string):
+  {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | {kind: 'missing'} {
+  const absolute = path.join(root, relativePath);
+  let stat: fs.Stats | undefined;
+  try {
+    stat = fs.lstatSync(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  if (!stat) {
+    const baseline = gitSnapshotAtCommit(root, baselineCommit, relativePath);
+    return baseline ? baseline : {kind: 'missing'};
+  }
+  if (stat.isSymbolicLink()) return {kind: 'symlink', link_target: fs.readlinkSync(absolute)};
+  if (stat.isFile()) return {kind: 'file', bytes: fs.readFileSync(absolute)};
+  throw new Error(`recovery draft path is not a regular file or symlink: ${relativePath}`);
+}
+
+function currentFileValue(root: string, relativePath: string):
+  {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | undefined {
+  const absolute = path.join(root, relativePath);
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  if (stat.isSymbolicLink()) return {kind: 'symlink', link_target: fs.readlinkSync(absolute)};
+  if (stat.isFile()) return {kind: 'file', bytes: fs.readFileSync(absolute)};
+  throw new Error(`recovery path is not a regular file or symlink: ${relativePath}`);
+}
+
+function fileValuesEqual(
+  left: {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | undefined,
+  right: {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.kind !== right.kind) return false;
+  return left.kind === 'file'
+    ? left.bytes.equals((right as {kind: 'file'; bytes: Buffer}).bytes)
+    : left.link_target === (right as {kind: 'symlink'; link_target: string}).link_target;
+}
+
+/**
+ * Compare only the WorkItem-owned source paths with the recorded baseline.
+ * The subject may have advanced with an unrelated sibling commit, but a
+ * changed owned path cannot be safely replayed from a retained author draft.
+ */
+export function assertCanonicalOwnedPathsUnchanged(
+  root: string,
+  baselineCommit: string,
+  ownedSourcePaths: readonly string[],
+): void {
+  const changed = ownedSourcePaths.filter(relativePath =>
+    !fileValuesEqual(
+      gitSnapshotAtCommit(root, baselineCommit, relativePath),
+      currentFileValue(root, relativePath),
+    )
+  );
+  if (changed.length > 0) {
+    throw new Error(`Recovery canonical subject changed WorkItem-owned paths: ${changed.join(', ')}`);
+  }
+}
+
+function isNativeComponentPath(relativePath: string): boolean {
+  return /^specs\/(?:stakeholder|system|software|integration)\/(?:requirements\/[^/]+\.req\.ya?ml|variables\/[^/]+\.vars\.ya?ml)$/.test(relativePath);
+}
+
+function yamlComponent(value: Buffer | string, relativePath: string): string | undefined {
+  if (!isNativeComponentPath(relativePath)) return undefined;
+  try {
+    const parsed = yaml.load(Buffer.isBuffer(value) ? value.toString('utf8') : value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+      typeof (parsed as Json).component === 'string'
+      ? (parsed as Json).component as string
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function nativePathBelongsToComponent(
+  root: string,
+  baselineCommit: string,
+  relativePath: string,
+  componentId: string,
+): boolean {
+  if (!isNativeComponentPath(relativePath)) return false;
+  const current = draftFileValue(root, relativePath, baselineCommit);
+  if (current.kind === 'missing') return false;
+  let currentBytes: Buffer;
+  if (current.kind === 'file') currentBytes = current.bytes;
+  else {
+    if (path.isAbsolute(current.link_target)) return false;
+    const target = path.resolve(path.dirname(path.join(root, relativePath)), current.link_target);
+    if (!inside(target, root) || !fs.existsSync(target) || !fs.statSync(target).isFile()) return false;
+    currentBytes = fs.readFileSync(target);
+  }
+  if (yamlComponent(currentBytes, relativePath) !== componentId) return false;
+  const baseline = gitSnapshotAtCommit(root, baselineCommit, relativePath);
+  if (!baseline) return true;
+  const baselineBytes = baseline.kind === 'file'
+    ? baseline.bytes
+    : Buffer.from(baseline.link_target, 'utf8');
+  return yamlComponent(baselineBytes, relativePath) === componentId;
+}
+
+function draftInventoryDigest(files: readonly RecoveryDraftInventoryEntry[]): string {
+  return createHash('sha256').update(JSON.stringify(files), 'utf8').digest('hex');
+}
+
+export function inventoryAuthorDraft(
+  root: string,
+  baselineCommit: string,
+  componentId: string,
+  ownedSourcePaths: readonly string[],
+): RecoveryDraftInventory {
+  const owned = new Set(ownedSourcePaths);
+  const files = parseGitStatusNul(root).map(({path: relativePath, status}) => {
+    const allowedSource = owned.has(relativePath);
+    const allowedNative = nativePathBelongsToComponent(root, baselineCommit, relativePath, componentId);
+    if (!allowedSource && !allowedNative) {
+      throw new Error(`recovery author draft path is outside WorkItem ownership: ${relativePath}`);
+    }
+    const value = draftFileValue(root, relativePath, baselineCommit);
+    const entry: RecoveryDraftInventoryEntry = value.kind === 'file'
+      ? {path: relativePath, status, kind: 'file', sha256: `sha256:${createHash('sha256').update(value.bytes).digest('hex')}`}
+      : value.kind === 'symlink'
+        ? {path: relativePath, status, kind: 'symlink', link_target: value.link_target,
+          sha256: `sha256:${createHash('sha256').update(value.link_target, 'utf8').digest('hex')}`}
+        : {path: relativePath, status, kind: 'missing'};
+    return entry;
+  });
+  return Object.freeze({
+    root,
+    baseline_commit: baselineCommit,
+    component_id: componentId,
+    files: Object.freeze(files),
+    sha256: `sha256:${draftInventoryDigest(files)}`,
+  });
+}
+
+function assertDraftInventoryUnchanged(
+  expected: RecoveryDraftInventory,
+  ownedSourcePaths: readonly string[],
+): void {
+  const actual = inventoryAuthorDraft(expected.root, expected.baseline_commit, expected.component_id, ownedSourcePaths);
+  if (actual.sha256 !== expected.sha256 || !sameJson(actual.files, expected.files)) {
+    throw new Error(`recovery author draft changed before retry dispatch for ${expected.component_id}`);
+  }
+}
+
+function gitCommonDirectory(root: string, label: string): string {
+  const value = gitScalar(root, ['rev-parse', '--git-common-dir'], label);
+  const candidate = path.isAbsolute(value) ? value : path.resolve(root, value);
+  return fs.realpathSync(candidate);
+}
+
+function assertCheckoutCommonDirectory(checkoutRoot: string, canonicalRoot: string, baselineCommit: string): void {
+  const commonDirectory = gitCommonDirectory(checkoutRoot, 'retained checkout');
+  if (!fs.statSync(commonDirectory).isDirectory()) throw new Error('retained checkout Git common directory is not a directory');
+  try {
+    execFileSync('git', ['--git-dir', commonDirectory, 'cat-file', '-e', `${baselineCommit}^{commit}`], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    throw new Error('retained checkout Git common directory does not contain the WorkItem baseline');
+  }
+  const canonicalCommon = gitCommonDirectory(canonicalRoot, 'recovery subject');
+  if (commonDirectory === canonicalCommon) return;
+  // Worktree managers may use a verified bare cache. The checkout claim's
+  // repository path remains the canonical subject authority; the common dir
+  // must still be a real Git object store containing the exact baseline.
+  if (!path.isAbsolute(commonDirectory) || commonDirectory === checkoutRoot) {
+    throw new Error('retained checkout Git common directory is not an owned Git object store');
+  }
+}
+
+function hasPriorIsolatedDraftReplay(checkpoint: GraphJournalCheckpointV1, generationId: string): boolean {
+  return checkpoint.events.some(event =>
+    event.type === 'AttemptRetryRequested' &&
+    event.nodeGenerationId === generationId &&
+    event.externalSideEffects === 'isolated_draft_replay'
+  );
 }
 
 function assertRecoveryInputClaim(
@@ -587,8 +1023,19 @@ export function validateRecoverySelection(
   retryGenerationIds: readonly string[],
   roots: RecoveryRoots,
   inventory: Json,
+  externalSideEffects: RecoverySideEffects,
 ): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]} {
   const plan = compileClaimPlan(config);
+  if (checkpoint.graphSemanticDigest !== plan.expansionPlan.graphSemanticDigest) {
+    throw new Error('Recovery checkpoint graph semantic digest does not match the retained configuration authority');
+  }
+  if (externalSideEffects !== 'absent' && externalSideEffects !== 'safely_idempotent' &&
+      externalSideEffects !== 'isolated_draft_replay') {
+    throw new Error('Recovery has an unsupported external side-effect disposition');
+  }
+  if (externalSideEffects === 'isolated_draft_replay' && retryGenerationIds.length !== 1) {
+    throw new Error('isolated draft replay requires exactly one selected author generation');
+  }
   const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
   const projection: any = journal.getInstanceProjection();
   const authority = inventory.authority && typeof inventory.authority === 'object' && !Array.isArray(inventory.authority)
@@ -609,26 +1056,45 @@ export function validateRecoverySelection(
   const bindings: RecoveryBinding[] = [];
   for (const generationId of retryGenerationIds) {
     const generation = projection.generationsById[generationId];
-    if (!generation || generation.checkId !== 'promote-native-component' || generation.status !== 'failed' ||
+    const authorReplay = externalSideEffects === 'isolated_draft_replay';
+    const expectedCheckId = authorReplay ? 'author-native-component' : 'promote-native-component';
+    if (!generation || generation.checkId !== expectedCheckId || generation.status !== 'failed' ||
         !generation.scheduled || typeof generation.attemptId !== 'string' || typeof generation.fence !== 'number' ||
         typeof generation.reason !== 'string' || generation.completedOutputClaimIds.length !== 0) {
-      throw new Error(`Recovery generation ${generationId} is not an eligible failed promotion leaf`);
+      throw new Error(`Recovery generation ${generationId} is not an eligible failed ${authorReplay ? 'author' : 'promotion'} leaf`);
+    }
+    if (authorReplay && hasPriorIsolatedDraftReplay(checkpoint, generationId)) {
+      throw new Error(`Recovery generation ${generationId} already has an isolated draft replay`);
+    }
+    if (!authorReplay && hasPriorIsolatedDraftReplay(checkpoint, generationId)) {
+      throw new Error(`Recovery generation ${generationId} has already used isolated draft replay`);
     }
     if (Object.values(projection.instancesById).some((instance: any) =>
       instance.status === 'active' && instance.parentSubgraphInstanceId === generation.subgraphInstanceId)) {
       throw new Error(`Recovery generation ${generationId} still has active descendants`);
     }
     const claims = generation.activeInputClaimIds.map((id: string) => projection.claimsById[id]).filter(Boolean);
-    if (claims.length !== 3 || new Set(claims.map((claim: any) => claim.claim)).size !== 3) {
-      throw new Error(`Recovery generation ${generationId} has an unexpected promotion input set`);
+    const expectedClaims = authorReplay
+      ? ['component.checkout@1', 'component.prepared_work_item@1', 'native.role.onboard@1']
+      : ['component.checkout@1', 'component.prepared_work_item@1', 'native.author.evidence@1'];
+    if (claims.length !== expectedClaims.length ||
+        new Set(claims.map((claim: any) => claim.claim)).size !== expectedClaims.length ||
+        expectedClaims.some(claimName => !claims.some((claim: any) => claim.claim === claimName))) {
+      throw new Error(`Recovery generation ${generationId} has an unexpected ${authorReplay ? 'author' : 'promotion'} input set`);
     }
     const workItem = assertRecoveryInputClaim(projection, generation, 'component.prepared_work_item@1');
     const checkout = assertRecoveryInputClaim(projection, generation, 'component.checkout@1');
-    const author = assertRecoveryInputClaim(projection, generation, 'native.author.evidence@1');
+    const author = assertRecoveryInputClaim(
+      projection, generation, authorReplay ? 'native.role.onboard@1' : 'native.author.evidence@1'
+    );
     if (workItem.producerCheckId !== 'prepare-work-item' || checkout.producerCheckId !== 'checkout-worktree' ||
-        author.producerCheckId !== 'author-native-component' || !sameJson(workItem.scope, generation.scope) ||
-        !sameJson(checkout.scope, generation.scope) || !sameJson(author.scope, generation.scope)) {
+        (authorReplay ? author.producerCheckId !== 'role-onboard-component' : author.producerCheckId !== 'author-native-component') ||
+        !sameJson(workItem.scope, generation.scope) || !sameJson(checkout.scope, generation.scope) ||
+        !sameJson(author.scope, generation.scope)) {
       throw new Error(`Recovery generation ${generationId} has mismatched native input provenance`);
+    }
+    if (authorReplay && (typeof author.payload !== 'string' || author.payload.length === 0)) {
+      throw new Error(`Recovery generation ${generationId} has no built-in onboard role authority`);
     }
     const workItemPayload = workItem.payload && typeof workItem.payload === 'object' && !Array.isArray(workItem.payload)
       ? workItem.payload as Json
@@ -646,7 +1112,13 @@ export function validateRecoverySelection(
       throw new Error(`Recovery generation ${generationId} has incomplete Proof component subject authority`);
     }
     const baselineCommit = workItemPayload.baseline_commit;
-    if (subjectHead !== baselineCommit) {
+    const ownedSourcePaths = Array.isArray(workItemPayload.sorted_owned_paths)
+      ? workItemPayload.sorted_owned_paths.filter((value): value is string => typeof value === 'string')
+      : [];
+    if (ownedSourcePaths.length === 0 || ownedSourcePaths.some(value => path.isAbsolute(value) || value.includes('..'))) {
+      throw new Error(`Recovery WorkItem for ${workItemPayload.component_id} has no safe sorted owned paths`);
+    }
+    if (!authorReplay && subjectHead !== baselineCommit) {
       throw new Error(`Recovery subject HEAD does not match WorkItem baseline for ${workItemPayload.component_id}`);
     }
     const checkoutPayload = checkout.payload && typeof checkout.payload === 'object' && !Array.isArray(checkout.payload)
@@ -655,6 +1127,8 @@ export function validateRecoverySelection(
     if (!checkoutPayload || checkoutPayload.success !== true || checkoutPayload.is_worktree !== true ||
         typeof checkoutPayload.path !== 'string' || !path.isAbsolute(checkoutPayload.path) ||
         typeof checkoutPayload.commit !== 'string' || checkoutPayload.commit !== baselineCommit ||
+        typeof checkoutPayload.ref !== 'string' || checkoutPayload.ref !== baselineCommit ||
+        typeof checkoutPayload.repository !== 'string' ||
         typeof checkoutPayload.worktree_id !== 'string' || checkoutPayload.worktree_id.length === 0) {
       throw new Error(`Recovery generation ${generationId} has an invalid retained checkout binding`);
     }
@@ -668,11 +1142,22 @@ export function validateRecoverySelection(
       throw new Error(`Recovery retained checkout for ${workItemPayload.component_id} is not pinned to its WorkItem baseline`);
     }
     // Author checkouts intentionally retain their uncommitted native draft.
-    // Verify only the immutable Git identity here; promotion recovery owns the
-    // draft scope and must not clean or rewrite the retained worktree.
-    if (typeof checkoutPayload.repository === 'string') {
-      const repository = realDirectory(checkoutPayload.repository, 'retained checkout repository');
-      if (repository !== roots.subject) throw new Error(`Recovery checkout for ${workItemPayload.component_id} has a mismatched repository`);
+    // Verify only immutable Git identity here; never clean or rewrite drafts.
+    const repository = realDirectory(checkoutPayload.repository as string, 'retained checkout repository');
+    if (repository !== roots.subject) throw new Error(`Recovery checkout for ${workItemPayload.component_id} has a mismatched repository`);
+    assertCheckoutCommonDirectory(checkoutPath, roots.subject, baselineCommit);
+    const draftInventory = authorReplay
+      ? inventoryAuthorDraft(checkoutPath, baselineCommit, workItemPayload.component_id, ownedSourcePaths)
+      : undefined;
+    if (authorReplay && (!draftInventory || draftInventory.files.length === 0)) {
+      throw new Error(`Recovery author draft inventory is empty for ${workItemPayload.component_id}`);
+    }
+    if (authorReplay) {
+      const retainedNativePaths = draftInventory?.files
+        .map(file => file.path)
+        .filter(isNativeComponentPath) || [];
+      const canonicalPaths = [...new Set([...ownedSourcePaths, ...retainedNativePaths])];
+      assertCanonicalOwnedPathsUnchanged(roots.subject, baselineCommit, canonicalPaths);
     }
     bindings.push(Object.freeze({
       generationId,
@@ -682,6 +1167,8 @@ export function validateRecoverySelection(
       workItemClaimId: workItem.claimId,
       checkoutClaimId: checkout.claimId,
       authorClaimId: author.claimId,
+      ...(authorReplay ? {ownedSourcePaths: Object.freeze([...ownedSourcePaths])} : {}),
+      ...(draftInventory ? {draftInventory} : {}),
     }));
   }
   return {journal, bindings: Object.freeze(bindings)};
@@ -817,16 +1304,32 @@ async function runRecovery(
     throw new Error('prior recovery output must be disjoint from current subject, original, and output roots');
   }
   const checkpointPath = fs.realpathSync(path.resolve(required(values, 'recover-checkpoint')));
-  if (!fs.statSync(checkpointPath).isFile() || !inside(checkpointPath, priorOutput)) {
-    throw new Error('recover-checkpoint must be a file retained inside prior-output');
+  if (!fs.statSync(checkpointPath).isFile()) {
+    throw new Error('recover-checkpoint must be a retained checkpoint file');
+  }
+  if (!inside(checkpointPath, priorOutput)) {
+    if (path.basename(checkpointPath) !== 'checkpoint.json') {
+      throw new Error('recover-checkpoint outside prior-output must be named checkpoint.json');
+    }
+    const checkpointRoot = realDirectory(path.dirname(checkpointPath), 'retained checkpoint root');
+    if (inside(checkpointRoot, roots.subject) || inside(roots.subject, checkpointRoot) ||
+        inside(checkpointRoot, roots.original) || inside(roots.original, checkpointRoot) ||
+        inside(checkpointRoot, priorOutput) || inside(priorOutput, checkpointRoot) ||
+        inside(checkpointRoot, roots.output) || inside(roots.output, checkpointRoot)) {
+      throw new Error('retained checkpoint root must be disjoint from subject, protected original, prior output, and recovery output');
+    }
   }
   const checkpointBytes = fs.readFileSync(checkpointPath, 'utf8');
   const checkpoint = JSON.parse(checkpointBytes) as unknown;
   const validatedInput = ExecutionJournal.validateGraphCheckpointIntegrity(checkpoint);
   const generationIds = [...recovery.retryGenerationIds];
   const externalSideEffects = required(values, 'external-side-effects');
-  if (externalSideEffects !== 'absent' && externalSideEffects !== 'safely_idempotent') {
-    throw new Error('--external-side-effects must be absent or safely_idempotent');
+  if (externalSideEffects !== 'absent' && externalSideEffects !== 'safely_idempotent' &&
+      externalSideEffects !== 'isolated_draft_replay') {
+    throw new Error('--external-side-effects must be absent, safely_idempotent, or isolated_draft_replay');
+  }
+  if (externalSideEffects === 'isolated_draft_replay' && generationIds.length !== 1) {
+    throw new Error('isolated_draft_replay requires exactly one failed author generation');
   }
 
   const revision = assertRecoverySubject(roots.subject);
@@ -875,20 +1378,51 @@ async function runRecovery(
     codex_home_is_private: true,
     codex_home_config_present: codex.configPresent,
     no_native_init_or_discovery: true,
-    note: 'Recovery restores one retained Graph-v2 prefix and explicitly retries only selected promotion leaves; failed authors and historical failures remain visible.',
+    note: externalSideEffects === 'isolated_draft_replay'
+      ? 'Recovery restores one retained Graph-v2 prefix and explicitly retries one selected author leaf from an isolated retained draft; other failures remain visible.'
+      : 'Recovery restores one retained Graph-v2 prefix and explicitly retries only selected promotion leaves; failed authors and historical failures remain visible.',
   });
 
   const registry = CheckProviderRegistry.getInstance();
   registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
-  const config = await loadOnboardingConfig(proof, roots.subject, roots.output, timeout);
-  const inventory = JSON.parse(fs.readFileSync(path.join(roots.output, 'preflight', 'inventory.json'), 'utf8')) as Json;
+  // Refresh the current subject inventory as a separate freshness check, but
+  // never bind the recovery graph to post-promotion role/schema bytes. Those
+  // bytes are immutable authority retained by the earlier run.
+  const currentInventory = await loadCurrentOnboardingInventory(proof, roots.subject, roots.output, timeout);
+  const retained = await loadRetainedOnboardingConfig(priorOutput, roots.output);
+  const currentAuthority = assertAuthenticatedInventory(currentInventory, 'current Proof onboarding inventory');
+  const retainedAuthority = assertAuthenticatedInventory(
+    retained.authority.inventory,
+    'retained Proof onboarding inventory',
+  );
+  if (currentAuthority.project_id !== retainedAuthority.project_id) {
+    throw new Error('current Proof project identity does not match retained recovery authority');
+  }
+  writeJson(path.join(roots.output, 'recovery', 'current-authority.json'), {
+    project_id: currentAuthority.project_id,
+    subject_fingerprint: currentAuthority.subject_fingerprint,
+    source: 'current-read-only-proof-inventory',
+  });
+  const config = retained.config;
+  const configPlan = compileClaimPlan(config);
+  if (configPlan.expansionPlan.graphSemanticDigest !== validatedInput.graphSemanticDigest) {
+    throw new Error('recovery configuration graph digest does not match the checkpoint authority');
+  }
   const authority = validateRecoverySelection(
     config,
     validatedInput,
     generationIds,
     {subject: roots.subject, priorOutput},
-    inventory,
+    currentInventory,
+    externalSideEffects,
   );
+  const draftInventories = authority.bindings
+    .filter(binding => binding.draftInventory)
+    .map(binding => binding.draftInventory);
+  if (externalSideEffects === 'isolated_draft_replay' && draftInventories.length !== 1) {
+    throw new Error('isolated_draft_replay requires one retained author draft inventory');
+  }
+  writeJson(path.join(roots.output, 'recovery', 'draft-inventory.json'), draftInventories);
   writeJson(path.join(roots.output, 'recovery', 'selection.json'), {
     session_id: checkpoint && typeof checkpoint === 'object' ? (checkpoint as Json).sessionId : undefined,
     source_revision: revision,
@@ -905,8 +1439,15 @@ async function runRecovery(
       config,
       prInfo: PR,
       retryGenerationIds: generationIds,
-      externalSideEffects: externalSideEffects as 'absent' | 'safely_idempotent',
-      onRetryCheckpoint: retryCheckpoint => writeCheckpoint(path.join(roots.output, 'recovery', 'retry-prefix-checkpoint.json'), retryCheckpoint),
+      externalSideEffects,
+      onRetryCheckpoint: retryCheckpoint => {
+        for (const binding of authority.bindings) {
+          if (binding.draftInventory) {
+            assertDraftInventoryUnchanged(binding.draftInventory, binding.ownedSourcePaths || []);
+          }
+        }
+        writeCheckpoint(path.join(roots.output, 'recovery', 'retry-prefix-checkpoint.json'), retryCheckpoint);
+      },
       maxParallelism: config.max_parallelism,
       failFast: false,
     });

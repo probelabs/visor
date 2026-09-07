@@ -583,11 +583,15 @@ export interface GeneratedAttemptFailedEvent extends BoundAttemptEventBase {
  * Explicit operator-authorized retry of one failed generated attempt.  This
  * event never rewrites the failed attempt: it records the exact failed
  * generation/input identity and only reopens that generation for a fresh
- * allocator-issued attempt.  The caller must have independently established
- * that the prior operation had no external side effects (or is safely
- * idempotent).
+ * allocator-issued attempt.  The caller must explicitly classify the prior
+ * boundary as absent, safely idempotent, or an isolated draft replay.  The
+ * latter records a retained disposable writer checkout; it does not claim
+ * byte convergence, approval, or absence of side effects.
  */
-export type GeneratedAttemptRetrySideEffects = 'absent' | 'safely_idempotent';
+export type GeneratedAttemptRetrySideEffects =
+  | 'absent'
+  | 'safely_idempotent'
+  | 'isolated_draft_replay';
 
 export interface GeneratedAttemptRetryRequestedEvent extends InstanceEventBase {
   readonly type: 'AttemptRetryRequested';
@@ -2317,7 +2321,9 @@ function reduceGeneratedAttemptRetry(
       generation.fence !== event.priorFence ||
       generation.reason !== event.priorFailureReason ||
       generation.completedOutputClaimIds.length !== 0 ||
-      (event.externalSideEffects !== 'absent' && event.externalSideEffects !== 'safely_idempotent')) {
+      (event.externalSideEffects !== 'absent' &&
+        event.externalSideEffects !== 'safely_idempotent' &&
+        event.externalSideEffects !== 'isolated_draft_replay')) {
     throw new InstanceKernelError(
       'INVALID_RETRY',
       'Retry event is not bound to the exact failed generated attempt'

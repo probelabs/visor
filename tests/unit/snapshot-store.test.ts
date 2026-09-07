@@ -1504,6 +1504,42 @@ describe('Graph-v2 journal checkpoints', () => {
     })).toThrow();
   });
 
+  it('round-trips the closed isolated draft replay disposition and rejects tampering', () => {
+    const source = c2Journal();
+    publishCatalog(source, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = source.queryReadyWork().find(value => value.checkId === 'inspect')!;
+    const firstAttempt = source.startGeneratedAttempt(generation.nodeGenerationId);
+    source.scheduleGeneratedAttempt(firstAttempt);
+    source.failGeneratedAttempt(firstAttempt, 'author retryable failure');
+
+    const events = source.retryFailedGeneratedAttempts({
+      sessionId: 'c2-session',
+      nodeGenerationIds: [generation.nodeGenerationId],
+      externalSideEffects: 'isolated_draft_replay',
+    });
+    expect(events[0]).toEqual(expect.objectContaining({
+      type: 'AttemptRetryRequested',
+      externalSideEffects: 'isolated_draft_replay',
+    }));
+
+    const checkpoint = source.exportGraphCheckpoint('c2-session');
+    const restored = ExecutionJournal.restoreGraphCheckpoint(
+      compileClaimPlan(c2Config()),
+      JSON.parse(JSON.stringify(checkpoint)),
+    );
+    expect(restored.readRuntimeEvents()).toEqual(source.readRuntimeEvents());
+    expect(restored.getInstanceProjection()).toEqual(source.getInstanceProjection());
+
+    const tampered = JSON.parse(JSON.stringify(checkpoint));
+    const retry = tampered.events.find((event: any) => event.type === 'AttemptRetryRequested');
+    retry.externalSideEffects = 'unapproved_replay';
+    rehash(tampered);
+    expectErrorCode(
+      () => ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(c2Config()), tampered),
+      'INVALID_CHECKPOINT_PREFIX',
+    );
+  });
+
   function completeC2Work(journal: ExecutionJournal): void {
     while (journal.queryReadyWork().length > 0) {
       const generation = journal.queryReadyWork()[0];

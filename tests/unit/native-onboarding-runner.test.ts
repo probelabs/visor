@@ -6,9 +6,12 @@ import {execFileSync, spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import {
   assertPrivateCodexHome,
+  assertCanonicalOwnedPathsUnchanged,
   assertRecoveryRoots,
   commitInitializedProofBaseline,
   configurePublicPromptCapture,
+  inventoryAuthorDraft,
+  loadRetainedOnboardingConfig,
   parseRecoveryArguments,
   serializeRoleInvocation,
   summarizeNativePostflight,
@@ -254,6 +257,161 @@ describe('native onboarding runner boundaries', () => {
     expect(fs.existsSync(roots.output)).toBe(true);
     expect(() => assertRecoveryRoots(subject, original, path.join(prior, 'nested-output'), prior, checkpoint))
       .toThrow(/outside subject, protected original, and prior output/);
+  });
+
+  it('inventories only retained author drafts and permits unrelated canonical sibling progress', () => {
+    const subject = path.join(root, 'draft-subject');
+    const worker = path.join(root, 'draft-worktree');
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n\nconst Owned = 1\n', 'utf8');
+    fs.writeFileSync(path.join(subject, 'sibling.go'), 'package fixture\n\nconst Sibling = 1\n', 'utf8');
+    const baselineRequirement = path.join(subject, 'specs', 'system', 'requirements', 'SYS-REQ-A.req.yaml');
+    fs.mkdirSync(path.dirname(baselineRequirement), {recursive: true});
+    fs.writeFileSync(baselineRequirement, 'id: SYS-REQ-A\ncomponent: component-a\ndescription: existing\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'draft baseline']);
+    const baseline = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    execFileSync('git', ['-C', subject, 'worktree', 'add', '--quiet', '--detach', worker, baseline]);
+
+    fs.writeFileSync(path.join(worker, 'owned.go'), 'package fixture\n\nconst Owned = 2\n', 'utf8');
+    const requirement = path.join(worker, 'specs', 'system', 'requirements', 'SYS-REQ-DRAFT.req.yaml');
+    const variable = path.join(worker, 'specs', 'system', 'variables', 'DRAFT.vars.yaml');
+    fs.mkdirSync(path.dirname(requirement), {recursive: true});
+    fs.mkdirSync(path.dirname(variable), {recursive: true});
+    fs.writeFileSync(requirement, 'id: SYS-REQ-DRAFT\ncomponent: component-a\ndescription: draft\n', 'utf8');
+    fs.writeFileSync(variable, 'id: DRAFT\ncomponent: component-a\nvalue: 1\n', 'utf8');
+
+    // An accepted sibling commit may advance the canonical subject without
+    // changing the selected WorkItem's source or native paths.
+    fs.writeFileSync(path.join(subject, 'sibling.go'), 'package fixture\n\nconst Sibling = 2\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', 'sibling.go']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'accepted sibling']);
+
+    const inventory = inventoryAuthorDraft(worker, baseline, 'component-a', ['owned.go']);
+    expect(inventory.files.map(file => file.path)).toEqual([
+      'owned.go',
+      'specs/system/requirements/SYS-REQ-DRAFT.req.yaml',
+      'specs/system/variables/DRAFT.vars.yaml',
+    ]);
+    expect(inventory.files.every(file => file.sha256?.startsWith('sha256:'))).toBe(true);
+    expect(() => assertCanonicalOwnedPathsUnchanged(subject, baseline, ['owned.go'])).not.toThrow();
+
+    // A sibling cannot silently take over a retained native path.
+    const canonicalRequirement = path.join(subject, 'specs/system/requirements/SYS-REQ-DRAFT.req.yaml');
+    fs.mkdirSync(path.dirname(canonicalRequirement), {recursive: true});
+    fs.copyFileSync(requirement, canonicalRequirement);
+    expect(() => assertCanonicalOwnedPathsUnchanged(subject, baseline, [
+      'specs/system/requirements/SYS-REQ-DRAFT.req.yaml',
+    ])).toThrow(/changed WorkItem-owned paths/);
+    fs.unlinkSync(canonicalRequirement);
+
+    // A pre-existing native path cannot be relabeled by the replayed author.
+    const relabeledRequirement = path.join(worker, 'specs/system/requirements/SYS-REQ-A.req.yaml');
+    fs.writeFileSync(relabeledRequirement, 'id: SYS-REQ-A\ncomponent: component-b\ndescription: stolen\n', 'utf8');
+    expect(() => inventoryAuthorDraft(worker, baseline, 'component-a', ['owned.go']))
+      .toThrow(/outside WorkItem ownership: specs\/system\/requirements\/SYS-REQ-A\.req\.yaml/);
+    fs.writeFileSync(relabeledRequirement, 'id: SYS-REQ-A\ncomponent: component-a\ndescription: existing\n', 'utf8');
+
+    // An arbitrary dirty path in the retained author checkout is rejected.
+    fs.writeFileSync(path.join(worker, 'unowned.txt'), 'not part of the WorkItem\n', 'utf8');
+    expect(() => inventoryAuthorDraft(worker, baseline, 'component-a', ['owned.go']))
+      .toThrow(/outside WorkItem ownership: unowned.txt/);
+    fs.unlinkSync(path.join(worker, 'unowned.txt'));
+
+    // A direct edit of an owned canonical path is also a pre-replay conflict.
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n\nconst Owned = 3\n', 'utf8');
+    expect(() => assertCanonicalOwnedPathsUnchanged(subject, baseline, ['owned.go']))
+      .toThrow(/changed WorkItem-owned paths: owned.go/);
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n\nconst Owned = 1\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
+  });
+
+  it('allows a chained checkpoint by its explicit disjoint checkpoint root', () => {
+    const subject = path.join(root, 'chained-subject');
+    const original = path.join(root, 'chained-original');
+    const prior = path.join(root, 'chained-prior');
+    const newer = path.join(root, 'chained-recovery-output');
+    fs.mkdirSync(subject, {recursive: true});
+    fs.mkdirSync(original, {recursive: true});
+    fs.mkdirSync(path.join(prior, 'worktrees'), {recursive: true});
+    fs.mkdirSync(newer, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['init', '--quiet', original]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'proof.yaml'), 'project:\n  name: chained\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', 'proof.yaml']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'chained baseline']);
+    const checkpoint = path.join(newer, 'checkpoint.json');
+    fs.writeFileSync(checkpoint, '{}\n', 'utf8');
+
+    const roots = assertRecoveryRoots(subject, original, path.join(root, 'chained-output'), prior, checkpoint);
+    expect(roots.checkpoint).toBe(fs.realpathSync(checkpoint));
+  });
+
+  it('binds recovery config to retained inventory and role authority without Proof dispatch', async () => {
+    const prior = path.join(root, 'retained-authority');
+    const output = path.join(root, 'retained-authority-output');
+    const commandRoot = path.join(prior, 'commands', 'preflight');
+    const preflightRoot = path.join(prior, 'preflight');
+    fs.mkdirSync(commandRoot, {recursive: true});
+    fs.mkdirSync(preflightRoot, {recursive: true});
+    fs.mkdirSync(output, {recursive: true});
+    const shipped = yaml.load(fs.readFileSync(
+      path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml'), 'utf8',
+    )) as any;
+    const resultSchema = shipped.subgraphs['discover-project'].checks.inspect.result_schema as string;
+    const outputSchema = Buffer.from(resultSchema, 'utf8').toString('base64');
+    const inventory = {
+      version: 'proof.structural-inventory/v1',
+      authority: {
+        version: 'proof.project-authority/v1',
+        project_id: 'retained-project',
+        subject_fingerprint: `sha256:${'a'.repeat(64)}`,
+      },
+      sorted_paths: [],
+    };
+    const resolved = {
+      version: 'proof.role-invocation/v1',
+      role_id: 'onboard',
+      role_source: 'builtin',
+      stance: 'owner',
+      subject: {kind: 'project', id: 'retained-project', fingerprint: `sha256:${'a'.repeat(64)}`},
+      authority: 'read-only',
+      output_schema_id: 'proof.component-catalog-candidate@1',
+      output_schema: outputSchema,
+      instructions: 'retained role instructions',
+      invocation_digest: `sha256:${'b'.repeat(64)}`,
+    };
+    fs.writeFileSync(path.join(preflightRoot, 'inventory.json'), JSON.stringify(inventory), 'utf8');
+    fs.writeFileSync(path.join(commandRoot, 'resolve-role-invocation.stdout'), JSON.stringify(resolved), 'utf8');
+    fs.writeFileSync(path.join(commandRoot, 'resolve-role-invocation.stderr'), '', 'utf8');
+    fs.writeFileSync(path.join(commandRoot, 'resolve-role-invocation.meta.json'), JSON.stringify({
+      cwd: prior,
+      started_at: '2026-09-07T00:00:00.000Z',
+      finished_at: '2026-09-07T00:00:00.001Z',
+      args: ['resolve-role-invocation'],
+      status: 0,
+      timed_out: false,
+    }), 'utf8');
+
+    const retained = await loadRetainedOnboardingConfig(prior, output);
+    const inspect = retained.config.subgraphs['discover-project'].checks.inspect as any;
+    expect(inspect.instructions).toBe('retained role instructions');
+    expect(inspect.invocation.subject.id).toBe('retained-project');
+    expect(fs.existsSync(path.join(output, 'recovery', 'config-authority', 'manifest.json'))).toBe(true);
+    expect(JSON.parse(fs.readFileSync(
+      path.join(output, 'recovery', 'config-authority', 'manifest.json'), 'utf8',
+    )).files).toHaveLength(4);
+
+    fs.writeFileSync(path.join(commandRoot, 'resolve-role-invocation.meta.json'), JSON.stringify({
+      args: ['resolve-role-invocation'], status: 1, timed_out: false,
+    }), 'utf8');
+    await expect(loadRetainedOnboardingConfig(prior, path.join(root, 'rejected-authority-output')))
+      .rejects.toThrow(/successful exact command/);
   });
 
   it('rejects an invalid checkpoint before Proof init or any command dispatch', () => {

@@ -892,7 +892,9 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
           !Array.isArray(event.activeInputClaimIds) || typeof event.priorAttemptId !== 'string' ||
           typeof event.priorFence !== 'number' || !Number.isSafeInteger(event.priorFence) ||
           event.priorFence < 1 || typeof event.priorFailureReason !== 'string' ||
-          (event.externalSideEffects !== 'absent' && event.externalSideEffects !== 'safely_idempotent')) {
+          (event.externalSideEffects !== 'absent' &&
+            event.externalSideEffects !== 'safely_idempotent' &&
+            event.externalSideEffects !== 'isolated_draft_replay')) {
         throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Generated retry event has invalid fields');
       }
       return event as unknown as InstanceRuntimeEvent;
@@ -2080,7 +2082,9 @@ export class ExecutionJournal {
     if (typeof input.sessionId !== 'string' || input.sessionId.length === 0) {
       throw new ClaimKernelError('INVALID_RETRY', 'Retry session ID is required');
     }
-    if (input.externalSideEffects !== 'absent' && input.externalSideEffects !== 'safely_idempotent') {
+    if (input.externalSideEffects !== 'absent' &&
+        input.externalSideEffects !== 'safely_idempotent' &&
+        input.externalSideEffects !== 'isolated_draft_replay') {
       throw new ClaimKernelError('INVALID_RETRY', 'Retry requires an explicit side-effect disposition');
     }
     const generationIds = [...input.nodeGenerationIds].sort();
