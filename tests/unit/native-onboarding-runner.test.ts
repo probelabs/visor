@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import {
   assertPrivateCodexHome,
   commitInitializedProofBaseline,
+  configurePublicPromptCapture,
   serializeRoleInvocation,
   summarizeNativePostflight,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
@@ -68,6 +70,70 @@ describe('native onboarding runner boundaries', () => {
       checklist: {exit_code: 0},
       status: {exit_code: 7},
     }).hard_failures).toEqual(['status']);
+  });
+
+  it('captures same-step prompts in distinct public files and disables inherited private history', () => {
+    const aiDirectory = path.join(root, 'output', 'ai');
+    const ambientDirectory = path.join(root, 'ambient-private-debug');
+    const previousSessions = process.env.VISOR_DEBUG_AI_SESSIONS;
+    const previousArtifacts = process.env.VISOR_DEBUG_ARTIFACTS;
+    const prompt = 'public native onboarding prompt ✓';
+    const info = {step: 'component/review', provider: 'codex', prompt};
+    try {
+      process.env.VISOR_DEBUG_AI_SESSIONS = 'true';
+      process.env.VISOR_DEBUG_ARTIFACTS = ambientDirectory;
+      const capture = configurePublicPromptCapture(aiDirectory);
+
+      capture(info);
+      capture(info);
+
+      expect(process.env.VISOR_DEBUG_AI_SESSIONS).toBe('false');
+      expect(process.env.VISOR_DEBUG_ARTIFACTS).toBe(aiDirectory);
+      expect(fs.existsSync(ambientDirectory)).toBe(false);
+      expect(fs.statSync(aiDirectory).mode & 0o777).toBe(0o700);
+
+      const files = fs.readdirSync(aiDirectory);
+      expect(files).toHaveLength(2);
+      expect(new Set(files).size).toBe(2);
+      expect(files[0]).toMatch(/^\d{8}-component_review-[0-9a-f]{64}\.json$/);
+      expect(files[1]).toMatch(/^\d{8}-component_review-[0-9a-f]{64}\.json$/);
+      const digest = createHash('sha256').update(prompt, 'utf8').digest('hex');
+      for (const file of files) {
+        const absolute = path.join(aiDirectory, file);
+        expect(fs.statSync(absolute).mode & 0o777).toBe(0o600);
+        const record = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+        expect(Object.keys(record).sort()).toEqual([
+          'mode', 'prompt', 'promptBytes', 'promptDigest', 'provider', 'step',
+        ]);
+        expect(record).toEqual({
+          mode: 'public-prompt-capture/v1',
+          step: info.step,
+          provider: info.provider,
+          prompt,
+          promptBytes: Buffer.byteLength(prompt, 'utf8'),
+          promptDigest: `sha256:${digest}`,
+        });
+      }
+
+      const currentCounter = Math.max(...files.map(file => Number(file.slice(0, 8))));
+      const collision = path.join(
+        aiDirectory,
+        `${String(currentCounter + 1).padStart(8, '0')}-component_review-${digest}.json`,
+      );
+      fs.writeFileSync(collision, 'retained collision\n', {encoding: 'utf8', flag: 'wx', mode: 0o600});
+      capture(info);
+      const afterCollision = fs.readdirSync(aiDirectory);
+      expect(afterCollision).toHaveLength(4);
+      expect(fs.readFileSync(collision, 'utf8')).toBe('retained collision\n');
+      expect(afterCollision).toContain(
+        `${String(currentCounter + 2).padStart(8, '0')}-component_review-${digest}.json`,
+      );
+    } finally {
+      if (previousSessions === undefined) delete process.env.VISOR_DEBUG_AI_SESSIONS;
+      else process.env.VISOR_DEBUG_AI_SESSIONS = previousSessions;
+      if (previousArtifacts === undefined) delete process.env.VISOR_DEBUG_ARTIFACTS;
+      else process.env.VISOR_DEBUG_ARTIFACTS = previousArtifacts;
+    }
   });
 
   it('serializes the resolver request as exact one-line Go-compatible JSON', () => {

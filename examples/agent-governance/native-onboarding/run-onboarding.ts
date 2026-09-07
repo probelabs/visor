@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { loadConfig, StateMachineExecutionEngine } from '../../../src/sdk';
@@ -19,6 +20,97 @@ import type { VisorConfig } from '../../../src/types/config';
 
 type Json = Record<string, unknown>;
 type CommandResult = { status: number; stdout: string; stderr: string };
+export type PublicPromptCaptureInfo = Readonly<{
+  step: string;
+  provider: string;
+  prompt: string;
+}>;
+
+let publicPromptCaptureCounter = 0;
+
+function safePromptStep(value: string): string {
+  const safe = value.replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 96);
+  return safe || 'step';
+}
+
+/**
+ * Persist the exact prompt fields exposed by the public execution hook.
+ * This intentionally has no session/rollout lookup: the journal and
+ * checkpoint remain the durable source for execution results.
+ */
+export function capturePublicPrompt(
+  aiDirectory: string,
+  info: PublicPromptCaptureInfo,
+): string | undefined {
+  if (!path.isAbsolute(aiDirectory) || !info ||
+      typeof info.step !== 'string' || typeof info.provider !== 'string' ||
+      typeof info.prompt !== 'string') {
+    return undefined;
+  }
+  try {
+    fs.mkdirSync(aiDirectory, {recursive: true, mode: 0o700});
+    fs.chmodSync(aiDirectory, 0o700);
+    const promptDigest = createHash('sha256').update(info.prompt, 'utf8').digest('hex');
+    const record = {
+      mode: 'public-prompt-capture/v1',
+      step: info.step,
+      provider: info.provider,
+      prompt: info.prompt,
+      promptBytes: Buffer.byteLength(info.prompt, 'utf8'),
+      promptDigest: `sha256:${promptDigest}`,
+    };
+    const safeStep = safePromptStep(info.step);
+    const serialized = JSON.stringify(record) + '\n';
+    // A resumed process may reuse the initial counter while retaining the
+    // same runner-owned output directory. Advance only on an exclusive-create
+    // collision; other filesystem failures remain observational.
+    for (let attempt = 0; attempt < 1024; attempt += 1) {
+      const counter = ++publicPromptCaptureCounter;
+      const filename = `${String(counter).padStart(8, '0')}-${safeStep}-${promptDigest}.json`;
+      const file = path.join(aiDirectory, filename);
+      try {
+        fs.writeFileSync(file, serialized, {
+          encoding: 'utf8',
+          flag: 'wx',
+          mode: 0o600,
+        });
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error
+          ? (error as {code?: unknown}).code
+          : undefined;
+        if (code === 'EEXIST') continue;
+        return undefined;
+      }
+      try {
+        fs.chmodSync(file, 0o600);
+      } catch {
+        return undefined;
+      }
+      return file;
+    }
+    return undefined;
+  } catch {
+    // Prompt diagnostics are observational and must not change execution.
+    return undefined;
+  }
+}
+
+/**
+ * Configure the runner's public prompt diagnostic boundary. In particular,
+ * an inherited debug-session setting can never turn private session history
+ * back on for this runner.
+ */
+export function configurePublicPromptCapture(aiDirectory: string): (info: PublicPromptCaptureInfo) => void {
+  if (!path.isAbsolute(aiDirectory)) throw new Error('public prompt directory must be absolute');
+  fs.mkdirSync(aiDirectory, {recursive: true, mode: 0o700});
+  fs.chmodSync(aiDirectory, 0o700);
+  process.env.VISOR_DEBUG_AI_SESSIONS = 'false';
+  process.env.VISOR_DEBUG_ARTIFACTS = aiDirectory;
+  return info => {
+    capturePublicPrompt(aiDirectory, info);
+  };
+}
+
 export type NativePostflightSummary = {
   hard_failures: string[];
   open_native_checks: Array<{name: string; exit_code: number}>;
@@ -467,9 +559,10 @@ async function main(): Promise<void> {
   process.env.USE_CODEX = 'true';
   process.env.DISABLE_FALLBACK = '1';
   process.env.AUTO_FALLBACK = '0';
-  process.env.VISOR_DEBUG_AI_SESSIONS = 'true';
+  process.env.VISOR_DEBUG_AI_SESSIONS = 'false';
   process.env.VISOR_TRACE_DIR = process.env.VISOR_TRACE_DIR || path.join(roots.output, 'traces');
-  process.env.VISOR_DEBUG_ARTIFACTS = process.env.VISOR_DEBUG_ARTIFACTS || path.join(roots.output, 'ai');
+  const publicAiDirectory = path.join(roots.output, 'ai');
+  const onPromptCaptured = configurePublicPromptCapture(publicAiDirectory);
 
   writeJson(path.join(roots.output, 'preflight.json'), {
     status: 'launch-boundary-passed',
@@ -549,6 +642,9 @@ async function main(): Promise<void> {
     return;
   }
   const engine = new StateMachineExecutionEngine(roots.subject);
+  engine.setExecutionContext({
+    hooks: {onPromptCaptured},
+  });
   let result: unknown;
   let checkpoint: unknown;
   try {

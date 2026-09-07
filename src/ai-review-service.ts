@@ -342,6 +342,8 @@ const GOVERNED_RAW_ITEM_FAILURE_PREDICATES = new Set([
   'input',
   'call_output_pairing',
   'event_limit',
+  'tool_event_limit',
+  'tool_call_limit',
   'final_answer_cardinality',
 ]);
 

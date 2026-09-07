@@ -362,6 +362,43 @@ describe('public governed raw-item failure warning', () => {
     expect(consoleError).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['tool_event_limit', 'tool_call_limit'])
+  ('accepts the bounded %s predicate with the same public identity', async predicate => {
+    const failure = Object.assign(new Error('raw tool event payload stays private'), {
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: predicate,
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-tool-limit'
+      )
+    ).rejects.toThrow('raw tool event payload stays private');
+
+    expect(warningLog).toHaveBeenCalledWith(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName: 'spec_review',
+        nodeGenerationId: 'generation-tool-limit',
+        stage: 'native_event_grammar',
+        boundary: 'raw_item_predicate',
+        predicate,
+      })
+    );
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
   it('does not normalize an unknown predicate or leak hostile error data', async () => {
     const failure = Object.assign(new Error('secret raw payload /private/project'), {
       name: 'SecretError',
