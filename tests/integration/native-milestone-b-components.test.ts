@@ -90,7 +90,7 @@ function createFixture(componentCount: 1 | 2): Fixture {
     proof(subject, [
       'req', 'new', 'specs/system', '--component', component,
       '--fretish', `the ${fretishSubject} shall always satisfy ${variable} > 0`,
-      '--variables', variable, '--format', 'json',
+      '--variables', variable, '--priority-level', 'major', '--format', 'json',
     ]);
     proof(subject, [
       'var', 'add', component, variable, '--type', 'int', '--direction', 'input',
@@ -168,6 +168,7 @@ function assertNativeItemClaims(checkpoint: any, rows: ProofRow[], fixture: Fixt
       file_path: row.file_path,
       proof_file_hash: sha256(path.join(fixture.subject, row.file_path)),
     });
+    expect(event.payload.proof_snapshot.catalog_entry).toEqual(row);
     expect(event.scope).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'keyed',
@@ -196,6 +197,7 @@ function assertCandidatePackets(checkpoint: any, rows: ProofRow[], fixture: Fixt
     expect(payload).toMatchObject({
       id: row.id,
       freshness: 'pending_component_fan_in',
+      catalog_entry: row,
       req_show: {
         file_path: row.file_path,
         requirement: {
@@ -225,6 +227,18 @@ function assertPreparedNativeSurface(fixture: Fixture, expectedComponents: strin
   const { rows, summary } = nativeCatalog(fixture);
   expect(summary.components.map((component: any) => component.id)).toEqual(expectedComponents);
   expect(summary.components.every((component: any) => component.items.length > 0)).toBe(true);
+  expect(rows.every(row => row.priority_level === 'major')).toBe(true);
+  expect(summary.preflight).toMatchObject({
+    status: 'validated',
+    component_ids: expectedComponents,
+    item_ids: rows.map(row => row.id),
+  });
+  expect(summary.preflight.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+  expect(summary.preflight.graph_semantic_digest).toMatch(/^[0-9a-f]{64}$/);
+  expect(summary.preflight.validator_counts['native.component.catalog@1']).toBe(1);
+  expect(summary.preflight.validator_counts['native.component.item@1']).toBe(expectedComponents.length);
+  expect(summary.preflight.validator_counts['native.spec.catalog@1']).toBe(expectedComponents.length);
+  expect(summary.preflight.validator_counts['native.spec.item@1']).toBe(rows.length);
   expect(new Set(rows.map(row => row.id)).size).toBe(rows.length);
   const listed = JSON.parse(proof(fixture.subject, ['req', 'list', '--format', 'json'])) as ProofRow[];
   expect(listed.map(row => row.id).sort()).toEqual(rows.map(row => row.id).sort());

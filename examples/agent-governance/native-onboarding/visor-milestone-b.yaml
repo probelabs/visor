@@ -5,7 +5,7 @@
 # item per native requirement.  The Graph-v2 frontier, rather than legacy
 # forEach/workflow barriers, owns the scopes and dependencies.
 version: "1.0"
-max_parallelism: 2
+max_parallelism: 4
 fail_fast: false
 workspace:
   enabled: false
@@ -50,43 +50,41 @@ claim_types:
           items:
             type: object
             additionalProperties: false
-            required: [id, spec, component, status, req_type, file_path, proof_file_hash, proof_snapshot, spec_review_role]
+            required: [id, component, file_path, proof_file_hash, spec_review_role, proof_snapshot]
             properties:
               id: {type: string, minLength: 1}
-              spec: {type: string, minLength: 1}
               component: {type: string, minLength: 1}
-              status: {type: string}
-              req_type: {type: string}
               file_path: {type: string, minLength: 1}
-              assurance_level: {type: string}
-              fretish: {type: string}
-              description: {type: string}
-              parse_status: {type: string}
-              neighborhood: {type: object}
               proof_file_hash: {type: string, minLength: 1}
-              proof_snapshot: {type: object}
               spec_review_role: {type: string, minLength: 1}
+              proof_snapshot:
+                type: object
+                additionalProperties: false
+                required: [catalog_entry, req_show, spec_graph]
+                properties:
+                  catalog_entry: {type: object}
+                  req_show: {type: object}
+                  spec_graph: {type: object}
 
   native.spec.item@1:
     schema:
       type: object
       additionalProperties: false
-      required: [id, spec, component, status, req_type, file_path, proof_file_hash, proof_snapshot, spec_review_role]
+      required: [id, component, file_path, proof_file_hash, spec_review_role, proof_snapshot]
       properties:
         id: {type: string, minLength: 1}
-        spec: {type: string, minLength: 1}
         component: {type: string, minLength: 1}
-        status: {type: string}
-        req_type: {type: string}
         file_path: {type: string, minLength: 1}
-        assurance_level: {type: string}
-        fretish: {type: string}
-        description: {type: string}
-        parse_status: {type: string}
-        neighborhood: {type: object}
         proof_file_hash: {type: string, minLength: 1}
-        proof_snapshot: {type: object}
         spec_review_role: {type: string, minLength: 1}
+        proof_snapshot:
+          type: object
+          additionalProperties: false
+          required: [catalog_entry, req_show, spec_graph]
+          properties:
+            catalog_entry: {type: object}
+            req_show: {type: object}
+            spec_graph: {type: object}
 
   native.role.spec-review@1:
     schema:
@@ -102,10 +100,11 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [id, candidate, req_show, spec_graph, freshness]
+      required: [id, candidate, catalog_entry, req_show, spec_graph, freshness]
       properties:
         id: {type: string, minLength: 1}
         candidate: {}
+        catalog_entry: {type: object}
         req_show: {type: object}
         spec_graph: {type: object}
         freshness: {const: pending_component_fan_in}
@@ -164,7 +163,14 @@ subgraphs:
             if (typeof hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(hash)) throw new Error(`Proof req show ${row.id} has no computed sha256 file hash`);
               const specGraph = JSON.parse(execFileSync(proof, ['spec', 'graph', '--focus', row.id, '--format', 'json'], { encoding: 'utf8' }));
             if (!specGraph || typeof specGraph !== 'object') throw new Error(`Proof spec graph ${row.id} is not an object`);
-            return { ...row, spec_review_role: component.spec_review_role, proof_file_hash: hash, proof_snapshot: { req_show: reqShow, spec_graph: specGraph } };
+            return {
+              id: row.id,
+              component: row.component,
+              file_path: row.file_path,
+              proof_file_hash: hash,
+              spec_review_role: component.spec_review_role,
+              proof_snapshot: { catalog_entry: row, req_show: reqShow, spec_graph: specGraph },
+            };
           });
           if (!items.length) throw new Error(`Proof catalog has no requirements for ${componentId}`);
           process.stdout.write(JSON.stringify({ items }));
@@ -359,6 +365,7 @@ subgraphs:
           process.stdout.write(JSON.stringify({
             id: item.id,
             candidate,
+            catalog_entry: item.proof_snapshot.catalog_entry,
             req_show: item.proof_snapshot.req_show,
             spec_graph: item.proof_snapshot.spec_graph,
             freshness: 'pending_component_fan_in',

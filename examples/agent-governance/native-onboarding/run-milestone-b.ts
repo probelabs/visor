@@ -3,6 +3,7 @@
  * Proof catalog.  `pause` and `resume` use the existing Graph-v2 SDK journal;
  * they do not introduce a second checkpoint or scheduling protocol.
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -163,6 +164,26 @@ function parseJson(result: CommandResult, description: string): Json | ProofRow[
   }
 }
 
+function validatePreparedClaim(
+  plan: ReturnType<typeof compileClaimPlan>,
+  claim: string,
+  payload: unknown,
+  counts: Record<string, number>,
+): void {
+  const validator = plan.validatorsByClaim[claim];
+  if (!validator) throw new Error(`prepared config has no validator for ${claim}`);
+  try {
+    validator(payload);
+  } catch (error) {
+    throw new Error(`prepared ${claim} failed validation: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  counts[claim] = (counts[claim] || 0) + 1;
+}
+
+function preparedIdentityDigest(identity: Json): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}`;
+}
+
 function nativeRows(value: Json | ProofRow[]): ProofRow[] {
   if (!Array.isArray(value)) throw new Error('Proof req list did not return an array');
   if (!value.length) throw new Error('Proof catalog has no native requirements');
@@ -294,14 +315,25 @@ async function configForSubject(subject: string, output: string) {
 }
 
 async function prepare(subject: string, proof: string, output: string): Promise<void> {
+  const config = await loadConfig(CONFIG_PATH, { strict: true });
+  const claimPlan = compileClaimPlan(config);
+  const validatedClaimCounts: Record<string, number> = {};
   const role = runProof(proof, subject, output, 'prepare', ['role', 'show', 'spec-review', '--format', 'agent']);
   if (role.status !== 0) throw new Error(`built-in spec-review role failed with exit ${role.status}`);
+  validatePreparedClaim(claimPlan, 'native.role.spec-review@1', role.stdout, validatedClaimCounts);
   writeText(path.join(output, 'prepare', 'role-spec-review.txt'), role.stdout);
 
   const list = runProof(proof, subject, output, 'prepare', ['req', 'list', '--format', 'json']);
   const rows = nativeRows(parseJson(list, 'Proof req list') as ProofRow[]);
   writeJson(path.join(output, 'prepare', 'catalog.json'), rows);
+  const componentIds = [...new Set(rows.map(row => row.component))].sort((left, right) => left.localeCompare(right));
+  const componentClaims = componentIds.map(id => ({ id, spec_review_role: role.stdout }));
+  validatePreparedClaim(claimPlan, 'native.component.catalog@1', { components: componentClaims }, validatedClaimCounts);
+  for (const component of componentClaims) {
+    validatePreparedClaim(claimPlan, 'native.component.item@1', component, validatedClaimCounts);
+  }
   const itemSummaries: Json[] = [];
+  const nativeItems: Json[] = [];
   for (const row of rows) {
     const show = runProof(proof, subject, output, `prepare-${row.id}`, ['req', 'show', row.id, '--with', 'file', '--format', 'json']);
     const graph = runProof(proof, subject, output, `prepare-${row.id}`, ['spec', 'graph', '--focus', row.id, '--format', 'json']);
@@ -314,13 +346,38 @@ async function prepare(subject: string, proof: string, output: string): Promise<
     if (!graphValue || Array.isArray(graphValue) || typeof graphValue !== 'object') throw new Error(`Proof spec graph ${row.id} is not an object`);
     writeJson(path.join(output, 'prepare', 'items', row.id, 'req-show.json'), reqEnvelope);
     writeJson(path.join(output, 'prepare', 'items', row.id, 'spec-graph.json'), graphValue);
+    nativeItems.push({
+      id: row.id,
+      component: row.component,
+      file_path: row.file_path,
+      proof_file_hash: hash,
+      spec_review_role: role.stdout,
+      proof_snapshot: {
+        catalog_entry: row,
+        req_show: reqEnvelope,
+        spec_graph: graphValue,
+      },
+    });
     itemSummaries.push({ id: row.id, component: row.component, file_path: row.file_path, file_hash: hash, graph_exit: graph.status });
   }
-  const componentIds = [...new Set(rows.map(row => row.component))].sort((left, right) => left.localeCompare(right));
-  const components = componentIds.map(id => ({
-    id,
-    items: itemSummaries.filter(item => item.component === id),
-  }));
+  const components = componentIds.map(id => ({ id, items: itemSummaries.filter(item => item.component === id) }));
+  for (const component of componentIds) {
+    const items = nativeItems.filter(item => item.component === component);
+    validatePreparedClaim(claimPlan, 'native.spec.catalog@1', { items }, validatedClaimCounts);
+    for (const item of items) {
+      validatePreparedClaim(claimPlan, 'native.spec.item@1', item, validatedClaimCounts);
+    }
+  }
+  const identity = {
+    component_ids: componentIds,
+    item_ids: nativeItems.map(item => item.id),
+    items: itemSummaries.map(item => ({
+      id: item.id,
+      component: item.component,
+      file_path: item.file_path,
+      file_hash: item.file_hash,
+    })),
+  };
   writeJson(path.join(output, 'prepare', 'summary.json'), {
     phase: 'prepare',
     status: 'ready-for-review',
@@ -331,6 +388,15 @@ async function prepare(subject: string, proof: string, output: string): Promise<
     role_exit: role.status,
     catalog_exit: list.status,
     proof_bin: proof,
+    preflight: {
+      status: 'validated',
+      claim_types: Object.keys(validatedClaimCounts).sort(),
+      validator_counts: validatedClaimCounts,
+      component_ids: identity.component_ids,
+      item_ids: identity.item_ids,
+      graph_semantic_digest: claimPlan.expansionPlan.graphSemanticDigest,
+      digest: preparedIdentityDigest(identity),
+    },
     note: 'Native state is collected from Proof; this is not an admission receipt.',
   });
   console.log(JSON.stringify({ mode: 'prepare', status: 'ready-for-review', item_count: rows.length, output }, null, 2));
