@@ -14,7 +14,7 @@ import type { PRInfo } from '../../../src/pr-analyzer';
 import type { GeneratedDispatchGate } from '../../../src/types/engine';
 
 type Json = Record<string, unknown>;
-type ProofRow = { id: string; component?: string; file_path?: string } & Json;
+type ProofRow = { id: string; component: string; file_path: string } & Json;
 type CommandResult = { status: number; stdout: string; stderr: string };
 
 const CONFIG_PATH = path.resolve(__dirname, 'visor-milestone-b.yaml');
@@ -163,11 +163,21 @@ function parseJson(result: CommandResult, description: string): Json | ProofRow[
   }
 }
 
-function rowsForComponent(value: Json | ProofRow[]): ProofRow[] {
+function nativeRows(value: Json | ProofRow[]): ProofRow[] {
   if (!Array.isArray(value)) throw new Error('Proof req list did not return an array');
-  const rows = value.filter(row => row && row.component === 'get_string' && typeof row.id === 'string' && typeof row.file_path === 'string') as ProofRow[];
-  if (!rows.length) throw new Error('Proof catalog has no native get_string requirements');
-  return rows;
+  if (!value.length) throw new Error('Proof catalog has no native requirements');
+  const seenIds = new Set<string>();
+  const rows = value.map((row, index) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.component !== 'string' || !row.component ||
+      typeof row.id !== 'string' || !row.id || typeof row.file_path !== 'string' || !row.file_path) {
+      throw new Error(`Proof catalog row ${index} is missing component, id, or file_path`);
+    }
+    const typed = row as ProofRow;
+    if (seenIds.has(typed.id)) throw new Error(`Proof catalog contains duplicate requirement id ${typed.id}`);
+    seenIds.add(typed.id);
+    return typed;
+  });
+  return rows.sort((left, right) => left.component.localeCompare(right.component) || left.id.localeCompare(right.id));
 }
 
 function proofFileHash(value: Json, id: string): string {
@@ -192,18 +202,18 @@ function verifyCurrentProofInputs(
   phase: string,
 ): Record<string, string> {
   const currentList = runProof(proof, subject, output, `${phase}-catalog`, ['req', 'list', '--format', 'json']);
-  const currentRows = rowsForComponent(parseJson(currentList, 'Proof req list') as ProofRow[]);
+  const currentRows = nativeRows(parseJson(currentList, 'Proof req list') as ProofRow[]);
   const expectedIds = rows.map(row => row.id).sort();
   const currentIds = currentRows.map(row => row.id).sort();
   if (JSON.stringify(expectedIds) !== JSON.stringify(currentIds)) throw new Error(`Proof requirement ID set changed during ${phase}`);
   const hashes: Record<string, string> = {};
   for (const row of rows) {
     const currentRow = currentRows.find(item => item.id === row.id);
-    if (!currentRow || currentRow.file_path !== row.file_path) throw new Error(`Proof requirement path changed during ${phase} for ${row.id}`);
+    if (!currentRow || currentRow.component !== row.component || currentRow.file_path !== row.file_path) throw new Error(`Proof requirement component/path changed during ${phase} for ${row.id}`);
     const shown = runProof(proof, subject, output, `${phase}-${row.id}`, ['req', 'show', row.id, '--with', 'file', '--format', 'json']);
     const value = parseJson(shown, `Proof req show ${row.id}`) as Json;
     const requirement = value.requirement as Json | undefined;
-    if (!requirement || requirement.id !== row.id || value.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the ${phase} catalog row`);
+    if (!requirement || requirement.id !== row.id || requirement.component !== row.component || value.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the ${phase} catalog row`);
     hashes[row.id] = proofFileHash(requirement, row.id);
   }
   return hashes;
@@ -212,7 +222,7 @@ function verifyCurrentProofInputs(
 function baselineRows(output: string): ProofRow[] {
   const file = path.join(output, 'prepare', 'catalog.json');
   if (!fs.existsSync(file)) throw new Error(`missing prepare catalog: ${file}`);
-  return rowsForComponent(JSON.parse(fs.readFileSync(file, 'utf8')) as Json | ProofRow[]);
+  return nativeRows(JSON.parse(fs.readFileSync(file, 'utf8')) as Json | ProofRow[]);
 }
 
 function zeroModelTestEnabled(): boolean {
@@ -275,7 +285,9 @@ async function configForSubject(subject: string, output: string) {
   if (zeroModelTestEnabled()) {
     const review = (config as any).subgraphs?.['native-spec-item']?.checks?.['review-native-item'];
     if (!review) throw new Error('zero-model test could not find native review check');
-    review.ai = { ...(review.ai || {}), provider: 'mock', model: 'mock' };
+    const mockAi = { ...(review.ai || {}) };
+    delete mockAi.codex_execution_profile;
+    review.ai = { ...mockAi, provider: 'mock', model: 'mock' };
     installZeroModelPromptWitness(output);
   }
   return { config, engine: new StateMachineExecutionEngine(subject) };
@@ -287,7 +299,7 @@ async function prepare(subject: string, proof: string, output: string): Promise<
   writeText(path.join(output, 'prepare', 'role-spec-review.txt'), role.stdout);
 
   const list = runProof(proof, subject, output, 'prepare', ['req', 'list', '--format', 'json']);
-  const rows = rowsForComponent(parseJson(list, 'Proof req list') as ProofRow[]);
+  const rows = nativeRows(parseJson(list, 'Proof req list') as ProofRow[]);
   writeJson(path.join(output, 'prepare', 'catalog.json'), rows);
   const itemSummaries: Json[] = [];
   for (const row of rows) {
@@ -295,19 +307,25 @@ async function prepare(subject: string, proof: string, output: string): Promise<
     const graph = runProof(proof, subject, output, `prepare-${row.id}`, ['spec', 'graph', '--focus', row.id, '--format', 'json']);
     const reqEnvelope = parseJson(show, `Proof req show ${row.id}`) as Json;
     const req = reqEnvelope.requirement as Json | undefined;
-    if (!req || req.id !== row.id || reqEnvelope.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the catalog row`);
+    if (!req || req.id !== row.id || req.component !== row.component || reqEnvelope.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the catalog row`);
     const hash = proofFileHash(req, row.id);
     if (graph.status !== 0) throw new Error(`Proof spec graph ${row.id} failed with exit ${graph.status}`);
     const graphValue = parseJson(graph, `Proof spec graph ${row.id}`);
     if (!graphValue || Array.isArray(graphValue) || typeof graphValue !== 'object') throw new Error(`Proof spec graph ${row.id} is not an object`);
     writeJson(path.join(output, 'prepare', 'items', row.id, 'req-show.json'), reqEnvelope);
     writeJson(path.join(output, 'prepare', 'items', row.id, 'spec-graph.json'), graphValue);
-    itemSummaries.push({ id: row.id, file_path: row.file_path, file_hash: hash, graph_exit: graph.status });
+    itemSummaries.push({ id: row.id, component: row.component, file_path: row.file_path, file_hash: hash, graph_exit: graph.status });
   }
+  const componentIds = [...new Set(rows.map(row => row.component))].sort((left, right) => left.localeCompare(right));
+  const components = componentIds.map(id => ({
+    id,
+    items: itemSummaries.filter(item => item.component === id),
+  }));
   writeJson(path.join(output, 'prepare', 'summary.json'), {
     phase: 'prepare',
     status: 'ready-for-review',
-    component: 'get_string',
+    components,
+    component_count: components.length,
     item_count: rows.length,
     items: itemSummaries,
     role_exit: role.status,
@@ -396,7 +414,7 @@ async function pause(subject: string, proof: string, output: string, holdId?: st
   const siblingObservations = observations.filter(observation => !observation.held_scope && observation.status === 'ready');
   if (!heldObservations.some(observation => observation.status === 'ready')) throw new Error('pause did not hold a ready generated scope');
   const siblingPacketCompleted = events.some(event => event?.type === 'AttemptCompleted' && event?.checkId === 'collect-proof-evidence' && !event.scope?.some((part: any) => part.key === held));
-  if (!siblingObservations.length || !siblingPacketCompleted) throw new Error('pause did not observe sibling candidate-packet progression');
+  if (rows.length > 1 && (!siblingObservations.length || !siblingPacketCompleted)) throw new Error('pause did not observe sibling candidate-packet progression');
   const heldGenerationIds = new Set(heldObservations.map(observation => observation.generation_id));
   const heldAttemptEvents = events.filter(event => heldGenerationIds.has(event.nodeGenerationId) && /^Attempt/.test(String(event.type)));
   if (heldAttemptEvents.length) throw new Error('held ready scope already has an attempt event');
@@ -536,14 +554,18 @@ async function main(): Promise<void> {
   if (fs.realpathSync(process.cwd()) !== roots.subject) throw new Error('runner cwd did not resolve to the validated subject root');
   process.env.VISOR_NATIVE_B_PREPARE_SUMMARY = path.join(roots.output, 'prepare', 'summary.json');
   process.env.USE_CODEX = 'true';
+  process.env.DISABLE_FALLBACK = '1';
+  process.env.AUTO_FALLBACK = '0';
   process.env.VISOR_DEBUG_AI_SESSIONS = 'true';
   process.env.VISOR_TRACE_DIR = process.env.VISOR_TRACE_DIR || path.join(roots.output, 'traces');
-  process.env.VISOR_DEBUG_ARTIFACTS = process.env.VISOR_DEBUG_ARTIFACTS || path.join(roots.output, 'ai');
   if (mode === 'prepare') {
     ensureFreshPrepareOutput(roots.output);
     return prepare(roots.subject, proof, roots.output);
   }
   requireReadonlyCodexHome(roots.subject, roots.original, roots.output);
+  const aiArtifacts = path.join(roots.output, 'ai');
+  fs.mkdirSync(aiArtifacts, { recursive: true });
+  process.env.VISOR_DEBUG_ARTIFACTS = aiArtifacts;
   if (mode === 'pause') return pause(roots.subject, proof, roots.output, values['hold-id']);
   if (mode === 'resume') return resume(roots.subject, proof, roots.output);
   throw new Error(`unknown mode ${mode}; expected prepare, pause, or resume`);

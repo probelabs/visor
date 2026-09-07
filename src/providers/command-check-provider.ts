@@ -22,6 +22,14 @@ import {
   sanitizeContextForTelemetry,
 } from '../telemetry/state-capture';
 
+type CommandTemplateContext = {
+  pr: Record<string, unknown>;
+  files: unknown[];
+  outputs: Record<string, unknown>;
+  env: Record<string, string>;
+  scope: import('./check-provider.interface').ExecutionContext['scope'];
+};
+
 /**
  * Check provider that executes shell commands and captures their output
  * Supports JSON parsing and integration with forEach functionality
@@ -136,6 +144,9 @@ export class CommandCheckProvider extends CheckProvider {
       // Workflow inputs (when executing within a workflow)
       // Check config first (set by projectWorkflowToGraph), then fall back to context
       inputs: (config as any).workflowInputs || context?.workflowInputs || {},
+      // Graph-v2 generated checks receive an immutable keyed scope from the
+      // journal. Keep it exact; ordinary checks render an empty scope.
+      scope: context?.scope ?? [],
       // Custom arguments from on_init 'with' directive
       args: context?.args || {},
       env: this.getSafeEnvironmentVariables(),
@@ -1695,12 +1706,7 @@ ${bodyWithReturn}
 
   private async renderCommandTemplate(
     template: string,
-    context: {
-      pr: Record<string, unknown>;
-      files: unknown[];
-      outputs: Record<string, unknown>;
-      env: Record<string, string>;
-    }
+    context: CommandTemplateContext
   ): Promise<string> {
     try {
       // Best-effort compatibility: allow double-quoted bracket keys inside Liquid tags.
@@ -1735,18 +1741,14 @@ ${bodyWithReturn}
 
   private renderWithJsExpressions(
     template: string,
-    context: {
-      pr: Record<string, unknown>;
-      files: unknown[];
-      outputs: Record<string, unknown>;
-      env: Record<string, string>;
-    }
+    context: CommandTemplateContext
   ): string {
-    const scope = {
+    const templateContext = {
       pr: context.pr,
       files: context.files,
       outputs: context.outputs,
       env: context.env,
+      scope: context.scope,
     };
 
     const expressionRegex = /\{\{\s*([^{}]+?)\s*\}\}/g;
@@ -1755,15 +1757,16 @@ ${bodyWithReturn}
       if (!expression) return '';
       try {
         const evalCode = `
-          const pr = scope.pr;
-          const files = scope.files;
-          const outputs = scope.outputs;
-          const env = scope.env;
+          const pr = templateContext.pr;
+          const files = templateContext.files;
+          const outputs = templateContext.outputs;
+          const env = templateContext.env;
+          const scope = templateContext.scope;
           return (${expression});
         `;
         if (!this.sandbox) this.sandbox = this.createSecureSandbox();
         const evaluator = this.sandbox.compile(evalCode);
-        const result = evaluator({ scope }).run();
+        const result = evaluator({ templateContext }).run();
         return result === undefined || result === null ? '' : String(result);
       } catch {
         return '';

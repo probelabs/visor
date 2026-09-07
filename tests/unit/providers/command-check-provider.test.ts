@@ -309,6 +309,82 @@ describe('CommandCheckProvider', () => {
 
       expect(mockExecute).toHaveBeenCalledWith('echo "static command"', expect.any(Object));
     });
+
+    it('should expose the exact immutable generated scope to Liquid templates', async () => {
+      const componentScope = Object.freeze([
+        Object.freeze({
+          kind: 'keyed',
+          expansionOwnerCheck: 'discover-native-components',
+          key: 'component-a',
+          subgraphInstanceId: 'instance-a',
+        }),
+      ]);
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'scope={{ scope | json }}',
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: `scope=${JSON.stringify(componentScope)}\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config, undefined, { scope: componentScope } as any);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        `scope=${JSON.stringify(componentScope)}`,
+        expect.any(Object)
+      );
+      expect(Object.isFrozen(componentScope)).toBe(true);
+      expect(Object.isFrozen(componentScope[0])).toBe(true);
+      expect(componentScope[0]).toMatchObject({
+        key: 'component-a',
+        subgraphInstanceId: 'instance-a',
+      });
+    });
+
+    it('should expose generated scope to the safe JavaScript template fallback', async () => {
+      const componentScope = Object.freeze([
+        Object.freeze({
+          kind: 'keyed',
+          expansionOwnerCheck: 'discover-native-components',
+          key: 'component-a',
+          subgraphInstanceId: 'instance-a',
+        }),
+      ]);
+      const rendered = (provider as any).renderWithJsExpressions(
+        'scope={{ scope?.[0]?.key }}',
+        {
+          pr: {},
+          files: [],
+          outputs: {},
+          env: {},
+          scope: componentScope,
+        }
+      );
+
+      expect(rendered).toBe('scope=component-a');
+      expect(Object.isFrozen(componentScope)).toBe(true);
+      expect(Object.isFrozen(componentScope[0])).toBe(true);
+    });
+
+    it('should render an empty scope for ordinary commands', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'scope={{ scope | json }}',
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'scope=[]\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(mockExecute).toHaveBeenCalledWith('scope=[]', expect.any(Object));
+    });
   });
 
   describe('Environment Variables', () => {

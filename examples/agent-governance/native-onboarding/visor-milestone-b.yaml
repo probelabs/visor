@@ -1,7 +1,7 @@
 # Milestone B prototype: Graph-v2 native review progression.
 #
 # This is deliberately an ordinary command -> ai graph.  C2 expansion turns
-# the current Proof catalog into one natural component and then one generated
+# the current Proof catalog into natural components and then one generated
 # item per native requirement.  The Graph-v2 frontier, rather than legacy
 # forEach/workflow barriers, owns the scopes and dependencies.
 version: "1.0"
@@ -130,6 +130,7 @@ subgraphs:
       enumerate-native-specs:
         type: command
         timeout: 180000
+        resource_group: proof-workspace-mutation
         schema: plain
         consumes:
           - {claim: native.component.item@1, as: component}
@@ -149,10 +150,16 @@ subgraphs:
           const component = {{ outputs['discover-native-components'] | json }};
           const componentId = component.id;
           const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], { encoding: 'utf8' }));
+          if (!Array.isArray(rows) || !rows.length) throw new Error('Proof catalog has no native requirements');
+          for (const [index, row] of rows.entries()) {
+            if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.component !== 'string' || !row.component || typeof row.id !== 'string' || !row.id || typeof row.file_path !== 'string' || !row.file_path) {
+              throw new Error(`Proof catalog row ${index} is missing component, id, or file_path`);
+            }
+          }
           const items = rows.filter(row => row && row.component === componentId).map(row => {
             const reqShow = JSON.parse(execFileSync(proof, ['req', 'show', row.id, '--with', 'file', '--format', 'json'], { encoding: 'utf8' }));
             const requirement = reqShow && reqShow.requirement;
-            if (!requirement || requirement.id !== row.id || reqShow.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the catalog row`);
+            if (!requirement || requirement.id !== row.id || requirement.component !== componentId || reqShow.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the catalog row`);
             const hash = requirement && requirement._computed && requirement._computed.file_hash;
             if (typeof hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(hash)) throw new Error(`Proof req show ${row.id} has no computed sha256 file hash`);
               const specGraph = JSON.parse(execFileSync(proof, ['spec', 'graph', '--focus', row.id, '--format', 'json'], { encoding: 'utf8' }));
@@ -167,6 +174,7 @@ subgraphs:
         type: command
         depends_on: enumerate-native-specs
         timeout: 900000
+        resource_group: proof-workspace-mutation
         schema: plain
         wait_for_expansion:
           owner: enumerate-native-specs
@@ -181,11 +189,41 @@ subgraphs:
           const baselinePath = process.env.VISOR_NATIVE_B_PREPARE_SUMMARY;
           if (!baselinePath) throw new Error('runner did not provide its prepare catalog summary');
           const baseline = JSON.parse(require('node:fs').readFileSync(baselinePath, 'utf8'));
-          const expected = { items: baseline.items.map(item => ({ ...item, proof_file_hash: item.file_hash })) };
-          const componentId = baseline.component;
-          if (typeof componentId !== 'string' || !componentId || !Array.isArray(expected.items) || !expected.items.length) {
+          const graphScope = {{ scope | json }};
+          if (!Array.isArray(graphScope) || graphScope.length !== 1) {
+            throw new Error('wait-for-native-items requires exactly one component scope');
+          }
+          const componentScope = graphScope[0];
+          if (!componentScope || componentScope.kind !== 'keyed' || componentScope.expansionOwnerCheck !== 'discover-native-components' || typeof componentScope.key !== 'string' || !componentScope.key || typeof componentScope.subgraphInstanceId !== 'string' || !componentScope.subgraphInstanceId) {
+            throw new Error('wait-for-native-items received an invalid component scope');
+          }
+          const componentId = componentScope.key;
+          if (!Array.isArray(baseline.components) || !baseline.components.length) {
             throw new Error('runner prepare catalog summary is incomplete');
           }
+          const matchingComponents = baseline.components.filter(item => item && item.id === componentId);
+          if (matchingComponents.length !== 1 || !Array.isArray(matchingComponents[0].items) || !matchingComponents[0].items.length) {
+            throw new Error(`prepared Proof summary has no unique component entry for ${componentId}`);
+          }
+          const expected = { items: matchingComponents[0].items };
+          const expectedIdsSeen = new Set();
+          for (const item of expected.items) {
+            if (!item || item.component !== componentId || typeof item.id !== 'string' || !item.id || typeof item.file_path !== 'string' || !item.file_path || typeof item.file_hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(item.file_hash)) {
+              throw new Error(`prepared Proof summary contains an incomplete item for ${componentId}`);
+            }
+            if (expectedIdsSeen.has(item.id)) throw new Error(`prepared Proof summary contains duplicate requirement id ${item.id}`);
+            expectedIdsSeen.add(item.id);
+          }
+          if (!Array.isArray(baseline.items) || !baseline.items.length) throw new Error('runner prepare catalog summary has no complete native item set');
+          const allExpectedIdsSeen = new Set();
+          const allExpectedIdentity = baseline.items.map((item, index) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.id !== 'string' || !item.id || typeof item.component !== 'string' || !item.component || typeof item.file_path !== 'string' || !item.file_path || typeof item.file_hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(item.file_hash)) {
+              throw new Error(`prepared Proof summary contains an incomplete global item at ${index}`);
+            }
+            if (allExpectedIdsSeen.has(item.id)) throw new Error(`prepared Proof summary contains duplicate global requirement id ${item.id}`);
+            allExpectedIdsSeen.add(item.id);
+            return `${item.id}\u0000${item.component}\u0000${item.file_path}`;
+          }).sort();
           const run = args => {
             try {
               const stdout = execFileSync(proof, args, { encoding: 'utf8' });
@@ -201,13 +239,20 @@ subgraphs:
           if (!expected || !Array.isArray(expected.items) || !expected.items.length) throw new Error('expanded Proof catalog is empty');
           const listed = run(['req', 'list', '--format', 'json']);
           if (listed.exit_code !== 0 || !Array.isArray(listed.value)) throw new Error('Proof req list failed at component fan-in');
+          for (const [index, row] of listed.value.entries()) {
+            if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.component !== 'string' || !row.component || typeof row.id !== 'string' || !row.id || typeof row.file_path !== 'string' || !row.file_path) {
+              throw new Error(`Proof catalog row ${index} is missing component, id, or file_path at fan-in`);
+            }
+          }
+          const currentIdentity = listed.value.map(row => `${row.id}\u0000${row.component}\u0000${row.file_path}`).sort();
+          if (JSON.stringify(allExpectedIdentity) !== JSON.stringify(currentIdentity)) throw new Error('Proof requirement ID/component/path set changed before fan-in');
           const currentItems = listed.value.filter(row => row && row.component === componentId);
           const expectedIds = expected.items.map(item => item.id).sort();
           const currentIds = currentItems.map(item => item.id).sort();
           if (JSON.stringify(expectedIds) !== JSON.stringify(currentIds)) throw new Error('Proof requirement ID set changed before fan-in');
           for (const item of expected.items) {
             const current = currentItems.find(row => row.id === item.id);
-            if (!current || current.file_path !== item.file_path) throw new Error(`Proof requirement path changed before fan-in for ${item.id}`);
+            if (!current || current.component !== componentId || current.file_path !== item.file_path) throw new Error(`Proof requirement component/path changed before fan-in for ${item.id}`);
           }
           const freshness = [];
           for (const item of expected.items) {
@@ -216,7 +261,7 @@ subgraphs:
             if (shown.exit_code !== 0 || !requirement || typeof requirement._computed?.file_hash !== 'string') {
               throw new Error(`Proof req show ${item.id} failed or has no computed file hash`);
             }
-            if (requirement._computed.file_hash !== item.proof_file_hash || requirement.id !== item.id || shown.value.file_path !== item.file_path) {
+            if (requirement._computed.file_hash !== item.file_hash || requirement.id !== item.id || requirement.component !== componentId || shown.value.file_path !== item.file_path) {
               throw new Error(`Proof input changed before fan-in for ${item.id}`);
             }
             freshness.push({ id: item.id, file_path: item.file_path, file_hash: requirement._computed.file_hash });
@@ -261,7 +306,7 @@ subgraphs:
           The `spec_review_role` field below is the built-in role text supplied
           by Proof through the exact generated input claim.  Use it as guidance
           and review only the same item.
-          {{ outputs | json }}
+          {{ outputs.item | json }}
           --- end runtime role and item claim ---
 
           This node independently reviews the semantic consistency of exactly
@@ -282,14 +327,13 @@ subgraphs:
           successful model call.
         ai:
           model: gpt-5.6-luna
+          codex_execution_profile: luna-xhigh-readonly-v1
           prompt_type: engineer
           allowEdit: false
           allowBash: false
           allowedTools: [search, extract, listFiles]
           max_iterations: 12
           timeout: 480000
-          retry:
-            maxRetries: 0
 
       collect-proof-evidence:
         type: command
@@ -304,11 +348,11 @@ subgraphs:
         exec: |
           set -eu
           node - "$PROOF_BIN" <<'NODE'
-          const dependencyOutputs = {{ outputs | json }};
-          const itemCandidates = Object.values(dependencyOutputs).filter(value => value && value.proof_snapshot && typeof value.proof_file_hash === 'string');
-          if (itemCandidates.length !== 1) throw new Error(`expected one exact native item claim, found ${itemCandidates.length}`);
-          const item = itemCandidates[0];
-          const candidate = {{ outputs['review-native-item'] | json }};
+          const item = {{ outputs.item | json }};
+          const candidate = {{ outputs.candidate | json }};
+          if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.proof_file_hash !== 'string') {
+            throw new Error('expected one exact native item claim');
+          }
           if (!item || !item.proof_snapshot || !item.proof_snapshot.req_show || !item.proof_snapshot.spec_graph) {
             throw new Error('generated Proof item is missing its native snapshot');
           }
@@ -358,8 +402,18 @@ checks:
       const proof = process.argv[2];
       const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], { encoding: 'utf8' }));
       const role = {{ outputs['role-spec-review'] | json }};
-      const components = [...new Set(rows.filter(row => row && row.component === 'get_string').map(row => row.component))]
+      if (!Array.isArray(rows) || !rows.length) throw new Error('Proof catalog has no native requirements');
+      const ids = new Set();
+      for (const [index, row] of rows.entries()) {
+        if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.component !== 'string' || !row.component || typeof row.id !== 'string' || !row.id || typeof row.file_path !== 'string' || !row.file_path) {
+          throw new Error(`Proof catalog row ${index} is missing component, id, or file_path`);
+        }
+        if (ids.has(row.id)) throw new Error(`Proof catalog contains duplicate requirement id ${row.id}`);
+        ids.add(row.id);
+      }
+      const components = [...new Set(rows.map(row => row.component))]
+        .sort((left, right) => left.localeCompare(right))
         .map(id => ({ id, spec_review_role: role }));
-      if (!components.length) throw new Error('Proof catalog has no selected native component');
+      if (!components.length) throw new Error('Proof catalog has no native components');
       process.stdout.write(JSON.stringify({ components }));
       NODE
