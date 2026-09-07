@@ -84,7 +84,10 @@ function completedGeneration(input: {
   };
 }
 
-function fixture(reverseRecords = false): {
+function fixture(
+  components: readonly string[] = ['alpha', 'βeta'],
+  reverseRecords = false,
+): {
   projection: InstanceProjection;
   generation: NodeGenerationProjection;
   parentClaimIds: readonly string[];
@@ -192,7 +195,7 @@ function fixture(reverseRecords = false): {
   const instances: Record<string, SubgraphInstanceProjection> = { [projectId]: project };
   const admissionIds: string[] = [];
 
-  for (const component of ['alpha', 'βeta']) {
+  for (const component of components) {
     const childId = id(`${component}-instance`);
     const childScope: KeyedScopePath = [projectScope[0], {
       kind: 'keyed',
@@ -332,14 +335,17 @@ function fixture(reverseRecords = false): {
   return { projection, generation: reconciliation, parentClaimIds };
 }
 
-function stagedFixture(reverseRecords = false): {
+function stagedFixture(
+  components: readonly string[] = ['alpha', 'βeta'],
+  reverseRecords = false,
+): {
   projection: InstanceProjection;
   generation: NodeGenerationProjection;
   parentClaimIds: readonly string[];
   stageCandidateIds: readonly string[];
   stageAdmissionIds: readonly string[];
 } {
-  const base = fixture(reverseRecords);
+  const base = fixture(components, reverseRecords);
   const projectId = base.generation.subgraphInstanceId;
   const projection = {
     ...base.projection,
@@ -533,9 +539,81 @@ function expectInvalid(run: () => unknown): void {
 }
 
 describe('project reconciliation dynamic parents', () => {
+  it.each([
+    ['N=1', ['alpha']],
+    ['N=5', ['benchmark-codec-adapters', 'benchmark-workloads', 'byte-conversion', 'core-parser', 'escape-decoder']],
+  ] as const)('accepts a natural component set through parent derivation and receipt publication: %s', (_label, components) => {
+    const value = fixture(components);
+    const parents = deriveProofProjectReconciliationParentClaimIds(value.projection, value.generation);
+
+    expect(parents).toHaveLength(components.length + 1);
+    expect(parents).toEqual(value.parentClaimIds);
+    expect(parents).toEqual([...parents].sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'))));
+    expect(parents).toContain(
+      Object.values(value.projection.claimsById).find(claim => claim.claim === PROOF_CATALOG_REVALIDATION_CLAIM)!.claimId,
+    );
+    const admissions = Object.values(value.projection.claimsById)
+      .filter(claim => claim.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
+    expect(admissions).toHaveLength(components.length);
+    expect(parents).toEqual(expect.arrayContaining(admissions.map(claim => claim.claimId)));
+
+    const event = publication(
+      value.projection,
+      value.generation,
+      PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
+      parents,
+    );
+    const next = reduceInstanceEvent(value.projection, event);
+    expect(next.claimsById[event.claimId].parentClaimIds).toEqual(parents);
+  });
+
+  it('rejects an empty natural component set before publishing a reconciliation receipt', () => {
+    const value = fixture([]);
+    const revalidation = Object.values(value.projection.claimsById)
+      .find(claim => claim.claim === PROOF_CATALOG_REVALIDATION_CLAIM)!.claimId;
+    expect(value.parentClaimIds).toEqual([revalidation]);
+    expectInvalid(() => deriveProofProjectReconciliationParentClaimIds(value.projection, value.generation));
+    expectInvalid(() => reduceInstanceEvent(
+      value.projection,
+      publication(value.projection, value.generation, PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM, value.parentClaimIds),
+    ));
+  });
+
+  it.each([
+    ['N=1', ['alpha']],
+    ['N=5', ['benchmark-codec-adapters', 'benchmark-workloads', 'byte-conversion', 'core-parser', 'escape-decoder']],
+  ] as const)('accepts a natural component set through staged receipt publication in the reducer: %s', (_label, components) => {
+    const value = stagedFixture(components);
+    const parents = deriveProofProjectReconciliationParentClaimIds(value.projection, value.generation);
+
+    expect(parents).toHaveLength(components.length + 1);
+    expect(parents).toEqual(value.parentClaimIds);
+    expect(parents).toEqual(expect.arrayContaining(value.stageAdmissionIds));
+    expect(parents).not.toEqual(expect.arrayContaining(value.stageCandidateIds));
+
+    const event = publication(
+      value.projection,
+      value.generation,
+      PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
+      parents,
+    );
+    const next = reduceInstanceEvent(value.projection, event);
+    expect(next.claimsById[event.claimId].parentClaimIds).toEqual(parents);
+  });
+
+  it('rejects an empty staged component set before journal receipt publication', () => {
+    const value = stagedFixture([]);
+    expect(value.parentClaimIds).toHaveLength(1);
+    expectInvalid(() => deriveProofProjectReconciliationParentClaimIds(value.projection, value.generation));
+    expectInvalid(() => reduceInstanceEvent(
+      value.projection,
+      publication(value.projection, value.generation, PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM, value.parentClaimIds),
+    ));
+  });
+
   it('derives the UTF-8 sorted revalidation and child admission set independent of record order', () => {
     const normal = fixture();
-    const reversed = fixture(true);
+    const reversed = fixture(undefined, true);
     const normalParents = deriveProofProjectReconciliationParentClaimIds(normal.projection, normal.generation);
     const reversedParents = deriveProofProjectReconciliationParentClaimIds(reversed.projection, reversed.generation);
     expect(normalParents).toEqual(normal.parentClaimIds);
@@ -545,7 +623,7 @@ describe('project reconciliation dynamic parents', () => {
 
   it('derives staged reconciliation parents from revalidation and terminal stage admissions', () => {
     const normal = stagedFixture();
-    const reversed = stagedFixture(true);
+    const reversed = stagedFixture(undefined, true);
     const normalParents = deriveProofProjectReconciliationParentClaimIds(normal.projection, normal.generation);
     const reversedParents = deriveProofProjectReconciliationParentClaimIds(reversed.projection, reversed.generation);
     expect(normalParents).toEqual(normal.parentClaimIds);
