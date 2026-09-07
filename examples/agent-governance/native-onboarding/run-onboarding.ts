@@ -716,18 +716,28 @@ export async function loadRetainedOnboardingConfig(priorOutput: string, output: 
 type RecoveryRoots = Readonly<{
   subject: string;
   priorOutput: string;
+  checkpointRoot?: string;
 }>;
 
 type RecoveryBinding = Readonly<{
   generationId: string;
   componentId: string;
   baselineCommit: string;
-  checkoutPath: string;
+  checkoutPath?: string;
   workItemClaimId: string;
-  checkoutClaimId: string;
-  authorClaimId: string;
+  checkoutClaimId?: string;
+  authorClaimId?: string;
   ownedSourcePaths?: readonly string[];
   draftInventory?: RecoveryDraftInventory;
+}>;
+
+export type RecoveryReviewPacket = Readonly<{
+  componentId: string;
+  id: string;
+  claimId: string;
+  sourceRelativePath: string;
+  bytes: Buffer;
+  sha256: string;
 }>;
 
 type RecoverySideEffects = 'absent' | 'safely_idempotent' | 'isolated_draft_replay';
@@ -750,6 +760,15 @@ type RecoveryDraftInventory = Readonly<{
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function deepJsonEqual(left: unknown, right: unknown): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value as Json).sort().map(key => [key, canonical((value as Json)[key])]));
+  };
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
 }
 
 function gitScalar(root: string, args: string[], label: string): string {
@@ -1013,6 +1032,198 @@ function assertRecoveryInputClaim(
   return matches[0];
 }
 
+function recoveryToken(value: string): string {
+  return Buffer.from(value, 'utf8').toString('base64url');
+}
+
+function assertRecoveryPacketScope(scope: unknown, componentScope: readonly Json[], itemId: string): void {
+  if (!Array.isArray(scope) || scope.length !== componentScope.length + 1 ||
+      !sameJson(scope.slice(0, componentScope.length), componentScope)) {
+    throw new Error(`Recovery review packet for ${itemId} has a mismatched component scope`);
+  }
+  const itemScope = scope[scope.length - 1];
+  if (!itemScope || typeof itemScope !== 'object' || Array.isArray(itemScope) ||
+      (itemScope as Json).kind !== 'keyed' || (itemScope as Json).key !== itemId ||
+      (itemScope as Json).expansionOwnerCheck !== '["onboard-component","enumerate-native-requirements"]' ||
+      typeof (itemScope as Json).subgraphInstanceId !== 'string' ||
+      !/^[0-9a-f]{64}$/.test((itemScope as Json).subgraphInstanceId as string)) {
+    throw new Error(`Recovery review packet for ${itemId} has an invalid requirement scope`);
+  }
+}
+
+export function readRecoveryReviewPackets(
+  checkpointRoot: string,
+  componentScope: readonly Json[],
+  componentId: string,
+  workItemPayload: Json,
+  catalogPayload: Json,
+  projection: any,
+  plan: ReturnType<typeof compileClaimPlan>,
+): readonly RecoveryReviewPacket[] {
+  const root = realDirectory(checkpointRoot, 'retained checkpoint root');
+  const packetRootCandidate = path.join(root, 'review-packets');
+  const packetRootStat = fs.lstatSync(packetRootCandidate);
+  if (!packetRootStat.isDirectory() || packetRootStat.isSymbolicLink()) {
+    throw new Error('retained review packet root must be a regular directory');
+  }
+  const packetRoot = realDirectory(packetRootCandidate, 'retained review packet root');
+  if (!inside(packetRoot, root) || packetRoot === root) {
+    throw new Error('retained review packet root must remain inside the checkpoint root');
+  }
+  const componentToken = recoveryToken(componentId);
+  const componentDirCandidate = path.join(packetRoot, componentToken);
+  const componentDirStat = fs.lstatSync(componentDirCandidate);
+  if (!componentDirStat.isDirectory() || componentDirStat.isSymbolicLink()) {
+    throw new Error(`retained review packet directory must be a regular directory for ${componentId}`);
+  }
+  const componentDir = realDirectory(componentDirCandidate, `retained review packets for ${componentId}`);
+  if (!inside(componentDir, packetRoot) || componentDir === packetRoot) {
+    throw new Error(`retained review packet directory escapes the checkpoint root for ${componentId}`);
+  }
+  const aggregatePath = path.join(packetRoot, componentToken + '.json');
+  if (fs.existsSync(aggregatePath)) {
+    throw new Error(`recovery review packet source already has a component aggregate for ${componentId}`);
+  }
+  const items = Array.isArray(catalogPayload.items) ? catalogPayload.items as Json[] : [];
+  const itemIds = new Set<string>();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        typeof item.id !== 'string' || !item.id || itemIds.has(item.id)) {
+      throw new Error(`Recovery native requirement catalog contains duplicate or invalid item IDs for ${componentId}`);
+    }
+    itemIds.add(item.id);
+  }
+  const expectedFiles = new Set(items.map(item => recoveryToken(String(item.id)) + '.json'));
+  const actualEntries = fs.readdirSync(componentDir, {withFileTypes: true});
+  if (actualEntries.length !== expectedFiles.size ||
+      actualEntries.some(entry => !entry.isFile() || !expectedFiles.has(entry.name))) {
+    throw new Error(`retained review packet set does not exactly match the native requirement catalog for ${componentId}`);
+  }
+  const packetClaims = Object.values(projection.claimsById).filter((claim: any) =>
+    claim.active === true && claim.claim === 'native.review.packet@1' &&
+    claim.producerCheckId === 'collect-proof-evidence'
+  ) as any[];
+  const packetValidator = plan.validatorsByClaim['native.review.packet@1'];
+  const itemValidator = plan.validatorsByClaim['native.requirement.item@1'];
+  const packets: RecoveryReviewPacket[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        typeof item.id !== 'string' || !item.id || item.component_id !== componentId ||
+        typeof item.file_path !== 'string' || path.isAbsolute(item.file_path) || item.file_path.includes('..') ||
+        typeof item.proof_file_hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(item.proof_file_hash) ||
+        !item.proof_snapshot || typeof item.proof_snapshot !== 'object' || Array.isArray(item.proof_snapshot) ||
+        !deepJsonEqual(item.prepared_work_item, workItemPayload)) {
+      throw new Error(`Recovery native requirement item is not bound to the selected WorkItem for ${componentId}`);
+    }
+    try {
+      itemValidator(item);
+    } catch {
+      throw new Error(`Recovery native requirement item failed its compiled validator for ${item.id}`);
+    }
+    const matches = packetClaims.filter(claim =>
+      claim.payload && typeof claim.payload === 'object' && !Array.isArray(claim.payload) &&
+      claim.payload.id === item.id && claim.payload.component_id === componentId
+    );
+    if (matches.length !== 1) {
+      throw new Error(`Recovery requires exactly one active native review packet claim for ${item.id}`);
+    }
+    const claim = matches[0];
+    if (typeof claim.claimId !== 'string' || !/^[0-9a-f]{64}$/.test(claim.claimId)) {
+      throw new Error(`Recovery native review packet claim for ${item.id} has no exact claim identity`);
+    }
+    const claimPayload = claim.payload as Json;
+    const itemSnapshot = item.proof_snapshot as Json;
+    if (claimPayload.file_path !== item.file_path || claimPayload.proof_file_hash !== item.proof_file_hash ||
+        !deepJsonEqual(claimPayload.prepared_work_item, workItemPayload) ||
+        !deepJsonEqual(claimPayload.catalog_entry, itemSnapshot.catalog_entry) ||
+        !deepJsonEqual(claimPayload.req_show, itemSnapshot.req_show) ||
+        !deepJsonEqual(claimPayload.spec_graph, itemSnapshot.spec_graph)) {
+      throw new Error(`Recovery native review packet claim is not bound to the catalog item ${item.id}`);
+    }
+    assertRecoveryPacketScope(claim.scope, componentScope, item.id);
+    const relativePath = path.join('review-packets', componentToken, recoveryToken(item.id) + '.json');
+    const sourcePath = path.join(root, relativePath);
+    let sourceRealPath: string;
+    try {
+      sourceRealPath = fs.realpathSync(sourcePath);
+    } catch {
+      throw new Error(`retained native review packet is missing for ${item.id}`);
+    }
+    if (!inside(sourceRealPath, componentDir) || sourceRealPath !== path.join(componentDir, recoveryToken(item.id) + '.json')) {
+      throw new Error(`retained native review packet escapes its component directory for ${item.id}`);
+    }
+    const sourceStat = fs.lstatSync(sourcePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) throw new Error(`retained native review packet is not a regular file for ${item.id}`);
+    const bytes = fs.readFileSync(sourceRealPath);
+    let packet: Json;
+    try {
+      packet = JSON.parse(bytes.toString('utf8')) as Json;
+    } catch {
+      throw new Error(`retained native review packet is not valid JSON for ${item.id}`);
+    }
+    if (!deepJsonEqual(packet, claim.payload)) {
+      throw new Error(`retained native review packet does not match its checkpoint claim for ${item.id}`);
+    }
+    try {
+      packetValidator(packet);
+    } catch {
+      throw new Error(`retained native review packet failed its compiled validator for ${item.id}`);
+    }
+    packets.push(Object.freeze({
+      componentId,
+      id: item.id,
+      claimId: claim.claimId,
+      sourceRelativePath: relativePath,
+      bytes,
+      sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+    }));
+  }
+  return Object.freeze(packets);
+}
+
+export function stageRecoveryReviewPackets(
+  output: string,
+  packets: readonly RecoveryReviewPacket[],
+): Json {
+  if (!path.isAbsolute(output)) throw new Error('recovery review packet output must be absolute');
+  const outputRoot = path.resolve(output);
+  const packetRoot = path.join(outputRoot, 'review-packets');
+  fs.mkdirSync(packetRoot, {recursive: true, mode: 0o700});
+  fs.chmodSync(packetRoot, 0o700);
+  const entries: Json[] = [];
+  for (const packet of packets) {
+    const componentDir = path.join(packetRoot, recoveryToken(packet.componentId));
+    fs.mkdirSync(componentDir, {recursive: true, mode: 0o700});
+    fs.chmodSync(componentDir, 0o700);
+    const destination = path.join(componentDir, recoveryToken(packet.id) + '.json');
+    if (!inside(destination, componentDir) || path.dirname(destination) !== componentDir) {
+      throw new Error(`recovery review packet destination escapes its component directory for ${packet.id}`);
+    }
+    fs.writeFileSync(destination, packet.bytes, {flag: 'wx', mode: 0o600});
+    fs.chmodSync(destination, 0o600);
+    const copied = fs.readFileSync(destination);
+    const copiedSha = `sha256:${createHash('sha256').update(copied).digest('hex')}`;
+    if (!copied.equals(packet.bytes) || copiedSha !== packet.sha256) {
+      throw new Error(`recovery review packet changed while staging for ${packet.id}`);
+    }
+    entries.push({
+      component_id: packet.componentId,
+      id: packet.id,
+      claim_id: packet.claimId,
+      source: packet.sourceRelativePath,
+      destination: path.relative(outputRoot, destination),
+      bytes: packet.bytes.byteLength,
+      source_sha256: packet.sha256,
+      destination_sha256: copiedSha,
+    });
+  }
+  const manifest = {version: 1, kind: 'retained-native-review-packet-manifest', packets: entries};
+  const manifestPath = path.join(outputRoot, 'recovery', 'review-packet-manifest.json');
+  writeJson(manifestPath, manifest);
+  fs.chmodSync(manifestPath, 0o600);
+  return manifest;
+}
+
 /**
  * Validate the immutable checkpoint projection and the retained native inputs
  * before the retry API is allowed to append its retry events.
@@ -1024,7 +1235,7 @@ export function validateRecoverySelection(
   roots: RecoveryRoots,
   inventory: Json,
   externalSideEffects: RecoverySideEffects,
-): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]} {
+): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]; reviewPackets: readonly RecoveryReviewPacket[]} {
   const plan = compileClaimPlan(config);
   if (checkpoint.graphSemanticDigest !== plan.expansionPlan.graphSemanticDigest) {
     throw new Error('Recovery checkpoint graph semantic digest does not match the retained configuration authority');
@@ -1038,6 +1249,15 @@ export function validateRecoverySelection(
   }
   const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
   const projection: any = journal.getInstanceProjection();
+  const selectedChecks = retryGenerationIds.map(generationId => projection.generationsById[generationId]?.checkId);
+  const componentReviewCount = selectedChecks.filter(checkId => checkId === 'component-reviewed').length;
+  if (componentReviewCount > 0 && (componentReviewCount !== selectedChecks.length || externalSideEffects !== 'absent')) {
+    throw new Error('component-reviewed recovery must select only component-reviewed leaves with absent external side effects');
+  }
+  if (externalSideEffects === 'isolated_draft_replay' &&
+      selectedChecks.some(checkId => checkId !== 'author-native-component')) {
+    throw new Error('isolated draft replay must select only failed author leaves');
+  }
   const authority = inventory.authority && typeof inventory.authority === 'object' && !Array.isArray(inventory.authority)
     ? inventory.authority as Json
     : undefined;
@@ -1054,10 +1274,14 @@ export function validateRecoverySelection(
   }
   const retainedWorktreeRoot = fs.realpathSync(worktreeRoot);
   const bindings: RecoveryBinding[] = [];
+  const reviewPackets: RecoveryReviewPacket[] = [];
   for (const generationId of retryGenerationIds) {
     const generation = projection.generationsById[generationId];
     const authorReplay = externalSideEffects === 'isolated_draft_replay';
-    const expectedCheckId = authorReplay ? 'author-native-component' : 'promote-native-component';
+    const componentReviewReplay = generation?.checkId === 'component-reviewed';
+    const expectedCheckId = componentReviewReplay
+      ? 'component-reviewed'
+      : authorReplay ? 'author-native-component' : 'promote-native-component';
     if (!generation || generation.checkId !== expectedCheckId || generation.status !== 'failed' ||
         !generation.scheduled || typeof generation.attemptId !== 'string' || typeof generation.fence !== 'number' ||
         typeof generation.reason !== 'string' || generation.completedOutputClaimIds.length !== 0) {
@@ -1069,31 +1293,44 @@ export function validateRecoverySelection(
     if (!authorReplay && hasPriorIsolatedDraftReplay(checkpoint, generationId)) {
       throw new Error(`Recovery generation ${generationId} has already used isolated draft replay`);
     }
-    if (Object.values(projection.instancesById).some((instance: any) =>
+    if (!componentReviewReplay && Object.values(projection.instancesById).some((instance: any) =>
       instance.status === 'active' && instance.parentSubgraphInstanceId === generation.subgraphInstanceId)) {
       throw new Error(`Recovery generation ${generationId} still has active descendants`);
     }
+    if (componentReviewReplay && Object.values(projection.generationsById).some((child: any) =>
+      child.status === 'active' && Array.isArray(child.scope) &&
+      child.scope.length > generation.scope.length &&
+      sameJson(child.scope.slice(0, generation.scope.length), generation.scope))) {
+      throw new Error(`Recovery generation ${generationId} still has active descendant generations`);
+    }
     const claims = generation.activeInputClaimIds.map((id: string) => projection.claimsById[id]).filter(Boolean);
-    const expectedClaims = authorReplay
-      ? ['component.checkout@1', 'component.prepared_work_item@1', 'native.role.onboard@1']
-      : ['component.checkout@1', 'component.prepared_work_item@1', 'native.author.evidence@1'];
+    const expectedClaims = componentReviewReplay
+      ? ['component.prepared_work_item@1', 'native.requirement.catalog@1']
+      : authorReplay
+        ? ['component.checkout@1', 'component.prepared_work_item@1', 'native.role.onboard@1']
+        : ['component.checkout@1', 'component.prepared_work_item@1', 'native.author.evidence@1'];
     if (claims.length !== expectedClaims.length ||
         new Set(claims.map((claim: any) => claim.claim)).size !== expectedClaims.length ||
         expectedClaims.some(claimName => !claims.some((claim: any) => claim.claim === claimName))) {
       throw new Error(`Recovery generation ${generationId} has an unexpected ${authorReplay ? 'author' : 'promotion'} input set`);
     }
     const workItem = assertRecoveryInputClaim(projection, generation, 'component.prepared_work_item@1');
-    const checkout = assertRecoveryInputClaim(projection, generation, 'component.checkout@1');
-    const author = assertRecoveryInputClaim(
+    const checkout = componentReviewReplay ? undefined : assertRecoveryInputClaim(projection, generation, 'component.checkout@1');
+    const author = componentReviewReplay ? undefined : assertRecoveryInputClaim(
       projection, generation, authorReplay ? 'native.role.onboard@1' : 'native.author.evidence@1'
     );
-    if (workItem.producerCheckId !== 'prepare-work-item' || checkout.producerCheckId !== 'checkout-worktree' ||
-        (authorReplay ? author.producerCheckId !== 'role-onboard-component' : author.producerCheckId !== 'author-native-component') ||
-        !sameJson(workItem.scope, generation.scope) || !sameJson(checkout.scope, generation.scope) ||
-        !sameJson(author.scope, generation.scope)) {
+    const catalog = componentReviewReplay ? assertRecoveryInputClaim(projection, generation, 'native.requirement.catalog@1') : undefined;
+    if (workItem.producerCheckId !== 'prepare-work-item' ||
+        (componentReviewReplay
+          ? catalog?.producerCheckId !== 'enumerate-native-requirements'
+          : checkout?.producerCheckId !== 'checkout-worktree' ||
+            (authorReplay ? author?.producerCheckId !== 'role-onboard-component' : author?.producerCheckId !== 'author-native-component')) ||
+        !sameJson(workItem.scope, generation.scope) ||
+        (componentReviewReplay ? !sameJson(catalog?.scope, generation.scope) :
+          !sameJson(checkout?.scope, generation.scope) || !sameJson(author?.scope, generation.scope))) {
       throw new Error(`Recovery generation ${generationId} has mismatched native input provenance`);
     }
-    if (authorReplay && (typeof author.payload !== 'string' || author.payload.length === 0)) {
+    if (authorReplay && !componentReviewReplay && (typeof author?.payload !== 'string' || author.payload.length === 0)) {
       throw new Error(`Recovery generation ${generationId} has no built-in onboard role authority`);
     }
     const workItemPayload = workItem.payload && typeof workItem.payload === 'object' && !Array.isArray(workItem.payload)
@@ -1118,37 +1355,43 @@ export function validateRecoverySelection(
     if (ownedSourcePaths.length === 0 || ownedSourcePaths.some(value => path.isAbsolute(value) || value.includes('..'))) {
       throw new Error(`Recovery WorkItem for ${workItemPayload.component_id} has no safe sorted owned paths`);
     }
-    if (!authorReplay && subjectHead !== baselineCommit) {
+    if (!authorReplay && !componentReviewReplay && subjectHead !== baselineCommit) {
       throw new Error(`Recovery subject HEAD does not match WorkItem baseline for ${workItemPayload.component_id}`);
     }
-    const checkoutPayload = checkout.payload && typeof checkout.payload === 'object' && !Array.isArray(checkout.payload)
+    const checkoutPayload = checkout?.payload && typeof checkout.payload === 'object' && !Array.isArray(checkout.payload)
       ? checkout.payload as Json
       : undefined;
-    if (!checkoutPayload || checkoutPayload.success !== true || checkoutPayload.is_worktree !== true ||
+    if (!componentReviewReplay && (!checkoutPayload || checkoutPayload.success !== true || checkoutPayload.is_worktree !== true ||
         typeof checkoutPayload.path !== 'string' || !path.isAbsolute(checkoutPayload.path) ||
         typeof checkoutPayload.commit !== 'string' || checkoutPayload.commit !== baselineCommit ||
         typeof checkoutPayload.ref !== 'string' || checkoutPayload.ref !== baselineCommit ||
         typeof checkoutPayload.repository !== 'string' ||
-        typeof checkoutPayload.worktree_id !== 'string' || checkoutPayload.worktree_id.length === 0) {
+        typeof checkoutPayload.worktree_id !== 'string' || checkoutPayload.worktree_id.length === 0)) {
       throw new Error(`Recovery generation ${generationId} has an invalid retained checkout binding`);
     }
-    const checkoutPath = fs.realpathSync(checkoutPayload.path);
-    if (!inside(checkoutPath, retainedWorktreeRoot) || checkoutPath === retainedWorktreeRoot) {
+    const checkoutPath = !componentReviewReplay && checkoutPayload
+      ? fs.realpathSync(checkoutPayload.path)
+      : undefined;
+    if (!componentReviewReplay && (!checkoutPath || !inside(checkoutPath, retainedWorktreeRoot) || checkoutPath === retainedWorktreeRoot)) {
       throw new Error(`Recovery checkout for ${workItemPayload.component_id} is outside the retained worktree root`);
     }
-    const checkoutGitRoot = realDirectory(gitRoot(checkoutPath), 'retained checkout Git root');
-    if (checkoutGitRoot !== checkoutPath ||
-        gitScalar(checkoutPath, ['rev-parse', '--verify', 'HEAD^{commit}'], 'retained checkout') !== baselineCommit) {
+    const checkoutGitRoot = checkoutPath ? realDirectory(gitRoot(checkoutPath), 'retained checkout Git root') : undefined;
+    if (!componentReviewReplay && (!checkoutPath || checkoutGitRoot !== checkoutPath ||
+        gitScalar(checkoutPath, ['rev-parse', '--verify', 'HEAD^{commit}'], 'retained checkout') !== baselineCommit)) {
       throw new Error(`Recovery retained checkout for ${workItemPayload.component_id} is not pinned to its WorkItem baseline`);
     }
     // Author checkouts intentionally retain their uncommitted native draft.
     // Verify only immutable Git identity here; never clean or rewrite drafts.
-    const repository = realDirectory(checkoutPayload.repository as string, 'retained checkout repository');
-    if (repository !== roots.subject) throw new Error(`Recovery checkout for ${workItemPayload.component_id} has a mismatched repository`);
-    assertCheckoutCommonDirectory(checkoutPath, roots.subject, baselineCommit);
-    const draftInventory = authorReplay
-      ? inventoryAuthorDraft(checkoutPath, baselineCommit, workItemPayload.component_id, ownedSourcePaths)
-      : undefined;
+    if (!componentReviewReplay && checkoutPath && checkoutPayload) {
+      const repository = realDirectory(checkoutPayload.repository as string, 'retained checkout repository');
+      if (repository !== roots.subject) throw new Error(`Recovery checkout for ${workItemPayload.component_id} has a mismatched repository`);
+      assertCheckoutCommonDirectory(checkoutPath, roots.subject, baselineCommit);
+    }
+    let draftInventory: RecoveryDraftInventory | undefined;
+    if (authorReplay) {
+      if (!checkoutPath) throw new Error(`Recovery author generation ${generationId} has no retained checkout`);
+      draftInventory = inventoryAuthorDraft(checkoutPath, baselineCommit, workItemPayload.component_id, ownedSourcePaths);
+    }
     if (authorReplay && (!draftInventory || draftInventory.files.length === 0)) {
       throw new Error(`Recovery author draft inventory is empty for ${workItemPayload.component_id}`);
     }
@@ -1159,19 +1402,41 @@ export function validateRecoverySelection(
       const canonicalPaths = [...new Set([...ownedSourcePaths, ...retainedNativePaths])];
       assertCanonicalOwnedPathsUnchanged(roots.subject, baselineCommit, canonicalPaths);
     }
+    if (componentReviewReplay) {
+      if (!roots.checkpointRoot) {
+        throw new Error('component-reviewed recovery requires an explicit retained checkpoint root');
+      }
+      if (!catalog || !catalog.payload || typeof catalog.payload !== 'object' || Array.isArray(catalog.payload)) {
+        throw new Error(`Recovery generation ${generationId} has no native requirement catalog`);
+      }
+      const catalogPayload = catalog.payload as Json;
+      if (catalogPayload.component_id !== workItemPayload.component_id || !Array.isArray(catalogPayload.items) || catalogPayload.items.length === 0) {
+        throw new Error(`Recovery generation ${generationId} has an invalid native requirement catalog`);
+      }
+      const catalogValidator = plan.validatorsByClaim['native.requirement.catalog@1'];
+      try {
+        catalogValidator(catalogPayload);
+      } catch {
+        throw new Error(`Recovery native requirement catalog failed its compiled validator for ${workItemPayload.component_id}`);
+      }
+      reviewPackets.push(...readRecoveryReviewPackets(
+        roots.checkpointRoot, generation.scope, workItemPayload.component_id, workItemPayload,
+        catalogPayload, projection, plan,
+      ));
+    }
     bindings.push(Object.freeze({
       generationId,
       componentId: workItemPayload.component_id,
       baselineCommit,
-      checkoutPath,
+      ...(checkoutPath ? {checkoutPath} : {}),
       workItemClaimId: workItem.claimId,
-      checkoutClaimId: checkout.claimId,
-      authorClaimId: author.claimId,
+      ...(checkout ? {checkoutClaimId: checkout.claimId} : {}),
+      ...(author ? {authorClaimId: author.claimId} : {}),
       ...(authorReplay ? {ownedSourcePaths: Object.freeze([...ownedSourcePaths])} : {}),
       ...(draftInventory ? {draftInventory} : {}),
     }));
   }
-  return {journal, bindings: Object.freeze(bindings)};
+  return {journal, bindings: Object.freeze(bindings), reviewPackets: Object.freeze(reviewPackets)};
 }
 
 function summarizeCheckpoint(checkpoint: unknown): Json {
@@ -1307,11 +1572,11 @@ async function runRecovery(
   if (!fs.statSync(checkpointPath).isFile()) {
     throw new Error('recover-checkpoint must be a retained checkpoint file');
   }
+  const checkpointRoot = realDirectory(path.dirname(checkpointPath), 'retained checkpoint root');
   if (!inside(checkpointPath, priorOutput)) {
     if (path.basename(checkpointPath) !== 'checkpoint.json') {
       throw new Error('recover-checkpoint outside prior-output must be named checkpoint.json');
     }
-    const checkpointRoot = realDirectory(path.dirname(checkpointPath), 'retained checkpoint root');
     if (inside(checkpointRoot, roots.subject) || inside(roots.subject, checkpointRoot) ||
         inside(checkpointRoot, roots.original) || inside(roots.original, checkpointRoot) ||
         inside(checkpointRoot, priorOutput) || inside(priorOutput, checkpointRoot) ||
@@ -1380,6 +1645,12 @@ async function runRecovery(
     no_native_init_or_discovery: true,
     note: externalSideEffects === 'isolated_draft_replay'
       ? 'Recovery restores one retained Graph-v2 prefix and explicitly retries one selected author leaf from an isolated retained draft; other failures remain visible.'
+      : generationIds.some(generationId => {
+        const event = (validatedInput.events as readonly Json[]).find(candidate =>
+          candidate.type === 'AttemptFailed' && candidate.nodeGenerationId === generationId);
+        return event?.checkId === 'component-reviewed';
+      })
+        ? 'Recovery restores one retained Graph-v2 prefix and explicitly retries selected native fan-in aggregation leaves; failed authors and historical failures remain visible.'
       : 'Recovery restores one retained Graph-v2 prefix and explicitly retries only selected promotion leaves; failed authors and historical failures remain visible.',
   });
 
@@ -1412,7 +1683,7 @@ async function runRecovery(
     config,
     validatedInput,
     generationIds,
-    {subject: roots.subject, priorOutput},
+    {subject: roots.subject, priorOutput, checkpointRoot},
     currentInventory,
     externalSideEffects,
   );
@@ -1421,6 +1692,9 @@ async function runRecovery(
     .map(binding => binding.draftInventory);
   if (externalSideEffects === 'isolated_draft_replay' && draftInventories.length !== 1) {
     throw new Error('isolated_draft_replay requires one retained author draft inventory');
+  }
+  if (authority.reviewPackets.length > 0) {
+    stageRecoveryReviewPackets(roots.output, authority.reviewPackets);
   }
   writeJson(path.join(roots.output, 'recovery', 'draft-inventory.json'), draftInventories);
   writeJson(path.join(roots.output, 'recovery', 'selection.json'), {

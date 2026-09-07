@@ -13,9 +13,98 @@ import {
   inventoryAuthorDraft,
   loadRetainedOnboardingConfig,
   parseRecoveryArguments,
+  readRecoveryReviewPackets,
   serializeRoleInvocation,
+  stageRecoveryReviewPackets,
   summarizeNativePostflight,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
+
+function recoveryReviewPacketFixture(root: string): {
+  checkpointRoot: string;
+  component: string;
+  componentScope: any[];
+  item: any;
+  packet: any;
+  projection: any;
+  catalog: any;
+  workItem: any;
+  plan: any;
+  packetPath: string;
+} {
+  const component = 'component-a';
+  const itemId = 'SYS-REQ-001';
+  const token = (value: string) => Buffer.from(value, 'utf8').toString('base64url');
+  const checkpointRoot = path.join(root, 'retained-checkpoint');
+  const componentDir = path.join(checkpointRoot, 'review-packets', token(component));
+  fs.mkdirSync(componentDir, {recursive: true});
+  const workItem = {
+    component_id: component,
+    baseline_commit: 'a'.repeat(40),
+    project_id: 'project-a',
+    sorted_owned_paths: ['src/component-a.go'],
+  };
+  const proofSnapshot = {
+    catalog_entry: {id: itemId, component, priority_level: 'high'},
+    req_show: {requirement: {id: itemId, component}},
+    spec_graph: {id: itemId, edges: []},
+  };
+  const item = {
+    id: itemId,
+    component_id: component,
+    file_path: 'specs/system/requirements/SYS-REQ-001.req.yaml',
+    proof_file_hash: 'sha256:' + '1'.repeat(64),
+    spec_review_role: 'spec-review-role',
+    proof_snapshot: proofSnapshot,
+    prepared_work_item: workItem,
+  };
+  const packet = {
+    id: item.id,
+    component_id: component,
+    file_path: item.file_path,
+    proof_file_hash: item.proof_file_hash,
+    candidate: {decision: 'needs_changes'},
+    catalog_entry: proofSnapshot.catalog_entry,
+    req_show: proofSnapshot.req_show,
+    spec_graph: proofSnapshot.spec_graph,
+    prepared_work_item: workItem,
+    freshness: 'pending_component_fan_in',
+  };
+  const componentScope = [{
+    kind: 'keyed',
+    key: component,
+    expansionOwnerCheck: '["discover-project","materialize_catalog"]',
+    subgraphInstanceId: 'c'.repeat(64),
+  }];
+  const packetScope = [...componentScope, {
+    kind: 'keyed',
+    key: item.id,
+    expansionOwnerCheck: '["onboard-component","enumerate-native-requirements"]',
+    subgraphInstanceId: 'd'.repeat(64),
+  }];
+  const claimId = 'e'.repeat(64);
+  const projection = {
+    claimsById: {
+      [claimId]: {
+        claimId,
+        active: true,
+        claim: 'native.review.packet@1',
+        producerCheckId: 'collect-proof-evidence',
+        scope: packetScope,
+        payload: packet,
+      },
+    },
+  };
+  const catalog = {component_id: component, items: [item]};
+  const plan = {
+    validatorsByClaim: {
+      'native.requirement.item@1': () => undefined,
+      'native.review.packet@1': () => undefined,
+    },
+  };
+  const packetPath = path.join(componentDir, token(item.id) + '.json');
+  fs.writeFileSync(packetPath, JSON.stringify(packet, null, 2) + '\n', 'utf8');
+  return {checkpointRoot, component, componentScope, item, packet, projection, catalog, workItem, plan, packetPath};
+}
 
 describe('native onboarding runner boundaries', () => {
   let root: string;
@@ -467,5 +556,106 @@ describe('native onboarding runner boundaries', () => {
     }
     expect(config.subgraphs['discover-project'].checks.inspect.message).toContain('owned_paths');
     expect(config.subgraphs['discover-project'].checks.inspect.message).toContain('transitive in-repository dependency files');
+  });
+
+  it('matches retained native review packets to claims and stages exact bytes', () => {
+    const fixture = recoveryReviewPacketFixture(path.join(root, 'packet-positive'));
+    const packets = readRecoveryReviewPackets(
+      fixture.checkpointRoot,
+      fixture.componentScope,
+      fixture.component,
+      fixture.workItem,
+      fixture.catalog,
+      fixture.projection,
+      fixture.plan,
+    );
+    expect(packets).toHaveLength(1);
+    expect(packets[0].id).toBe(fixture.item.id);
+    expect(packets[0].claimId).toBe('e'.repeat(64));
+    expect(packets[0].bytes).toEqual(Buffer.from(JSON.stringify(fixture.packet, null, 2) + '\n'));
+
+    const output = path.join(root, 'packet-output');
+    fs.mkdirSync(output, {recursive: true});
+    const manifest = stageRecoveryReviewPackets(output, packets);
+    const destination = path.join(output, 'review-packets', Buffer.from(fixture.component).toString('base64url'), `${Buffer.from(fixture.item.id).toString('base64url')}.json`);
+    expect(fs.readFileSync(destination)).toEqual(packets[0].bytes);
+    expect(fs.statSync(destination).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.dirname(destination)).mode & 0o777).toBe(0o700);
+    expect(manifest.packets).toEqual([expect.objectContaining({
+      component_id: fixture.component,
+      id: fixture.item.id,
+      claim_id: 'e'.repeat(64),
+      destination: path.relative(output, destination),
+      source_sha256: packets[0].sha256,
+      destination_sha256: packets[0].sha256,
+    })]);
+    expect(() => stageRecoveryReviewPackets(output, packets)).toThrow(/EEXIST/);
+  });
+
+  it('rejects aggregate, extra, tampered, and cross-scope retained packets', () => {
+    const aggregateFixture = recoveryReviewPacketFixture(path.join(root, 'packet-aggregate'));
+    const aggregatePath = path.join(
+      aggregateFixture.checkpointRoot,
+      'review-packets',
+      Buffer.from(aggregateFixture.component).toString('base64url') + '.json',
+    );
+    fs.writeFileSync(aggregatePath, '{}\n', 'utf8');
+    expect(() => readRecoveryReviewPackets(
+      aggregateFixture.checkpointRoot,
+      aggregateFixture.componentScope,
+      aggregateFixture.component,
+      aggregateFixture.workItem,
+      aggregateFixture.catalog,
+      aggregateFixture.projection,
+      aggregateFixture.plan,
+    )).toThrow(/component aggregate/);
+
+    const extraFixture = recoveryReviewPacketFixture(path.join(root, 'packet-extra'));
+    fs.writeFileSync(path.join(path.dirname(extraFixture.packetPath), 'unexpected.json'), '{}\n', 'utf8');
+    expect(() => readRecoveryReviewPackets(
+      extraFixture.checkpointRoot,
+      extraFixture.componentScope,
+      extraFixture.component,
+      extraFixture.workItem,
+      extraFixture.catalog,
+      extraFixture.projection,
+      extraFixture.plan,
+    )).toThrow(/packet set does not exactly match/);
+
+    const duplicateFixture = recoveryReviewPacketFixture(path.join(root, 'packet-duplicate'));
+    duplicateFixture.catalog.items.push({...duplicateFixture.item});
+    expect(() => readRecoveryReviewPackets(
+      duplicateFixture.checkpointRoot,
+      duplicateFixture.componentScope,
+      duplicateFixture.component,
+      duplicateFixture.workItem,
+      duplicateFixture.catalog,
+      duplicateFixture.projection,
+      duplicateFixture.plan,
+    )).toThrow(/duplicate or invalid item IDs/);
+
+    const tamperedFixture = recoveryReviewPacketFixture(path.join(root, 'packet-tampered'));
+    fs.writeFileSync(tamperedFixture.packetPath, JSON.stringify({...tamperedFixture.packet, candidate: {decision: 'tampered'}}) + '\n', 'utf8');
+    expect(() => readRecoveryReviewPackets(
+      tamperedFixture.checkpointRoot,
+      tamperedFixture.componentScope,
+      tamperedFixture.component,
+      tamperedFixture.workItem,
+      tamperedFixture.catalog,
+      tamperedFixture.projection,
+      tamperedFixture.plan,
+    )).toThrow(/does not match its checkpoint claim/);
+
+    const scopeFixture = recoveryReviewPacketFixture(path.join(root, 'packet-scope'));
+    scopeFixture.projection.claimsById['e'.repeat(64)].scope = scopeFixture.componentScope;
+    expect(() => readRecoveryReviewPackets(
+      scopeFixture.checkpointRoot,
+      scopeFixture.componentScope,
+      scopeFixture.component,
+      scopeFixture.workItem,
+      scopeFixture.catalog,
+      scopeFixture.projection,
+      scopeFixture.plan,
+    )).toThrow(/scope/);
   });
 });
