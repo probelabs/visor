@@ -362,7 +362,25 @@ describe('public governed raw-item failure warning', () => {
     expect(consoleError).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['tool_event_limit', 'tool_call_limit'])
+  it.each([
+    'tool_event_limit',
+    'tool_call_limit',
+    'message_content_array',
+    'message_content_empty',
+    'message_content_limit',
+    'message_content_kind',
+    'message_content_text_type',
+    'message_content_text_limit',
+    'reasoning_summary_array',
+    'reasoning_summary_nonempty',
+    'reasoning_encrypted_content_type',
+    'reasoning_encrypted_content_limit',
+    'tool_output_array',
+    'tool_output_limit',
+    'tool_output_kind',
+    'tool_output_text_type',
+    'tool_output_text_limit',
+  ])
   ('accepts the bounded %s predicate with the same public identity', async predicate => {
     const failure = Object.assign(new Error('raw tool event payload stays private'), {
       answerFailureStage: 'native_event_grammar',
