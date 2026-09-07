@@ -221,6 +221,94 @@ function stagedPriorCandidate(request: Record<string, unknown>, resolved: Record
 }
 
 describe('runtime component C0 authority seam', () => {
+  it('rejects a pre-promotion WorkItem at real Proof C0 until current authority is refreshed', async () => {
+    const runSync = jest.requireActual<typeof import('node:child_process')>('node:child_process').execFileSync;
+    const binary = pinnedProofBinary(runSync);
+    expect(existsSync(binary)).toBe(true);
+    const repository = mkdtempSync(join(tmpdir(), 'visor-runtime-c0-refresh-'));
+    const root = join(repository, 'project');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'proof.yaml'), 'project:\n  name: journalservice\n', 'utf8');
+    for (const name of ['alpha.go', 'beta.go', 'gamma.go']) writeFileSync(join(root, name), `package journal\n// ${name}\n`, 'utf8');
+    const commandEnv = { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' };
+    const invoke = (args: string[], input: string): any => JSON.parse(String(runSync(binary, args, {
+      cwd: root, input, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: commandEnv,
+    })));
+    const resolve = (request: Record<string, unknown>): any => JSON.parse(String(runSync(binary, ['resolve-role-invocation'], {
+      cwd: root, input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, env: commandEnv,
+    })));
+    try {
+      runSync('git', ['init', '-q'], { cwd: repository, env: commandEnv });
+      runSync('git', ['config', 'user.email', 'runtime-c0-refresh@example.invalid'], { cwd: repository, env: commandEnv });
+      runSync('git', ['config', 'user.name', 'Runtime C0 refresh'], { cwd: repository, env: commandEnv });
+      runSync('git', ['add', '.'], { cwd: repository, env: commandEnv });
+      runSync('git', ['commit', '-qm', 'fixture'], { cwd: repository, env: commandEnv });
+
+      const authority = makeAuthority(runSync, binary, root);
+      const componentRequest = (currentAuthority: Record<string, unknown>): Record<string, unknown> => ({
+        role_id: 'onboard',
+        stance: 'owner',
+        subject: {
+          kind: 'component',
+          id: 'alpha',
+          fingerprint: (currentAuthority.subject as Record<string, unknown>).fingerprint,
+        },
+        component_authority: currentAuthority,
+        output_schema_id: 'reqproof.component-onboarding/v1',
+        output_schema: SCHEMA,
+      });
+
+      const initialRequest = componentRequest(authority);
+      const initialResolved = resolve(initialRequest);
+      expect(initialResolved.subject).toEqual(initialRequest.subject);
+      expect(initialResolved.component_authority).toEqual(authority);
+
+      // Simulate the native promotion changing an owned source file after the
+      // controller minted the original Proof WorkItem.
+      writeFileSync(join(root, 'alpha.go'), 'package journal\n// alpha.go changed by native promotion\n', 'utf8');
+
+      let staleError: unknown;
+      try {
+        resolve(initialRequest);
+      } catch (error) {
+        staleError = error;
+      }
+      expect(staleError).toBeDefined();
+      const failure = staleError as { status?: number; stderr?: string | Buffer };
+      expect(failure.status).toBe(1);
+      const staleStderr = String(failure.stderr ?? '');
+      expect(staleStderr.trim()).toBe('roles: role invocation: SUBJECT_RESOLUTION_FAILED: component authority is not bound to the current catalog WorkItem');
+
+      const refreshedRevalidation = invoke(
+        ['onboarding', 'revalidate'],
+        proofJSON({ version: 'proof.catalog-revalidation-request/v2', candidate: authority.candidate, admission: authority.admission }),
+      );
+      const refreshedWorkItems = invoke(
+        ['onboarding', 'work-items'],
+        `{"version":${proofCanonicalJson('proof.onboarding-work-items-request/v1')},"candidate":${proofCanonicalJson(authority.candidate)},"admission":${proofCanonicalJson(authority.admission)},"revalidation_receipt":${proofCanonicalJson(refreshedRevalidation.receipt)}}`,
+      );
+      const refreshedItem = refreshedWorkItems.work_items.find((item: any) => item.component_id === 'alpha');
+      const refreshedRow = refreshedRevalidation.receipt.component_authorities.find((item: any) => item.component_id === 'alpha');
+      expect(refreshedItem).toBeDefined();
+      expect(refreshedRow).toBeDefined();
+      expect(refreshedRow.work_item_digest).not.toBe(authority.work_item_digest);
+      expect(refreshedRow.subject.fingerprint).not.toBe((authority.subject as Record<string, unknown>).fingerprint);
+      const refreshedAuthority = {
+        ...authority,
+        work_item_digest: refreshedRow.work_item_digest,
+        subject: refreshedRow.subject,
+        work_item: refreshedItem,
+        catalog_revalidation_receipt: refreshedRevalidation.receipt,
+      };
+      const refreshedRequest = componentRequest(refreshedAuthority);
+      const refreshedResolved = resolve(refreshedRequest);
+      expect(refreshedResolved.subject).toEqual(refreshedRequest.subject);
+      expect(refreshedResolved.component_authority).toEqual(refreshedAuthority);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  }, 180000);
+
   it('runs real pinned Proof C0 before a fake Probe and fails closed before Probe on malformed authority', async () => {
     jest.resetModules();
     jest.doMock('child_process', () => jest.requireActual('child_process'));
