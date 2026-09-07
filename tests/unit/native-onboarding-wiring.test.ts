@@ -8,6 +8,7 @@ import {loadConfig} from '../../src/sdk';
 import {createExtendedLiquid} from '../../src/liquid-extensions';
 import {GitCheckoutProvider} from '../../src/providers/git-checkout-provider';
 import {worktreeManager} from '../../src/utils/worktree-manager';
+import {nativeOnboardingCountsAreConsistent} from '../../examples/agent-governance/native-onboarding/run-onboarding';
 
 type Json = Record<string, any>;
 
@@ -34,7 +35,30 @@ describe('native onboarding isolated writer wiring', () => {
     expect(checks['author-native-component'].depends_on).toEqual(['role-onboard-component', 'checkout-worktree']);
     expect(checks['author-native-component'].resource_group).toBeUndefined();
     expect(checks['promote-native-component'].resource_group).toBe('proof-workspace-mutation');
-    expect(checks['enumerate-native-requirements'].depends_on).toEqual(['promote-native-component']);
+    expect(checks['enumerate-native-requirements'].depends_on).toEqual([
+      'promote-native-component',
+      'role-spec-review-component',
+    ]);
+    expect(checks['enumerate-native-requirements'].expand).toEqual(expect.objectContaining({
+      claim: 'native.requirement.catalog@1',
+      template: 'native-requirement-review',
+      items_pointer: '/items',
+      key_pointer: '/id',
+      item_claim: 'native.requirement.item@1',
+    }));
+    expect(checks['wait-for-native-items'].type).toBe('noop');
+    expect(checks['wait-for-native-items'].consumes).toBeUndefined();
+    expect(checks['wait-for-native-items'].wait_for_expansion).toEqual({
+      owner: 'enumerate-native-requirements',
+      terminal_node: 'collect-proof-evidence',
+    });
+    expect(checks['component-reviewed'].depends_on).toEqual(['wait-for-native-items']);
+    expect(checks['component-reviewed'].consumes).toEqual([
+      {claim: 'component.prepared_work_item@1', as: 'work_item'},
+      {claim: 'native.requirement.catalog@1', as: 'catalog'},
+    ]);
+    expect(checks['review-native-component']).toBeUndefined();
+    expect(checks['persist-review-packet']).toBeUndefined();
   });
 
   it('binds only the admitted WorkItem, exact checkout, and built-in role into the writer prompt', async () => {
@@ -124,6 +148,49 @@ describe('native onboarding isolated writer wiring', () => {
     expect(enumeration.exec).toContain("promotion.status !== 'promoted'");
     expect(enumeration.exec).toContain('deps.work_item');
     expect(enumeration.exec).toContain('deps.promotion');
+    expect(enumeration.exec).toContain('deps.role');
+    expect(enumeration.exec).toContain('catalog_entry: row');
+    expect(enumeration.exec).toContain('prepared_work_item: workItem');
+  });
+
+  it('binds one exact WorkItem and opaque Proof snapshot per generated requirement review', () => {
+    const config = readConfig();
+    const template = config.subgraphs['native-requirement-review'];
+    const review = template.checks['review-native-item'];
+    const collect = template.checks['collect-proof-evidence'];
+    expect(template.input).toEqual({name: 'item', claim: 'native.requirement.item@1'});
+    expect(review.ai).toEqual(expect.objectContaining({
+      model: 'gpt-5.6-luna',
+      codex_execution_profile: 'luna-xhigh-readonly-v1',
+      allowEdit: false,
+      allowBash: false,
+      allowedTools: ['search', 'extract', 'listFiles'],
+    }));
+    expect(review.prompt).toContain('{{ outputs.item | json }}');
+    expect(review.prompt).toContain('exactly one materialized');
+    expect(review.prompt).toMatch(/Candidate\s+prose is evidence, not Proof state or approval/);
+    expect(collect.consumes).toEqual([
+      {claim: 'native.requirement.item@1', as: 'item'},
+      {claim: 'native.review.candidate@1', as: 'candidate'},
+    ]);
+    expect(collect.exec).toContain('proof_snapshot.catalog_entry');
+    expect(collect.exec).toContain('prepared_work_item: item.prepared_work_item');
+    expect(collect.exec).toContain('pending_component_fan_in');
+    expect(config.claim_types['native.requirement.item@1'].schema.additionalProperties).toBe(false);
+    expect(config.claim_types['native.requirement.catalog@1'].schema.additionalProperties).toBe(false);
+  });
+
+  it('keeps component fan-in scoped, hash-fresh, and WorkItem-bound', () => {
+    const config = readConfig();
+    const fanIn = config.subgraphs['onboard-component'].checks['component-reviewed'];
+    expect(fanIn.resource_group).toBe('proof-workspace-mutation');
+    expect(fanIn.exec).toContain("run(['req', 'list', '--format', 'json'])");
+    expect(fanIn.exec).toContain('current.length !== catalog.items.length');
+    expect(fanIn.exec).toContain('component requirement hash changed');
+    expect(fanIn.exec).toContain('same(packet.prepared_work_item, workItem)');
+    expect(fanIn.exec).toContain('reviewed-native-requirement-items');
+    expect(fanIn.exec).not.toContain('allExpectedIdentity');
+    expect(fanIn.exec).not.toContain('per-requirement Graph-v2 expansion is deferred');
   });
 
   it('records the real GitCheckoutProvider success envelope against the closed checkout claim', async () => {
@@ -191,5 +258,32 @@ describe('native onboarding isolated writer wiring', () => {
       .toBeLessThan(source.indexOf("baseline-checkpoint.json"));
     expect(source.indexOf("baseline-checkpoint.json"))
       .toBeLessThan(source.indexOf('executeGroupedChecks'));
+  });
+
+  it('requires natural authoritative component and requirement counts', () => {
+    const counts = (overrides: Partial<Parameters<typeof nativeOnboardingCountsAreConsistent>[0]> = {}) => ({
+      expected_components: 1,
+      native_requirements: 1,
+      authored_components: 1,
+      reviewed_items: 1,
+      reviewed_components: 1,
+      validated_components: 1,
+      ...overrides,
+    });
+    expect(nativeOnboardingCountsAreConsistent(counts())).toBe(true);
+    expect(nativeOnboardingCountsAreConsistent(counts({
+      expected_components: 2,
+      native_requirements: 3,
+      authored_components: 2,
+      reviewed_items: 3,
+      reviewed_components: 2,
+      validated_components: 2,
+    }))).toBe(true);
+    for (const field of ['reviewed_items', 'reviewed_components', 'validated_components'] as const) {
+      expect(nativeOnboardingCountsAreConsistent(counts({[field]: 0}))).toBe(false);
+    }
+    expect(nativeOnboardingCountsAreConsistent(counts({native_requirements: 0, reviewed_items: 0}))).toBe(false);
+    expect(nativeOnboardingCountsAreConsistent(counts({expected_components: 0, authored_components: 0, reviewed_components: 0, validated_components: 0}))).toBe(false);
+    expect(nativeOnboardingCountsAreConsistent(counts({authored_components: 0}))).toBe(false);
   });
 });

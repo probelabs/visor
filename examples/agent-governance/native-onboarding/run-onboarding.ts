@@ -10,9 +10,12 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { loadConfig, StateMachineExecutionEngine } from '../../../src/sdk';
+import { ExecutionJournal } from '../../../src/snapshot-store';
+import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 import { createProofAdmissionCapability, goCompatibleProofJson } from '../../../src/providers/proof-admission-cli-child';
 import type { PRInfo } from '../../../src/pr-analyzer';
+import type { VisorConfig } from '../../../src/types/config';
 
 type Json = Record<string, unknown>;
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -21,9 +24,35 @@ export type NativePostflightSummary = {
   open_native_checks: Array<{name: string; exit_code: number}>;
 };
 
+export type NativeOnboardingCompletionCounts = Readonly<{
+  expected_components: number;
+  native_requirements: number;
+  authored_components: number;
+  reviewed_items: number;
+  reviewed_components: number;
+  validated_components: number;
+}>;
+
+/**
+ * Check natural discovered counts against the authoritative component
+ * catalog. This is a completion consistency predicate, not an agent quota.
+ */
+export function nativeOnboardingCountsAreConsistent(counts: NativeOnboardingCompletionCounts): boolean {
+  return Number.isSafeInteger(counts.expected_components) && counts.expected_components > 0 &&
+    Number.isSafeInteger(counts.native_requirements) && counts.native_requirements > 0 &&
+    counts.authored_components === counts.expected_components &&
+    counts.reviewed_components === counts.expected_components &&
+    counts.validated_components === counts.expected_components &&
+    counts.reviewed_items === counts.native_requirements;
+}
+
 const CONFIG_PATH = path.resolve(__dirname, 'visor-onboarding.yaml');
 const REPO_ROOT = path.resolve(__dirname, '../../../');
-const DEFAULT_TIMEOUT_MS = 1_800_000;
+// A natural component catalog can contain many independent review items after
+// each editable author/promotion. Keep the outer campaign budget bounded, but
+// large enough for that real work; per-check and request budgets remain the
+// enforcement points for individual calls.
+const DEFAULT_TIMEOUT_MS = 7_200_000;
 let diagnosticOutput: string | undefined;
 
 const PR: PRInfo = {
@@ -344,6 +373,53 @@ function summarizeCheckpoint(checkpoint: unknown): Json {
   };
 }
 
+/**
+ * Recover the expected natural component count from the journal's current
+ * Proof catalog and its controller-owned WorkItems. No completed-attempt count
+ * or runner-side manifest is authoritative for this boundary.
+ */
+export function countAuthoritativeMaterializedComponents(config: VisorConfig, checkpoint: unknown): number {
+  const plan = compileClaimPlan(config);
+  const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  const projection = journal.getInstanceProjection();
+  const activeClaims = Object.values(projection.claimsById).filter(claim => claim.active);
+  const catalogs = activeClaims.filter(claim =>
+    claim.kind === 'generated-output' &&
+    claim.claim === 'component.catalog@1' &&
+    claim.producerCheckId === 'materialize_catalog'
+  );
+  if (catalogs.length !== 1) throw new Error('checkpoint must contain exactly one active materialized component catalog');
+  const catalog = catalogs[0];
+  const payload = catalog.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('materialized component catalog payload is invalid');
+  const components = (payload as Json).components;
+  if (!Array.isArray(components) || components.length === 0) throw new Error('materialized component catalog has no components');
+  const componentIds = components.map((component, index) => {
+    if (!component || typeof component !== 'object' || Array.isArray(component) || typeof (component as Json).component_id !== 'string' || !(component as Json).component_id) {
+      throw new Error(`materialized component catalog entry ${index} has no exact component_id`);
+    }
+    return (component as Json).component_id as string;
+  });
+  if (new Set(componentIds).size !== componentIds.length) throw new Error('materialized component catalog contains duplicate component_id values');
+  const workItems = activeClaims.filter(claim =>
+    claim.kind === 'controller-item' &&
+    claim.claim === 'component.work_item@1' &&
+    claim.controllerCatalogClaimId === catalog.claimId
+  );
+  const workItemIds = workItems.map((claim, index) => {
+    const item = claim.payload;
+    if (!item || typeof item !== 'object' || Array.isArray(item) || typeof (item as Json).component_id !== 'string' || !(item as Json).component_id) {
+      throw new Error(`materialized component WorkItem ${index} has no exact component_id`);
+    }
+    return (item as Json).component_id as string;
+  });
+  if (new Set(workItemIds).size !== workItemIds.length ||
+      workItemIds.slice().sort().join('\u0000') !== componentIds.slice().sort().join('\u0000')) {
+    throw new Error('materialized component WorkItems do not exactly match the current component catalog');
+  }
+  return componentIds.length;
+}
+
 export function summarizeNativePostflight(postflight: Json): NativePostflightSummary {
   const checkNames = ['requirements', 'validation', 'audit', 'checklist', 'status'];
   const open_native_checks = checkNames.flatMap(name => {
@@ -507,6 +583,14 @@ async function main(): Promise<void> {
   const postflightSummary = summarizeNativePostflight(postflight);
   const checkpointSummary = summarizeCheckpoint(checkpoint);
   checkpointSummary.mode = 'export-only-no-resume-wired';
+  let expectedComponents = 0;
+  let authoritativeComponentError: string | null = null;
+  try {
+    expectedComponents = countAuthoritativeMaterializedComponents(config, checkpoint);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    authoritativeComponentError = message.length > 1024 ? `${message.slice(0, 1024)}...[truncated]` : message;
+  }
   const completedByCheck = checkpointSummary.completed_by_check &&
       typeof checkpointSummary.completed_by_check === 'object' &&
       !Array.isArray(checkpointSummary.completed_by_check)
@@ -515,7 +599,8 @@ async function main(): Promise<void> {
   const nativeRequirements = postflightValues.requirements;
   const nativeRequirementCount = Array.isArray(nativeRequirements) ? nativeRequirements.length : 0;
   const authored = completedByCheck['author-native-component'] || 0;
-  const reviewed = completedByCheck['persist-review-packet'] || 0;
+  const reviewedItems = completedByCheck['collect-proof-evidence'] || 0;
+  const reviewedComponents = completedByCheck['component-reviewed'] || 0;
   const validated = completedByCheck['native-validation'] || 0;
   const discoveryAdmission = completedByCheck.proof_admit || 0;
   const reconciliation = completedByCheck.project_reconcile || 0;
@@ -530,22 +615,30 @@ async function main(): Promise<void> {
   const expectedBoundaryFailureOnly = failedExecutions > 0 &&
     Object.keys(failedByCheck).length > 0 &&
     Object.keys(failedByCheck).every(check => check === 'project_reconcile');
-  const failed = unexpectedFailures.length > 0 || authored === 0 || reviewed === 0 ||
-    validated === 0 || nativeRequirementCount === 0 ||
+  const countConsistency = authoritativeComponentError === null && nativeOnboardingCountsAreConsistent({
+    expected_components: expectedComponents,
+    native_requirements: nativeRequirementCount,
+    authored_components: authored,
+    reviewed_items: reviewedItems,
+    reviewed_components: reviewedComponents,
+    validated_components: validated,
+  });
+  const failed = unexpectedFailures.length > 0 || !countConsistency ||
     postflightSummary.hard_failures.length > 0 ||
     (failedExecutions > 0 && !expectedBoundaryFailureOnly);
   const status = failed ? 'failed-native-onboarding-run' : 'partial-open-component-admission-boundary';
   const summary = {
     status,
     candidate: discoveryAdmission > 0 ? 'proof-governed-discovery-candidate-and-discovery-admission-receipt-recorded' : 'discovery-candidate-or-admission-not-recorded',
-    reviewed: reviewed > 0 ? 'persisted-independent-native-review-packets' : 'no-persisted-independent-review-packets',
+    reviewed: reviewedItems > 0 ? 'persisted-independent-native-requirement-review-packets' : 'no-persisted-independent-review-packets',
     validated: validated > 0 && nativeRequirementCount > 0 ? 'native-validation-summary-and-postflight-proof-evidence' : 'native-validation-not-complete',
     admitted: 'component authoring and independent review are not native approval; no component admission is claimed',
     project_summary: reconciliation > 0 ? 'project reconciliation receipt recorded; inspect component boundary before treating as admitted' : 'project reconciliation did not record a component admission receipt; open step is native component admission/reconciliation',
-    open_step: 'per-requirement Graph-v2 expansion is deferred because the graph uses its single nested expansion for natural component scopes; component admission/reconciliation remains open',
+    open_step: 'component admission/reconciliation remains open; per-requirement review packets and native validation are recorded separately',
     open_native_checks: postflightSummary.open_native_checks,
-    counts: {authored_components: authored, reviewed_packets: reviewed, validated_components: validated, native_requirements: nativeRequirementCount, project_reconciliation: reconciliation, failed_executions: failedExecutions},
-    failure_reason: failed ? 'failed attempt outside the explicit project-reconciliation boundary, missing author/review/validation completion, empty native requirement catalog, or nonzero native validation/status' : null,
+    counts: {expected_components: expectedComponents, authored_components: authored, reviewed_items: reviewedItems, reviewed_components: reviewedComponents, validated_components: validated, native_requirements: nativeRequirementCount, project_reconciliation: reconciliation, failed_executions: failedExecutions},
+    count_consistency: {authoritative: authoritativeComponentError === null, consistent: countConsistency, error: authoritativeComponentError},
+    failure_reason: failed ? 'failed attempt outside the explicit project-reconciliation boundary, incomplete natural component/item review counts, unavailable authoritative component catalog, empty native requirement catalog, or nonzero native validation/status' : null,
     checkpoint: checkpointSummary,
     output: roots.output,
   };

@@ -199,7 +199,7 @@ TS_NODE_TRANSPILE_ONLY=1 npx ts-node examples/agent-governance/native-onboarding
   --original-root /absolute/path/to/jsonparser \
   --proof-bin /private/tmp/proof-native-graph-tools.0B8QnO/proof \
   --output /absolute/path/to/fresh-onboarding-output \
-  --timeout 1800000
+  --timeout 7200000
 ```
 
 `REQUEST_TIMEOUT` is required to be smaller than the outer timeout. The
@@ -223,20 +223,24 @@ changes; an interruption after writes start is a failure, not an unchanged
 rejection. It does not claim crash-atomic application or recovery.
 
 After promotion, the graph re-lists native requirements and focused graphs,
-runs separate Luna/xhigh read-only review, persists review packets, and records
-native validation/audit/checklist/status. Review output is evidence only;
-authoring, Git promotion, and review never become native approval. Independent
-author/reviewer overlap is enabled by this wiring but remains to be measured
-in the real flow.
+then expands one independent read-only Luna review and candidate packet for
+each requirement. Every generated item carries its complete Proof row,
+`req show`/focused graph snapshot, built-in role text, and exact prepared
+WorkItem. A component fan-in waits for all of its item packets, re-reads only
+that component's current IDs, paths, and Proof-computed hashes, and rejects
+stale, missing, duplicate, or cross-WorkItem packets. Sibling component
+catalog changes are not treated as this component's staleness. Review output
+is evidence only; authoring, Git promotion, and review never become native
+approval.
 
-The current Graph-v2 compiler permits one nested expansion owner. This flow
-uses that owner for natural component scopes, so the output explicitly records
-the open step “per-requirement Graph-v2 expansion” while the component packet
-still contains every real requirement snapshot. The output `summary.json`,
-`checkpoint.json`, `postflight.json`, and retained command streams distinguish
-discovery candidate/admission, reviewed packets, native validation, and the
-uncompleted component-admission/project-reconciliation boundary. No approval
-is inferred when that boundary remains open.
+The output `summary.json`, `checkpoint.json`, `postflight.json`, and retained
+command streams distinguish discovery candidate/admission, per-requirement
+review packets, native validation, and the uncompleted
+component-admission/project-reconciliation boundary. The runner counts
+natural authored components, reviewed item packets, reviewed components, and
+validated components separately and requires their consistency with the final
+Proof requirement count. No approval is inferred when that boundary remains
+open.
 
 ## Historical single-component milestone scope
 
