@@ -349,8 +349,12 @@ export interface AIProviderConfig {
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
   /** Model name to use */
   model?: string;
-  /** Closed execution profile for the read-only Luna xhigh worker path. */
-  codex_execution_profile?: 'luna-xhigh-readonly-v1';
+  /** Closed execution profile for ordinary governed Luna workers. */
+  codex_execution_profile?:
+    | 'luna-xhigh-readonly-v1'
+    | 'luna-xhigh-isolated-writer-v1';
+  /** Exact dependency check id that produced the isolated writer worktree. */
+  codex_working_directory_from?: string;
   /** API key (usually from environment variables) */
   apiKey?: string;
   /** Request timeout in milliseconds */

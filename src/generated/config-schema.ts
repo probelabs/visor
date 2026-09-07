@@ -1502,8 +1502,14 @@ export const configSchema = {
         },
         codex_execution_profile: {
           type: 'string',
-          enum: ['luna-xhigh-readonly-v1'],
-          description: 'Closed execution profile for the read-only Luna xhigh worker path.',
+          enum: ['luna-xhigh-readonly-v1', 'luna-xhigh-isolated-writer-v1'],
+          description: 'Closed execution profile for ordinary governed Luna workers.',
+        },
+        codex_working_directory_from: {
+          type: 'string',
+          minLength: 1,
+          description:
+            'Exact dependency check id whose successful git-checkout output supplies the isolated writer worktree.',
         },
         apiKey: {
           type: 'string',

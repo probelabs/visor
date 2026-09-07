@@ -6,6 +6,8 @@ import { EnvironmentResolver } from '../utils/env-resolver';
 import { IssueFilter } from '../issue-filter';
 import { createExtendedLiquid } from '../liquid-extensions';
 import fs from 'fs/promises';
+import fsSync from 'fs';
+import { execFileSync } from 'child_process';
 import path from 'path';
 import { trace, context as otContext } from '../telemetry/lazy-otel';
 import {
@@ -33,6 +35,129 @@ import { formatUserFacingExecutionError } from '../utils/user-facing-error';
 
 const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
 const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
+const LUNA_ISOLATED_WRITER_PROFILE = 'luna-xhigh-isolated-writer-v1' as const;
+const LUNA_WRITER_TOOLS = ['search', 'extract', 'listFiles'] as const;
+
+function gitOutput(worktreePath: string, args: string[]): string {
+  return execFileSync('git', ['-C', worktreePath, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function resolveIsolatedWriterWorktree(
+  selector: string,
+  dependencyResults: Map<string, ReviewSummary> | undefined,
+  sessionInfo: { parentSessionId?: string; reuseSession?: boolean } &
+    import('./check-provider.interface').ExecutionContext,
+  aiConfig: AIReviewConfig
+): string {
+  if (
+    selector.length === 0 ||
+    selector !== selector.trim() ||
+    selector.includes('{{') ||
+    selector.includes('}}')
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires a literal dependency check id in codex_working_directory_from`
+    );
+  }
+  if (!dependencyResults) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires dependency results for ${selector}`
+    );
+  }
+  const dependency = dependencyResults.get(selector) as
+    | (ReviewSummary & { output?: unknown })
+    | undefined;
+  const output = dependency?.output;
+  if (
+    !dependency ||
+    (Array.isArray(dependency.issues) && dependency.issues.length > 0) ||
+    !output ||
+    typeof output !== 'object' ||
+    Array.isArray(output)
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects missing or failed checkout dependency ${selector}`
+    );
+  }
+  const checkout = output as Record<string, unknown>;
+  if (
+    checkout.success !== true ||
+    checkout.is_worktree !== true ||
+    typeof checkout.path !== 'string' ||
+    !path.isAbsolute(checkout.path) ||
+    typeof checkout.commit !== 'string' ||
+    checkout.commit.length === 0 ||
+    typeof checkout.worktree_id !== 'string' ||
+    checkout.worktree_id.length === 0
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects incomplete checkout dependency ${selector}`
+    );
+  }
+
+  const parentContext = (sessionInfo as any)?._parentContext;
+  const canonicalCandidate = parentContext?.workingDirectory;
+  if (typeof canonicalCandidate !== 'string' || canonicalCandidate.length === 0) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires the canonical integration root in execution context`
+    );
+  }
+
+  let canonicalRoot: string;
+  let selectedRoot: string;
+  try {
+    canonicalRoot = fsSync.realpathSync(canonicalCandidate);
+    selectedRoot = fsSync.realpathSync(checkout.path);
+    if (!fsSync.statSync(selectedRoot).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects an unresolved checkout worktree ${checkout.path}`
+    );
+  }
+  if (selectedRoot === canonicalRoot) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects a checkout worktree equal to the canonical integration root`
+    );
+  }
+
+  try {
+    if (gitOutput(selectedRoot, ['rev-parse', '--is-inside-work-tree']) !== 'true') {
+      throw new Error('not a git worktree');
+    }
+    const gitRoot = fsSync.realpathSync(gitOutput(selectedRoot, ['rev-parse', '--show-toplevel']));
+    if (gitRoot !== selectedRoot) throw new Error('git root mismatch');
+    const head = gitOutput(selectedRoot, ['rev-parse', 'HEAD']);
+    if (head !== checkout.commit) throw new Error('checkout commit mismatch');
+    const worktreePaths = gitOutput(selectedRoot, ['worktree', 'list', '--porcelain'])
+      .split('\n')
+      .filter(line => line.startsWith('worktree '))
+      .map(line => line.slice('worktree '.length))
+      .map(candidate => {
+        try {
+          return fsSync.realpathSync(candidate);
+        } catch {
+          return candidate;
+        }
+      });
+    if (!worktreePaths.includes(selectedRoot)) throw new Error('git worktree listing mismatch');
+  } catch (error) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects checkout dependency ${selector}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  // These values are internal, selector-derived bindings. They are copied to
+  // AIReviewService only after the dependency and Git checks above succeed.
+  (aiConfig as any).path = selectedRoot;
+  (aiConfig as any).cwd = selectedRoot;
+  (aiConfig as any).workspacePath = selectedRoot;
+  (aiConfig as any).allowedFolders = [selectedRoot];
+  aiConfig.codexWorkingDirectoryFrom = selector;
+  return selectedRoot;
+}
 
 /**
  * AI-powered check provider using probe agent
@@ -138,7 +263,8 @@ export class AICheckProvider extends CheckProvider {
     if (cfg.ai) {
       if (
         cfg.ai.codex_execution_profile !== undefined &&
-        cfg.ai.codex_execution_profile !== LUNA_READONLY_PROFILE
+        cfg.ai.codex_execution_profile !== LUNA_READONLY_PROFILE &&
+        cfg.ai.codex_execution_profile !== LUNA_ISOLATED_WRITER_PROFILE
       ) {
         return false;
       }
@@ -176,9 +302,57 @@ export class AICheckProvider extends CheckProvider {
           return false;
         }
       }
+      if (cfg.ai.codex_execution_profile === LUNA_ISOLATED_WRITER_PROFILE) {
+        const profileAi = cfg.ai as any;
+        const selector = profileAi.codex_working_directory_from;
+        if (
+          typeof selector !== 'string' ||
+          selector.length === 0 ||
+          selector !== selector.trim() ||
+          selector.includes('{{') ||
+          selector.includes('}}') ||
+          (profileAi.provider !== undefined && profileAi.provider !== 'codex') ||
+          (profileAi.model !== undefined && profileAi.model !== 'gpt-5.6-luna') ||
+          profileAi.allowEdit === false ||
+          profileAi.allowBash === true ||
+          profileAi.bashConfig !== undefined ||
+          profileAi.retry !== undefined ||
+          profileAi.fallback !== undefined ||
+          profileAi.enableDelegate === true ||
+          profileAi.enableTasks === true ||
+          profileAi.enableExecutePlan === true ||
+          profileAi.disableTools === true ||
+          (profileAi.allowedTools !== undefined &&
+            (!Array.isArray(profileAi.allowedTools) ||
+              profileAi.allowedTools.length !== LUNA_WRITER_TOOLS.length ||
+              profileAi.allowedTools.some(
+                (tool: unknown, index: number) => tool !== LUNA_WRITER_TOOLS[index]
+              ))) ||
+          (profileAi.mcpServers && Object.keys(profileAi.mcpServers).length > 0) ||
+          profileAi.path !== undefined ||
+          profileAi.cwd !== undefined ||
+          profileAi.workspacePath !== undefined ||
+          profileAi.allowedFolders !== undefined ||
+          (cfg as any).workingDirectory !== undefined ||
+          (cfg as any).ai_provider !== undefined && (cfg as any).ai_provider !== 'codex' ||
+          (cfg as any).ai_model !== undefined && (cfg as any).ai_model !== 'gpt-5.6-luna' ||
+          (cfg as any).reuse_ai_session === true ||
+          typeof (cfg as any).reuse_ai_session === 'string' ||
+          (cfg as any).ai_mcp_servers ||
+          (cfg as any).ai_mcp_servers_js ||
+          (cfg as any).ai_custom_tools ||
+          (cfg as any).ai_custom_tools_js ||
+          (cfg as any).ai_bash_config_js ||
+          (cfg as any).ai_extra_allowed_folders_js
+        ) {
+          return false;
+        }
+      }
       if (
         cfg.ai.provider &&
-        !['google', 'anthropic', 'openai', 'bedrock', 'mock'].includes(cfg.ai.provider as string)
+        !['google', 'anthropic', 'openai', 'bedrock', 'mock', 'codex'].includes(
+          cfg.ai.provider as string
+        )
       ) {
         return false;
       }
@@ -192,8 +366,9 @@ export class AICheckProvider extends CheckProvider {
     }
 
     if (
-      cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE &&
-      ((cfg as any).ai_provider !== undefined ||
+      (cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE ||
+        cfg.ai?.codex_execution_profile === LUNA_ISOLATED_WRITER_PROFILE) &&
+      (((cfg as any).ai_provider !== undefined && (cfg as any).ai_provider !== 'codex') ||
         ((cfg as any).ai_model !== undefined &&
           (cfg as any).ai_model !== 'gpt-5.6-luna') ||
         (cfg as any).reuse_ai_session === true ||
@@ -201,7 +376,11 @@ export class AICheckProvider extends CheckProvider {
     ) {
       // Top-level provider/model/session reuse settings are resolved during
       // execution, but a profile-selected check can reject them early.
-      if (cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE) return false;
+      if (
+        cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE ||
+        cfg.ai?.codex_execution_profile === LUNA_ISOLATED_WRITER_PROFILE
+      )
+        return false;
     }
 
     // Validate check-level MCP servers if present
@@ -907,7 +1086,18 @@ export class AICheckProvider extends CheckProvider {
         const profile =
           (await resolveLiquid(aiAny.codex_execution_profile)) ??
           String(aiAny.codex_execution_profile);
-        aiConfig.codexExecutionProfile = profile as 'luna-xhigh-readonly-v1';
+        aiConfig.codexExecutionProfile = profile as
+          | 'luna-xhigh-readonly-v1'
+          | 'luna-xhigh-isolated-writer-v1';
+      }
+      if (aiAny.codex_working_directory_from !== undefined) {
+        const selector = aiAny.codex_working_directory_from;
+        if (typeof selector !== 'string') {
+          throw new Error(
+            `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires codex_working_directory_from to be a literal check id`
+          );
+        }
+        aiConfig.codexWorkingDirectoryFrom = selector;
       }
       if (aiAny.timeout !== undefined) {
         const resolvedTimeout = (await resolveLiquid(aiAny.timeout)) ?? aiAny.timeout;
@@ -1024,6 +1214,44 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
+    const writerSelector = (config.ai as any)?.codex_working_directory_from;
+    if (writerSelector !== undefined) {
+      if (aiConfig.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE) {
+        throw new Error(
+          `codex_working_directory_from requires codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE}`
+        );
+      }
+      if (config.workingDirectory !== undefined) {
+        throw new Error(
+          `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects a configured check workingDirectory`
+        );
+      }
+      for (const key of ['path', 'cwd', 'workspacePath', 'allowedFolders']) {
+        if ((config.ai as any)?.[key] !== undefined) {
+          throw new Error(
+            `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects caller-provided ${key}`
+          );
+        }
+      }
+      resolveIsolatedWriterWorktree(
+        writerSelector,
+        _dependencyResults,
+        sessionInfo as { parentSessionId?: string; reuseSession?: boolean } &
+          import('./check-provider.interface').ExecutionContext,
+        aiConfig
+      );
+      if (aiConfig.allowEdit === false) {
+        throw new Error(
+          `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects disabled edit capability`
+        );
+      }
+      aiConfig.allowEdit = true;
+    } else if (aiConfig.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires codex_working_directory_from`
+      );
+    }
+
     // Derive workspace-aware allowedFolders for ProbeAgent when workspace
     // isolation is enabled. This ensures tools like search/query operate
     // inside the isolated workspace (and its project symlinks) instead of
@@ -1053,7 +1281,19 @@ export class AICheckProvider extends CheckProvider {
         logger.debug(`[AI Provider]   workspace.listProjects() count: ${projectCount}`);
       }
 
-      if (workspace && typeof workspace.isEnabled === 'function' && workspace.isEnabled()) {
+      // The isolated writer has already been bound to the exact dependency
+      // worktree above.  Workspace projects may include sibling checkouts, so
+      // applying the generic workspace folders here would widen that closed
+      // boundary and overwrite its selected cwd.
+      const writerWorktreeIsBound =
+        aiConfig.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE;
+
+      if (
+        !writerWorktreeIsBound &&
+        workspace &&
+        typeof workspace.isEnabled === 'function' &&
+        workspace.isEnabled()
+      ) {
         const folders: string[] = [];
         let workspaceRoot: string | undefined;
         let mainProjectPath: string | undefined;
@@ -1126,7 +1366,7 @@ export class AICheckProvider extends CheckProvider {
           logger.debug(`[AI Provider]   workspaceRoot: ${workspaceRoot}`);
           logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
         }
-      } else if (parentCtx && typeof parentCtx.workingDirectory === 'string') {
+      } else if (!writerWorktreeIsBound && parentCtx && typeof parentCtx.workingDirectory === 'string') {
         // Fallback: when workspace is not available (or disabled), still
         // constrain tools to the engine's working directory so ProbeAgent
         // operates inside the same logical root as the state machine. This

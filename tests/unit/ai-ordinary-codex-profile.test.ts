@@ -2,6 +2,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { AIReviewService } from '../../src/ai-review-service';
 import { AICheckProvider } from '../../src/providers/ai-check-provider';
 import { ProbeAgent } from '@probelabs/probe';
@@ -13,6 +14,8 @@ jest.mock('@probelabs/probe', () => ({
 
 const PROFILE = 'luna-xhigh-readonly-v1' as const;
 const TOOLS = ['search', 'extract', 'listFiles'] as const;
+const WRITER_PROFILE = 'luna-xhigh-isolated-writer-v1' as const;
+const WRITER_NATIVE_TOOLS = ['apply_patch', 'exec'] as const;
 
 const prInfo: PRInfo = {
   number: 1,
@@ -31,6 +34,39 @@ function mockAgent(answer = JSON.stringify({ issues: [] })): void {
     initialize: jest.fn().mockResolvedValue(undefined),
     answer: jest.fn().mockResolvedValue(answer),
   }));
+}
+
+function createWorktreeFixture(): {
+  canonicalRoot: string;
+  worktreeRoot: string;
+  commit: string;
+  cleanup: () => void;
+} {
+  const canonicalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-canonical-'));
+  const worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-writer-'));
+  fs.rmSync(worktreeRoot, { recursive: true, force: true });
+  execFileSync('git', ['init', '--quiet', canonicalRoot]);
+  execFileSync('git', ['-C', canonicalRoot, 'config', 'user.email', 'test@visor.dev']);
+  execFileSync('git', ['-C', canonicalRoot, 'config', 'user.name', 'Visor Test']);
+  fs.writeFileSync(path.join(canonicalRoot, 'README.md'), 'canonical\n');
+  execFileSync('git', ['-C', canonicalRoot, 'add', 'README.md']);
+  execFileSync('git', ['-C', canonicalRoot, 'commit', '--quiet', '-m', 'baseline']);
+  const commit = execFileSync('git', ['-C', canonicalRoot, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  }).trim();
+  execFileSync('git', ['-C', canonicalRoot, 'worktree', 'add', '--detach', worktreeRoot, commit]);
+  return {
+    canonicalRoot,
+    worktreeRoot,
+    commit,
+    cleanup: () => {
+      try {
+        execFileSync('git', ['-C', canonicalRoot, 'worktree', 'remove', '--force', worktreeRoot]);
+      } catch {}
+      fs.rmSync(canonicalRoot, { recursive: true, force: true });
+      fs.rmSync(worktreeRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 describe('ordinary Luna Codex execution profile', () => {
@@ -238,6 +274,88 @@ describe('ordinary Luna Codex execution profile', () => {
     await expect(realAgent.answer('read only')).resolves.toBe('ordinary profile answer');
     expect(queryOptions).toEqual(expect.objectContaining({ abortSignal: expect.any(Object) }));
   });
+
+  it('passes the exact isolated writer v3 profile to ordinary ProbeAgent.answer', async () => {
+    mockAgent();
+    const fixture = createWorktreeFixture();
+    try {
+      const cwd = fs.realpathSync(fixture.worktreeRoot);
+      const service = new AIReviewService({
+        codexExecutionProfile: WRITER_PROFILE,
+        codexWorkingDirectoryFrom: 'checkout-worktree',
+        path: cwd,
+        cwd,
+        workspacePath: cwd,
+        allowedFolders: [cwd],
+        allowEdit: true,
+      });
+
+      await service.executeReview(prInfo, 'Implement the scoped change');
+
+      const options = (ProbeAgent as jest.Mock).mock.calls[0][0];
+      expect(options).toMatchObject({
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        path: cwd,
+        cwd,
+        workspacePath: cwd,
+        allowedFolders: [cwd],
+        allowEdit: true,
+        enableBash: false,
+        allowedTools: [...TOOLS],
+        governedCodexProfile: {
+          version: 'probe.governed-codex-profile/v3',
+          profileId: WRITER_PROFILE,
+          engine: 'codex',
+          model: 'gpt-5.6-luna',
+          reasoningEffort: 'xhigh',
+          sandbox: 'workspace-write',
+          approvalPolicy: 'never',
+          cwd,
+          probeMcpTools: [...TOOLS],
+          codexNativeTools: [...WRITER_NATIVE_TOOLS],
+          fallback: false,
+          retries: 0,
+        },
+      });
+      expect(options).not.toHaveProperty('sessionId');
+      expect((ProbeAgent as jest.Mock).mock.calls).toHaveLength(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects an isolated writer profile without a selector-bound directory', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-writer-invalid-'));
+    try {
+      const realCwd = fs.realpathSync(cwd);
+      expect(
+        () =>
+          new AIReviewService({
+            codexExecutionProfile: WRITER_PROFILE,
+            codexWorkingDirectoryFrom: 'checkout-worktree',
+            path: realCwd,
+            cwd: realCwd,
+            workspacePath: realCwd,
+            allowedFolders: [realCwd],
+            allowEdit: true,
+          })
+      ).not.toThrow();
+      expect(
+        () =>
+          new AIReviewService({
+            codexExecutionProfile: WRITER_PROFILE,
+            path: realCwd,
+            cwd: realCwd,
+            workspacePath: realCwd,
+            allowedFolders: [realCwd],
+            allowEdit: true,
+          })
+      ).toThrow('requires codex_working_directory_from');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('AICheckProvider ordinary profile wiring', () => {
@@ -290,6 +408,161 @@ describe('AICheckProvider ordinary profile wiring', () => {
     }
   });
 
+  it('binds the writer to the exact successful git-checkout dependency worktree', async () => {
+    const fixture = createWorktreeFixture();
+    try {
+      await provider.execute(
+        prInfo,
+        {
+          type: 'ai',
+          prompt: 'implement',
+          ai: {
+            codex_execution_profile: WRITER_PROFILE,
+            codex_working_directory_from: 'checkout-worktree',
+          },
+        } as any,
+        new Map([
+          [
+            'checkout-worktree',
+            {
+              issues: [],
+              output: {
+                success: true,
+                path: fixture.worktreeRoot,
+                is_worktree: true,
+                commit: fixture.commit,
+                worktree_id: 'writer-worktree-1',
+              },
+            },
+          ],
+        ]) as any,
+        { _parentContext: { workingDirectory: fixture.canonicalRoot } } as any
+      );
+
+      const config = captured[captured.length - 1];
+      const worktree = fs.realpathSync(fixture.worktreeRoot);
+      expect(config.codexExecutionProfile).toBe(WRITER_PROFILE);
+      expect(config.codexWorkingDirectoryFrom).toBe('checkout-worktree');
+      expect(config.path).toBe(worktree);
+      expect(config.cwd).toBe(worktree);
+      expect(config.workspacePath).toBe(worktree);
+      expect(config.allowedFolders).toEqual([worktree]);
+      expect(config.allowEdit).toBe(true);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('preserves the exact writer worktree when workspace isolation exposes sibling projects', async () => {
+    const fixture = createWorktreeFixture();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-workspace-'));
+    const siblingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-sibling-'));
+    try {
+      await provider.execute(
+        prInfo,
+        {
+          type: 'ai',
+          prompt: 'implement',
+          ai: {
+            codex_execution_profile: WRITER_PROFILE,
+            codex_working_directory_from: 'checkout-worktree',
+          },
+        } as any,
+        new Map([
+          [
+            'checkout-worktree',
+            {
+              issues: [],
+              output: {
+                success: true,
+                path: fixture.worktreeRoot,
+                is_worktree: true,
+                commit: fixture.commit,
+                worktree_id: 'writer-worktree-1',
+              },
+            },
+          ],
+        ]) as any,
+        {
+          _parentContext: {
+            workingDirectory: fixture.canonicalRoot,
+            workspace: {
+              isEnabled: () => true,
+              getWorkspaceInfo: () => ({
+                workspacePath: workspaceRoot,
+                mainProjectPath: fixture.canonicalRoot,
+              }),
+              listProjects: () => [{ path: siblingRoot }],
+            },
+          },
+        } as any
+      );
+
+      const config = captured[captured.length - 1];
+      const worktree = fs.realpathSync(fixture.worktreeRoot);
+      expect(config.path).toBe(worktree);
+      expect(config.cwd).toBe(worktree);
+      expect(config.workspacePath).toBe(worktree);
+      expect(config.allowedFolders).toEqual([worktree]);
+    } finally {
+      fixture.cleanup();
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+      fs.rmSync(siblingRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a failed, tampered, or arbitrary writer directory selection before service dispatch', async () => {
+    const fixture = createWorktreeFixture();
+    try {
+      const writerConfig = {
+        type: 'ai',
+        prompt: 'implement',
+        ai: {
+          codex_execution_profile: WRITER_PROFILE,
+          codex_working_directory_from: 'checkout-worktree',
+        },
+      } as any;
+      await expect(
+        provider.execute(
+          prInfo,
+          writerConfig,
+          new Map([
+            [
+              'checkout-worktree',
+              {
+                issues: [],
+                output: {
+                  success: true,
+                  path: fixture.worktreeRoot,
+                  is_worktree: true,
+                  commit: '0'.repeat(40),
+                  worktree_id: 'writer-worktree-1',
+                },
+              },
+            ],
+          ]) as any,
+          { _parentContext: { workingDirectory: fixture.canonicalRoot } } as any
+        )
+      ).rejects.toThrow(/rejects checkout dependency/);
+      await expect(
+        provider.execute(
+          prInfo,
+          {
+            ...writerConfig,
+            ai: {
+              ...writerConfig.ai,
+              codex_working_directory_from: '{{ outputs.checkout-worktree.path }}',
+            },
+          },
+          new Map(),
+          { _parentContext: { workingDirectory: fixture.canonicalRoot } } as any
+        )
+      ).rejects.toThrow(/literal dependency check id/);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it('validates the closed profile and rejects static conflicts early', async () => {
     await expect(
       provider.validateConfig({
@@ -303,6 +576,30 @@ describe('AICheckProvider ordinary profile wiring', () => {
         type: 'ai',
         prompt: 'inspect',
         ai: { codex_execution_profile: PROFILE, allowedTools: ['search'] },
+      } as any)
+    ).resolves.toBe(false);
+  });
+
+  it('validates the isolated writer selector and rejects disabled native editing', async () => {
+    await expect(
+      provider.validateConfig({
+        type: 'ai',
+        prompt: 'implement',
+        ai: {
+          codex_execution_profile: WRITER_PROFILE,
+          codex_working_directory_from: 'checkout-worktree',
+        },
+      } as any)
+    ).resolves.toBe(true);
+    await expect(
+      provider.validateConfig({
+        type: 'ai',
+        prompt: 'implement',
+        ai: {
+          codex_execution_profile: WRITER_PROFILE,
+          codex_working_directory_from: 'checkout-worktree',
+          allowEdit: false,
+        },
       } as any)
     ).resolves.toBe(false);
   });
@@ -323,5 +620,16 @@ describe('AICheckProvider ordinary profile wiring', () => {
         ai: { codex_execution_profile: PROFILE, provider: 'openai' },
       } as any)
     ).rejects.toThrow('conflicts with provider');
+
+    await expect(
+      provider.execute(prInfo, {
+        type: 'ai',
+        prompt: 'inspect',
+        ai: {
+          codex_execution_profile: PROFILE,
+          codex_working_directory_from: 'checkout-worktree',
+        },
+      } as any)
+    ).rejects.toThrow('requires codex_execution_profile luna-xhigh-isolated-writer-v1');
   });
 });

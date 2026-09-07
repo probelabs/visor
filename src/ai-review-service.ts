@@ -33,6 +33,9 @@ const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
 const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
 const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
 const LUNA_READONLY_MODEL = 'gpt-5.6-luna' as const;
+const LUNA_ISOLATED_WRITER_PROFILE = 'luna-xhigh-isolated-writer-v1' as const;
+const LUNA_WRITER_PROBE_TOOLS = ['search', 'extract', 'listFiles'] as const;
+const LUNA_WRITER_CODEX_TOOLS = ['apply_patch', 'exec'] as const;
 
 /**
  * Build the profile object consumed by Probe's existing governed Codex path.
@@ -53,6 +56,28 @@ function buildLunaReadonlyProfile(cwd: string): GovernedCodexProfile {
     fallback: false,
     retries: 0,
   };
+}
+
+/**
+ * Build the v3 profile consumed by Probe's isolated native writer path.
+ * The checked-in SDK may predate v3, so the narrow cast keeps this Visor
+ * consumer source-compatible until the reviewed Probe package is installed.
+ */
+function buildLunaIsolatedWriterProfile(cwd: string): GovernedCodexProfile {
+  return {
+    version: 'probe.governed-codex-profile/v3',
+    profileId: LUNA_ISOLATED_WRITER_PROFILE,
+    engine: 'codex',
+    model: LUNA_READONLY_MODEL,
+    reasoningEffort: 'xhigh',
+    sandbox: 'workspace-write',
+    approvalPolicy: 'never',
+    cwd,
+    probeMcpTools: [...LUNA_WRITER_PROBE_TOOLS],
+    codexNativeTools: [...LUNA_WRITER_CODEX_TOOLS],
+    fallback: false,
+    retries: 0,
+  } as unknown as GovernedCodexProfile;
 }
 
 function resolveLunaReadonlyCwd(config: AIReviewConfig): string {
@@ -80,6 +105,11 @@ function assertLunaReadonlyConfig(config: AIReviewConfig): void {
   if (config.codexExecutionProfile !== LUNA_READONLY_PROFILE) {
     throw new Error(
       `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
+    );
+  }
+  if (config.codexWorkingDirectoryFrom !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects an isolated writer worktree selector`
     );
   }
 
@@ -155,6 +185,108 @@ function assertLunaReadonlyConfig(config: AIReviewConfig): void {
       );
     }
   }
+}
+
+function resolveLunaIsolatedWriterCwd(config: AIReviewConfig): string {
+  if (!config.codexWorkingDirectoryFrom) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires codex_working_directory_from`
+    );
+  }
+  if (!config.path || !config.cwd || !config.workspacePath) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires a selector-bound working directory`
+    );
+  }
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(config.path);
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires an existing worktree: ${config.path}`
+    );
+  }
+  try {
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires a directory worktree: ${resolved}`
+    );
+  }
+  if (config.cwd !== resolved || config.workspacePath !== resolved) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires cwd, path, and workspacePath to agree`
+    );
+  }
+  if (
+    !Array.isArray(config.allowedFolders) ||
+    config.allowedFolders.length !== 1 ||
+    config.allowedFolders[0] !== resolved
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires one selector-bound allowed folder`
+    );
+  }
+  return resolved;
+}
+
+function assertLunaIsolatedWriterConfig(config: AIReviewConfig): void {
+  if (config.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE) {
+    throw new Error(
+      `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
+    );
+  }
+  if (process.env.USE_CLAUDE_CODE === 'true') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} conflicts with USE_CLAUDE_CODE=true`
+    );
+  }
+  if (config.provider !== undefined && config.provider !== 'codex') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} conflicts with provider ${String(config.provider)}`
+    );
+  }
+  if (config.model !== undefined && config.model !== LUNA_READONLY_MODEL) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} conflicts with model ${String(config.model)}`
+    );
+  }
+  if (config.retry !== undefined || config.fallback !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires fallback=false and retries=0`
+    );
+  }
+  if (config.allowEdit !== true || config.allowBash === true || config.bashConfig !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires edit enabled and rejects Probe bash`
+    );
+  }
+  if (
+    config.enableDelegate === true ||
+    config.enableTasks === true ||
+    config.enableExecutePlan === true
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects delegation/tasks/execute_plan`
+    );
+  }
+  if (
+    config.disableTools === true ||
+    (config.allowedTools !== undefined &&
+      (!Array.isArray(config.allowedTools) ||
+        config.allowedTools.length !== LUNA_WRITER_PROBE_TOOLS.length ||
+        config.allowedTools.some((tool, index) => tool !== LUNA_WRITER_PROBE_TOOLS[index])))
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires allowedTools exactly [search,extract,listFiles]`
+    );
+  }
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects configured MCP servers`
+    );
+  }
+  resolveLunaIsolatedWriterCwd(config);
 }
 
 /**
@@ -674,8 +806,10 @@ export interface AIReviewConfig {
   timeout?: number; // Default: 1800000ms (30 minutes)
   maxIterations?: number; // Maximum tool iterations for ProbeAgent
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code' | 'codex';
-  /** Closed Probe/Codex execution profile for ordinary read-only AI work. */
-  codexExecutionProfile?: 'luna-xhigh-readonly-v1';
+  /** Closed Probe/Codex execution profile for ordinary governed AI work. */
+  codexExecutionProfile?: 'luna-xhigh-readonly-v1' | 'luna-xhigh-isolated-writer-v1';
+  /** Internal provenance selector bound by AICheckProvider from a git-checkout dependency. */
+  codexWorkingDirectoryFrom?: string;
   debug?: boolean; // Enable debug mode
   tools?: Array<{ name: string; [key: string]: unknown }>; // (unused) Legacy tool listing
   // Pass-through MCP server configuration for ProbeAgent
@@ -714,6 +848,8 @@ export interface AIReviewConfig {
   // When provided, these are forwarded to ProbeAgent so tools like search/query
   // operate inside the isolated workspace/projects instead of the Visor repo root.
   path?: string;
+  cwd?: string;
+  workspacePath?: string;
   allowedFolders?: string[];
   // Completion prompt for post-completion validation/review (runs after attempt_completion)
   completionPrompt?: string;
@@ -802,8 +938,14 @@ export class AIReviewService {
 
     // Validate the user-selected profile before provider auto-detection can
     // replace an omitted provider with an environment-derived one.
-    if (this.config.codexExecutionProfile !== undefined) {
+    if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
       assertLunaReadonlyConfig(this.config);
+    } else if (this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE) {
+      assertLunaIsolatedWriterConfig(this.config);
+    } else if (this.config.codexExecutionProfile !== undefined) {
+      throw new Error(
+        `Unsupported codex_execution_profile: ${String(this.config.codexExecutionProfile)}`
+      );
     }
 
     this.sessionRegistry = SessionRegistry.getInstance();
@@ -977,7 +1119,10 @@ export class AIReviewService {
       // particular, debug mode must not turn a missing attestation, sandbox
       // mismatch, provider override, or cleanup failure into a completed
       // ordinary review summary.
-      if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+      if (
+        this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+        this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+      ) {
         throw error;
       }
       if (debugInfo) {
@@ -1015,9 +1160,12 @@ export class AIReviewService {
     checkName?: string,
     sessionMode: 'clone' | 'append' = 'clone'
   ): Promise<ReviewSummary> {
-    if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+    if (
+      this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+      this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+    ) {
       throw new Error(
-        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects session reuse`
+        `codex_execution_profile ${this.config.codexExecutionProfile} rejects session reuse`
       );
     }
     const startTime = Date.now();
@@ -2536,7 +2684,9 @@ If you receive a message that the time limit has been reached or your operation 
       );
 
       const options: TracedProbeAgentOptions = {
-        sessionId: sessionId,
+        ...(this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+          ? {}
+          : { sessionId }),
         // Prefer config promptType, then env override, else fallback to code-review when schema is set
         promptType:
           this.config.promptType && this.config.promptType.trim()
@@ -2780,6 +2930,29 @@ If you receive a message that the time limit has been reached or your operation 
         (options as any).mcpConfig = undefined;
         (options as any).allowedFolders = [cwd];
         options.allowedTools = [...LUNA_READONLY_TOOLS];
+        (options as any).disableTools = false;
+        (options as any).retry = undefined;
+        (options as any).fallback = undefined;
+        options.governedCodexProfile = governedCodexProfile;
+      } else if (this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE) {
+        const cwd = resolveLunaIsolatedWriterCwd(this.config);
+        const governedCodexProfile = buildLunaIsolatedWriterProfile(cwd);
+        options.provider = 'codex';
+        options.model = LUNA_READONLY_MODEL;
+        options.path = cwd;
+        (options as any).cwd = cwd;
+        (options as any).workspacePath = cwd;
+        options.allowEdit = true;
+        (options as any).enableBash = false;
+        (options as any).bashConfig = undefined;
+        (options as any).enableDelegate = false;
+        (options as any).enableTasks = false;
+        (options as any).enableExecutePlan = false;
+        (options as any).searchDelegate = false;
+        (options as any).enableMcp = false;
+        (options as any).mcpConfig = undefined;
+        (options as any).allowedFolders = [cwd];
+        options.allowedTools = [...LUNA_WRITER_PROBE_TOOLS];
         (options as any).disableTools = false;
         (options as any).retry = undefined;
         (options as any).fallback = undefined;
@@ -3141,7 +3314,11 @@ ${'='.repeat(60)}
       }
 
       // Register the session for potential reuse by dependent checks
-      if (_checkName && this.config.codexExecutionProfile !== LUNA_READONLY_PROFILE) {
+      if (
+        _checkName &&
+        this.config.codexExecutionProfile !== LUNA_READONLY_PROFILE &&
+        this.config.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE
+      ) {
         // ProbeAgent.clone() will handle history filtering when this session is cloned
         this.registerSession(sessionId, agent);
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
