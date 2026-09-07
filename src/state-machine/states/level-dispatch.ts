@@ -3330,9 +3330,20 @@ async function executeSingleCheck(
     const executionContext = {
       ...inheritedExecutionContext,
       _engineMode: context.mode,
-      ...(dynamic?.kind === 'generated'
-        ? {}
-        : { _parentContext: context, _parentState: state }),
+      ...(dynamic?.kind === 'generated' && providerType === 'ai'
+        ? {
+            // Generated ordinary AI providers must resolve an isolated
+            // checkout against the controller's canonical root.  The caller's
+            // parent context was scrubbed above deliberately; never carry
+            // caller-selected workspace/sibling roots into the generated
+            // provider.  Governed providers retain their managed-start path.
+            _parentContext: Object.freeze({
+              workingDirectory: controllerWorkingDirectory(context),
+            }),
+          }
+        : dynamic?.kind === 'generated'
+          ? {}
+          : { _parentContext: context, _parentState: state }),
       // Make checks metadata available to providers that want it
       checksMeta,
       ...(context.claimPlan?.active ? { claims: providerClaims } : {}),
