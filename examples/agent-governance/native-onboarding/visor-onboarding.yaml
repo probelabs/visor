@@ -519,6 +519,7 @@ subgraphs:
           : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
           : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
           node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const fs = require('node:fs');
           const path = require('node:path');
           const {promoteNativeDelta} = require(path.join(
             process.env.NATIVE_ONBOARDING_REPO_ROOT,
@@ -526,30 +527,78 @@ subgraphs:
           ));
           const proofBin = process.argv[2];
           const deps = {{ outputs | json }};
-          const workItem = deps.work_item;
-          const checkout = deps.checkout;
-          if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || typeof workItem.baseline_commit !== 'string') {
-            throw new Error('promotion is missing the prepared WorkItem');
+          const outputDir = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+          if (typeof outputDir !== 'string' || !path.isAbsolute(outputDir)) {
+            throw new Error('NATIVE_ONBOARDING_OUTPUT_DIR must be an absolute path');
           }
-          if (!checkout || typeof checkout !== 'object' || checkout.success !== true || checkout.is_worktree !== true || typeof checkout.path !== 'string' || typeof checkout.commit !== 'string' || typeof checkout.worktree_id !== 'string') {
-            throw new Error('promotion is missing the verified writer checkout');
+          const outputRoot = path.resolve(outputDir);
+
+          function safeRecordPath(componentId) {
+            if (typeof componentId !== 'string' || componentId.length === 0 || Buffer.byteLength(componentId, 'utf8') > 180) {
+              throw new Error('promotion component id is missing or too long');
+            }
+            const encoded = Buffer.from(componentId, 'utf8').toString('base64')
+              .replace(/\+/g, '-')
+              .replace(/\//g, '_')
+              .replace(/=+$/, '');
+            const recordDir = path.resolve(outputRoot, 'promotion-results');
+            const recordPath = path.resolve(recordDir, `${encoded}.json`);
+            if (path.dirname(recordPath) !== recordDir || !recordPath.startsWith(`${recordDir}${path.sep}`)) {
+              throw new Error('promotion record path escapes the output directory');
+            }
+            return recordPath;
           }
-          const result = promoteNativeDelta({
-            canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT,
-            baselineCommit: workItem.baseline_commit,
-            writerCheckout: checkout,
-            workItem,
-            proofBin,
-            commitAcceptedArtifacts: true,
-            timeoutMs: Number(process.env.REQUEST_TIMEOUT),
-          });
-          const output = {
-            ...result,
-            component_id: workItem.component_id,
-            baseline_commit: result.checkpoint.baseline_commit,
-          };
-          process.stdout.write(JSON.stringify(output));
-          if (result.status !== 'promoted') process.exitCode = 1;
+
+          function persistRecord(componentId, record) {
+            const recordPath = safeRecordPath(componentId);
+            fs.mkdirSync(path.dirname(recordPath), {recursive: true, mode: 0o700});
+            const serialized = JSON.stringify(record);
+            fs.writeFileSync(recordPath, serialized, {encoding: 'utf8', mode: 0o600});
+            fs.chmodSync(recordPath, 0o600);
+          }
+
+          function boundedError(error) {
+            const message = error && typeof error.message === 'string' ? error.message : String(error);
+            return message.length > 2048 ? `${message.slice(0, 2048)}...[truncated]` : message;
+          }
+
+          let workItem;
+          try {
+            workItem = deps.work_item;
+            const checkout = deps.checkout;
+            if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || workItem.component_id.length === 0 || Buffer.byteLength(workItem.component_id, 'utf8') > 180 || typeof workItem.baseline_commit !== 'string') {
+              throw new Error('promotion is missing the prepared WorkItem');
+            }
+            if (!checkout || typeof checkout !== 'object' || checkout.success !== true || checkout.is_worktree !== true || typeof checkout.path !== 'string' || typeof checkout.commit !== 'string' || typeof checkout.worktree_id !== 'string') {
+              throw new Error('promotion is missing the verified writer checkout');
+            }
+            const result = promoteNativeDelta({
+              canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT,
+              baselineCommit: workItem.baseline_commit,
+              writerCheckout: checkout,
+              workItem,
+              proofBin,
+              commitAcceptedArtifacts: true,
+              timeoutMs: Number(process.env.REQUEST_TIMEOUT),
+            });
+            const output = {
+              ...result,
+              component_id: workItem.component_id,
+              baseline_commit: result.checkpoint.baseline_commit,
+            };
+            persistRecord(workItem.component_id, output);
+            process.stdout.write(JSON.stringify(output));
+            if (result.status !== 'promoted') process.exitCode = 1;
+          } catch (error) {
+            const componentId = workItem && typeof workItem.component_id === 'string' && workItem.component_id.length > 0 && Buffer.byteLength(workItem.component_id, 'utf8') <= 180 ? workItem.component_id : 'unknown';
+            persistRecord(componentId, {
+              status: 'failed',
+              reason: 'promotion wrapper failed',
+              error: boundedError(error),
+              component_id: componentId,
+            });
+            throw error;
+          }
           NODE
 
       enumerate-native-requirements:
