@@ -18,6 +18,7 @@ import {
   PROOF_STRUCTURAL_INVENTORY_CLAIM,
 } from './instance-plan';
 import {
+  NATIVE_COMPONENT_REVIEWED_CLAIM,
   validateGovernedProofRuntimeContextAgainstClaims,
   validateProofCandidateEvidence,
   type ProofCandidateEvidenceV1,
@@ -977,6 +978,10 @@ export function deriveProofProjectReconciliationParentClaimIds(
     const admission = inputs.find(claim => claim?.claim === PROOF_ADMITTED_RECEIPT_CLAIM);
     const stageCandidate = inputs.find(claim => claim?.claim === PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM);
     const stageAdmission = inputs.find(claim => claim?.claim === PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM);
+    const reviewedParent = candidate?.parentClaimIds
+      .map(claimId => projection.claimsById[claimId])
+      .find(claim => claim?.claim === NATIVE_COMPONENT_REVIEWED_CLAIM);
+    const nativeReviewed = reviewedParent !== undefined;
     const expected = staged
       ? [candidate?.claimId, admission?.claimId, stageCandidate?.claimId, stageAdmission?.claimId]
       : [candidate?.claimId, admission?.claimId];
@@ -1006,11 +1011,18 @@ export function deriveProofProjectReconciliationParentClaimIds(
     currentCompletedGeneratedOutput(projection, candidate, 'inspect', child.subgraphInstanceId);
     const admissionGeneration = currentCompletedGeneratedOutput(projection, admission, 'proof_admit', child.subgraphInstanceId);
     if (!child.activeItemClaimId ||
-        !sameStrings(candidate.parentClaimIds, [child.activeItemClaimId]) ||
+        candidate.parentClaimIds.length !== (nativeReviewed ? 2 : 1) ||
+        !candidate.parentClaimIds.includes(child.activeItemClaimId) ||
+        (nativeReviewed && (!reviewedParent || reviewedParent.subgraphInstanceId !== child.subgraphInstanceId ||
+          !reviewedParent.active || reviewedParent.kind !== 'generated-output' ||
+          reviewedParent.producerCheckId !== 'component-reviewed' ||
+          !candidate.parentClaimIds.includes(reviewedParent.claimId))) ||
+        (!nativeReviewed && candidate.parentClaimIds.length !== 1) ||
         !sameStrings(admissionGeneration.activeInputClaimIds, [candidate.claimId]) ||
         !sameStrings(admission.parentClaimIds, [candidate.claimId])) {
       invalidProjectReconciliationParents(`Component ${child.itemKey} admission is detached from its candidate`);
     }
+    if (nativeReviewed && reviewedParent) currentCompletedGeneratedOutput(projection, reviewedParent, 'component-reviewed', child.subgraphInstanceId);
     if (!staged) return admission.claimId;
 
     currentCompletedGeneratedOutput(

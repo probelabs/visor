@@ -15,6 +15,7 @@ import {
   validateGovernedProofComponentReinspectionContext,
   validateGovernedProofRuntimeContextAgainstClaims,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
+import type { ProofCandidateEvidenceV1 } from '../../../src/providers/governed-proof-inspect-check-provider';
 import type { CandidateClaimInput, CheckProviderConfig } from '../../../src/providers/check-provider.interface';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 
@@ -58,6 +59,98 @@ function claims(scope: any, key: string): Record<string, CandidateClaimInput> {
   return {
     component: claim(COMPONENT_WORK_ITEM_CLAIM, key === 'http-adapter' ? '1'.repeat(64) : '2'.repeat(64), scope, workItem),
   };
+}
+
+/** The native aggregate is intentionally a compact projection: packet
+ * snapshots stay in their own claims/files, while this parent carries only
+ * the exact identities needed by the later governed component check. */
+function nativeReviewedClaims(scope: any, key: string): Record<string, CandidateClaimInput> {
+  const componentId = key;
+  const workItem = immutableCanonicalValue({
+    version: 'component.work-item/v1',
+    project_id: 'journalservice',
+    component_id: componentId,
+    sorted_owned_paths: ['http.go'],
+    sorted_dependency_closure: ['http.go'],
+    proof_component_subject: {
+      version: 'proof.component-subject/v1', project_id: 'journalservice', component_id: componentId,
+      sorted_owned_paths: ['http.go'], sorted_dependency_closure: ['http.go'],
+      fingerprint: `sha256:${'1'.repeat(64)}`,
+    },
+    proof_input_state: [{ owner_kind: 'component', owner_id: componentId, input_kind: 'code', path: 'http.go', file_hash: `sha256:${'2'.repeat(64)}` }],
+  });
+  // Keep the candidate deliberately non-canonical by insertion order. Its
+  // canonical fingerprint, rather than object insertion order, is the
+  // authority binding for reviewed evidence.
+  const candidate = { finding: 'candidate-only evidence', status: 'needs_changes' };
+  const reviewed = {
+    version: 'native.component.reviewed/v1',
+    component_id: componentId,
+    status: 'reviewed-native-requirement-items',
+    item_count: 1,
+    source: {
+      kind: 'current_graph',
+      checkpoint_sha256: null,
+      graph_semantic_digest: null,
+      manifest_sha256: `sha256:${'6'.repeat(64)}`,
+    },
+    reviews: [{
+      id: 'REQ-1', component_id: componentId, file_path: 'http.go',
+      proof_file_hash: `sha256:${'4'.repeat(64)}`,
+      candidate, candidate_fingerprint: `sha256:${sha256Canonical(candidate)}`,
+      packet_sha256: `sha256:${'5'.repeat(64)}`,
+      retained_claim: null,
+    }],
+  };
+  const component = claim(COMPONENT_WORK_ITEM_CLAIM, 'a'.repeat(64), scope, workItem);
+  const reviewedClaim: CandidateClaimInput = {
+    claimId: 'b'.repeat(64), claim: 'native.component.reviewed@1', payload: reviewed,
+    payloadFingerprint: sha256Canonical(reviewed), producerCheckId: 'component-reviewed', scope,
+    parentClaimIds: [component.claimId], wireMode: 'generic', provenance: 'attempt',
+    attemptId: 'review-attempt', fence: 1,
+  } as CandidateClaimInput;
+  return { component, reviewed: reviewedClaim };
+}
+
+function nativeReviewedEvidence(scope: any, key: string): {
+  evidence: ProofCandidateEvidenceV1;
+  parents: CandidateClaimInput[];
+} {
+  const input = nativeReviewedClaims(scope, key);
+  const subject = input.component.payload.proof_component_subject;
+  const workItemDigest = `sha256:${'9'.repeat(64)}`;
+  const compactAuthority = { component_id: key, work_item_digest: workItemDigest, subject };
+  const componentPayload = immutableCanonicalValue({ ...input.component.payload, authority: compactAuthority });
+  const component: CandidateClaimInput = {
+    ...input.component,
+    payload: componentPayload,
+    payloadFingerprint: sha256Canonical(componentPayload),
+  } as CandidateClaimInput;
+  const authority = {
+    work_item_digest: workItemDigest,
+    subject,
+    candidate: {},
+    admission: {},
+    work_item: {},
+    catalog_revalidation_receipt: {},
+  };
+  const invocation = {
+    role_id: 'onboard',
+    stance: 'owner',
+    subject: { kind: 'component', id: key, fingerprint: subject.fingerprint },
+    component_authority: authority,
+    output_schema_id: 'onboarding',
+    output_schema: Buffer.from(JSON.stringify({ type: 'object' })).toString('base64'),
+  };
+  const context = projectGovernedProofRuntimeContext({ component, reviewed: input.reviewed }, binding(scope));
+  const evidence: ProofCandidateEvidenceV1 = {
+    version: 'visor.proof-candidate-evidence/v1',
+    role: { invocation, invocationDigest: `sha256:${'e'.repeat(64)}` },
+    probe: { attestation: {}, resultIdentity: {} },
+    context,
+    contextDigest: governedProofRuntimeContextDigest(context),
+  };
+  return { evidence, parents: [component, input.reviewed] };
 }
 
 function inspectConfig(): CheckProviderConfig {
@@ -241,6 +334,79 @@ describe('EXP-0209 governed component context', () => {
       ...context,
       prior_candidate: { ...context.prior_candidate, payload: oversizedPayload, payload_fingerprint: sha256Canonical(oversizedPayload) },
     })).toThrow(/byte|bounded/i);
+  });
+
+  it('projects the closed native reviewed-component context from exactly WorkItem and reviewed parents', () => {
+    const input = nativeReviewedClaims(scopeA, 'http-adapter');
+    const projected: any = projectGovernedProofRuntimeContext(input, binding(scopeA));
+    expect(Object.keys(projected).sort()).toEqual(['component', 'reviewed', 'version']);
+    expect(projected.component.claim).toBe(COMPONENT_WORK_ITEM_CLAIM);
+    expect(projected.reviewed.claim).toBe('native.component.reviewed@1');
+    expect(projected.reviewed.payload).toEqual(input.reviewed.payload);
+    expect(governedProofRuntimeContextDigest(projected)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(governedProofRuntimePrompt(projected)).toContain('candidate-only evidence');
+  });
+
+  it('binds candidate evidence at publication to the exact current WorkItem and reviewed parent', () => {
+    const { evidence, parents } = nativeReviewedEvidence(scopeA, 'http-adapter');
+    expect(() => validateGovernedProofRuntimeContextAgainstClaims(evidence, parents, binding(scopeA))).not.toThrow();
+
+    const detachedDigest = { ...evidence, contextDigest: `sha256:${'f'.repeat(64)}` };
+    expect(() => validateGovernedProofRuntimeContextAgainstClaims(detachedDigest, parents, binding(scopeA))).toThrow(/context.*digest|detached/i);
+
+    const reviewed = parents[1];
+    const replacementPayload = {
+      ...reviewed.payload,
+      reviews: [{ ...reviewed.payload.reviews[0], candidate: { finding: 'replacement' } }],
+    };
+    const replacementReviewed = {
+      ...reviewed,
+      claimId: 'c'.repeat(64),
+      payload: replacementPayload,
+      payloadFingerprint: sha256Canonical(replacementPayload),
+    } as CandidateClaimInput;
+    expect(() => validateGovernedProofRuntimeContextAgainstClaims(evidence, [parents[0], replacementReviewed], binding(scopeA))).toThrow(/stale|foreign|reviewed/i);
+  });
+
+  it('accepts the retained-checkpoint discriminator and per-review retained claim identity', () => {
+    const input: any = nativeReviewedClaims(scopeA, 'http-adapter');
+    const reviewed = input.reviewed.payload;
+    const retainedPayload = {
+      ...reviewed,
+      source: {
+        kind: 'retained_checkpoint',
+        checkpoint_sha256: `sha256:${'9'.repeat(64)}`,
+        graph_semantic_digest: 'a'.repeat(64),
+        manifest_sha256: `sha256:${'8'.repeat(64)}`,
+      },
+      reviews: [{
+        ...reviewed.reviews[0],
+        retained_claim: { claim_id: 'c'.repeat(64), payload_fingerprint: 'd'.repeat(64) },
+      }],
+    };
+    input.reviewed = { ...input.reviewed, payload: retainedPayload, payloadFingerprint: sha256Canonical(retainedPayload) };
+    expect(projectGovernedProofRuntimeContext(input, binding(scopeA))).toMatchObject({
+      reviewed: { payload: { source: { kind: 'retained_checkpoint', graph_semantic_digest: 'a'.repeat(64) } } },
+    });
+  });
+
+  it.each([
+    ['missing reviewed parent', (input: any) => { delete input.reviewed; }],
+    ['duplicate reviewed alias', (input: any) => { input.reviewed_copy = input.reviewed; }],
+    ['foreign reviewed scope', (input: any) => { input.reviewed = nativeReviewedClaims(scopeB, 'service-policy').reviewed; }],
+    ['stale reviewed fingerprint', (input: any) => { input.reviewed = { ...input.reviewed, payloadFingerprint: 'f'.repeat(64) }; }],
+    ['oversized reviewed context', (input: any) => {
+      const candidate = { finding: 'x'.repeat(140000), status: 'needs_changes' };
+      const payload = {
+        ...input.reviewed.payload,
+        reviews: [{ ...input.reviewed.payload.reviews[0], candidate, candidate_fingerprint: `sha256:${sha256Canonical(candidate)}` }],
+      };
+      input.reviewed = { ...input.reviewed, payload, payloadFingerprint: sha256Canonical(payload) };
+    }],
+  ])('fails closed for native reviewed context: %s', (_label, mutate) => {
+    const input: any = nativeReviewedClaims(scopeA, 'http-adapter');
+    mutate(input);
+    expect(() => projectGovernedProofRuntimeContext(input, binding(scopeA))).toThrow(/reviewed|authority|context|scope|foreign|canonical|closed|bounded/i);
   });
 });
 

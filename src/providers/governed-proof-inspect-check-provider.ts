@@ -41,13 +41,23 @@ export const COMPONENT_WORK_ITEM_CLAIM = 'component.work_item@1';
 export const PROOF_ROLE_AUTHORITY_CLAIM = 'proof.component_role_authority@1';
 export const GOVERNED_PROOF_CONTEXT_VERSION = 'visor.proof-runtime-context/v1';
 export const GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION = 'visor.proof-component-reinspection-context/v1';
+/** Closed context used by the native component admission suffix.  It is
+ * deliberately separate from the legacy one-WorkItem envelope so old
+ * checkpoints cannot acquire a reviewed aggregate implicitly. */
+export const GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION = 'visor.proof-reviewed-component-context/v1';
 export const PROJECT_DISCOVERY_CLAIM = 'project.discovery_item@1';
 export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
 export const GOVERNED_PROOF_PROJECT_CONTEXT_VERSION = 'visor.proof-project-discovery-context/v1';
+export const NATIVE_COMPONENT_REVIEWED_CLAIM = 'native.component.reviewed@1';
 export const GOVERNED_PROOF_CONTEXT_MAX_BYTES = 131072;
 const AUTHORED = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile'] as const;
 const CONTROLLER = new Set(['checkName', 'prompt', 'exec', 'schema', 'group', 'focus', 'transform', 'transform_js', 'env', 'forEach', 'eventContext', '__outputHistory', '__globalTools', 'checksMeta', 'workflowInputs', 'ai']);
-const GRAPH = new Set(['emits', 'consumes', 'expand']);
+// Graph-owned topology is validated by the claim-plan compiler, but remains
+// present on the check object when a managed run is acquired. Keep the
+// dependency declaration visible at this provider boundary so the shipped
+// component selector can reach C0 instead of being rejected as an unknown
+// provider option.
+const GRAPH = new Set(['emits', 'consumes', 'depends_on', 'expand']);
 const own = (v: object, k: string) => Object.prototype.hasOwnProperty.call(v, k);
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 function dataDescriptor(v: object, key: PropertyKey): PropertyDescriptor | undefined {
@@ -260,7 +270,13 @@ export interface GovernedProofProjectDiscoveryContextV1 {
   readonly current_inventory: GovernedProofRuntimeContextClaimV1;
 }
 
-export type GovernedProofRuntimeContext = GovernedProofRuntimeContextV1 | GovernedProofProjectDiscoveryContextV1;
+export interface GovernedProofReviewedComponentContextV1 {
+  readonly version: typeof GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION;
+  readonly component: GovernedProofRuntimeContextClaimV1;
+  readonly reviewed: GovernedProofRuntimeContextClaimV1;
+}
+
+export type GovernedProofRuntimeContext = GovernedProofRuntimeContextV1 | GovernedProofProjectDiscoveryContextV1 | GovernedProofReviewedComponentContextV1;
 
 function proofPathCompare(left: string, right: string): number { return Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')); }
 export function validateGovernedProofComponentReinspectionContext(value: unknown): GovernedProofComponentReinspectionContextV1 {
@@ -369,7 +385,8 @@ function candidateClaimKeys(value: CandidateClaimInput): readonly string[] {
 function validateRuntimeContextClaim(
   value: unknown,
   expectedClaim: string,
-  expectedScope?: ManagedRunBindingV1['scope']
+  expectedScope?: ManagedRunBindingV1['scope'],
+  options?: Readonly<{ allowNonCanonicalPayload?: boolean }>
 ): GovernedProofRuntimeContextClaimV1 {
   if (!plain(value) || !validMaterialized(value)) fail('runtime context claim is not materialized');
   const claim = value as unknown as CandidateClaimInput;
@@ -382,7 +399,7 @@ function validateRuntimeContextClaim(
   if (!validMaterialized(claim.payload)) fail('runtime context claim payload is not materialized');
   if (JSON.stringify(claim.scope) !== canonicalJson(claim.scope)) fail('runtime context claim scope is noncanonical');
   const payloadCanonical = canonicalJson(claim.payload);
-  if (JSON.stringify(claim.payload) !== payloadCanonical || sha256Canonical(claim.payload) !== claim.payloadFingerprint) fail('runtime context claim payload is noncanonical or detached');
+  if ((!options?.allowNonCanonicalPayload && JSON.stringify(claim.payload) !== payloadCanonical) || sha256Canonical(claim.payload) !== claim.payloadFingerprint) fail('runtime context claim payload is noncanonical or detached');
   return immutableCanonicalValue({
     claimId: claim.claimId,
     claim: claim.claim,
@@ -394,13 +411,14 @@ function validateRuntimeContextClaim(
 
 function validateProjectedRuntimeContextClaim(
   value: unknown,
-  expectedClaim: string
+  expectedClaim: string,
+  options?: Readonly<{ allowNonCanonicalPayload?: boolean }>
 ): GovernedProofRuntimeContextClaimV1 {
   if (!plain(value) || !exact(value, ['claimId', 'claim', 'payloadFingerprint', 'scope', 'payload']) || !validMaterialized(value)) fail('projected runtime context claim is not closed');
   const claim = value as unknown as GovernedProofRuntimeContextClaimV1;
   if (!bare(claim.claimId) || claim.claim !== expectedClaim || !bare(claim.payloadFingerprint) || !Array.isArray(claim.scope) || !validMaterialized(claim.scope) || !validMaterialized(claim.payload)) fail('projected runtime context claim identity is invalid');
-  if (JSON.stringify(value) !== canonicalJson(value) || JSON.stringify(claim.scope) !== canonicalJson(claim.scope)) fail('projected runtime context claim is noncanonical');
-  if (JSON.stringify(claim.payload) !== canonicalJson(claim.payload) || sha256Canonical(claim.payload) !== claim.payloadFingerprint) fail('projected runtime context payload is noncanonical or detached');
+  if ((!options?.allowNonCanonicalPayload && JSON.stringify(value) !== canonicalJson(value)) || JSON.stringify(claim.scope) !== canonicalJson(claim.scope)) fail('projected runtime context claim is noncanonical');
+  if ((!options?.allowNonCanonicalPayload && JSON.stringify(claim.payload) !== canonicalJson(claim.payload)) || sha256Canonical(claim.payload) !== claim.payloadFingerprint) fail('projected runtime context payload is noncanonical or detached');
   return immutableCanonicalValue({
     claimId: claim.claimId,
     claim: claim.claim,
@@ -408,6 +426,55 @@ function validateProjectedRuntimeContextClaim(
     scope: claim.scope as unknown as ManagedRunBindingV1['scope'],
     payload: claim.payload,
   });
+}
+
+function validateNativeReviewedComponentPayload(value: unknown, expectedComponentId: string): Record<string, unknown> {
+  if (!plain(value) || !validMaterialized(value) || !exact(value, ['version', 'component_id', 'status', 'item_count', 'source', 'reviews']) ||
+      value.version !== 'native.component.reviewed/v1' || !visible(value.component_id, 256) || value.component_id !== expectedComponentId ||
+      value.status !== 'reviewed-native-requirement-items' || !Number.isSafeInteger(value.item_count) || (value.item_count as number) < 1 ||
+      !plain(value.source) || !validMaterialized(value.source) || !exact(value.source, ['kind', 'checkpoint_sha256', 'graph_semantic_digest', 'manifest_sha256']) ||
+      (value.source.kind !== 'current_graph' && value.source.kind !== 'retained_checkpoint') ||
+      (value.source.kind === 'current_graph'
+        ? value.source.checkpoint_sha256 !== null || value.source.graph_semantic_digest !== null
+        : !wire(value.source.checkpoint_sha256) || !bare(value.source.graph_semantic_digest)) ||
+      !wire(value.source.manifest_sha256) ||
+      !Array.isArray(value.reviews) || value.reviews.length !== value.item_count) {
+    fail('reviewed component payload is invalid');
+  }
+  const reviews = value.reviews as unknown[];
+  const ids = new Set<string>();
+  let previousId: string | undefined;
+  for (const entry of reviews) {
+    const retainedClaim = plain(entry) && entry.retained_claim;
+    const retainedClaimValid = value.source.kind === 'current_graph'
+      ? retainedClaim === null
+      : plain(retainedClaim) && exact(retainedClaim, ['claim_id', 'payload_fingerprint']) &&
+        bare(retainedClaim.claim_id) && bare(retainedClaim.payload_fingerprint);
+    if (!plain(entry) || !validMaterialized(entry) || !exact(entry, ['id', 'component_id', 'file_path', 'proof_file_hash', 'candidate', 'candidate_fingerprint', 'packet_sha256', 'retained_claim']) ||
+        !visible(entry.id, 512) || ids.has(entry.id) || (previousId !== undefined && Buffer.from(previousId, 'utf8').compare(Buffer.from(entry.id as string, 'utf8')) >= 0) ||
+        entry.component_id !== expectedComponentId || !visible(entry.file_path, 4096) || (entry.file_path as string).startsWith('/') || (entry.file_path as string).includes('\\') || (entry.file_path as string).split('/').some(part => part === '..' || part.length === 0) || !wire(entry.proof_file_hash) ||
+        !validMaterialized(entry.candidate) || entry.candidate_fingerprint !== `sha256:${sha256Canonical(entry.candidate)}` ||
+        !wire(entry.packet_sha256) || !retainedClaimValid) {
+      fail('reviewed component packet projection is invalid');
+    }
+    ids.add(entry.id as string);
+    previousId = entry.id as string;
+  }
+  return value;
+}
+
+function validateReviewedComponentContext(value: unknown): GovernedProofReviewedComponentContextV1 {
+  if (!plain(value) || !exact(value, ['version', 'component', 'reviewed']) || !validMaterialized(value) || value.version !== GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION) {
+    fail('reviewed component runtime context header is invalid');
+  }
+  const component = validateProjectedRuntimeContextClaim(value.component, COMPONENT_WORK_ITEM_CLAIM);
+  const reviewed = validateProjectedRuntimeContextClaim(value.reviewed, NATIVE_COMPONENT_REVIEWED_CLAIM, { allowNonCanonicalPayload: true });
+  if (component.claimId === reviewed.claimId || canonicalJson(component.scope) !== canonicalJson(reviewed.scope)) fail('reviewed component context claims are not distinct and co-scoped');
+  if (!plain(component.payload) || typeof component.payload.component_id !== 'string' || component.payload.component_id.length === 0) fail('reviewed component WorkItem is invalid');
+  validateNativeReviewedComponentPayload(reviewed.payload, component.payload.component_id);
+  const context = immutableCanonicalValue({ version: GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION as typeof GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION, component, reviewed });
+  if (Buffer.byteLength(canonicalJson(context), 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('reviewed component runtime context exceeds bounded byte limit');
+  return context;
 }
 
 /**
@@ -464,6 +531,9 @@ function validateProjectDiscoveryContextPayload(
 function validateRuntimeContextShape(value: unknown): GovernedProofRuntimeContext {
   if (!plain(value) || typeof value.version !== 'string' || JSON.stringify(value) !== canonicalJson(value)) fail('runtime context header is invalid');
   const context = value as Record<string, unknown>;
+  if (context.version === GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION) {
+    return validateReviewedComponentContext(context);
+  }
   if (context.version === GOVERNED_PROOF_CONTEXT_VERSION) {
     if (!exact(value, ['version', 'component', 'authority'])) fail('runtime context header is invalid');
     const component = validateProjectedRuntimeContextClaim(context.component, COMPONENT_WORK_ITEM_CLAIM);
@@ -491,7 +561,16 @@ function validateRuntimeContextShape(value: unknown): GovernedProofRuntimeContex
 export function projectGovernedProofRuntimeContext(
   claims: unknown,
   binding: ManagedRunBindingV1
-): GovernedProofRuntimeContextV1 {
+): GovernedProofRuntimeContextV1 | GovernedProofReviewedComponentContextV1 {
+  if (plain(claims) && exact(claims, ['component', 'reviewed'])) {
+    const context = validateReviewedComponentContext({
+      version: GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION,
+      component: validateRuntimeContextClaim((claims as Record<string, unknown>).component, COMPONENT_WORK_ITEM_CLAIM, binding.scope),
+      reviewed: validateRuntimeContextClaim((claims as Record<string, unknown>).reviewed, NATIVE_COMPONENT_REVIEWED_CLAIM, binding.scope, { allowNonCanonicalPayload: true }),
+    });
+    if (Buffer.byteLength(canonicalJson(context), 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('reviewed component runtime context exceeds bounded byte limit');
+    return context;
+  }
   if (!plain(claims) || !exact(claims, ['component'])) fail('runtime context requires exactly the component WorkItem claim');
   const record = claims as Record<string, unknown>;
   const component = validateRuntimeContextClaim(record.component, COMPONENT_WORK_ITEM_CLAIM, binding.scope);
@@ -528,7 +607,10 @@ export function governedProofRuntimePrompt(context: GovernedProofRuntimeContext)
   const projected = validateRuntimeContextShape(context);
   const bytes = canonicalJson(projected);
   if (Buffer.byteLength(bytes, 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('runtime context exceeds bounded byte limit');
-  return `${GOVERNED_PROOF_INSPECT_MESSAGE}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${bytes}`;
+  const reviewedInstruction = projected.version === GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION
+    ? '\n\nController instruction: independent packet findings are fallible candidates. Verify each against current Proof and source, preserve unsupported or unresolved status, and never infer approval from packet or aggregate completion.'
+    : '';
+  return `${GOVERNED_PROOF_INSPECT_MESSAGE}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${bytes}${reviewedInstruction}`;
 }
 
 /** Validate that candidate evidence still names the exact activated inputs. */
@@ -538,6 +620,7 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   binding: ManagedRunBindingV1
 ): void {
   const contextClaims = parentClaims.filter(claim => claim.claim === COMPONENT_WORK_ITEM_CLAIM);
+  const reviewedClaims = parentClaims.filter(claim => claim.claim === NATIVE_COMPONENT_REVIEWED_CLAIM);
   const projectClaims = parentClaims.filter(claim => claim.claim === PROJECT_DISCOVERY_CLAIM);
   const inventoryClaims = parentClaims.filter(claim => claim.claim === PROOF_STRUCTURAL_INVENTORY_CLAIM);
   const invocation = evidence.role.invocation;
@@ -547,7 +630,20 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
       const reinspection = validateGovernedProofComponentReinspectionContext(evidence.reinspectionContext);
       if (evidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(reinspection)) fail('reinspection context digest is detached');
     }
-    if (contextClaims.length !== 1 || projectClaims.length !== 0 || inventoryClaims.length !== 0) fail('component invocation authority requires exactly one WorkItem parent');
+    if (projectClaims.length !== 0 || inventoryClaims.length !== 0) fail('component invocation authority cannot use project discovery parents');
+    if (reviewedClaims.length > 0) {
+      if (contextClaims.length !== 1 || reviewedClaims.length !== 1 || parentClaims.length !== 2 || !evidence.context || evidence.context.version !== GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION || evidence.contextDigest === undefined) fail('reviewed component invocation authority requires exactly WorkItem and reviewed parents');
+      const context = validateRuntimeContextShape(evidence.context);
+      if (context.version !== GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION) fail('reviewed component runtime context is invalid');
+      if (evidence.contextDigest !== governedProofRuntimeContextDigest(context)) fail('reviewed component runtime context digest is detached');
+      const parentComponent = contextClaims[0];
+      const parentReviewed = reviewedClaims[0];
+      if (canonicalJson(context.component) !== canonicalJson({ claimId: parentComponent.claimId, claim: parentComponent.claim, payloadFingerprint: parentComponent.payloadFingerprint, scope: parentComponent.scope, payload: parentComponent.payload }) ||
+          canonicalJson(context.reviewed) !== canonicalJson({ claimId: parentReviewed.claimId, claim: parentReviewed.claim, payloadFingerprint: parentReviewed.payloadFingerprint, scope: parentReviewed.scope, payload: parentReviewed.payload }) ||
+          canonicalJson(context.component.scope) !== canonicalJson(binding.scope) || canonicalJson(context.reviewed.scope) !== canonicalJson(binding.scope)) fail('reviewed component runtime context is stale or foreign');
+    } else if (contextClaims.length !== 1 || parentClaims.length !== 1) {
+      fail('component invocation authority requires exactly one WorkItem parent');
+    }
     const authority = validateProofComponentInvocationAuthority(invocation.component_authority);
     const invocationSubject = invocation.subject as Record<string, unknown>;
     if (!plain(invocationSubject) || invocationSubject.id !== authority.subject.component_id || invocationSubject.fingerprint !== authority.subject.fingerprint) fail('component invocation subject is detached from authority');
@@ -589,12 +685,25 @@ export function validateGovernedProofRuntimeContextAgainstClaims(
   if (canonicalJson(context.component.scope) !== canonicalJson(binding.scope) || canonicalJson(context.authority.scope) !== canonicalJson(binding.scope)) fail('runtime context scope is foreign');
 }
 
-type RuntimeContextKind = 'component' | 'project';
+type RuntimeContextKind = 'component' | 'reviewed-component' | 'project';
 function requiresRuntimeContext(config: CheckProviderConfig): RuntimeContextKind | undefined {
   // The component selector uses the controller-owned Proof authority and C0
   // itself as the runtime binding. The legacy envelope context remains for
   // already-resolved EXP-0209 checks.
-  if (isGovernedProofComponentSelector(config.invocation) || isGovernedProofSpecReviewSelector(config.invocation)) return undefined;
+  if (isGovernedProofComponentSelector(config.invocation) || isGovernedProofSpecReviewSelector(config.invocation)) {
+    const consumes = config.consumes;
+    const exactConsume = (value: unknown, claim: string, as: string): boolean => plain(value) &&
+      (exact(value, ['claim', 'as']) || (exact(value, ['claim', 'as', 'cardinality']) && value.cardinality === 'one')) &&
+      value.claim === claim && value.as === as;
+    const reviewedBinding = isGovernedProofComponentSelector(config.invocation) && Array.isArray(consumes) && consumes.length === 2 &&
+      consumes.some(value => exactConsume(value, COMPONENT_WORK_ITEM_CLAIM, 'component')) &&
+      consumes.some(value => exactConsume(value, NATIVE_COMPONENT_REVIEWED_CLAIM, 'reviewed'));
+    if (isGovernedProofComponentSelector(config.invocation) && Array.isArray(consumes) &&
+        (consumes.length > 1 || consumes.some(value => plain(value) && value.claim === NATIVE_COMPONENT_REVIEWED_CLAIM)) && !reviewedBinding) {
+      fail('component selector reviewed bindings are not exact');
+    }
+    return reviewedBinding ? 'reviewed-component' : undefined;
+  }
   const consumes = config.consumes;
   if (consumes === undefined) return undefined;
   if (!Array.isArray(consumes)) fail('config consumes is not an array');
@@ -727,7 +836,7 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       const subject = plain(invocation) && plain(invocation.subject) ? invocation.subject : undefined;
       if (!subject || subject.kind !== 'project' || typeof subject.id !== 'string' || typeof subject.fingerprint !== 'string') fail('project discovery invocation subject is invalid');
       context = projectGovernedProofProjectDiscoveryContext(request.executionContext?.claims, binding, { projectId: subject.id, fingerprint: subject.fingerprint });
-    } else if (runtimeContextKind === 'component') {
+    } else if (runtimeContextKind === 'component' || runtimeContextKind === 'reviewed-component') {
       context = projectGovernedProofRuntimeContext(request.executionContext?.claims, binding);
     }
     const contextDigest = context ? governedProofRuntimeContextDigest(context) : undefined;

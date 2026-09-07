@@ -152,8 +152,24 @@ function componentSelectorTemplateBindingAllowed(inputName: string | undefined, 
     consumption.claim === 'component.work_item@1' && consumption.as === 'component';
 }
 
+function reviewedComponentSelectorTemplateBindingAllowed(inputName: string | undefined, inputClaim: string | undefined, check: CheckConfig): boolean {
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1') return false;
+  const consumes = check.consumes;
+  if (!Array.isArray(consumes) || consumes.length !== 2) return false;
+  const exactConsume = (value: unknown, claim: string, as: string): boolean => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    const keys = Reflect.ownKeys(record);
+    if (!(keys.length === 2 || (keys.length === 3 && record.cardinality === 'one')) ||
+        keys.some(key => typeof key !== 'string' || (key !== 'claim' && key !== 'as' && key !== 'cardinality'))) return false;
+    return record.claim === claim && record.as === as;
+  };
+  return consumes.some(value => exactConsume(value, 'component.work_item@1', 'component')) &&
+    consumes.some(value => exactConsume(value, 'native.component.reviewed@1', 'reviewed'));
+}
+
 function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false, specReviewSelectorAllowed = false): void {
-  const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
+  const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'depends_on', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
   if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
   if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
   validateControllerAi(name, record.ai);
@@ -362,6 +378,136 @@ function rejectReservedProfile(templateName: string, detail: string): never {
   );
 }
 
+/** Exact native component admission suffix.  The operational prefix is
+ * intentionally explicit: this profile may follow only the shipped
+ * native-validation barrier, while the older three/five-node profiles below
+ * retain their original one-WorkItem semantics. */
+function validateNativeReviewedComponentAdmissionTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority,
+): void {
+  const reviewedClaim = 'native.component.reviewed@1';
+  const suffix = ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit', 'verify'];
+  const liveTopology = [
+    'prepare-work-item',
+    'role-onboard-component',
+    'role-spec-review-component',
+    'checkout-target',
+    'checkout-worktree',
+    'author-native-component',
+    'promote-native-component',
+    'enumerate-native-requirements',
+    'wait-for-native-items',
+    'component-reviewed',
+    'native-validation',
+    ...suffix,
+  ];
+  const liveDependencies: Readonly<Record<string, readonly string[]>> = {
+    'prepare-work-item': [],
+    'role-onboard-component': [],
+    'role-spec-review-component': [],
+    'checkout-target': ['prepare-work-item'],
+    'checkout-worktree': ['checkout-target'],
+    'author-native-component': ['checkout-worktree', 'prepare-work-item', 'role-onboard-component'],
+    'promote-native-component': ['author-native-component', 'checkout-worktree', 'prepare-work-item'],
+    'enumerate-native-requirements': ['author-native-component', 'prepare-work-item', 'promote-native-component', 'role-spec-review-component'],
+    'wait-for-native-items': ['enumerate-native-requirements'],
+    'component-reviewed': ['enumerate-native-requirements', 'prepare-work-item', 'wait-for-native-items'],
+    'native-validation': ['component-reviewed'],
+  };
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1' || !hasOwn(authority.claimTypes, reviewedClaim)) {
+    rejectReservedProfile(name, 'native reviewed component profile requires the component WorkItem input and reviewed claim declaration');
+  }
+  if (nodeKeys.join('\0') !== [...liveTopology].sort().join('\0') || topology.join('\0') !== liveTopology.join('\0')) {
+    rejectReservedProfile(name, 'native reviewed component profile requires the complete named live onboarding topology');
+  }
+  for (const nodeKey of suffix) if (!hasOwn(resolvedChecks, nodeKey)) rejectReservedProfile(name, `native reviewed component profile is missing ${nodeKey}`);
+  for (const [nodeKey, expected] of Object.entries(liveDependencies)) {
+    if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) rejectReservedProfile(name, `native reviewed component profile has unexpected dependencies for ${nodeKey}`);
+  }
+  const prefixExpectations: Readonly<Record<string, { type: string; consumes: readonly string[]; emits: readonly string[] }>> = {
+    'prepare-work-item': { type: 'command', consumes: ['component.work_item@1'], emits: ['component.prepared_work_item@1'] },
+    'checkout-target': { type: 'command', consumes: ['component.prepared_work_item@1'], emits: ['component.checkout_target@1'] },
+    'checkout-worktree': { type: 'git-checkout', consumes: ['component.checkout_target@1'], emits: ['component.checkout@1'] },
+    'role-onboard-component': { type: 'command', consumes: ['component.work_item@1'], emits: ['native.role.onboard@1'] },
+    'author-native-component': { type: 'ai', consumes: ['component.checkout@1', 'component.prepared_work_item@1', 'native.role.onboard@1'], emits: ['native.author.evidence@1'] },
+    'promote-native-component': { type: 'command', consumes: ['component.checkout@1', 'component.prepared_work_item@1', 'native.author.evidence@1'], emits: ['native.promotion@1'] },
+    'role-spec-review-component': { type: 'command', consumes: ['component.work_item@1'], emits: ['native.role.spec_review@1'] },
+    'enumerate-native-requirements': { type: 'command', consumes: ['component.prepared_work_item@1', 'native.author.evidence@1', 'native.promotion@1', 'native.role.spec_review@1'], emits: ['native.requirement.catalog@1'] },
+    'wait-for-native-items': { type: 'noop', consumes: [], emits: [] },
+    'component-reviewed': { type: 'command', consumes: ['component.prepared_work_item@1', 'native.requirement.catalog@1'], emits: [reviewedClaim] },
+    'native-validation': { type: 'command', consumes: ['component.work_item@1', reviewedClaim], emits: ['native.component.summary@1'] },
+  };
+  for (const [nodeKey, expected] of Object.entries(prefixExpectations)) {
+    const check = resolvedChecks[nodeKey];
+    if (!check || check.type !== expected.type || claimList(check, 'consumes').join('\0') !== [...expected.consumes].sort().join('\0') || claimList(check, 'emits').join('\0') !== [...expected.emits].sort().join('\0')) {
+      rejectReservedProfile(name, `${nodeKey} is not the exact native onboarding prefix node`);
+    }
+  }
+  const wait = resolvedChecks['wait-for-native-items'];
+  if (!wait || !wait.wait_for_expansion || !hasExactKeys(wait.wait_for_expansion, ['owner', 'terminal_node']) || wait.wait_for_expansion.owner !== 'enumerate-native-requirements' || wait.wait_for_expansion.terminal_node !== 'collect-proof-evidence') {
+    rejectReservedProfile(name, 'wait-for-native-items must be the sole native requirement expansion barrier');
+  }
+  const requirementExpansion = resolvedChecks['enumerate-native-requirements'].expand;
+  if (!requirementExpansion || typeof requirementExpansion !== 'object' || Array.isArray(requirementExpansion) || !hasExactKeys(requirementExpansion, ['claim', 'template', 'items_pointer', 'key_pointer', 'item_claim']) ||
+      requirementExpansion.claim !== 'native.requirement.catalog@1' || requirementExpansion.template !== 'native-requirement-review' ||
+      requirementExpansion.items_pointer !== '/items' || requirementExpansion.key_pointer !== '/id' || requirementExpansion.item_claim !== 'native.requirement.item@1') {
+    rejectReservedProfile(name, 'enumerate-native-requirements must own the exact native requirement expansion');
+  }
+  const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofComponentSelector(inspect.invocation)) {
+    rejectReservedProfile(name, 'native reviewed component inspect must use the builtin component selector');
+  }
+  validateGovernedInspectConfig(name, inspect, true);
+  if (claimBindings(inspect).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, 'native reviewed component inspect must consume exactly WorkItem and reviewed aggregate parents');
+  }
+  const nativeValidation = resolvedChecks['native-validation'];
+  if (!nativeValidation || claimBindings(nativeValidation).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(nativeValidation, 'emits').join('\0') !== 'native.component.summary@1') {
+    rejectReservedProfile(name, 'native-validation must consume the exact WorkItem/reviewed parents and emit the component summary');
+  }
+  const reviewedProducer = resolvedChecks['component-reviewed'];
+  if (!reviewedProducer || claimList(reviewedProducer, 'emits').join('\0') !== reviewedClaim) {
+    rejectReservedProfile(name, 'component-reviewed must be the sole reviewed aggregate producer');
+  }
+  const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (proofAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(proofAdmit).join('\0') !== JSON.stringify([PROOF_CANDIDATE_CLAIM, 'candidate']) || claimList(proofAdmit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, 'native reviewed component proof_admit bindings are not exact');
+  }
+  const expectedDependencies: Readonly<Record<string, readonly string[]>> = {
+    inspect: ['component-reviewed', 'native-validation'], [PROOF_ADMIT_NODE_KEY]: ['inspect'], spec_review: ['inspect', PROOF_ADMIT_NODE_KEY],
+    spec_review_admit: ['spec_review'], verify: ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit'],
+  };
+  for (const [nodeKey, expected] of Object.entries(expectedDependencies)) {
+    if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) rejectReservedProfile(name, `native reviewed component profile has unexpected dependencies for ${nodeKey}`);
+  }
+  const specReview = resolvedChecks.spec_review;
+  if (specReview.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofSpecReviewSelector(specReview.invocation)) rejectReservedProfile(name, 'native reviewed component spec_review must use the builtin spec-review selector');
+  validateGovernedInspectConfig(name, specReview, false, true);
+  if (claimBindings(specReview).join('\0') !== [
+    ['component.work_item@1', 'component'], [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'admission'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(specReview, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM) rejectReservedProfile(name, 'native reviewed component spec_review bindings are not exact');
+  const specReviewAdmit = resolvedChecks.spec_review_admit;
+  if (specReviewAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(specReviewAdmit).join('\0') !== JSON.stringify([PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'candidate']) || claimList(specReviewAdmit, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM) rejectReservedProfile(name, 'native reviewed component spec_review_admit bindings are not exact');
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE || claimList(verify, 'emits').length !== 0 || claimBindings(verify).join('\0') !== [
+    [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'receipt'],
+    [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'spec_candidate'], [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, 'spec_receipt'],
+  ].map(value => JSON.stringify(value)).sort().join('\0')) rejectReservedProfile(name, 'native reviewed component verify bindings are not exact');
+  if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1 || consumptionsByNode.spec_review_admit.length !== 1) rejectReservedProfile(name, 'native reviewed component admission consumers are not singular');
+}
+
 /**
  * The proof admission node is deliberately a fixed, tiny profile. It is
  * validated after all ordinary declaration, emitter, dependency, and topology
@@ -398,6 +544,16 @@ function validateReservedProofAdmissionTemplate(
     );
   });
   if (!triggered) return;
+
+  const nativeReviewed = resolvedChecks.inspect !== undefined && reviewedComponentSelectorTemplateBindingAllowed(
+    inputName,
+    inputClaim,
+    resolvedChecks.inspect,
+  );
+  if (nativeReviewed) {
+    validateNativeReviewedComponentAdmissionTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    return;
+  }
 
   if (!hasOwn(authority.claimTypes, PROOF_CANDIDATE_CLAIM)) {
     rejectReservedProfile(name, `missing ${PROOF_CANDIDATE_CLAIM} declaration`);
@@ -718,7 +874,10 @@ function compileTemplate(
       );
     }
     if (check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
-      validateGovernedInspectConfig(name, check, componentSelectorTemplateBindingAllowed(inputName, inputClaim, check), nodeKey === 'spec_review');
+      validateGovernedInspectConfig(name, check,
+        componentSelectorTemplateBindingAllowed(inputName, inputClaim, check) ||
+        reviewedComponentSelectorTemplateBindingAllowed(inputName, inputClaim, check),
+        nodeKey === 'spec_review');
     }
     for (const field of ['emits', 'consumes'] as const) {
       if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {

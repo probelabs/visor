@@ -156,6 +156,89 @@ function stagedProofAdmissionConfig(): any {
   return value;
 }
 
+function nativeReviewedAdmissionConfig(): any {
+  const value = stagedProofAdmissionConfig();
+  Object.assign(value.claim_types, {
+    'component.prepared_work_item@1': { schema: { type: 'object' } },
+    'component.checkout_target@1': { schema: { type: 'object' } },
+    'component.checkout@1': { schema: { type: 'object' } },
+    'native.role.onboard@1': { schema: { type: 'string' } },
+    'native.author.evidence@1': { schema: { type: 'object' } },
+    'native.promotion@1': { schema: { type: 'object' } },
+    'native.role.spec_review@1': { schema: { type: 'string' } },
+    'native.requirement.catalog@1': { schema: { type: 'object' } },
+    'native.requirement.item@1': { schema: { type: 'object' } },
+    'native.component.reviewed@1': { schema: { type: 'object' } },
+    'native.component.summary@1': { schema: { type: 'object' } },
+  });
+  const checks = value.subgraphs['onboard-component'].checks;
+  checks['prepare-work-item'] = {
+    type: 'command', consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'component.prepared_work_item@1', from: 'output' }],
+  };
+  checks['checkout-target'] = {
+    type: 'command', depends_on: ['prepare-work-item'], consumes: [{ claim: 'component.prepared_work_item@1', as: 'work_item' }], emits: [{ claim: 'component.checkout_target@1', from: 'output' }],
+  };
+  checks['checkout-worktree'] = {
+    type: 'git-checkout', depends_on: ['checkout-target'], consumes: [{ claim: 'component.checkout_target@1', as: 'target' }], emits: [{ claim: 'component.checkout@1', from: 'output' }],
+  };
+  checks['role-onboard-component'] = {
+    type: 'command', consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'native.role.onboard@1', from: 'output' }],
+  };
+  checks['author-native-component'] = {
+    type: 'ai', depends_on: ['role-onboard-component', 'checkout-worktree'], consumes: [
+      { claim: 'component.prepared_work_item@1', as: 'work_item' }, { claim: 'component.checkout@1', as: 'checkout' }, { claim: 'native.role.onboard@1', as: 'role' },
+    ], emits: [{ claim: 'native.author.evidence@1', from: 'output' }],
+  };
+  checks['promote-native-component'] = {
+    type: 'command', depends_on: ['author-native-component'], consumes: [
+      { claim: 'component.prepared_work_item@1', as: 'work_item' }, { claim: 'component.checkout@1', as: 'checkout' }, { claim: 'native.author.evidence@1', as: 'author' },
+    ], emits: [{ claim: 'native.promotion@1', from: 'output' }],
+  };
+  checks['role-spec-review-component'] = {
+    type: 'command', consumes: [{ claim: 'component.work_item@1', as: 'component' }], emits: [{ claim: 'native.role.spec_review@1', from: 'output' }],
+  };
+  checks['enumerate-native-requirements'] = {
+    type: 'command', depends_on: ['promote-native-component', 'role-spec-review-component'], consumes: [
+      { claim: 'component.prepared_work_item@1', as: 'work_item' }, { claim: 'native.promotion@1', as: 'promotion' },
+      { claim: 'native.author.evidence@1', as: 'author' }, { claim: 'native.role.spec_review@1', as: 'role' },
+    ], emits: [{ claim: 'native.requirement.catalog@1', from: 'output' }],
+    expand: { claim: 'native.requirement.catalog@1', template: 'native-requirement-review', items_pointer: '/items', key_pointer: '/id', item_claim: 'native.requirement.item@1' },
+  };
+  checks['wait-for-native-items'] = {
+    type: 'noop', depends_on: ['enumerate-native-requirements'],
+    wait_for_expansion: { owner: 'enumerate-native-requirements', terminal_node: 'collect-proof-evidence' },
+  };
+  checks['component-reviewed'] = {
+    type: 'command', depends_on: ['wait-for-native-items'],
+    consumes: [
+      { claim: 'component.prepared_work_item@1', as: 'work_item' }, { claim: 'native.requirement.catalog@1', as: 'catalog' },
+    ], emits: [{ claim: 'native.component.reviewed@1', from: 'output' }],
+  };
+  checks['native-validation'] = {
+    type: 'command',
+    consumes: [
+      { claim: 'component.work_item@1', as: 'component' },
+      { claim: 'native.component.reviewed@1', as: 'reviewed' },
+    ],
+    emits: [{ claim: 'native.component.summary@1', from: 'output' }],
+  };
+  checks['native-validation'].depends_on = ['component-reviewed'];
+  checks.inspect.depends_on = ['native-validation'];
+  checks.inspect.consumes = [
+    { claim: 'component.work_item@1', as: 'component' },
+    { claim: 'native.component.reviewed@1', as: 'reviewed' },
+  ];
+  checks.proof_admit.depends_on = ['inspect'];
+  checks.spec_review.depends_on = ['inspect', 'proof_admit'];
+  checks.spec_review_admit.depends_on = ['spec_review'];
+  checks.verify.depends_on = ['inspect', 'proof_admit', 'spec_review', 'spec_review_admit'];
+  value.subgraphs['native-requirement-review'] = {
+    input: { name: 'item', claim: 'native.requirement.item@1' },
+    checks: { 'collect-proof-evidence': { type: 'noop', consumes: [{ claim: 'native.requirement.item@1', as: 'item' }] } },
+  };
+  return value;
+}
+
 function discoveryFixture(): any {
   const fixturePath = path.resolve(
     __dirname,
@@ -165,6 +248,38 @@ function discoveryFixture(): any {
 }
 
 describe('Graph v2 C2 expansion plan', () => {
+  it('accepts the exact native reviewed-component admission suffix after native-validation', () => {
+    const plan = compileClaimPlan(nativeReviewedAdmissionConfig()).expansionPlan;
+    const template = plan.templatesByName['onboard-component'];
+    expect(template.topology).toEqual([
+      'prepare-work-item', 'role-onboard-component', 'role-spec-review-component', 'checkout-target',
+      'checkout-worktree', 'author-native-component', 'promote-native-component', 'enumerate-native-requirements',
+      'wait-for-native-items', 'component-reviewed', 'native-validation', 'inspect', 'proof_admit', 'spec_review',
+      'spec_review_admit', 'verify',
+    ]);
+    expect(template.nodesByKey.inspect.consumptions.map(value => [value.claim, value.as])).toEqual([
+      ['component.work_item@1', 'component'], ['native.component.reviewed@1', 'reviewed'],
+    ]);
+  });
+
+  it.each([
+    ['missing reviewed parent', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.consumes.pop(); }],
+    ['wrong reviewed alias', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.consumes[1].as = 'aggregate'; }],
+    ['unknown suffix node', (value: any) => { value.subgraphs['onboard-component'].checks.extra = { type: 'noop', depends_on: ['native-validation'] }; }],
+    ['foreign inspect claim', (value: any) => { value.subgraphs['onboard-component'].checks.inspect.consumes[1].claim = 'native.review.packet@1'; }],
+    ['repointed requirement expansion', (value: any) => { value.subgraphs['onboard-component'].checks['enumerate-native-requirements'].expand.key_pointer = '/component_id'; }],
+    ['retyped author prefix node', (value: any) => { value.subgraphs['onboard-component'].checks['author-native-component'].type = 'noop'; }],
+    ['rebound prefix node', (value: any) => {
+      const checks = value.subgraphs['onboard-component'].checks;
+      checks['author'] = checks['author-native-component'];
+      delete checks['author-native-component'];
+    }],
+  ])('rejects native reviewed profile mutation: %s', (_label, mutate) => {
+    const value = nativeReviewedAdmissionConfig();
+    mutate(value);
+    expect(() => compileClaimPlan(value)).toThrow(InstancePlanError);
+  });
+
   it('compiles the exact seven-node discovery topology and reconciliation barrier', () => {
     const plan = compileClaimPlan(discoveryFixture()).expansionPlan;
     const template = plan.templatesByName['discover-project'];
