@@ -11,7 +11,8 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { loadConfig, StateMachineExecutionEngine } from '../../../src/sdk';
-import { ExecutionJournal } from '../../../src/snapshot-store';
+import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../../src/snapshot-store';
+import type { GraphJournalCheckpointV1 } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 import { createProofAdmissionCapability, goCompatibleProofJson } from '../../../src/providers/proof-admission-cli-child';
@@ -223,6 +224,79 @@ function assertRoots(subjectArg: string, originalArg: string, outputArg: string)
   return {subject, original, output};
 }
 
+export type RecoveryArguments = Readonly<{
+  checkpoint: string;
+  priorOutput: string;
+  retryGenerationIds: readonly string[];
+}>;
+
+/** Parse the explicit, closed recovery mode instead of inferring failed work. */
+export function parseRecoveryArguments(values: Record<string, string>): RecoveryArguments | undefined {
+  const checkpoint = values['recover-checkpoint'];
+  const priorOutput = values['prior-output'];
+  const retryValue = values['retry-generations'];
+  const present = [checkpoint, priorOutput, retryValue].filter(value => value !== undefined).length;
+  if (present === 0) return undefined;
+  if (present !== 3 || !checkpoint || !priorOutput || !retryValue) {
+    throw new Error('--recover-checkpoint, --prior-output, and --retry-generations must be supplied together');
+  }
+  const ids = retryValue.split(',').map(value => value.trim());
+  if (ids.length === 0 || ids.some(id => !/^[0-9a-f]{64}$/.test(id))) {
+    throw new Error('--retry-generations must contain comma-separated 64-character generation IDs');
+  }
+  const sorted = [...ids].sort();
+  if (new Set(ids).size !== ids.length || ids.some((id, index) => id !== sorted[index])) {
+    throw new Error('--retry-generations must be sorted and unique');
+  }
+  return Object.freeze({checkpoint, priorOutput, retryGenerationIds: Object.freeze(ids)});
+}
+
+function assertDisjointCheckoutRoots(subject: string, original: string): void {
+  const subjectGitRoot = realDirectory(gitRoot(subject), 'subject git root');
+  const originalGitRoot = realDirectory(gitRoot(original), 'original git root');
+  if (subject !== subjectGitRoot || original !== originalGitRoot) {
+    throw new Error('subject-root and original-root must each be their checkout git root');
+  }
+  if (subject === original || subjectGitRoot === originalGitRoot) {
+    throw new Error('subject root must differ from protected original root');
+  }
+  if (inside(subject, original) || inside(original, subject) ||
+      inside(subjectGitRoot, originalGitRoot) || inside(originalGitRoot, subjectGitRoot)) {
+    throw new Error('subject and protected original checkouts must be disjoint');
+  }
+}
+
+/** Recovery may reuse an initialized subject, but its output is always fresh. */
+export function assertRecoveryRoots(
+  subjectArg: string,
+  originalArg: string,
+  outputArg: string,
+  priorOutputArg: string,
+  checkpointArg: string,
+): {subject: string; original: string; output: string; priorOutput: string; checkpoint: string} {
+  const subject = realDirectory(subjectArg, 'subject root');
+  const original = realDirectory(originalArg, 'original root');
+  assertDisjointCheckoutRoots(subject, original);
+  const priorOutput = realDirectory(priorOutputArg, 'prior output');
+  if (inside(priorOutput, subject) || inside(priorOutput, original)) {
+    throw new Error('prior output must be outside subject and protected original roots');
+  }
+  const checkpointCandidate = path.resolve(checkpointArg);
+  const checkpoint = fs.realpathSync(checkpointCandidate);
+  if (!fs.statSync(checkpoint).isFile() || !inside(checkpoint, priorOutput)) {
+    throw new Error('recovery checkpoint must be a file inside prior output');
+  }
+  const output = path.resolve(outputArg);
+  const parent = fs.realpathSync(path.dirname(output));
+  if (inside(output, subject) || inside(output, original) || inside(output, priorOutput) ||
+      inside(parent, subject) || inside(parent, original) || inside(parent, priorOutput)) {
+    throw new Error('recovery output must be outside subject, protected original, and prior output roots');
+  }
+  if (fs.existsSync(output)) throw new Error('recovery output must be a fresh non-existent directory');
+  fs.mkdirSync(output, {recursive: true});
+  return {subject, original, output, priorOutput, checkpoint};
+}
+
 function executable(value: string): string {
   if (!path.isAbsolute(value)) throw new Error('--proof-bin must be an absolute path');
   const resolved = fs.realpathSync(value);
@@ -317,6 +391,12 @@ function assertFreshSubject(subject: string, expectedRevision?: string): string 
     throw new Error('fresh subject already contains Proof state');
   }
   return revision;
+}
+
+function assertRecoverySubject(subject: string): string {
+  const status = String(execFileSync('git', ['-C', subject, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}));
+  if (status.trim()) throw new Error('recovery subject checkout must remain clean before retry');
+  return String(execFileSync('git', ['-C', subject, 'rev-parse', '--verify', 'HEAD^{commit}'], {encoding: 'utf8'})).trim();
 }
 
 function gitObjectFormat(subject: string): 'sha1' | 'sha256' {
@@ -454,6 +534,159 @@ export async function loadOnboardingConfig(proof: string, subject: string, outpu
   return loadConfig(prepared, {strict: true});
 }
 
+type RecoveryRoots = Readonly<{
+  subject: string;
+  priorOutput: string;
+}>;
+
+type RecoveryBinding = Readonly<{
+  generationId: string;
+  componentId: string;
+  baselineCommit: string;
+  checkoutPath: string;
+  workItemClaimId: string;
+  checkoutClaimId: string;
+  authorClaimId: string;
+}>;
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function gitScalar(root: string, args: string[], label: string): string {
+  try {
+    return String(execFileSync('git', ['-C', root, ...args], {encoding: 'utf8'})).trim();
+  } catch {
+    throw new Error(label + ' is not a valid Git checkout');
+  }
+}
+
+function assertCleanGit(root: string, label: string): void {
+  const status = String(execFileSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}));
+  if (status.trim()) throw new Error(label + ' must have a clean Git tree');
+}
+
+function assertRecoveryInputClaim(
+  projection: any,
+  generation: any,
+  claimName: string,
+): any {
+  const claims = generation.activeInputClaimIds.map((id: string) => projection.claimsById[id]).filter(Boolean);
+  const matches = claims.filter((claim: any) => claim.claim === claimName && claim.active);
+  if (matches.length !== 1) throw new Error(`Recovery generation ${generation.nodeGenerationId} must have one active ${claimName} input`);
+  return matches[0];
+}
+
+/**
+ * Validate the immutable checkpoint projection and the retained native inputs
+ * before the retry API is allowed to append its retry events.
+ */
+export function validateRecoverySelection(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  retryGenerationIds: readonly string[],
+  roots: RecoveryRoots,
+  inventory: Json,
+): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]} {
+  const plan = compileClaimPlan(config);
+  const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  const projection: any = journal.getInstanceProjection();
+  const authority = inventory.authority && typeof inventory.authority === 'object' && !Array.isArray(inventory.authority)
+    ? inventory.authority as Json
+    : undefined;
+  if (!authority || typeof authority.project_id !== 'string' ||
+      typeof authority.subject_fingerprint !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(authority.subject_fingerprint)) {
+    throw new Error('Recovery Proof inventory did not provide a current authenticated project fingerprint');
+  }
+  assertCleanGit(roots.subject, 'recovery subject');
+  const subjectHead = gitScalar(roots.subject, ['rev-parse', '--verify', 'HEAD^{commit}'], 'recovery subject');
+  const worktreeRoot = path.join(roots.priorOutput, 'worktrees');
+  if (!fs.existsSync(worktreeRoot) || !fs.statSync(worktreeRoot).isDirectory()) {
+    throw new Error('prior output is missing its retained worktree root');
+  }
+  const retainedWorktreeRoot = fs.realpathSync(worktreeRoot);
+  const bindings: RecoveryBinding[] = [];
+  for (const generationId of retryGenerationIds) {
+    const generation = projection.generationsById[generationId];
+    if (!generation || generation.checkId !== 'promote-native-component' || generation.status !== 'failed' ||
+        !generation.scheduled || typeof generation.attemptId !== 'string' || typeof generation.fence !== 'number' ||
+        typeof generation.reason !== 'string' || generation.completedOutputClaimIds.length !== 0) {
+      throw new Error(`Recovery generation ${generationId} is not an eligible failed promotion leaf`);
+    }
+    if (Object.values(projection.instancesById).some((instance: any) =>
+      instance.status === 'active' && instance.parentSubgraphInstanceId === generation.subgraphInstanceId)) {
+      throw new Error(`Recovery generation ${generationId} still has active descendants`);
+    }
+    const claims = generation.activeInputClaimIds.map((id: string) => projection.claimsById[id]).filter(Boolean);
+    if (claims.length !== 3 || new Set(claims.map((claim: any) => claim.claim)).size !== 3) {
+      throw new Error(`Recovery generation ${generationId} has an unexpected promotion input set`);
+    }
+    const workItem = assertRecoveryInputClaim(projection, generation, 'component.prepared_work_item@1');
+    const checkout = assertRecoveryInputClaim(projection, generation, 'component.checkout@1');
+    const author = assertRecoveryInputClaim(projection, generation, 'native.author.evidence@1');
+    if (workItem.producerCheckId !== 'prepare-work-item' || checkout.producerCheckId !== 'checkout-worktree' ||
+        author.producerCheckId !== 'author-native-component' || !sameJson(workItem.scope, generation.scope) ||
+        !sameJson(checkout.scope, generation.scope) || !sameJson(author.scope, generation.scope)) {
+      throw new Error(`Recovery generation ${generationId} has mismatched native input provenance`);
+    }
+    const workItemPayload = workItem.payload && typeof workItem.payload === 'object' && !Array.isArray(workItem.payload)
+      ? workItem.payload as Json
+      : undefined;
+    if (!workItemPayload || typeof workItemPayload.component_id !== 'string' || !workItemPayload.component_id ||
+        typeof workItemPayload.baseline_commit !== 'string' || !/^[0-9a-f]{40,64}$/.test(workItemPayload.baseline_commit) ||
+        typeof workItemPayload.project_id !== 'string' || workItemPayload.project_id !== authority.project_id) {
+      throw new Error(`Recovery generation ${generationId} has an invalid or stale Proof WorkItem`);
+    }
+    const componentSubject = workItemPayload.proof_component_subject;
+    if (!componentSubject || typeof componentSubject !== 'object' || Array.isArray(componentSubject) ||
+        (componentSubject as Json).component_id !== workItemPayload.component_id ||
+        typeof (componentSubject as Json).fingerprint !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test((componentSubject as Json).fingerprint as string)) {
+      throw new Error(`Recovery generation ${generationId} has incomplete Proof component subject authority`);
+    }
+    const baselineCommit = workItemPayload.baseline_commit;
+    if (subjectHead !== baselineCommit) {
+      throw new Error(`Recovery subject HEAD does not match WorkItem baseline for ${workItemPayload.component_id}`);
+    }
+    const checkoutPayload = checkout.payload && typeof checkout.payload === 'object' && !Array.isArray(checkout.payload)
+      ? checkout.payload as Json
+      : undefined;
+    if (!checkoutPayload || checkoutPayload.success !== true || checkoutPayload.is_worktree !== true ||
+        typeof checkoutPayload.path !== 'string' || !path.isAbsolute(checkoutPayload.path) ||
+        typeof checkoutPayload.commit !== 'string' || checkoutPayload.commit !== baselineCommit ||
+        typeof checkoutPayload.worktree_id !== 'string' || checkoutPayload.worktree_id.length === 0) {
+      throw new Error(`Recovery generation ${generationId} has an invalid retained checkout binding`);
+    }
+    const checkoutPath = fs.realpathSync(checkoutPayload.path);
+    if (!inside(checkoutPath, retainedWorktreeRoot) || checkoutPath === retainedWorktreeRoot) {
+      throw new Error(`Recovery checkout for ${workItemPayload.component_id} is outside the retained worktree root`);
+    }
+    const checkoutGitRoot = realDirectory(gitRoot(checkoutPath), 'retained checkout Git root');
+    if (checkoutGitRoot !== checkoutPath ||
+        gitScalar(checkoutPath, ['rev-parse', '--verify', 'HEAD^{commit}'], 'retained checkout') !== baselineCommit) {
+      throw new Error(`Recovery retained checkout for ${workItemPayload.component_id} is not pinned to its WorkItem baseline`);
+    }
+    // Author checkouts intentionally retain their uncommitted native draft.
+    // Verify only the immutable Git identity here; promotion recovery owns the
+    // draft scope and must not clean or rewrite the retained worktree.
+    if (typeof checkoutPayload.repository === 'string') {
+      const repository = realDirectory(checkoutPayload.repository, 'retained checkout repository');
+      if (repository !== roots.subject) throw new Error(`Recovery checkout for ${workItemPayload.component_id} has a mismatched repository`);
+    }
+    bindings.push(Object.freeze({
+      generationId,
+      componentId: workItemPayload.component_id,
+      baselineCommit,
+      checkoutPath,
+      workItemClaimId: workItem.claimId,
+      checkoutClaimId: checkout.claimId,
+      authorClaimId: author.claimId,
+    }));
+  }
+  return {journal, bindings: Object.freeze(bindings)};
+}
+
 function summarizeCheckpoint(checkpoint: unknown): Json {
   if (!checkpoint || typeof checkpoint !== 'object') return {available: false};
   const events = Array.isArray((checkpoint as Json).events) ? (checkpoint as Json).events as Json[] : [];
@@ -523,6 +756,12 @@ export function countAuthoritativeMaterializedComponents(config: VisorConfig, ch
   return componentIds.length;
 }
 
+function writeCheckpoint(file: string, checkpoint: unknown): void {
+  const canonical = canonicalGraphCheckpointJson(checkpoint);
+  writeText(file, canonical + '\n');
+  JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
 export function summarizeNativePostflight(postflight: Json): NativePostflightSummary {
   const checkNames = ['requirements', 'validation', 'audit', 'checklist', 'status'];
   const open_native_checks = checkNames.flatMap(name => {
@@ -541,9 +780,218 @@ export function summarizeNativePostflight(postflight: Json): NativePostflightSum
   };
 }
 
+function historicalFailedAttempts(checkpoint: GraphJournalCheckpointV1): Json[] {
+  return (checkpoint.events as readonly Json[])
+    .filter(event => event.type === 'AttemptFailed')
+    .map(event => ({
+      attempt_id: event.attemptId,
+      generation_id: event.nodeGenerationId,
+      check_id: event.checkId,
+      reason: event.reason,
+    }));
+}
+
+function currentUnresolvedGenerations(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): Json[] {
+  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  const projection: any = journal.getInstanceProjection();
+  return Object.values(projection.generationsById)
+    .filter((generation: any) => generation.status === 'failed')
+    .map((generation: any) => ({
+      generation_id: generation.nodeGenerationId,
+      check_id: generation.checkId,
+      reason: generation.reason || null,
+      scope: generation.scope,
+    }));
+}
+
+async function runRecovery(
+  values: Record<string, string>,
+  roots: {subject: string; original: string; output: string},
+  proof: string,
+  timeout: number,
+  requestTimeout: number,
+  recovery: RecoveryArguments,
+): Promise<void> {
+  const priorOutput = realDirectory(required(values, 'prior-output'), 'prior recovery output');
+  if (inside(priorOutput, roots.subject) || inside(priorOutput, roots.original) || inside(priorOutput, roots.output)) {
+    throw new Error('prior recovery output must be disjoint from current subject, original, and output roots');
+  }
+  const checkpointPath = fs.realpathSync(path.resolve(required(values, 'recover-checkpoint')));
+  if (!fs.statSync(checkpointPath).isFile() || !inside(checkpointPath, priorOutput)) {
+    throw new Error('recover-checkpoint must be a file retained inside prior-output');
+  }
+  const checkpointBytes = fs.readFileSync(checkpointPath, 'utf8');
+  const checkpoint = JSON.parse(checkpointBytes) as unknown;
+  const validatedInput = ExecutionJournal.validateGraphCheckpointIntegrity(checkpoint);
+  const generationIds = [...recovery.retryGenerationIds];
+  const externalSideEffects = required(values, 'external-side-effects');
+  if (externalSideEffects !== 'absent' && externalSideEffects !== 'safely_idempotent') {
+    throw new Error('--external-side-effects must be absent or safely_idempotent');
+  }
+
+  const revision = assertRecoverySubject(roots.subject);
+  const objectFormat = gitObjectFormat(roots.subject);
+  const codex = assertPrivateCodexHome(roots.subject, roots.original, roots.output);
+  process.chdir(roots.subject);
+  if (fs.realpathSync(process.cwd()) !== roots.subject) throw new Error('runner cwd did not resolve to the validated recovery subject root');
+  const retainedWorktreeRoot = path.join(priorOutput, 'worktrees');
+  if (!fs.existsSync(retainedWorktreeRoot) || !fs.statSync(retainedWorktreeRoot).isDirectory()) {
+    throw new Error('prior recovery output is missing its retained worktrees directory');
+  }
+
+  process.env.VISOR_WORKSPACE_MAIN_PROJECT = roots.subject;
+  process.env.VISOR_ORIGINAL_WORKDIR = roots.original;
+  process.env.PROOF_BIN = proof;
+  process.env.NATIVE_ONBOARDING_OUTPUT_DIR = roots.output;
+  process.env.NATIVE_ONBOARDING_REPO_ROOT = REPO_ROOT;
+  process.env.NATIVE_ONBOARDING_TS_NODE = fs.realpathSync(require.resolve('ts-node/register/transpile-only'));
+  pinNativeOnboardingTsProject();
+  process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = retainedWorktreeRoot;
+  process.env.SUBJECT_BASELINE_REVISION = revision;
+  process.env.USE_CODEX = 'true';
+  process.env.DISABLE_FALLBACK = '1';
+  process.env.AUTO_FALLBACK = '0';
+  process.env.VISOR_DEBUG_AI_SESSIONS = 'false';
+  process.env.VISOR_TRACE_DIR = process.env.VISOR_TRACE_DIR || path.join(roots.output, 'traces');
+  const onPromptCaptured = configurePublicPromptCapture(path.join(roots.output, 'ai'));
+
+  const checkpointDigest = createHash('sha256').update(checkpointBytes, 'utf8').digest('hex');
+  writeText(path.join(roots.output, 'recovery', 'prior-checkpoint.json'), checkpointBytes);
+  JSON.parse(fs.readFileSync(path.join(roots.output, 'recovery', 'prior-checkpoint.json'), 'utf8'));
+  writeJson(path.join(roots.output, 'preflight.json'), {
+    status: 'recovery-launch-boundary-passed',
+    subject_root: roots.subject,
+    protected_original_root: roots.original,
+    subject_revision: revision,
+    proof_binary: proof,
+    request_timeout_ms: requestTimeout,
+    outer_timeout_ms: timeout,
+    prior_output: priorOutput,
+    recover_checkpoint: checkpointPath,
+    recover_checkpoint_sha256: `sha256:${checkpointDigest}`,
+    retry_generation_ids: generationIds,
+    external_side_effects: externalSideEffects,
+    object_format: objectFormat,
+    codex_home_is_private: true,
+    codex_home_config_present: codex.configPresent,
+    no_native_init_or_discovery: true,
+    note: 'Recovery restores one retained Graph-v2 prefix and explicitly retries only selected promotion leaves; failed authors and historical failures remain visible.',
+  });
+
+  const registry = CheckProviderRegistry.getInstance();
+  registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
+  const config = await loadOnboardingConfig(proof, roots.subject, roots.output, timeout);
+  const inventory = JSON.parse(fs.readFileSync(path.join(roots.output, 'preflight', 'inventory.json'), 'utf8')) as Json;
+  const authority = validateRecoverySelection(
+    config,
+    validatedInput,
+    generationIds,
+    {subject: roots.subject, priorOutput},
+    inventory,
+  );
+  writeJson(path.join(roots.output, 'recovery', 'selection.json'), {
+    session_id: checkpoint && typeof checkpoint === 'object' ? (checkpoint as Json).sessionId : undefined,
+    source_revision: revision,
+    failed_generations: authority.bindings,
+    prior_checkpoint_sha256: `sha256:${checkpointDigest}`,
+  });
+
+  const engine = new StateMachineExecutionEngine(roots.subject);
+  engine.setExecutionContext({hooks: {onPromptCaptured}});
+  let resumed: Awaited<ReturnType<StateMachineExecutionEngine['retryGraphCheckpoint']>>;
+  try {
+    resumed = await engine.retryGraphCheckpoint({
+      checkpoint: validatedInput,
+      config,
+      prInfo: PR,
+      retryGenerationIds: generationIds,
+      externalSideEffects: externalSideEffects as 'absent' | 'safely_idempotent',
+      onRetryCheckpoint: retryCheckpoint => writeCheckpoint(path.join(roots.output, 'recovery', 'retry-prefix-checkpoint.json'), retryCheckpoint),
+      maxParallelism: config.max_parallelism,
+      failFast: false,
+    });
+  } catch (error) {
+    // The engine callback persists the retry prefix before dispatch. Keep the
+    // source checkpoint and selection receipt available if later resume fails.
+    throw error;
+  }
+  writeCheckpoint(path.join(roots.output, 'checkpoint.json'), resumed.checkpoint);
+  writeJson(path.join(roots.output, 'visor-result.json'), resumed.result);
+  const unresolved = currentUnresolvedGenerations(config, resumed.checkpoint);
+  const finalProjection: any = ExecutionJournal.restoreGraphCheckpoint(
+    compileClaimPlan(config), resumed.checkpoint,
+  ).getInstanceProjection();
+  const recoveredRetryGenerations = generationIds.map(generationId => ({
+    generation_id: generationId,
+    status: finalProjection.generationsById[generationId]?.status || 'missing',
+  }));
+  const selectedStillFailed = recoveredRetryGenerations
+    .filter(generation => generation.status === 'failed')
+    .map(generation => generation.generation_id);
+
+  const postflight: Json = {};
+  for (const [name, args] of Object.entries({
+    requirements: ['req', 'list', '--format', 'json'],
+    validation: ['validate', '--variable-drift', '--format', 'json'],
+    audit: ['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json'],
+    checklist: ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'],
+    status: ['status', '--format', 'json'],
+  })) {
+    const run = runProof(proof, roots.subject, roots.output, 'postflight', args, timeout);
+    postflight[name] = {exit_code: run.status, stdout_file: 'commands/postflight/' + commandName(args) + '.stdout', stderr_file: 'commands/postflight/' + commandName(args) + '.stderr'};
+  }
+  writeJson(path.join(roots.output, 'postflight.json'), postflight);
+  const postflightSummary = summarizeNativePostflight(postflight);
+  const summary = {
+    status: postflightSummary.hard_failures.length > 0
+      ? 'recovery-retry-failed-postflight'
+      : selectedStillFailed.length > 0
+        ? 'recovery-retry-failed'
+        : unresolved.length > 0
+          ? 'recovery-retry-complete-with-unresolved-generations'
+          : 'recovery-retry-complete-open-admission-boundary',
+    mode: 'explicit-failed-generation-retry',
+    prior_checkpoint: {
+      path: checkpointPath,
+      sha256: `sha256:${checkpointDigest}`,
+      event_count: ((checkpoint as Json).events as unknown[]).length,
+      immutable_prefix_preserved: true,
+    },
+    retry: {
+      generation_ids: generationIds,
+      side_effect_confirmation: externalSideEffects,
+      prefix_checkpoint: 'recovery/retry-prefix-checkpoint.json',
+      resumed_checkpoint: 'checkpoint.json',
+    },
+    historical_failed_attempts: historicalFailedAttempts(validatedInput),
+    final_checkpoint: summarizeCheckpoint(resumed.checkpoint),
+    current_unresolved_failed_generations: unresolved,
+    recovered_retry_generations: recoveredRetryGenerations,
+    open_native_checks: postflightSummary.open_native_checks,
+    admitted: 'No component admission or full onboarding success is claimed by retry mode.',
+    output: roots.output,
+  };
+  writeJson(path.join(roots.output, 'summary.json'), summary);
+  if (postflightSummary.hard_failures.length > 0 || selectedStillFailed.length > 0 || unresolved.length > 0) {
+    console.error(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
+    process.exitCode = 1;
+    return;
+  }
+  console.log(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
+}
+
 async function main(): Promise<void> {
   const values = parseArgs(process.argv.slice(2));
-  const roots = assertRoots(required(values, 'subject-root'), required(values, 'original-root'), required(values, 'output'));
+  const recovery = parseRecoveryArguments(values);
+  const roots = recovery
+    ? assertRecoveryRoots(
+      required(values, 'subject-root'),
+      required(values, 'original-root'),
+      required(values, 'output'),
+      recovery.priorOutput,
+      recovery.checkpoint,
+    )
+    : assertRoots(required(values, 'subject-root'), required(values, 'original-root'), required(values, 'output'));
   diagnosticOutput = roots.output;
   const proof = executable(required(values, 'proof-bin'));
   const timeout = values.timeout ? Number(values.timeout) : DEFAULT_TIMEOUT_MS;
@@ -551,6 +999,10 @@ async function main(): Promise<void> {
   const requestTimeout = Number(process.env.REQUEST_TIMEOUT || '');
   if (!Number.isSafeInteger(requestTimeout) || requestTimeout < 1000 || requestTimeout >= timeout) {
     throw new Error('REQUEST_TIMEOUT must be an explicit positive inner budget smaller than --timeout');
+  }
+  if (recovery) {
+    await runRecovery(values, roots, proof, timeout, requestTimeout, recovery);
+    return;
   }
   const revision = assertFreshSubject(roots.subject, process.env.SUBJECT_BASELINE_REVISION);
   const objectFormat = gitObjectFormat(roots.subject);

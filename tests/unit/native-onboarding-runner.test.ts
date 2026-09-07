@@ -6,8 +6,10 @@ import {execFileSync, spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import {
   assertPrivateCodexHome,
+  assertRecoveryRoots,
   commitInitializedProofBaseline,
   configurePublicPromptCapture,
+  parseRecoveryArguments,
   serializeRoleInvocation,
   summarizeNativePostflight,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
@@ -206,6 +208,91 @@ describe('native onboarding runner boundaries', () => {
     expect(result.stderr).toContain('REQUEST_TIMEOUT must be an explicit positive inner budget');
     expect(result.stderr).not.toContain('ReferenceError');
     expect(fs.existsSync(output)).toBe(true);
+  });
+
+  it('requires a complete sorted explicit recovery selection', () => {
+    expect(parseRecoveryArguments({})).toBeUndefined();
+    expect(() => parseRecoveryArguments({
+      'recover-checkpoint': '/tmp/checkpoint.json',
+    })).toThrow(/supplied together/);
+    expect(() => parseRecoveryArguments({
+      'recover-checkpoint': '/tmp/checkpoint.json',
+      'prior-output': '/tmp/prior',
+      'retry-generations': 'b'.repeat(64) + ',' + 'a'.repeat(64),
+    })).toThrow(/sorted and unique/);
+    expect(parseRecoveryArguments({
+      'recover-checkpoint': '/tmp/checkpoint.json',
+      'prior-output': '/tmp/prior',
+      'retry-generations': 'a'.repeat(64) + ',' + 'b'.repeat(64),
+    })).toEqual({
+      checkpoint: '/tmp/checkpoint.json',
+      priorOutput: '/tmp/prior',
+      retryGenerationIds: ['a'.repeat(64), 'b'.repeat(64)],
+    });
+  });
+
+  it('allows an initialized recovery subject but keeps checkpoint and output roots bounded', () => {
+    const subject = path.join(root, 'recovery-subject');
+    const original = path.join(root, 'recovery-original');
+    const prior = path.join(root, 'recovery-prior');
+    fs.mkdirSync(subject);
+    fs.mkdirSync(original);
+    fs.mkdirSync(path.join(prior, 'worktrees'), {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['init', '--quiet', original]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'proof.yaml'), 'project:\n  name: initialized\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', 'proof.yaml']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'initialized recovery fixture']);
+    const checkpoint = path.join(prior, 'checkpoint.json');
+    fs.writeFileSync(checkpoint, '{}\n', 'utf8');
+
+    const roots = assertRecoveryRoots(subject, original, path.join(root, 'recovery-output'), prior, checkpoint);
+    expect(roots.subject).toBe(fs.realpathSync(subject));
+    expect(roots.priorOutput).toBe(fs.realpathSync(prior));
+    expect(fs.existsSync(roots.output)).toBe(true);
+    expect(() => assertRecoveryRoots(subject, original, path.join(prior, 'nested-output'), prior, checkpoint))
+      .toThrow(/outside subject, protected original, and prior output/);
+  });
+
+  it('rejects an invalid checkpoint before Proof init or any command dispatch', () => {
+    const subject = path.join(root, 'recovery-cli-subject');
+    const original = path.join(root, 'recovery-cli-original');
+    const prior = path.join(root, 'recovery-cli-prior');
+    const output = path.join(root, 'recovery-cli-output');
+    const home = path.join(root, 'recovery-cli-home');
+    const proof = path.join(root, 'recovery-cli-proof');
+    const marker = path.join(root, 'proof-invoked');
+    for (const directory of [subject, original, home, path.join(prior, 'worktrees')]) fs.mkdirSync(directory, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['init', '--quiet', original]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'proof.yaml'), 'project:\n  name: already-initialized\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', 'proof.yaml']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'initialized recovery CLI fixture']);
+    fs.writeFileSync(path.join(prior, 'checkpoint.json'), '{}\n', 'utf8');
+    fs.writeFileSync(path.join(home, 'config.toml'), 'model = "gpt-5.6-luna"\n', 'utf8');
+    fs.writeFileSync(proof, `#!/bin/sh\nprintf invoked > ${marker}\n`, 'utf8');
+    fs.chmodSync(proof, 0o755);
+    const subjectProof = fs.readFileSync(path.join(subject, 'proof.yaml'), 'utf8');
+    const runner = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/run-onboarding.ts');
+    const env = {...process.env, CODEX_HOME: home, REQUEST_TIMEOUT: '1000', TS_NODE_TRANSPILE_ONLY: '1'};
+    delete env.USE_CLAUDE_CODE;
+    delete env.ANTHROPIC_API_KEY;
+    delete env.OPENAI_API_KEY;
+    delete env.OPENAI_BASE_URL;
+    const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner,
+      '--recover-checkpoint', path.join(prior, 'checkpoint.json'), '--prior-output', prior,
+      '--retry-generations', 'a'.repeat(64), '--external-side-effects', 'absent',
+      '--subject-root', subject, '--original-root', original, '--proof-bin', proof,
+      '--output', output, '--timeout', '2000'], {encoding: 'utf8', env});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/Checkpoint/);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.existsSync(path.join(output, 'commands'))).toBe(false);
+    expect(fs.readFileSync(path.join(subject, 'proof.yaml'), 'utf8')).toBe(subjectProof);
   });
 
   it('documents the Proof inventory path contract in both discovery schemas', () => {
