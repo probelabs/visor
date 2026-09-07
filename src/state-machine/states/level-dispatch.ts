@@ -267,6 +267,30 @@ function protocolFailure(
   return error instanceof ManagedRunProtocolError ? error.code : fallback;
 }
 
+const MANAGED_START_GENERIC_DETAIL = 'provider-start-error';
+const MANAGED_START_SAFE_MESSAGES = new Set([
+  'PROOF_CATALOG_INVALID: discovery candidate is not the closed Proof catalog schema',
+  'PROOF_CATALOG_INVALID: catalog revalidation catalog is invalid',
+  'PROOF_ADMISSION_INVALID: catalog revalidation receipt identity fields are invalid',
+  'INVALID_PARENT_CLAIMS: Selected component set is incomplete, foreign, or stale',
+  'INVALID_PROOF_RECONCILIATION: project reconciliation component set does not close the parent barrier',
+]);
+
+/**
+ * Keep synchronous provider-start diagnostics useful without turning the
+ * public console into a second request/credential channel.  The protocol
+ * failure remains the stable MANAGED_START_FAILED code; this text is only a
+ * bounded, best-effort log detail.
+ */
+function safeManagedStartFailureDetail(error: unknown): string {
+  try {
+    if (error instanceof Error && typeof error.message === 'string' && MANAGED_START_SAFE_MESSAGES.has(error.message)) {
+      return error.message;
+    }
+  } catch {}
+  return MANAGED_START_GENERIC_DETAIL;
+}
+
 function validateManagedCleanup(
   snapshot: ManagedRunSnapshot,
   close: PromiseSettledResult<unknown>
@@ -3489,6 +3513,7 @@ async function executeSingleCheck(
         failAcquisition('MANAGED_DEBOUNCE_UNSUPPORTED');
       }
 
+      let managedStartFailureDetail: string | undefined;
       const snapshot = (() => {
         try {
           return snapshotManagedRun(
@@ -3517,10 +3542,21 @@ async function executeSingleCheck(
                 }
                 : {}),
             })),
-            binding
+            binding,
+            error => { managedStartFailureDetail = safeManagedStartFailureDetail(error); },
           );
         } catch (error) {
           const code = protocolFailure(error, 'MANAGED_HANDLE_INVALID');
+          if (code === 'MANAGED_START_FAILED' && managedStartFailureDetail) {
+            try {
+              logger.error(JSON.stringify({
+                event: 'managed_start_failed',
+                check_id: checkId,
+                failure_code: code,
+                detail: managedStartFailureDetail,
+              }));
+            } catch {}
+          }
           return failAcquisition(
             code === 'MANAGED_START_FAILED' ||
               code === 'MANAGED_BINDING_MISMATCH' ||

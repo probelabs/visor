@@ -600,7 +600,7 @@ function candidateComponents(value: unknown, projectID?: string): readonly Plain
   // the cross-product graph wire is closed and always includes it.
   if (!exact(value, keys) || value.version !== COMPONENT_CATALOG_CANDIDATE_VERSION ||
       (projectID !== undefined && value.project_id !== projectID) || !Array.isArray(value.components) ||
-      value.components.length < 2 || value.components.length > 4) invalid('discovery candidate is not the closed Proof catalog schema');
+      value.components.length === 0) invalid('discovery candidate is not the closed Proof catalog schema');
   const ids = new Set<string>();
   return value.components.map((component, index) => {
     const componentKeys = ['id', 'responsibility', 'owned_paths', 'dependency_closure', 'entry_points', 'state_effects', 'interfaces', 'uncertainty'];
@@ -708,7 +708,7 @@ function sameStringSet(left: readonly string[], right: readonly string[]): boole
 function projectedCatalog(value: unknown, projectID: string): PlainRecord {
   if (!plain(value) || !exact(value, ['version', 'project_id', 'components']) ||
       value.version !== COMPONENT_CATALOG_CANDIDATE_VERSION || value.project_id !== projectID ||
-      !Array.isArray(value.components) || value.components.length < 2 || value.components.length > 4) {
+      !Array.isArray(value.components) || value.components.length === 0) {
     invalid('catalog revalidation catalog is invalid');
   }
   const ids = new Set<string>();

@@ -2381,7 +2381,7 @@ export class ExecutionJournal {
         workItemDigest,
       };
     });
-    if (components.length < 2 || components.length > 4 ||
+    if (components.length === 0 ||
         canonicalJson(components.map(component => component.admission.claimId).sort()) !== canonicalJson([...parentIds].filter(claimId => claimId !== revalidation.claimId).sort())) {
       reconciliationFailure('project reconciliation component set does not close the parent barrier');
     }

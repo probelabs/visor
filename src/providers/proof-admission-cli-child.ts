@@ -356,7 +356,7 @@ export function proofCatalogRevalidationReceiptIdentityJson(value: unknown): str
       !/^sha256:[0-9a-f]{64}$/.test(String(receipt.admission_result_digest)) ||
       !/^sha256:[0-9a-f]{64}$/.test(String(receipt.admission_receipt_id)) ||
       !(receipt.receipt_id === '' || /^sha256:[0-9a-f]{64}$/.test(String(receipt.receipt_id))) ||
-      !Array.isArray(receipt.component_authorities) || receipt.component_authorities.length < 2 || receipt.component_authorities.length > 4) {
+      !Array.isArray(receipt.component_authorities) || receipt.component_authorities.length === 0) {
     fail('catalog revalidation receipt identity fields are invalid');
   }
   for (const [index, authority] of receipt.component_authorities.entries()) {

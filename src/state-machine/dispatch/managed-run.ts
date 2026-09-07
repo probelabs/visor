@@ -347,13 +347,15 @@ function readHandleMembers(value: unknown): CapturedHandleMembers {
  */
 export function snapshotManagedRun(
   start: () => ManagedAgentRun,
-  expectedBinding: ManagedRunBindingV1
+  expectedBinding: ManagedRunBindingV1,
+  onSynchronousStartFailure?: (error: unknown) => void
 ): ManagedRunSnapshot {
   const binding = normalizeBinding(expectedBinding, 'MANAGED_BINDING_MISMATCH');
   let returned: unknown;
   try {
     returned = start();
-  } catch {
+  } catch (error) {
+    try { onSynchronousStartFailure?.(error); } catch { /* diagnostics never alter the protocol result */ }
     throw protocolError('MANAGED_START_FAILED');
   }
 

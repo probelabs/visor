@@ -908,7 +908,7 @@ export function deriveProofProjectReconciliationParentClaimIds(
 
   const children = Object.values(projection.instancesById).filter(instance =>
     instance.status === 'active' && instance.parentSubgraphInstanceId === project.subgraphInstanceId);
-  if (children.length < 2 || children.length > 4 ||
+  if (children.length === 0 ||
       new Set(children.map(child => child.itemKey)).size !== children.length ||
       children.some(child => child.catalogClaimId !== catalog.claimId ||
         child.catalogProducerNodeGenerationId !== catalogGeneration.nodeGenerationId ||

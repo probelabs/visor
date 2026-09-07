@@ -202,6 +202,98 @@ function fixture() {
   return { inventory: inventoryClaim, candidate, admission, revalidation };
 }
 
+/** Keep the natural-count regression on the same exact Proof wire recipe as
+ * the three-component fixture above.  Only the component set changes; all
+ * admission, receipt, WorkItem, and authority identities are recomputed. */
+function naturalCountFixture(ids: readonly string[]) {
+  const components = ids.map((id, index) => {
+    const path = `${id}.go`;
+    const hashDigit = String(index + 4);
+    return {
+      id,
+      path,
+      hashDigit,
+      catalog: { id, responsibility: `${id} component`, owned_paths: [path], dependency_closure: [path] },
+    };
+  });
+  const ordered = [...components].sort((left, right) => compareProofStrings(left.path, right.path));
+  const inventoryPayload = {
+    version: 'proof.structural-inventory/v1',
+    authority: {
+      version: 'proof.project-authority/v1', project_id: 'journalservice',
+      subject_fingerprint: `sha256:${'1'.repeat(64)}`, code_fingerprint: `sha256:${'2'.repeat(64)}`, tests_fingerprint: `sha256:${'3'.repeat(64)}`,
+    },
+    sorted_paths: ordered.map(item => item.path), sorted_module_paths: [], boundary_fingerprint: `sha256:${'8'.repeat(64)}`,
+    input_state: ordered.map(item => ({
+      owner_kind: 'onboarding_structural_inventory', owner_id: 'journalservice', input_kind: 'code',
+      path: item.path, file_hash: `sha256:${item.hashDigit.repeat(64)}`,
+    })),
+  };
+  const inventoryClaim = makeClaim('proof.structural_inventory@1', inventoryPayload, 'structural_inventory');
+  const candidatePayloadValue = {
+    version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice',
+    components: components.map(item => ({ ...item.catalog })),
+  };
+  const evidence = candidateEvidence(candidatePayloadValue);
+  const candidateBase = makeClaim('proof.candidate@1', candidatePayloadValue, 'inspect', [inventoryClaim.claimId]);
+  const candidate = immutableProofCanonicalValue({
+    ...candidateBase,
+    proofAdmission: evidence,
+    claimId: sha256Canonical({
+      claim: candidateBase.claim,
+      payloadFingerprint: candidateBase.payloadFingerprint,
+      producerCheckId: candidateBase.producerCheckId,
+      scope: candidateBase.scope,
+      attemptId: candidateBase.attemptId,
+      fence: candidateBase.fence,
+      parentClaimIds: [...candidateBase.parentClaimIds].sort(),
+      proofCandidateEvidenceFingerprint: sha256Canonical(evidence),
+    }),
+  }) as CandidateClaimInput;
+  const binding = { ManagedRunID: 'a'.repeat(64), SessionID: 'session', CheckID: 'inspect', Scope: [{ Kind: 'keyed', ExpansionOwnerCheck: 'project', Key: 'journalservice', SubgraphInstanceID: 'a'.repeat(64) }], NodeInstanceID: 'b'.repeat(64), NodeGenerationID: 'c'.repeat(64), AttemptID: 'd'.repeat(64), Fence: 1 };
+  const termination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: 'session', Scope: binding.Scope, Binding: binding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
+  const candidateText = proofCanonicalJson(candidate.payload);
+  const admissionReceipt: Record<string, unknown> = {
+    Version: 'proof.role-result-candidate-admission/v2', Status: 'ADMITTED',
+    CandidateID: encodedDigest('proof.role-result-candidate-envelope/id/v1', candidateText),
+    ProbeResultDigest: encodedDigest('probe.governed-result-identity/data/v1', candidateText), ProbeCanonicalBytes: Buffer.byteLength(candidateText),
+    ClaimID: candidate.claimId, Claim: candidate.claim, PayloadFingerprint: candidate.payloadFingerprint, InvocationDigest: `sha256:${'b'.repeat(64)}`,
+    RoleID: 'onboard', Stance: 'owner', Subject: { kind: 'project', id: 'journalservice', fingerprint: `sha256:${'1'.repeat(64)}` },
+    ProducerCheckID: 'inspect', ParentClaimIDs: candidate.parentClaimIds, Binding: binding, Termination: termination, ProjectLineage: null, receipt_id: '',
+  };
+  admissionReceipt.receipt_id = admissionID(admissionReceipt);
+  const admissionWire = canonicalJson({ version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt: admissionReceipt, reject_code: null });
+  const admission = makeClaim('proof.admitted_receipt@1', { ...admissionReceipt, __proof_admission_wire: admissionWire }, 'proof_admit', [candidate.claimId]);
+  const catalog = {
+    version: 'proof.component-catalog-candidate/v1', project_id: 'journalservice',
+    components: ordered.map(item => ({ ...item.catalog })),
+  };
+  const workItems = ordered.map(item => workItem(item.id, item.path, item.hashDigit));
+  const authorities = workItems.map(item => ({ component_id: item.component_id, work_item_digest: plainDigest({
+    version: item.version, project_id: item.project_id, component_id: item.component_id, sorted_owned_paths: item.sorted_owned_paths,
+    sorted_dependency_closure: item.sorted_dependency_closure, proof_path_mapping: item.proof_path_mapping,
+    proof_input_state: item.proof_input_state, proof_component_subject: item.proof_component_subject,
+  }), subject: item.proof_component_subject }));
+  const inventoryWire = {
+    version: inventoryPayload.version, authority: inventoryPayload.authority, sorted_paths: inventoryPayload.sorted_paths,
+    sorted_module_paths: inventoryPayload.sorted_module_paths, boundary_fingerprint: inventoryPayload.boundary_fingerprint, input_state: inventoryPayload.input_state,
+  };
+  const receiptUnsigned = {
+    version: 'proof.catalog-revalidation-receipt/v2', decision: 'accepted', project_id: 'journalservice', project_fingerprint: (inventoryPayload.authority as any).subject_fingerprint,
+    boundary_fingerprint: inventoryPayload.boundary_fingerprint, inventory_claim_id: domainDigest('proof.structural-inventory/claim/v1', inventoryWire),
+    catalog_claim_id: encodedDigest('proof.component-catalog-candidate/claim/v1', proofCanonicalJson(candidate.payload)), admission_candidate_id: admissionReceipt.CandidateID,
+    admission_result_digest: admissionReceipt.ProbeResultDigest, admission_receipt_id: admissionReceipt.receipt_id, component_authorities: authorities,
+    project_lineage: null, receipt_id: '',
+  };
+  const receipt = { ...receiptUnsigned, receipt_id: receiptID(receiptUnsigned) };
+  const revalidationPayload = { version: 'proof.catalog-revalidation/v2', inventory: inventoryPayload, catalog, work_items: workItems, receipt };
+  const revalidationBase = makeClaim('proof.catalog_revalidation@1', revalidationPayload, 'revalidate_catalog', [inventoryClaim.claimId, candidate.claimId, admission.claimId]);
+  const revalidation = immutableProofCanonicalValue({
+    ...revalidationBase, payload: revalidationPayload, payloadFingerprint: proofPayloadFingerprint(revalidationPayload), wireMode: 'proof' as const,
+  }) as CandidateClaimInput;
+  return { inventory: inventoryClaim, candidate, admission, revalidation };
+}
+
 function genericCandidateFromFixture(value: any): { candidate: any; evidence: any } {
   const genericEvidence = {
     ...value.candidate.proofAdmission,
@@ -367,6 +459,60 @@ describe('proof-admitted catalog egress', () => {
     expect(['a', 'B'].sort(compareProofStrings)).toEqual(['B', 'a']);
     const value = fixture();
     expect(() => validateProofCatalogRevalidationProjection(value.revalidation.payload, value.inventory.payload as any, value.candidate, value.admission, 'journalservice', value.revalidation, value.inventory.claimId)).not.toThrow();
+  });
+
+  it.each([
+    ['N=1', ['core-parser']],
+    ['N=5', ['benchmark-codec-adapters', 'benchmark-workloads', 'byte-conversion', 'core-parser', 'escape-decoder']],
+  ] as const)('accepts natural component count %s through revalidation and current-authority materialization', (_label, ids) => {
+    const value: any = naturalCountFixture(ids);
+    expect(() => validateProofCatalogRevalidationProjection(
+      value.revalidation.payload, value.inventory.payload, value.candidate, value.admission,
+      'journalservice', value.revalidation, value.inventory.claimId,
+    )).not.toThrow();
+
+    const revalidation = value.revalidation.payload;
+    const workItems = {
+      version: 'proof.onboarding-work-item-projection/v1',
+      authority: revalidation.inventory.authority,
+      catalog: revalidation.catalog,
+      work_items: revalidation.work_items,
+    };
+    const identity = proofCatalogRevalidationReceiptIdentityJson(revalidation.receipt);
+    expect(identity).toContain('"component_authorities"');
+    expect(proofCatalogRevalidationReceiptIdentityJson(revalidation.receipt)).toBe(identity);
+    const result = validateProofCurrentCatalogAuthorityBytes({
+      revalidationBytesBase64: Buffer.from(proofCanonicalJson(revalidation), 'utf8').toString('base64'),
+      workItemsBytesBase64: Buffer.from(proofCanonicalJson(workItems), 'utf8').toString('base64'),
+      candidate: value.candidate,
+      admission: value.admission,
+    });
+    expect(result.components.map(component => component.componentId)).toEqual([...ids].sort(compareProofStrings));
+    expect(result.workItems.work_items.map((item: any) => item.component_id)).toEqual([...ids].sort(compareProofStrings));
+    expect((revalidation.receipt.component_authorities as any[])).toHaveLength(ids.length);
+    expect((revalidation.receipt.component_authorities as any[]).map(authority => authority.component_id)).toEqual([...ids].sort(compareProofStrings));
+  });
+
+  it('rejects an empty natural component catalog before any receipt or materialization authority is accepted', () => {
+    const value: any = naturalCountFixture([]);
+    expect(() => proofCatalogRevalidationReceiptIdentityJson(value.revalidation.payload.receipt)).toThrow(/authority|invalid/i);
+    expect(() => validateProofCatalogRevalidationProjection(
+      value.revalidation.payload, value.inventory.payload, value.candidate, value.admission,
+      'journalservice', value.revalidation, value.inventory.claimId,
+    )).toThrow(/catalog|candidate/i);
+    const revalidation = value.revalidation.payload;
+    const workItems = {
+      version: 'proof.onboarding-work-item-projection/v1',
+      authority: revalidation.inventory.authority,
+      catalog: revalidation.catalog,
+      work_items: revalidation.work_items,
+    };
+    expect(() => validateProofCurrentCatalogAuthorityBytes({
+      revalidationBytesBase64: Buffer.from(proofCanonicalJson(revalidation), 'utf8').toString('base64'),
+      workItemsBytesBase64: Buffer.from(proofCanonicalJson(workItems), 'utf8').toString('base64'),
+      candidate: value.candidate,
+      admission: value.admission,
+    })).toThrow(/catalog|candidate/i);
   });
 
   it('derives onboarding eligibility from attested invocation evidence', () => {

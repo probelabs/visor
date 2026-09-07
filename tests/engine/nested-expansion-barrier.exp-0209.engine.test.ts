@@ -52,6 +52,8 @@ describe('EXP-0209 nested expansion completion barrier', () => {
   let childCVerifyStarted: ReturnType<typeof deferred>;
   let releaseChildCVerify: ReturnType<typeof deferred>;
   let calls: string[];
+  let expandedChildKeys: string[];
+  let heldChildKey: string;
 
   class ControlledNoopProvider extends CheckProvider {
     getName() { return 'noop'; }
@@ -75,12 +77,12 @@ describe('EXP-0209 nested expansion completion barrier', () => {
         return { issues: [], output: { projects: [{ id: 'P' }] } };
       }
       if (checkId === 'materialize') {
-        return { issues: [], output: { children: [{ id: 'A' }, { id: 'B' }, { id: 'C' }] } };
+        return { issues: [], output: { children: expandedChildKeys.map(id => ({ id })) } };
       }
       if (checkId === 'inspect') {
         return { issues: [], output: { id: childKey, stage: checkId } };
       }
-      if (checkId === 'verify' && childKey === 'C') {
+      if (checkId === 'verify' && childKey === heldChildKey) {
         childCVerifyStarted.resolve();
         await releaseChildCVerify.promise;
       }
@@ -93,6 +95,8 @@ describe('EXP-0209 nested expansion completion barrier', () => {
     childCVerifyStarted = deferred();
     releaseChildCVerify = deferred();
     calls = [];
+    expandedChildKeys = ['A', 'B', 'C'];
+    heldChildKey = 'C';
     registry.unregister('noop');
     registry.register(new ControlledNoopProvider());
   });
@@ -240,5 +244,55 @@ describe('EXP-0209 nested expansion completion barrier', () => {
     expect(() => ExecutionJournal.restoreGraphCheckpoint(context.claimPlan, omittedChildAndJoin)).toThrow(
       /Wait barrier .* has an incomplete catalog child selection/,
     );
+  });
+
+  it('accepts a five-child expansion barrier and restores its complete child set', async () => {
+    expandedChildKeys = ['benchmark-codec-adapters', 'benchmark-workloads', 'byte-conversion', 'core-parser', 'escape-decoder'];
+    heldChildKey = '__no-held-child__';
+    const run = engine.executeGroupedChecks(prInfo, ['discover'], undefined, fixtureConfig(), 'table', false, 5);
+    await run;
+
+    const context = (engine as any)._lastContext;
+    const journal = context.journal as ExecutionJournal;
+    const projection = journal.getInstanceProjection();
+    const project = Object.values(projection.instancesById).find((instance: any) => instance.itemKey === 'P' && instance.scope.length === 1) as any;
+    expect(project).toBeDefined();
+    const children = Object.values(projection.instancesById).filter((instance: any) =>
+      (instance as any).parentSubgraphInstanceId === project.subgraphInstanceId);
+    expect(children).toHaveLength(expandedChildKeys.length);
+    expect(children.map((instance: any) => instance.itemKey).sort()).toEqual([...expandedChildKeys].sort());
+    expect(new Set(children.map((instance: any) => instance.subgraphInstanceId)).size).toBe(expandedChildKeys.length);
+    expect(Object.values(projection.generationsById).filter((generation: any) =>
+      generation.templateNodeKey === 'verify' && generation.status === 'completed')).toHaveLength(expandedChildKeys.length);
+
+    const joinNodeId = project.nodeInstanceIdsByTemplateNode.join;
+    const joinGenerationId = projection.activeGenerationIdByNode[joinNodeId];
+    expect(joinGenerationId).toBeDefined();
+    expect(projection.generationsById[joinGenerationId!].status).toBe('completed');
+    expect(projection.generationsById[joinGenerationId!].expansionBarrierDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(calls.filter(call => call.startsWith('join:'))).toEqual(['join:P']);
+
+    const childStates: ExpansionBarrierChildState[] = expandedChildKeys.map(itemKey => ({
+      itemKey,
+      workItemFingerprint: `fingerprint-${itemKey}`,
+      terminalGenerationId: `generation-${itemKey}`,
+      terminalGenerationStatus: 'completed',
+      nestedCatalogClaimId: 'catalog-1',
+      nestedCatalogProducerGenerationId: 'materialize-generation-1',
+    }));
+    const barrierIdentity = {
+      expansionOwnerCheck: 'project.materialize',
+      terminalNode: 'verify',
+      nestedExpansionSpecDigest: 'expansion-spec-1',
+      nestedTemplateDigest: 'child-template-1',
+      nestedCatalogClaimId: 'catalog-1',
+    };
+    expect(deriveExpansionBarrierDigest({ ...barrierIdentity, children: childStates }))
+      .toBe(deriveExpansionBarrierDigest({ ...barrierIdentity, children: [...childStates].reverse() }));
+
+    const checkpoint = journal.exportGraphCheckpoint(context.sessionId);
+    const restored = ExecutionJournal.restoreGraphCheckpoint(context.claimPlan, checkpoint);
+    expect(restored.getInstanceProjection()).toEqual(projection);
+    expect(journal.replayInstanceProjection()).toEqual(projection);
   });
 });

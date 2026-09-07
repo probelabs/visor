@@ -49,6 +49,7 @@ import type { ReviewSummary } from '../../src/reviewer';
 import type { VisorConfig } from '../../src/types/config';
 import { SandboxManager } from '../../src/sandbox/sandbox-manager';
 import { EventBus } from '../../src/event-bus/event-bus';
+import { logger } from '../../src/logger';
 import * as traceHelpers from '../../src/telemetry/trace-helpers';
 import * as ndjsonTelemetry from '../../src/telemetry/fallback-ndjson';
 import * as managedRunHelpers from '../../src/state-machine/dispatch/managed-run';
@@ -89,6 +90,8 @@ function resetObservableModuleMocks(): void {
 const MANAGED_PROVIDER = 'exp-0123-managed';
 const LEGACY_PROVIDER = 'exp-0123-legacy';
 const NON_GOVERNED_PROVIDER = 'exp-0123-non-governed-candidate';
+const ALLOWLISTED_CATALOG_START_ERROR =
+  'PROOF_CATALOG_INVALID: discovery candidate is not the closed Proof catalog schema';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -285,6 +288,8 @@ function setManagedTimeout(config: VisorConfig, timeout: number): void {
 type AcquisitionMode =
   | 'valid'
   | 'throw'
+  | 'throw-catalog'
+  | 'throw-opaque'
   | 'thenable'
   | 'throwing-getter'
   | 'null'
@@ -434,6 +439,12 @@ describe('EXP-0123 managed graph-run ownership', () => {
       startManagedCalls++;
       observationLane?.push(`provider:start:${keyOf(request)}`);
       if (acquisitionMode === 'throw') throw new Error('RAW_START_SECRET');
+      if (acquisitionMode === 'throw-catalog') throw new Error(ALLOWLISTED_CATALOG_START_ERROR);
+      if (acquisitionMode === 'throw-opaque') {
+        const error = new Error('sk-live-value /private/path');
+        error.name = 'CustomProviderStartFailure';
+        throw error;
+      }
       if (acquisitionMode === 'thenable') {
         return Promise.resolve({}) as unknown as ManagedAgentRun;
       }
@@ -1806,6 +1817,109 @@ describe('EXP-0123 managed graph-run ownership', () => {
     expect(activeHandles).toBe(0);
     expect(JSON.stringify(generated)).not.toContain('RAW_START_SECRET');
     expect(JSON.stringify(generated)).not.toContain('RAW_GETTER_SECRET');
+  });
+
+  it('logs the allowlisted catalog start error while preserving the journal failure code', async () => {
+    acquisitionMode = 'throw-catalog';
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await engine.executeGroupedChecks(
+      prInfo,
+      ['discover-components'],
+      undefined,
+      fixtureConfig(),
+      'table',
+      false,
+      1
+    );
+
+    const events = (engine as any)._lastContext.journal.readRuntimeEvents() as readonly any[];
+    const generated = events.filter(
+      event => event.checkId === 'inspect' || event.binding?.checkId === 'inspect'
+    );
+    expect(generated.find(event => event.type === 'ManagedRunAcquisitionFailed')).toMatchObject({
+      failureCode: 'MANAGED_START_FAILED',
+    });
+    const diagnostic = errorSpy.mock.calls
+      .map(call => call[0])
+      .filter((message): message is string => typeof message === 'string')
+      .map(message => {
+        try {
+          return JSON.parse(message) as Record<string, unknown>;
+        } catch {
+          return undefined;
+        }
+      })
+      .find(record => record?.event === 'managed_start_failed');
+    expect(diagnostic).toMatchObject({
+      event: 'managed_start_failed',
+      check_id: 'inspect',
+      failure_code: 'MANAGED_START_FAILED',
+      detail: ALLOWLISTED_CATALOG_START_ERROR,
+    });
+  });
+
+  it('reduces arbitrary synchronous start errors and names to a fixed safe detail', async () => {
+    acquisitionMode = 'throw-opaque';
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+    await engine.executeGroupedChecks(
+      prInfo,
+      ['discover-components'],
+      undefined,
+      fixtureConfig(),
+      'table',
+      false,
+      1
+    );
+
+    const events = (engine as any)._lastContext.journal.readRuntimeEvents() as readonly any[];
+    const generated = events.filter(
+      event => event.checkId === 'inspect' || event.binding?.checkId === 'inspect'
+    );
+    expect(generated.find(event => event.type === 'ManagedRunAcquisitionFailed')).toMatchObject({
+      failureCode: 'MANAGED_START_FAILED',
+    });
+    const diagnosticText = errorSpy.mock.calls
+      .map(call => call[0])
+      .filter((message): message is string => typeof message === 'string')
+      .find(message => message.includes('"event":"managed_start_failed"'));
+    expect(diagnosticText).toBeDefined();
+    expect(diagnosticText).toContain('"detail":"provider-start-error"');
+    expect(diagnosticText).not.toContain('sk-live-value');
+    expect(diagnosticText).not.toContain('/private/path');
+    expect(diagnosticText).not.toContain('CustomProviderStartFailure');
+    expect(JSON.stringify(generated)).not.toContain('sk-live-value');
+    expect(JSON.stringify(generated)).not.toContain('CustomProviderStartFailure');
+  });
+
+  it('keeps the managed-start journal failure when the diagnostic logger throws', async () => {
+    acquisitionMode = 'throw-catalog';
+    jest.spyOn(logger, 'error').mockImplementationOnce(() => {
+      throw new Error('LOGGER_SINK_SECRET /private/logger-path');
+    });
+
+    await expect(
+      engine.executeGroupedChecks(
+        prInfo,
+        ['discover-components'],
+        undefined,
+        fixtureConfig(),
+        'table',
+        false,
+        1
+      )
+    ).resolves.toBeDefined();
+
+    const events = (engine as any)._lastContext.journal.readRuntimeEvents() as readonly any[];
+    const generated = events.filter(
+      event => event.checkId === 'inspect' || event.binding?.checkId === 'inspect'
+    );
+    expect(generated.find(event => event.type === 'ManagedRunAcquisitionFailed')).toMatchObject({
+      failureCode: 'MANAGED_START_FAILED',
+    });
+    expect(JSON.stringify(generated)).not.toContain('LOGGER_SINK_SECRET');
+    expect(JSON.stringify(generated)).not.toContain('/private/logger-path');
   });
 
   it.each<IdentityPosition>(['handle', 'started', 'outcome', 'cancel', 'cleanup'])(
