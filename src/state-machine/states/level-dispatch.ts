@@ -38,6 +38,8 @@ import {
   PROOF_CATALOG_REVALIDATION_CLAIM,
   PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
   PROOF_ADMIT_PROVIDER_TYPE,
+  PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
+  PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE,
   PROOF_PROJECT_RECONCILE_NODE_KEY,
   PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
   PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM,
@@ -581,17 +583,67 @@ function buildOutputHistoryFromJournal(context: EngineContext): Map<string, unkn
 }
 
 function buildExactClaimResults(
-  claims: Readonly<Record<string, CandidateClaimInput>>
+  claims: Readonly<Record<string, CandidateClaimInput>>,
+  includeAliases = false,
 ): Map<string, ReviewSummary> {
   const results = new Map<string, ReviewSummary>();
-  for (const claim of Object.values(claims)) {
-    const summary: ReviewSummary = { issues: [], output: claim.payload };
-    Object.freeze(summary.issues);
-    Object.freeze(summary);
-    results.set(claim.producerCheckId, summary);
+  if (!includeAliases) {
+    // Keep the sealed/legacy dependency map byte-for-byte equivalent to its
+    // producer-keyed form. In particular, proof-admit validates its exact
+    // one-entry map before dispatch.
+    for (const claim of Object.values(claims)) {
+      const summary: ReviewSummary = { issues: [], output: claim.payload };
+      Object.freeze(summary.issues);
+      Object.freeze(summary);
+      results.set(claim.producerCheckId, summary);
+    }
+    return results;
+  }
+
+  {
+    // Ordinary providers need the exact aliases declared by `consumes` (for
+    // example `as: component`) in their template namespace. Keep the
+    // producer-check key as a compatibility alias for older configs, but
+    // omit an ambiguous producer key rather than allowing an alias collision
+    // to select the wrong claim.
+    const producerOwners = new Map<string, string>();
+    const ambiguousProducers = new Set<string>();
+    for (const [alias, claim] of Object.entries(claims)) {
+      const owner = producerOwners.get(claim.producerCheckId);
+      if (owner !== undefined && owner !== alias) {
+        ambiguousProducers.add(claim.producerCheckId);
+      } else if (owner === undefined) {
+        producerOwners.set(claim.producerCheckId, alias);
+      }
+    }
+    const aliases = new Set(Object.keys(claims));
+    for (const [alias, claim] of Object.entries(claims)) {
+      if (!ambiguousProducers.has(claim.producerCheckId) &&
+          (!aliases.has(claim.producerCheckId) || claim.producerCheckId === alias)) {
+        const summary: ReviewSummary = { issues: [], output: claim.payload };
+        Object.freeze(summary.issues);
+        Object.freeze(summary);
+        results.set(claim.producerCheckId, summary);
+      }
+    }
+    for (const [alias, claim] of Object.entries(claims)) {
+      const summary: ReviewSummary = { issues: [], output: claim.payload };
+      Object.freeze(summary.issues);
+      Object.freeze(summary);
+      results.set(alias, summary);
+    }
   }
   return results;
 }
+
+const SEALED_CLAIM_PROVIDER_TYPES = new Set([
+  GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
+  PROOF_ADMIT_PROVIDER_TYPE,
+  PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
+  PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE,
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+]);
 
 /**
  * Evaluate 'if' condition for a check
@@ -3231,6 +3283,15 @@ async function executeSingleCheck(
     const dependencyResults = dynamic?.kind === 'generated'
       ? buildExactClaimResults(exactClaims)
       : buildDependencyResults(checkId, checkConfig, context, state);
+    // Reserved Proof providers validate a deliberately closed dependency map
+    // (notably proof-admit requires exactly one producer-keyed entry). Expose
+    // declared consumer aliases only to ordinary provider template contexts;
+    // the exact immutable claim aliases remain available through
+    // executionContext.claims for every generated provider.
+    const providerDependencyResults = dynamic?.kind === 'generated' &&
+      !SEALED_CLAIM_PROVIDER_TYPES.has(providerType)
+      ? buildExactClaimResults(exactClaims, true)
+      : dependencyResults;
 
     // Build PR info (use real prInfo from context if available, otherwise use defaults)
     const prInfo: any = context.prInfo || {
@@ -3248,7 +3309,7 @@ async function executeSingleCheck(
     // Render any Liquid templates in pending args using the dependency outputs
     const rawPendingArgs = state.pendingRunArgs?.get(checkId);
     const depResultsObj: Record<string, unknown> = {};
-    for (const [k, v] of dependencyResults.entries()) {
+    for (const [k, v] of providerDependencyResults.entries()) {
       const summary = v as ReviewSummary & { output?: unknown };
       depResultsObj[k] = summary.output !== undefined ? summary.output : summary;
     }
@@ -3423,7 +3484,7 @@ async function executeSingleCheck(
             () => provider.startManaged!(snapshotManagedRunStartRequest({
               prInfo,
               checkConfig: providerConfig,
-              dependencyResults,
+              dependencyResults: providerDependencyResults,
               executionContext,
               binding,
               executionConfigDigest: context.journal.getGeneratedExecution(dynamic!.attempt.nodeGenerationId).node.executionConfigDigest,
@@ -3574,10 +3635,10 @@ async function executeSingleCheck(
                     checkConfig,
                     context,
                     prInfo,
-                    dependencyResults,
+                    providerDependencyResults,
                     checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
                     () =>
-                      provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+                      provider.execute(prInfo, providerConfig, providerDependencyResults, executionContext)
                   );
                   try {
                     captureCheckOutput(span, (r as any).output);
@@ -3596,9 +3657,9 @@ async function executeSingleCheck(
               checkConfig,
               context,
               prInfo,
-              dependencyResults,
+              providerDependencyResults,
               checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
-              () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+              () => provider.execute(prInfo, providerConfig, providerDependencyResults, executionContext)
             );
             try {
               captureCheckOutput(span, (res as any).output);

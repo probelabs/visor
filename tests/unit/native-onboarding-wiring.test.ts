@@ -47,9 +47,9 @@ describe('native onboarding isolated writer wiring', () => {
     expect(author.ai.bashConfig).toBeUndefined();
     expect(author.ai_bash_config_js).toBeUndefined();
     expect(author.prompt).not.toContain('{{ outputs | json }}');
-    expect(author.prompt).toContain("{{ outputs['prepare-work-item'] | json }}");
-    expect(author.prompt).toContain("{{ outputs['checkout-worktree'] | json }}");
-    expect(author.prompt).toContain("{{ outputs['role-onboard-component'] | json }}");
+    expect(author.prompt).toContain('{{ outputs.work_item | json }}');
+    expect(author.prompt).toContain('{{ outputs.checkout | json }}');
+    expect(author.prompt).toContain('{{ outputs.role | json }}');
     expect(author.prompt).toContain('Native tools.apply_patch may edit only allowed');
     expect(author.prompt).toMatch(/The native exec carrier\s+may execute bounded Proof CLI commands/);
     expect(author.prompt).toMatch(/Do not use Probe MCP Bash or alternate\s+write paths\/roots/);
@@ -57,9 +57,9 @@ describe('native onboarding isolated writer wiring', () => {
     const liquid = createExtendedLiquid();
     const rendered = await liquid.parseAndRender(author.prompt, {
       outputs: {
-        'prepare-work-item': {component_id: 'component-a', sorted_owned_paths: ['a.go'], baseline_commit: 'a'.repeat(40)},
-        'checkout-worktree': {success: true, path: '/owned/worktrees/a', commit: 'a'.repeat(40), worktree_id: 'wt-a', is_worktree: true},
-        'role-onboard-component': 'built-in role text',
+        work_item: {component_id: 'component-a', sorted_owned_paths: ['a.go'], baseline_commit: 'a'.repeat(40)},
+        checkout: {success: true, path: '/owned/worktrees/a', commit: 'a'.repeat(40), worktree_id: 'wt-a', is_worktree: true},
+        role: 'built-in role text',
       },
     });
     expect(rendered).toContain('component-a');
@@ -88,7 +88,7 @@ describe('native onboarding isolated writer wiring', () => {
     };
     const liquid = createExtendedLiquid();
     const preparedExec = await liquid.parseAndRender(prepare.exec, {
-      outputs: {'materialize_catalog': workItem},
+      outputs: {component: workItem},
       env: {NATIVE_ONBOARDING_BASELINE_COMMIT: 'a'.repeat(40)},
     });
     const commandCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-native-onboarding-wiring-'));
@@ -105,8 +105,9 @@ describe('native onboarding isolated writer wiring', () => {
     expect(target.exec).toContain('NATIVE_ONBOARDING_WORKTREE_ROOT');
     expect(target.exec).toContain('path.join(root, digest)');
     expect(checkout.repository).toBe('{{ env.VISOR_WORKSPACE_MAIN_PROJECT }}');
-    expect(checkout.ref).toBe("{{ outputs['checkout-target'].baseline_commit }}");
-    expect(checkout.working_directory).toBe("{{ outputs['checkout-target'].worktree_root }}");
+    expect(checkout.consumes).toEqual([{claim: 'component.checkout_target@1', as: 'target'}]);
+    expect(checkout.ref).toBe('{{ outputs.target.baseline_commit }}');
+    expect(checkout.working_directory).toBe('{{ outputs.target.worktree_root }}');
     expect(checkout.clean).toBe(false);
 
     expect(promotion.exec).toContain('promoteNativeDelta');
@@ -116,7 +117,8 @@ describe('native onboarding isolated writer wiring', () => {
     expect(promotion.exec).toContain('commitAcceptedArtifacts: true');
     expect(promotion.exec).toContain('NATIVE_ONBOARDING_TS_NODE');
     expect(enumeration.exec).toContain("promotion.status !== 'promoted'");
-    expect(enumeration.exec).toContain("deps['prepare-work-item']");
+    expect(enumeration.exec).toContain('deps.work_item');
+    expect(enumeration.exec).toContain('deps.promotion');
   });
 
   it('records initialized Proof baseline before exposing worktree runtime paths', () => {

@@ -360,7 +360,7 @@ subgraphs:
           set -eu
           node - <<'NODE'
           const deps = {{ outputs | json }};
-          const component = deps['materialize_catalog'];
+          const component = deps.component;
           if (!component || typeof component !== 'object' || typeof component.component_id !== 'string') {
             throw new Error('component WorkItem is missing from the admitted catalog');
           }
@@ -396,7 +396,7 @@ subgraphs:
           const crypto = require('node:crypto');
           const path = require('node:path');
           const deps = {{ outputs | json }};
-          const workItem = deps['prepare-work-item'];
+          const workItem = deps.work_item;
           if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || typeof workItem.baseline_commit !== 'string') {
             throw new Error('checkout target is missing the prepared WorkItem');
           }
@@ -418,11 +418,13 @@ subgraphs:
         timeout: 900000
         criticality: internal
         repository: "{{ env.VISOR_WORKSPACE_MAIN_PROJECT }}"
-        ref: "{{ outputs['checkout-target'].baseline_commit }}"
-        working_directory: "{{ outputs['checkout-target'].worktree_root }}"
+        ref: "{{ outputs.target.baseline_commit }}"
+        working_directory: "{{ outputs.target.worktree_root }}"
         use_worktree: true
         persist_worktree: true
         clean: false
+        consumes:
+          - {claim: component.checkout_target@1, as: target}
         emits:
           - {claim: component.checkout@1, from: output}
 
@@ -466,11 +468,11 @@ subgraphs:
           Do not use Probe MCP Bash or alternate write paths/roots.
 
           WorkItem:
-          {{ outputs['prepare-work-item'] | json }}
+          {{ outputs.work_item | json }}
           Worker checkout:
-          {{ outputs['checkout-worktree'] | json }}
+          {{ outputs.checkout | json }}
           Built-in role:
-          {{ outputs['role-onboard-component'] | json }}
+          {{ outputs.role | json }}
 
           Materialize real native Proof requirements, vars, annotations, and
           trace links supported by this component's source. Use original native
@@ -521,8 +523,8 @@ subgraphs:
           ));
           const proofBin = process.argv[2];
           const deps = {{ outputs | json }};
-          const workItem = deps['prepare-work-item'];
-          const checkout = deps['checkout-worktree'];
+          const workItem = deps.work_item;
+          const checkout = deps.checkout;
           if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || typeof workItem.baseline_commit !== 'string') {
             throw new Error('promotion is missing the prepared WorkItem');
           }
@@ -565,9 +567,9 @@ subgraphs:
           const {execFileSync} = require('node:child_process');
           const proof = process.argv[2];
           const deps = {{ outputs | json }};
-          const workItem = deps['prepare-work-item'];
+          const workItem = deps.work_item;
           if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string') throw new Error('native requirement enumeration missing exact materialized WorkItem');
-          const promotion = deps['promote-native-component'];
+          const promotion = deps.promotion;
           if (!promotion || promotion.status !== 'promoted') throw new Error('native requirement enumeration requires successful promotion');
           const componentId = workItem.component_id;
           const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], {encoding: 'utf8'}));
@@ -624,7 +626,9 @@ subgraphs:
           `role-spec-review-component`; it is operating guidance, not an
           admission receipt. Exact generated component, role, and requirement
           context:
-          {{ outputs | json }}
+          Component: {{ outputs.component | json }}
+          Catalog: {{ outputs.catalog | json }}
+          Role: {{ outputs.role | json }}
         ai:
           codex_execution_profile: luna-xhigh-readonly-v1
           max_iterations: 12
@@ -648,9 +652,9 @@ subgraphs:
           const fs = require('node:fs');
           const path = require('node:path');
           const deps = {{ outputs | json }};
-          const catalog = deps['enumerate-native-requirements'];
+          const catalog = deps.catalog;
           if (!catalog || typeof catalog !== 'object' || !Array.isArray(catalog.items) || typeof catalog.component_id !== 'string') throw new Error('review packet missing exact native requirement catalog');
-          const candidate = deps['review-native-component'];
+          const candidate = deps.candidate;
           if (candidate === undefined) throw new Error('review packet missing independent review candidate');
           const packet = {id: 'component-' + catalog.component_id, component_id: catalog.component_id, candidate, requirements: catalog.items};
           const root = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
@@ -681,7 +685,7 @@ subgraphs:
           const fs = require('node:fs');
           const path = require('node:path');
           const deps = {{ outputs | json }};
-          const packet = deps['persist-review-packet'];
+          const packet = deps.packet;
           if (!packet || typeof packet !== 'object' || !Array.isArray(packet.requirements) || typeof packet.component_id !== 'string') throw new Error('review fan-in missing exact persisted packet');
           const encodedId = Buffer.from(packet.component_id, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
           const file = path.join(process.env.NATIVE_ONBOARDING_OUTPUT_DIR, 'review-packets', encodedId + '.json');
@@ -706,7 +710,7 @@ subgraphs:
           const {execFileSync} = require('node:child_process');
           const proof = process.argv[2];
           const deps = {{ outputs | json }};
-          const workItem = deps['materialize_catalog'];
+          const workItem = deps.component;
           if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string') throw new Error('native validation missing exact materialized WorkItem');
           const componentId = workItem.component_id;
           const run = args => {
@@ -733,7 +737,7 @@ subgraphs:
             ['checklist', checklist],
             ['status', statusDetail],
           ].filter(([, result]) => result.exit_code !== 0).map(([name, result]) => ({name, exit_code: result.exit_code}));
-          const output = {component_id: componentId, status: validation.exit_code !== 0 || statusDetail.exit_code !== 0 ? 'native-validation-failed' : 'validated-native-state-recorded', freshness, validation, audit, checklist, status_detail: statusDetail, open_native_checks: openNativeChecks, reviewed: deps['component-reviewed'] || null};
+          const output = {component_id: componentId, status: validation.exit_code !== 0 || statusDetail.exit_code !== 0 ? 'native-validation-failed' : 'validated-native-state-recorded', freshness, validation, audit, checklist, status_detail: statusDetail, open_native_checks: openNativeChecks, reviewed: deps.reviewed || null};
           process.stdout.write(JSON.stringify(output));
           if (validation.exit_code !== 0 || statusDetail.exit_code !== 0) process.exitCode = 1;
           NODE
