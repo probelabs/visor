@@ -2440,6 +2440,9 @@ export async function executeRetainedContinuationEngine(
     undefined, retainedProjectPrefixDispatchGate,
   );
   const checkpoint = engine.exportGraphCheckpoint();
+  if (initialResult.statistics.failedExecutions > 0) {
+    throw new Error('retained project prefix failed before catalog materialization');
+  }
   const materialized = materializedComponentIds(config, checkpoint);
   const expected = Object.freeze(utf8Sorted(expectedComponentIds));
   const zeroComponentAttempts = retainedFrontierHasNoComponentAttempts(checkpoint);

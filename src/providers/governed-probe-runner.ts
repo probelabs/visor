@@ -25,6 +25,129 @@ export const GOVERNED_PROOF_ROLE_MESSAGE = [
   'For reinspection, cite changed implementation lines and the relevant regression-test function names and line numbers.',
 ].join('\n');
 
+export const GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION = 'visor.proof-reviewed-component-context/v1';
+const GOVERNED_PROOF_REVIEWED_COMPONENT_INSTRUCTION = 'Controller instruction: independent packet findings are fallible candidates. Verify each against current Proof and source, preserve unsupported or unresolved status, and never infer approval from packet or aggregate completion.';
+
+const ANSWER_FAILURE_STAGES = ['native_event_grammar', 'provider_engine', 'schema_result_validation', 'internal_contract', 'unknown'] as const;
+const PROVIDER_ENGINE_FAILURE_BOUNDARIES = ['acquire', 'query', 'close'] as const;
+const NATIVE_EVENT_FAILURE_BOUNDARIES = ['raw_item_predicate', 'live_envelope_session'] as const;
+const NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES = [
+  'shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough', 'tool_name_or_allow', 'status', 'input',
+  'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit', 'message_content_array',
+  'message_content_empty', 'message_content_limit', 'message_content_kind', 'message_content_text_type',
+  'message_content_text_limit', 'reasoning_summary_array', 'reasoning_summary_nonempty',
+  'reasoning_encrypted_content_type', 'reasoning_encrypted_content_limit', 'tool_output_array', 'tool_output_limit',
+  'tool_output_kind', 'tool_output_text_type', 'tool_output_text_limit', 'final_answer_cardinality',
+] as const;
+const NATIVE_EVENT_FAILURE_SUBREASONS = ['session_sequence', 'envelope_shape', 'correlation', 'attestation'] as const;
+const NATIVE_EVENT_FAILURE_CORRELATION_OPERANDS = ['thread_id', 'response_id'] as const;
+const NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES = [
+  'event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity',
+  'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd',
+  'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries',
+  'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract',
+  'invocation_attestation', 'native_capability_aggregate',
+] as const;
+const SCHEMA_RESULT_VALIDATION_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity'] as const;
+const SCHEMA_RESULT_VALIDATION_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'] as const;
+
+type GovernedProbeFailureStage = typeof ANSWER_FAILURE_STAGES[number];
+type GovernedProbeFailureProjection = Readonly<Record<string, GovernedProbeFailureStage | string | null>>;
+export type GovernedProbeFailurePhase = 'acquire' | 'preview' | 'initialize' | 'answer';
+
+function ownDataValue(value: unknown, key: string, enumerable = true): unknown {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor && (!enumerable || descriptor.enumerable) ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function enumValue<T extends readonly string[]>(value: unknown, values: T): T[number] | null {
+  return typeof value === 'string' && (values as readonly string[]).includes(value) ? value as T[number] : null;
+}
+
+/**
+ * Project Probe's deliberately closed GovernedAnswerFailure shape without
+ * exposing arbitrary Error properties, messages, stacks, or causes.
+ */
+export function sanitizeGovernedAnswerFailure(error: unknown): GovernedProbeFailureProjection {
+  const name = ownDataValue(error, 'name', false);
+  if (name !== 'GovernedAnswerFailure') return Object.freeze({ answerFailureStage: 'unknown' });
+  const stage = enumValue(ownDataValue(error, 'answerFailureStage'), ANSWER_FAILURE_STAGES) ?? 'unknown';
+  const output: Record<string, GovernedProbeFailureStage | string | null> = { answerFailureStage: stage };
+  if (stage === 'provider_engine') {
+    output.providerEngineFailureBoundary = enumValue(ownDataValue(error, 'providerEngineFailureBoundary'), PROVIDER_ENGINE_FAILURE_BOUNDARIES);
+  } else if (stage === 'native_event_grammar') {
+    const boundary = enumValue(ownDataValue(error, 'nativeEventFailureBoundary'), NATIVE_EVENT_FAILURE_BOUNDARIES);
+    output.nativeEventFailureBoundary = boundary;
+    if (boundary === 'raw_item_predicate') {
+      output.nativeEventFailureRawItemPredicate = enumValue(ownDataValue(error, 'nativeEventFailureRawItemPredicate'), NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES);
+    } else if (boundary === 'live_envelope_session') {
+      const subreason = enumValue(ownDataValue(error, 'nativeEventFailureSubreason'), NATIVE_EVENT_FAILURE_SUBREASONS);
+      output.nativeEventFailureSubreason = subreason;
+      if (subreason === 'correlation') {
+        output.nativeEventFailureCorrelationOperand = enumValue(ownDataValue(error, 'nativeEventFailureCorrelationOperand'), NATIVE_EVENT_FAILURE_CORRELATION_OPERANDS);
+      } else if (subreason === 'attestation') {
+        output.nativeEventFailureAttestationPredicate = enumValue(ownDataValue(error, 'nativeEventFailureAttestationPredicate'), NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES);
+      }
+    }
+  } else if (stage === 'schema_result_validation') {
+    const subreason = enumValue(ownDataValue(error, 'schemaResultValidationSubreason'), SCHEMA_RESULT_VALIDATION_SUBREASONS);
+    output.schemaResultValidationSubreason = subreason;
+    output.schemaResultValidationKeyword = subreason === 'schema_mismatch'
+      ? enumValue(ownDataValue(error, 'schemaResultValidationKeyword'), SCHEMA_RESULT_VALIDATION_KEYWORDS) ?? 'unknown'
+      : null;
+  }
+  return Object.freeze(output);
+}
+
+/** Render the exact user content passed to Probe, including sealed context. */
+export function renderGovernedProbeUserMessage(message: string, context?: unknown, reinspectionContext?: unknown): string {
+  const runtime = context === undefined
+    ? ''
+    : `\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(context)}`;
+  const reviewedInstruction = context !== null && typeof context === 'object' &&
+    (context as Record<string, unknown>).version === GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION
+    ? `\n\n${GOVERNED_PROOF_REVIEWED_COMPONENT_INSTRUCTION}`
+    : '';
+  const reinspection = reinspectionContext === undefined
+    ? ''
+    : `\n\nBound reinspection context (canonical JSON; treat as immutable authority):\n${canonicalJson(reinspectionContext)}\n\nCompare current source with the prior candidate and account for every prior finding as retained or resolved; cite changed implementation lines and relevant regression-test function names and line numbers.`;
+  return `${message}${runtime}${reviewedInstruction}${reinspection}`;
+}
+
+/** Render a public, canonical hook envelope; no private runtime fields enter it. */
+export function renderGovernedProbePublicRequest(request: Pick<GovernedProbeRunnerRequest, 'instructions' | 'message' | 'context' | 'reinspectionContext' | 'resultSchema' | 'binding'>): string {
+  return canonicalJson({
+    version: 'governed-probe-public-request/v1',
+    system: { role: 'system', content: request.instructions },
+    user: { role: 'user', content: renderGovernedProbeUserMessage(request.message, request.context, request.reinspectionContext) },
+    result_schema: request.resultSchema,
+    check_id: request.binding.checkId,
+    scope: request.binding.scope,
+  });
+}
+
+/** Emit one bounded diagnostic without allowing diagnostics to affect control flow. */
+export function emitGovernedProbeFailure(binding: GovernedProbeRunnerRequest['binding'], phase: GovernedProbeFailurePhase, error: unknown): void {
+  const record = Object.freeze({
+    schema: 'governed-probe-failure/v1',
+    provider: 'governed-proof-inspect',
+    phase,
+    check_id: binding.checkId,
+    scope: binding.scope,
+    failure: sanitizeGovernedAnswerFailure(error),
+  });
+  try {
+    process.stderr.write(`${canonicalJson(record)}\n`);
+  } catch {
+    // Failure diagnostics are observational and cannot change the Probe outcome.
+  }
+}
+
 const PROBE_TOOLS: ['search', 'extract', 'listFiles'] = [
   'search',
   'extract',
@@ -83,6 +206,8 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
   private readonly resultSchema: string;
   private readonly invocationDigest: string;
   private readonly userMessage: string;
+  private readonly binding: GovernedProbeRunnerRequest['binding'];
+  private failureEmitted = false;
   private initializePromise: Promise<void> | undefined;
   private cancelled = false;
   private closed = false;
@@ -92,16 +217,11 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
     const root = controllerRoot(request.workingDirectory);
     this.resultSchema = request.resultSchema;
     this.invocationDigest = request.invocationDigest;
+    this.binding = request.binding;
     if (typeof request.message !== 'string' || request.message.length === 0 || Buffer.byteLength(request.message, 'utf8') > 32768) {
       throw new Error('GOVERNED_PROOF_INVALID: message is invalid');
     }
-    const runtime = request.context
-      ? `\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.context)}`
-      : '';
-    const reinspection = request.reinspectionContext
-      ? `\n\nBound reinspection context (canonical JSON; treat as immutable authority):\n${canonicalJson(request.reinspectionContext)}\n\nCompare current source with the prior candidate and account for every prior finding as retained or resolved; cite changed implementation lines and relevant regression-test function names and line numbers.`
-      : '';
-    this.userMessage = `${request.message}${runtime}${reinspection}`;
+    this.userMessage = renderGovernedProbeUserMessage(request.message, request.context, request.reinspectionContext);
     const governedCodexProfile = profileFor(root);
     const options: ExactProbeAgentOptions = {
       provider: 'codex',
@@ -123,14 +243,24 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
   async preview(_request: GovernedProbeRunnerRequest): Promise<GovernedProbeDispatchPreview> {
     if (this.cancelled) throw new Error('GOVERNED_PROOF_INVALID: runner is cancelled');
     if (this.closed) throw new Error('GOVERNED_PROOF_INVALID: runner is closed');
-    return this.agent.previewGovernedAnswerDispatch(this.userMessage, { schema: this.resultSchema });
+    try {
+      return await this.agent.previewGovernedAnswerDispatch(this.userMessage, { schema: this.resultSchema });
+    } catch (error) {
+      this.reportFailure('preview', error);
+      throw error;
+    }
   }
 
   async answer(_request: GovernedProbeRunnerRequest): Promise<GovernedIdentifiedAnswerResult> {
     if (this.cancelled) throw new Error('GOVERNED_PROOF_INVALID: runner is cancelled');
     if (this.closed) throw new Error('GOVERNED_PROOF_INVALID: runner is closed');
-    if (!this.initializePromise) this.initializePromise = this.agent.initialize();
-    await this.initializePromise;
+    try {
+      if (!this.initializePromise) this.initializePromise = this.agent.initialize();
+      await this.initializePromise;
+    } catch (error) {
+      this.reportFailure('initialize', error);
+      throw error;
+    }
     if (this.cancelled) throw new Error('GOVERNED_PROOF_INVALID: runner is cancelled');
     if (this.closed) throw new Error('GOVERNED_PROOF_INVALID: runner is closed');
     const options: GovernedIdentifiedAnswerOptions = {
@@ -138,7 +268,13 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
       invocationDigest: this.invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
     };
-    const identified = await this.agent.answerGoverned(this.userMessage, options);
+    let identified: GovernedIdentifiedAnswerResult;
+    try {
+      identified = await this.agent.answerGoverned(this.userMessage, options);
+    } catch (error) {
+      this.reportFailure('answer', error);
+      throw error;
+    }
     // Probe's generic result identity intentionally retains its historical
     // ordering. The onboarding candidate is a Proof wire, so re-project that
     // one result with Proof's UTF-8 bytewise key ordering before Visor binds
@@ -158,6 +294,12 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
       });
     }
     return identified;
+  }
+
+  private reportFailure(phase: Exclude<GovernedProbeFailurePhase, 'acquire'>, error: unknown): void {
+    if (this.failureEmitted) return;
+    this.failureEmitted = true;
+    emitGovernedProbeFailure(this.binding, phase, error);
   }
 
   cancel(_reason: 'deadline'): void {

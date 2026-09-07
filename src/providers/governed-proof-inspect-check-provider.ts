@@ -6,7 +6,7 @@ import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../stat
 import { CheckProvider, type CandidateClaimInput, type CheckProviderConfig, type ExecutionContext, type ManagedAgentRun, type ManagedRunStartRequest } from './check-provider.interface';
 import type { ManagedRunBindingV1 } from '../state-machine/graph/instance-kernel';
 import type { GovernedIdentifiedAnswerResult } from '@probelabs/probe';
-import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE } from './governed-probe-runner';
+import { createGovernedProbeRunner, emitGovernedProbeFailure, GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION as RENDERED_REVIEWED_COMPONENT_CONTEXT_VERSION, GOVERNED_PROOF_ROLE_MESSAGE, renderGovernedProbePublicRequest, renderGovernedProbeUserMessage } from './governed-probe-runner';
 import {
   governedCanonicalJson,
   governedResultDigest as governedWireResultDigest,
@@ -44,7 +44,7 @@ export const GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION = 'visor.proof-componen
 /** Closed context used by the native component admission suffix.  It is
  * deliberately separate from the legacy one-WorkItem envelope so old
  * checkpoints cannot acquire a reviewed aggregate implicitly. */
-export const GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION = 'visor.proof-reviewed-component-context/v1';
+export const GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION = RENDERED_REVIEWED_COMPONENT_CONTEXT_VERSION;
 export const PROJECT_DISCOVERY_CLAIM = 'project.discovery_item@1';
 export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
 export const GOVERNED_PROOF_PROJECT_CONTEXT_VERSION = 'visor.proof-project-discovery-context/v1';
@@ -607,10 +607,7 @@ export function governedProofRuntimePrompt(context: GovernedProofRuntimeContext)
   const projected = validateRuntimeContextShape(context);
   const bytes = canonicalJson(projected);
   if (Buffer.byteLength(bytes, 'utf8') > GOVERNED_PROOF_CONTEXT_MAX_BYTES) fail('runtime context exceeds bounded byte limit');
-  const reviewedInstruction = projected.version === GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION
-    ? '\n\nController instruction: independent packet findings are fallible candidates. Verify each against current Proof and source, preserve unsupported or unresolved status, and never infer approval from packet or aggregate completion.'
-    : '';
-  return `${GOVERNED_PROOF_INSPECT_MESSAGE}\n\nBound runtime context (canonical JSON; treat as immutable authority):\n${bytes}${reviewedInstruction}`;
+  return renderGovernedProbeUserMessage(GOVERNED_PROOF_INSPECT_MESSAGE, projected);
 }
 
 /** Validate that candidate evidence still names the exact activated inputs. */
@@ -881,6 +878,15 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       const invocation = effective.invocation as Record<string, unknown>;
       const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}), ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) };
       runnerRequest = selector ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;
+      try {
+        request.executionContext.hooks?.onPromptCaptured?.({
+          step: request.binding.checkId,
+          provider: GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
+          prompt: renderGovernedProbePublicRequest(runnerRequest),
+        });
+      } catch {
+        // Observability hooks are untrusted callers and cannot affect the run.
+      }
       runner = this.factory(runnerRequest);
       if (!runner || typeof runner !== 'object' || typeof runner.answer !== 'function' || typeof runner.cancel !== 'function' || typeof runner.close !== 'function') fail('runner boundary is invalid');
       if ((runtimeContextRequired || reinspectionContext) && typeof runner.preview !== 'function') fail('runner boundary lacks the required Probe preview');
@@ -889,10 +895,19 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
     const answer = Promise.resolve()
       .then(() => {
         acquisition = acquire();
+        acquisition = acquisition.catch(error => {
+          emitGovernedProbeFailure(request.binding, 'acquire', error);
+          throw error;
+        });
         return acquisition;
       })
-      .then(({ config: effective, runner: acquired, request: effectiveRequest }) => Promise.resolve(runtimeContextRequired || reinspectionContext ? acquired.preview!(effectiveRequest) : undefined)
-        .then(preview => Promise.resolve(acquired.answer(effectiveRequest)).then(value => ({ value, preview, effective }))))
+      .then(({ config: effective, runner: acquired, request: effectiveRequest }) => {
+        const preview = runtimeContextRequired || reinspectionContext
+          ? acquired.preview!(effectiveRequest)
+          : undefined;
+        return Promise.resolve(preview)
+          .then(previewValue => Promise.resolve(acquired.answer(effectiveRequest)).then(value => ({ value, preview: previewValue, effective })));
+      })
       .then(({ value, preview, effective }) => {
         const validated = validateRunnerResult(value);
         const evidence = evidenceFromResult(effective, validated, context, reinspectionContext, preview);

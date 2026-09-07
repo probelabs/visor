@@ -19,6 +19,7 @@ import {
   buildRetainedReviewedAggregateMap,
   encodeRetainedReviewedAggregateMap,
   materializeRetainedContinuationConfig,
+  executeRetainedContinuationEngine,
   retainedProjectPrefixDispatchGate,
   buildRetainedReviewedAggregate,
   loadRetainedOnboardingConfig,
@@ -214,6 +215,31 @@ describe('native onboarding runner boundaries', () => {
       checklist: {exit_code: 0},
       status: {exit_code: 7},
     }).hard_failures).toEqual(['status']);
+  });
+
+  it('fails a retained prefix after exporting its checkpoint and never resumes it', async () => {
+    let exported = false;
+    let resumed = false;
+    const engine = {
+      executeGroupedChecks: async () => ({statistics: {failedExecutions: 1}}),
+      exportGraphCheckpoint: () => {
+        exported = true;
+        return {};
+      },
+      resumeGraphCheckpoint: async () => {
+        resumed = true;
+        throw new Error('resume must not be called after a failed prefix');
+      },
+    };
+
+    await expect(executeRetainedContinuationEngine(
+      engine as any,
+      {} as any,
+      2_000,
+      ['component-a'],
+    )).rejects.toThrow('retained project prefix failed before catalog materialization');
+    expect(exported).toBe(true);
+    expect(resumed).toBe(false);
   });
 
   it('merges active component gaps without hiding hard native failures or escalating audit/checklist gaps', () => {

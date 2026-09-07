@@ -3,11 +3,13 @@ import {
   createGovernedProofInspectProviderForFocusedTest,
   GOVERNED_PROBE_UNAVAILABLE,
   GovernedProofInspectCheckProvider,
+  PROJECT_DISCOVERY_CLAIM,
+  PROOF_STRUCTURAL_INVENTORY_CLAIM,
   projectGovernedProofInspectConfig,
   validateProofCandidateEvidence,
   governedResultDigest,
 } from '../../../src/providers/governed-proof-inspect-check-provider';
-import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import { ExecutionJournal } from '../../../src/snapshot-store';
 
 const binding: any = Object.freeze({
@@ -57,6 +59,25 @@ function runnerResult(): any {
 
 function request(): any {
   return { prInfo: {}, checkConfig: config(), dependencyResults: new Map(), executionContext: {}, binding, executionConfigDigest: 'd'.repeat(64), workingDirectory: process.cwd() };
+}
+
+function projectDiscoveryClaims(): Record<string, any> {
+  const scope = immutableCanonicalValue(binding.scope);
+  const project = immutableCanonicalValue({ project_id: 'fixture', root: '/fixture' });
+  const inventory = immutableCanonicalValue({
+    version: 'proof.structural-inventory/v1',
+    authority: {
+      version: 'proof.project-authority/v1', project_id: 'fixture',
+      subject_fingerprint: `sha256:${'a'.repeat(64)}`, code_fingerprint: `sha256:${'b'.repeat(64)}`, tests_fingerprint: `sha256:${'c'.repeat(64)}`,
+    },
+    sorted_paths: ['entry.go'], sorted_module_paths: [], boundary_fingerprint: `sha256:${'d'.repeat(64)}`,
+    input_state: [{ owner_kind: 'onboarding_structural_inventory', owner_id: 'fixture', input_kind: 'code', path: 'entry.go', file_hash: `sha256:${'e'.repeat(64)}` }],
+  });
+  const claim = (claimName: string, claimId: string, payload: unknown) => ({
+    claimId, claim: claimName, payload, payloadFingerprint: sha256Canonical(payload), producerCheckId: 'materialize_catalog',
+    scope, parentClaimIds: [], wireMode: 'generic', provenance: 'controller', catalogClaimId: 'f'.repeat(64), incarnation: 1,
+  });
+  return { project: claim(PROJECT_DISCOVERY_CLAIM, '1'.repeat(64), project), current_inventory: claim(PROOF_STRUCTURAL_INVENTORY_CLAIM, '2'.repeat(64), inventory) };
 }
 
 function componentSelector(): any {
@@ -204,6 +225,62 @@ describe('governed Proof inspect provider', () => {
     await expect(run.cancel('deadline', binding.fence)).resolves.toMatchObject({ kind: 'cancelled' });
     await run.close(); await run.close();
     expect(cancel).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures the canonical public prompt before preview and ignores hook mutation or failure', async () => {
+    const events: string[] = [];
+    const preview = jest.fn(() => {
+      events.push('preview');
+      throw new Error('preview should remain the run error');
+    });
+    const answer = jest.fn(() => runnerResult());
+    const hook = jest.fn((info: { step: string; provider: string; prompt: string }) => {
+      events.push('hook');
+      const envelope = JSON.parse(info.prompt) as Record<string, any>;
+      expect(envelope.system).toEqual({ role: 'system', content: config().instructions });
+      expect(envelope.user.content).toContain(config().message);
+      expect(envelope.user.content).toContain('fixture');
+      expect(envelope.result_schema).toBe(config().result_schema);
+      expect(envelope.check_id).toBe(binding.checkId);
+      expect(envelope.scope).toEqual(binding.scope);
+      info.prompt = 'hook mutation must not reach the runner';
+      throw new Error('hook failure must be observational');
+    });
+    const provider = createGovernedProofInspectProviderForFocusedTest(requestValue => {
+      expect(requestValue.message).toBe(config().message);
+      return { preview, answer, cancel: jest.fn(), close: jest.fn() };
+    });
+    const run = provider.startManaged({
+      ...request(),
+      checkConfig: { ...config(), consumes: [{ claim: PROJECT_DISCOVERY_CLAIM, as: 'project' }, { claim: PROOF_STRUCTURAL_INVENTORY_CLAIM, as: 'current_inventory' }] },
+      executionContext: { claims: projectDiscoveryClaims(), hooks: { onPromptCaptured: hook } },
+    });
+    await expect(run.outcome).rejects.toThrow('preview should remain the run error');
+    expect(events).toEqual(['hook', 'preview']);
+    expect(answer).not.toHaveBeenCalled();
+    await run.close();
+  });
+
+  it('captures before a factory acquisition failure and emits only the unknown taxonomy', async () => {
+    const events: string[] = [];
+    const failure = new Error('private acquisition secret');
+    Object.defineProperty(failure, 'stack', { value: 'private stack secret', enumerable: true, configurable: true });
+    const hook = jest.fn(() => { events.push('hook'); });
+    const factory = jest.fn(() => { events.push('factory'); throw failure; });
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const provider = createGovernedProofInspectProviderForFocusedTest(factory);
+      const run = provider.startManaged({ ...request(), executionContext: { hooks: { onPromptCaptured: hook } } });
+      await expect(run.outcome).rejects.toBe(failure);
+      expect(events).toEqual(['hook', 'factory']);
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(writes[0])).toEqual(expect.objectContaining({ phase: 'acquire', failure: { answerFailureStage: 'unknown' } }));
+      expect(writes[0]).not.toContain('private acquisition secret');
+      expect(writes[0]).not.toContain('private stack secret');
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('rejects a projection tamper before constructing or dispatching the runner', () => {

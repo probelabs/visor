@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as ProbeModule from '@probelabs/probe';
-import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE, GovernedProbeAgentRunner, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
+import { createGovernedProbeRunner, GOVERNED_PROOF_ROLE_MESSAGE, GovernedProbeAgentRunner, renderGovernedProbePublicRequest, sanitizeGovernedAnswerFailure, withGovernedProbeRunnerBudget } from '../../../src/providers/governed-probe-runner';
 import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GovernedProbeRunnerRequest } from '../../../src/providers/governed-proof-inspect-check-provider';
 
@@ -39,8 +39,18 @@ function result(): Record<string, unknown> {
   };
 }
 
+function governedFailure(fields: Record<string, unknown>): Error {
+  const failure = new Error('secret failure message');
+  Object.defineProperty(failure, 'name', { value: 'GovernedAnswerFailure', configurable: true });
+  Object.defineProperty(failure, 'stack', { value: 'secret stack and private path', enumerable: true, configurable: true });
+  Object.defineProperty(failure, 'cause', { value: 'secret cause', enumerable: true, configurable: true });
+  for (const [key, value] of Object.entries(fields)) Object.defineProperty(failure, key, { value, enumerable: true, configurable: true });
+  return failure;
+}
+
 describe('private governed Probe runner', () => {
   const initialize = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+  const previewGovernedAnswerDispatch = jest.fn().mockResolvedValue({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'1'.repeat(64)}`, promptBytes: 7 });
   const answerGoverned = jest.fn().mockResolvedValue(result());
   const cancel = jest.fn();
   const close = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
@@ -49,12 +59,14 @@ describe('private governed Probe runner', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     initialize.mockClear();
+    previewGovernedAnswerDispatch.mockClear();
+    previewGovernedAnswerDispatch.mockResolvedValue({ source: 'probe-host-tools-call', tool: 'codex', promptDigest: `sha256:${'1'.repeat(64)}`, promptBytes: 7 });
     answerGoverned.mockClear();
     answerGoverned.mockResolvedValue(result());
     cancel.mockClear();
     close.mockClear();
     const prototype = ProbeModule.ProbeAgent.prototype;
-    for (const [name, implementation] of Object.entries({ initialize, answerGoverned, cancel, close })) {
+    for (const [name, implementation] of Object.entries({ initialize, previewGovernedAnswerDispatch, answerGoverned, cancel, close })) {
       descriptors.set(name, Object.getOwnPropertyDescriptor(prototype, name));
       Object.defineProperty(prototype, name, { configurable: true, writable: true, value: implementation });
     }
@@ -62,7 +74,7 @@ describe('private governed Probe runner', () => {
 
   afterEach(() => {
     const prototype = ProbeModule.ProbeAgent.prototype;
-    for (const name of ['initialize', 'answerGoverned', 'cancel', 'close']) {
+    for (const name of ['initialize', 'previewGovernedAnswerDispatch', 'answerGoverned', 'cancel', 'close']) {
       const descriptor = descriptors.get(name);
       if (descriptor) Object.defineProperty(prototype, name, descriptor);
       else delete (prototype as unknown as Record<string, unknown>)[name];
@@ -75,6 +87,77 @@ describe('private governed Probe runner', () => {
     expect(runner).toBeDefined();
     expect(initialize).not.toHaveBeenCalled();
     expect(answerGoverned).not.toHaveBeenCalled();
+  });
+
+  it('keeps only the closed typed Probe failure fields and freezes the projection', () => {
+    const failure = governedFailure({
+      answerFailureStage: 'schema_result_validation',
+      schemaResultValidationSubreason: 'schema_mismatch',
+      schemaResultValidationKeyword: 'type',
+      secret: 'candidate-controlled text',
+    });
+    const projection = sanitizeGovernedAnswerFailure(failure);
+    expect(projection).toEqual({
+      answerFailureStage: 'schema_result_validation',
+      schemaResultValidationSubreason: 'schema_mismatch',
+      schemaResultValidationKeyword: 'type',
+    });
+    expect(Object.isFrozen(projection)).toBe(true);
+    expect(JSON.stringify(projection)).not.toContain('secret');
+    expect(sanitizeGovernedAnswerFailure(new Error('secret message'))).toEqual({ answerFailureStage: 'unknown' });
+  });
+
+  it('emits one public preview failure record and rethrows the original Probe error', async () => {
+    const failure = governedFailure({
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'message_content_kind',
+    });
+    previewGovernedAnswerDispatch.mockRejectedValueOnce(failure);
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      await expect(runner.preview(request())).rejects.toBe(failure);
+      await expect(runner.answer(request())).resolves.toBeDefined();
+      expect(writes).toHaveLength(1);
+      const record = JSON.parse(writes[0]) as Record<string, any>;
+      expect(record).toEqual({
+        schema: 'governed-probe-failure/v1',
+        provider: 'governed-proof-inspect',
+        phase: 'preview',
+        check_id: 'inspect',
+        scope: [],
+        failure: {
+          answerFailureStage: 'native_event_grammar',
+          nativeEventFailureBoundary: 'raw_item_predicate',
+          nativeEventFailureRawItemPredicate: 'message_content_kind',
+        },
+      });
+      expect(writes[0]).not.toContain('secret');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it.each([
+    ['initialize', 'initialize'],
+    ['answer', 'answer'],
+  ])('reports the Probe %s phase separately', async (_label, phase) => {
+    const failure = governedFailure({ answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query' });
+    if (phase === 'initialize') initialize.mockRejectedValueOnce(failure);
+    else answerGoverned.mockRejectedValueOnce(failure);
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(writes[0])).toEqual(expect.objectContaining({ phase, failure: { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query' } }));
+      expect(writes[0]).not.toContain('secret');
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('allows four concurrent scoped factories and denies the fifth before dispatch', async () => {
@@ -146,6 +229,29 @@ describe('private governed Probe runner', () => {
       invocationDigest,
       resultIdentity: 'probe.governed-result-identity/v1',
     });
+  });
+
+  it('retains the fallible-candidate instruction for reviewed component context', async () => {
+    const context: any = immutableCanonicalValue({ version: 'visor.proof-reviewed-component-context/v1', component: { claimId: '1'.repeat(64) }, reviewed: { claimId: '2'.repeat(64) } });
+    const runner = new GovernedProbeAgentRunner(request({ context }));
+    await runner.answer(request({ context }));
+    const message = answerGoverned.mock.calls[0][0] as string;
+    expect(message).toContain('independent packet findings are fallible candidates');
+    expect(message).toContain('never infer approval from packet or aggregate completion');
+  });
+
+  it('renders a canonical public request envelope without private runner fields', () => {
+    const envelope = JSON.parse(renderGovernedProbePublicRequest(request()));
+    expect(envelope).toEqual({
+      version: 'governed-probe-public-request/v1',
+      system: { role: 'system', content: request().instructions },
+      user: { role: 'user', content: request().message },
+      result_schema: request().resultSchema,
+      check_id: 'inspect',
+      scope: [],
+    });
+    expect(JSON.stringify(envelope)).not.toContain('invocationDigest');
+    expect(JSON.stringify(envelope)).not.toContain('executionConfigDigest');
   });
 
   it('puts the canonical project discovery inventory in the authored Probe message', async () => {
