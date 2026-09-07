@@ -2276,20 +2276,20 @@ function hasReadyOrRunningGeneration(projection: InstanceProjection): boolean {
   );
 }
 
-function hasActiveDescendantInstance(
+/**
+ * A retry is blocked only by active instances directly owned by the selected
+ * expansion node.  Other expansion nodes may leave their completed children
+ * active in the same component subgraph while an independent fan-in retries.
+ */
+export function hasActiveDescendantInstance(
   projection: InstanceProjection,
-  subgraphInstanceId: string,
+  generation: Pick<NodeGenerationProjection, 'subgraphInstanceId' | 'nodeInstanceId'>,
 ): boolean {
-  const pending = [subgraphInstanceId];
-  while (pending.length > 0) {
-    const parent = pending.shift()!;
-    if (Object.values(projection.instancesById).some(instance => {
-      if (instance.status !== 'active' || instance.parentSubgraphInstanceId !== parent) return false;
-      pending.push(instance.subgraphInstanceId);
-      return true;
-    })) return true;
-  }
-  return false;
+  return Object.values(projection.instancesById).some(instance =>
+    instance.status === 'active' &&
+    instance.parentSubgraphInstanceId === generation.subgraphInstanceId &&
+    instance.expansionOwnerNodeInstanceId === generation.nodeInstanceId
+  );
 }
 
 function reduceGeneratedAttemptRetry(
@@ -2339,7 +2339,7 @@ function reduceGeneratedAttemptRetry(
       throw new InstanceKernelError('INVALID_RETRY', 'Retry input claim is no longer active');
     }
   }
-  if (hasActiveDescendantInstance(projection, generation.subgraphInstanceId)) {
+  if (hasActiveDescendantInstance(projection, generation)) {
     throw new InstanceKernelError('INVALID_RETRY', 'Retry generation has active descendant instances');
   }
   const managed = projection.managedRunsByAttemptId[event.priorAttemptId];

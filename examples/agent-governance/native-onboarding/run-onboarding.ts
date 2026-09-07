@@ -1297,12 +1297,6 @@ export function validateRecoverySelection(
       instance.status === 'active' && instance.parentSubgraphInstanceId === generation.subgraphInstanceId)) {
       throw new Error(`Recovery generation ${generationId} still has active descendants`);
     }
-    if (componentReviewReplay && Object.values(projection.generationsById).some((child: any) =>
-      child.status === 'active' && Array.isArray(child.scope) &&
-      child.scope.length > generation.scope.length &&
-      sameJson(child.scope.slice(0, generation.scope.length), generation.scope))) {
-      throw new Error(`Recovery generation ${generationId} still has active descendant generations`);
-    }
     const claims = generation.activeInputClaimIds.map((id: string) => projection.claimsById[id]).filter(Boolean);
     const expectedClaims = componentReviewReplay
       ? ['component.prepared_work_item@1', 'native.requirement.catalog@1']
@@ -1436,6 +1430,15 @@ export function validateRecoverySelection(
       ...(draftInventory ? {draftInventory} : {}),
     }));
   }
+  // Exercise the same immutable kernel eligibility check that the resumed
+  // engine will use.  This is deliberately a separately restored journal so
+  // preflight cannot append retry events to the source checkpoint.
+  const eligibilityJournal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  eligibilityJournal.retryFailedGeneratedAttempts({
+    sessionId: checkpoint.sessionId,
+    nodeGenerationIds: retryGenerationIds,
+    externalSideEffects,
+  });
   return {journal, bindings: Object.freeze(bindings), reviewPackets: Object.freeze(reviewPackets)};
 }
 

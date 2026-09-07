@@ -13,6 +13,7 @@ import {
   deriveProofCurrentCatalogAuthorityMutationDigest,
   deriveNodeInstanceId,
   deriveSubgraphInstanceId,
+  hasActiveDescendantInstance,
   InstanceKernelError,
   queryReadyGenerations,
   reduceInstanceEvent,
@@ -499,6 +500,37 @@ describe('Graph v2 C2 instance kernel', () => {
 
     expect(childForA).not.toBe(childForB);
     expect(childForA).not.toBe(childForDifferentOwner);
+  });
+
+  it('blocks only active children owned by the retried expansion node', () => {
+    const componentSubgraphInstanceId = 'c'.repeat(64);
+    const aggregateNodeInstanceId = 'a'.repeat(64);
+    const siblingEnumerateNodeInstanceId = 'e'.repeat(64);
+    const projection = {
+      instancesById: {
+        completedSpec: {
+          status: 'active',
+          parentSubgraphInstanceId: componentSubgraphInstanceId,
+          expansionOwnerNodeInstanceId: siblingEnumerateNodeInstanceId,
+        },
+      },
+    } as unknown as InstanceProjection;
+    const aggregateGeneration = {
+      subgraphInstanceId: componentSubgraphInstanceId,
+      nodeInstanceId: aggregateNodeInstanceId,
+    };
+
+    expect(hasActiveDescendantInstance(projection, aggregateGeneration)).toBe(false);
+    const ownedProjection = {
+      instancesById: {
+        completedSpec: projection.instancesById.completedSpec,
+        ownedSpec: {
+          ...projection.instancesById.completedSpec,
+          expansionOwnerNodeInstanceId: aggregateNodeInstanceId,
+        },
+      },
+    } as unknown as InstanceProjection;
+    expect(hasActiveDescendantInstance(ownedProjection, aggregateGeneration)).toBe(true);
   });
 
   it('replays expansion, controller claim, activation, and bound generated lifecycle immutably', () => {

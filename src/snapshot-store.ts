@@ -40,6 +40,7 @@ import {
   deriveProofCurrentCatalogAuthorityId,
   deriveProofCurrentCatalogAuthorityMutationDigest,
   deriveProofProjectReconciliationParentClaimIds,
+  hasActiveDescendantInstance,
   immutableInstanceEvent,
   immutableProofApplicationEvent,
   immutableInstanceProjection,
@@ -2105,9 +2106,7 @@ export class ExecutionJournal {
           generation.completedOutputClaimIds.length !== 0) {
         throw new ClaimKernelError('INVALID_RETRY', `Generation ${nodeGenerationId} is not an eligible failed leaf`);
       }
-      if (Object.values(this.instanceProjection.instancesById).some(candidate =>
-        candidate.status === 'active' && candidate.parentSubgraphInstanceId === generation.subgraphInstanceId
-      )) {
+      if (hasActiveDescendantInstance(this.instanceProjection, generation)) {
         throw new ClaimKernelError('INVALID_RETRY', `Generation ${nodeGenerationId} has active descendants`);
       }
       const managed = this.instanceProjection.managedRunsByAttemptId[generation.attemptId];
