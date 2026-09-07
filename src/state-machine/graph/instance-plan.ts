@@ -21,6 +21,7 @@ const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const CONTROLLER_TIMEOUT_MIN = 1;
 const CONTROLLER_TIMEOUT_MAX = 2147483647;
 const RESOURCE_GROUP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const RETAINED_COMPONENT_TEMPLATE_NAME = 'onboard-component-retained';
 
 /** Reserved EXP-0205 admission profile identifiers. */
 export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
@@ -378,6 +379,96 @@ function rejectReservedProfile(templateName: string, detail: string): never {
   );
 }
 
+/** Exact retained continuation prefix followed by the permanent admission suffix. */
+function validateNativeRetainedComponentAdmissionTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority,
+): void {
+  const reviewedClaim = 'native.component.reviewed@1';
+  const expectedTopology = ['component-reviewed', 'native-validation', 'inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit', 'verify'];
+  const expectedNodes = [...expectedTopology].sort();
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1' || !hasOwn(authority.claimTypes, reviewedClaim)) {
+    rejectReservedProfile(name, 'retained native component profile requires the component WorkItem input and reviewed claim declaration');
+  }
+  if (nodeKeys.length !== expectedNodes.length || nodeKeys.some((key, index) => key !== expectedNodes[index]) || topology.join('\0') !== expectedTopology.join('\0')) {
+    rejectReservedProfile(name, 'retained native component profile requires exactly the named retained prefix and admission suffix');
+  }
+  const dependenciesByNode: Readonly<Record<string, readonly string[]>> = {
+    'component-reviewed': [],
+    'native-validation': ['component-reviewed'],
+    inspect: ['component-reviewed', 'native-validation'],
+    [PROOF_ADMIT_NODE_KEY]: ['inspect'],
+    spec_review: ['inspect', PROOF_ADMIT_NODE_KEY],
+    spec_review_admit: ['spec_review'],
+    verify: ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit'],
+  };
+  for (const [nodeKey, expected] of Object.entries(dependenciesByNode)) {
+    if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) {
+      rejectReservedProfile(name, `retained native component profile has unexpected dependencies for ${nodeKey}`);
+    }
+  }
+  const reviewed = resolvedChecks['component-reviewed'];
+  const retainedMapLiteral = reviewed && reviewed.type === 'command' && typeof reviewed.exec === 'string'
+    ? [...reviewed.exec.matchAll(/const encoded = '([^']*)';/g)].map(match => match[1])
+    : [];
+  const retainedMapEncoding = retainedMapLiteral.length === 1 ? retainedMapLiteral[0] : undefined;
+  const retainedMapIsCanonical = retainedMapEncoding === '__NATIVE_RETAINED_AGGREGATE_MAP_BASE64__' || (() => {
+    if (!retainedMapEncoding || !/^[A-Za-z0-9+/]+={0,2}$/.test(retainedMapEncoding)) return false;
+    try {
+      return Buffer.from(retainedMapEncoding, 'base64').length > 0 &&
+        Buffer.from(retainedMapEncoding, 'base64').toString('base64') === retainedMapEncoding;
+    } catch {
+      return false;
+    }
+  })();
+  const reviewedTransportKeys = ['stdin', 'env', 'transform', 'transform_js', 'content', 'url', 'body', 'headers', 'tools', 'tools_js', 'mcp_servers', 'enable_fetch', 'enable_bash'];
+  const reviewedHasTransportOverride = reviewed && reviewedTransportKeys.some(key => Object.prototype.hasOwnProperty.call(reviewed, key));
+  if (!reviewed || reviewed.type !== 'command' || claimBindings(reviewed).join('\0') !== JSON.stringify(['component.work_item@1', 'component']) || claimList(reviewed, 'emits').join('\0') !== reviewedClaim || typeof reviewed.exec !== 'string' || retainedMapLiteral.length !== 1 || !retainedMapIsCanonical || reviewedHasTransportOverride) {
+    rejectReservedProfile(name, 'retained component-reviewed must consume the current WorkItem and one runner-bound aggregate map');
+  }
+  const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofComponentSelector(inspect.invocation)) {
+    rejectReservedProfile(name, 'retained native component inspect must use the builtin component selector');
+  }
+  validateGovernedInspectConfig(name, inspect, true);
+  if (claimBindings(inspect).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, 'retained native component inspect must consume exactly WorkItem and reviewed aggregate parents');
+  }
+  const nativeValidation = resolvedChecks['native-validation'];
+  if (nativeValidation.type !== 'command' || claimBindings(nativeValidation).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(nativeValidation, 'emits').join('\0') !== 'native.component.summary@1') {
+    rejectReservedProfile(name, 'retained native-validation must consume the exact WorkItem/reviewed parents and emit the component summary');
+  }
+  const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (proofAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(proofAdmit).join('\0') !== JSON.stringify([PROOF_CANDIDATE_CLAIM, 'candidate']) || claimList(proofAdmit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, 'retained native component proof_admit bindings are not exact');
+  }
+  const specReview = resolvedChecks.spec_review;
+  if (specReview.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofSpecReviewSelector(specReview.invocation)) rejectReservedProfile(name, 'retained native component spec_review must use the builtin spec-review selector');
+  validateGovernedInspectConfig(name, specReview, false, true);
+  if (claimBindings(specReview).join('\0') !== [
+    ['component.work_item@1', 'component'], [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'admission'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(specReview, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM) rejectReservedProfile(name, 'retained native component spec_review bindings are not exact');
+  const specReviewAdmit = resolvedChecks.spec_review_admit;
+  if (specReviewAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(specReviewAdmit).join('\0') !== JSON.stringify([PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'candidate']) || claimList(specReviewAdmit, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM) rejectReservedProfile(name, 'retained native component spec_review_admit bindings are not exact');
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE || claimList(verify, 'emits').length !== 0 || claimBindings(verify).join('\0') !== [
+    [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'receipt'],
+    [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'spec_candidate'], [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, 'spec_receipt'],
+  ].map(value => JSON.stringify(value)).sort().join('\0')) rejectReservedProfile(name, 'retained native component verify bindings are not exact');
+  if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1 || consumptionsByNode.spec_review_admit.length !== 1) rejectReservedProfile(name, 'retained native component admission consumers are not singular');
+}
+
 /** Exact native component admission suffix.  The operational prefix is
  * intentionally explicit: this profile may follow only the shipped
  * native-validation barrier, while the older three/five-node profiles below
@@ -543,6 +634,11 @@ function validateReservedProofAdmissionTemplate(
       )
     );
   });
+  const nativeRetainedName = name === RETAINED_COMPONENT_TEMPLATE_NAME;
+  const nativeLiveName = name === 'onboard-component' && inputClaim === 'component.work_item@1' && nodeKeys.includes('prepare-work-item');
+  if ((nativeRetainedName || nativeLiveName) && !triggered) {
+    rejectReservedProfile(name, 'reserved native component profile is missing its governed admission suffix');
+  }
   if (!triggered) return;
 
   const nativeReviewed = resolvedChecks.inspect !== undefined && reviewedComponentSelectorTemplateBindingAllowed(
@@ -550,8 +646,15 @@ function validateReservedProofAdmissionTemplate(
     inputClaim,
     resolvedChecks.inspect,
   );
+  if ((nativeRetainedName || nativeLiveName) && !nativeReviewed) {
+    rejectReservedProfile(name, 'reserved native component profile must use the exact reviewed component selector');
+  }
   if (nativeReviewed) {
-    validateNativeReviewedComponentAdmissionTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    if (nativeRetainedName) {
+      validateNativeRetainedComponentAdmissionTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    } else {
+      validateNativeReviewedComponentAdmissionTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    }
     return;
   }
 
@@ -1474,7 +1577,14 @@ export function compileExpansionPlan(
 
   for (const compiled of precompiled) compileReachableTemplate(compiled.template, 2);
   for (const templateName of Object.keys(templatesByName)) {
-    if (!reachableTemplates.has(templateName)) {
+    // The retained profile is a shipped, runner-selected continuation
+    // template. It is intentionally dormant in the live project expansion;
+    // its exact topology is still compiled and validated above, then the
+    // runner selects it in a fresh config before dispatch.
+    const dormantNativeProfile = (templateName === RETAINED_COMPONENT_TEMPLATE_NAME ||
+      (templateName === 'onboard-component' && templatesByName[templateName].input.claim === 'component.work_item@1' &&
+        Object.prototype.hasOwnProperty.call(templatesByName[templateName].nodesByKey, 'prepare-work-item')));
+    if (!reachableTemplates.has(templateName) && !dormantNativeProfile) {
       throw new InstancePlanError(
         'UNREACHABLE_SUBGRAPH_TEMPLATE',
         `Subgraph template "${templateName}" is not reachable from a root expansion`

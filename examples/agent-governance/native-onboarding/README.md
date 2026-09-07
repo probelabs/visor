@@ -1,4 +1,42 @@
-# Milestone A: native Proof onboarding
+# Current: retained native Proof continuation
+
+The current entrypoint is a two-phase bridge for an already initialized and
+promoted subject. Phase A authors and reviews native requirements, then
+exports the reviewed packet archive. Phase B below revalidates that retained
+archive against the current Proof WorkItems, builds a fresh graph, and runs
+the unchanged native validation/admission/reconciliation suffix. It does not
+dispatch historical authors or per-requirement reviewers and does not reuse
+stale WorkItem descendants.
+
+```sh
+REQUEST_TIMEOUT=480000 \
+TS_NODE_TRANSPILE_ONLY=1 \
+node -r ./node_modules/ts-node/register/transpile-only \
+  examples/agent-governance/native-onboarding/run-onboarding.ts \
+  --subject-root /absolute/path/to/already-promoted-subject \
+  --original-root /absolute/path/to/protected-original \
+  --proof-bin /absolute/path/to/proof \
+  --retained-review-export /absolute/path/to/native-review-packet-export \
+  --output /absolute/path/to/retained-continuation-output \
+  --timeout 7200000
+```
+
+The caller must set `CODEX_HOME=/absolute/path/to/private/codex-home` to a
+private read-only Luna/xhigh session configuration; this example never copies
+or prints its authentication or configuration.
+
+Add `--preflight-only` to validate the retained archive, current requirement
+hashes, aggregate map, and compiled graph without dispatching the engine. The
+disposable five-component/92-review integration evidence uses the real pinned Proof CLI
+and synthetic governed responses; it proves graph gating, exact lineage,
+`ADMITTED` receipts, reconciliation, and checkpoint replay, not completion by
+a real Luna model. The retained path requires a current authenticated Proof
+WorkItem set and matching hashes; it is not crash-atomic recovery or a claim
+that the historical author/review phase was rerun.
+
+The sections below are historical milestone notes and launch records.
+
+## Historical Milestone A: native Proof onboarding
 
 This example is a bounded, one-component slice of the Product-Native Proof
 Governance plan. It uses a normal Visor `command -> ai` DAG:
@@ -104,7 +142,7 @@ uninterrupted fresh run, and it does not demonstrate durable B resume or
 recovery. Treat the retained Proof files, traces, and logs as the curated
 evidence to inspect; use a fresh subject for a new run.
 
-## Milestone B: Graph-v2 review progression
+## Historical Milestone B: Graph-v2 review progression
 
 `visor-milestone-b.yaml` is a small read-only review prototype over the same
 native subject. It uses ordinary command and AI providers, Graph-v2 keyed
@@ -176,7 +214,7 @@ pause is not in-flight overlap or demonstrated interruption recovery. This
 prototype does not claim concurrent per-spec Proof validation; selective
 reruns, project reconciliation, and full-campaign admission remain deferred.
 
-## Fresh native onboarding flow
+## Historical fresh native onboarding flow
 
 `visor-onboarding.yaml` is the bounded fresh-project flow. Its launcher accepts
 generic absolute roots, checks the unannotated subject and protected original,

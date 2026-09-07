@@ -978,7 +978,7 @@ subgraphs:
           process.stdout.write(JSON.stringify(aggregate));
           NODE
 
-      native-validation:
+      native-validation: &native_validation_suffix
         type: command
         depends_on: [component-reviewed]
         resource_group: proof-workspace-mutation
@@ -1057,7 +1057,7 @@ subgraphs:
           if (validationHardFailure || statusHardFailure) process.exitCode = 1;
           NODE
 
-      inspect:
+      inspect: &native_component_inspect
         type: governed-proof-inspect
         depends_on: [native-validation]
         profile: luna-xhigh-readonly-v1
@@ -1073,14 +1073,14 @@ subgraphs:
         emits:
           - {claim: proof.candidate@1, from: output}
 
-      proof_admit:
+      proof_admit: &native_component_proof_admit
         type: proof-admit
         consumes:
           - {claim: proof.candidate@1, as: candidate}
         emits:
           - {claim: proof.admitted_receipt@1, from: output}
 
-      spec_review:
+      spec_review: &native_component_spec_review
         type: governed-proof-inspect
         profile: luna-xhigh-readonly-v1
         invocation:
@@ -1096,20 +1096,59 @@ subgraphs:
         emits:
           - {claim: proof.component_spec_review_candidate@1, from: output}
 
-      spec_review_admit:
+      spec_review_admit: &native_component_spec_review_admit
         type: proof-admit
         consumes:
           - {claim: proof.component_spec_review_candidate@1, as: candidate}
         emits:
           - {claim: proof.component_spec_review_admitted_receipt@1, from: output}
 
-      verify:
+      verify: &native_component_verify
         type: noop
         consumes:
           - {claim: proof.candidate@1, as: candidate}
           - {claim: proof.admitted_receipt@1, as: receipt}
           - {claim: proof.component_spec_review_candidate@1, as: spec_candidate}
           - {claim: proof.component_spec_review_admitted_receipt@1, as: spec_receipt}
+
+  # Retained continuation profile. The runner replaces the literal aggregate
+  # map sentinel with one canonical, schema-validated base64 document before
+  # strict config compilation. This command never rereads the archive or
+  # reconstructs packet provenance from a path, stdin, or environment.
+  onboard-component-retained:
+    input: {name: component, claim: component.work_item@1}
+    checks:
+      component-reviewed:
+        type: command
+        timeout: 120000
+        resource_group: proof-workspace-mutation
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+        emits:
+          - {claim: native.component.reviewed@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const deps = {{ outputs | json }};
+          const workItem = deps.component;
+          if (!workItem || typeof workItem !== 'object' || Array.isArray(workItem) || typeof workItem.component_id !== 'string' || workItem.component_id.length === 0) throw new Error('retained review continuation is missing the current component WorkItem');
+          const encoded = '__NATIVE_RETAINED_AGGREGATE_MAP_BASE64__';
+          if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) throw new Error('retained aggregate map is not canonical base64');
+          let aggregates;
+          try { aggregates = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')); } catch { throw new Error('retained aggregate map is not valid JSON'); }
+          if (!aggregates || typeof aggregates !== 'object' || Array.isArray(aggregates)) throw new Error('retained aggregate map must be an object');
+          const aggregate = aggregates[workItem.component_id];
+          if (!aggregate || typeof aggregate !== 'object' || Array.isArray(aggregate) || aggregate.component_id !== workItem.component_id || aggregate.source?.kind !== 'retained_checkpoint') throw new Error('retained aggregate map has no exact current component entry');
+          process.stdout.write(JSON.stringify(aggregate));
+          NODE
+
+      native-validation: *native_validation_suffix
+      inspect: *native_component_inspect
+      proof_admit: *native_component_proof_admit
+      spec_review: *native_component_spec_review
+      spec_review_admit: *native_component_spec_review_admit
+      verify: *native_component_verify
 
   native-requirement-review:
     input: {name: item, claim: native.requirement.item@1}

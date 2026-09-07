@@ -14,7 +14,9 @@ import { loadConfig, StateMachineExecutionEngine } from '../../../src/sdk';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../../src/snapshot-store';
 import type { GraphJournalCheckpointV1 } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
-import { immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import type { GeneratedDispatchGate, GeneratedDispatchGateDecision } from '../../../src/types/engine';
+import type { NodeGenerationProjection } from '../../../src/state-machine/graph/instance-kernel';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
 import { createProofAdmissionCapability, goCompatibleProofJson } from '../../../src/providers/proof-admission-cli-child';
 import type { PRInfo } from '../../../src/pr-analyzer';
@@ -512,6 +514,140 @@ function encodeResultSchemas(value: unknown): unknown {
   }
   return output;
 }
+
+const RETAINED_AGGREGATE_MAP_SENTINEL = '__NATIVE_RETAINED_AGGREGATE_MAP_BASE64__';
+const RETAINED_AGGREGATE_MAX_BYTES = 128 * 1024;
+
+function utf8Sorted(values: readonly string[]): string[] {
+  return [...values].sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+}
+
+/**
+ * Build the one immutable component-keyed map consumed by the retained
+ * component template.  The map is deliberately made from the validated
+ * packet objects, never from an archive path or a mutable process value.
+ */
+export function buildRetainedReviewedAggregateMap(input: RetainedReviewExport): Json {
+  const componentIds = utf8Sorted([...new Set(input.packets.map(packet => packet.componentId))]);
+  if (componentIds.length === 0) throw new Error('retained review export has no component aggregates');
+  const entries = componentIds.map(componentId => {
+    const aggregate = buildRetainedReviewedAggregate(input, componentId);
+    const bytes = Buffer.byteLength(canonicalJson(aggregate), 'utf8');
+    if (bytes > RETAINED_AGGREGATE_MAX_BYTES) {
+      throw new Error(`retained component aggregate exceeds ${RETAINED_AGGREGATE_MAX_BYTES} bytes for ${componentId}`);
+    }
+    return [componentId, aggregate] as const;
+  });
+  return immutableCanonicalValue(Object.fromEntries(entries)) as Json;
+}
+
+/** Encode exact canonical map bytes for embedding in the retained command. */
+export function encodeRetainedReviewedAggregateMap(input: RetainedReviewExport): string {
+  const bytes = Buffer.from(canonicalJson(buildRetainedReviewedAggregateMap(input)), 'utf8');
+  const encoded = bytes.toString('base64');
+  if (!encoded || Buffer.from(encoded, 'base64').compare(bytes) !== 0) {
+    throw new Error('retained aggregate map did not round-trip as canonical base64');
+  }
+  return encoded;
+}
+
+function componentCandidateSelectorSchema(prepared: Json): string {
+  const claimTypes = prepared.claim_types;
+  const candidateType = claimTypes && typeof claimTypes === 'object' && !Array.isArray(claimTypes)
+    ? (claimTypes as Json)['proof.candidate@1']
+    : undefined;
+  const candidateSchema = candidateType && typeof candidateType === 'object' && !Array.isArray(candidateType)
+    ? (candidateType as Json).schema
+    : undefined;
+  const oneOf = candidateSchema && typeof candidateSchema === 'object' && !Array.isArray(candidateSchema)
+    ? (candidateSchema as Json).oneOf
+    : undefined;
+  const branch = Array.isArray(oneOf)
+    ? oneOf.find(value => value && typeof value === 'object' && !Array.isArray(value) &&
+      (((value as Json).properties as Json | undefined)?.schema as Json | undefined)?.const === 'reqproof.component-onboarding/v1')
+    : undefined;
+  if (!branch || typeof branch !== 'object' || Array.isArray(branch)) {
+    throw new Error('shipped proof.candidate@1 schema has no component selector branch');
+  }
+  return Buffer.from(canonicalJson(branch), 'utf8').toString('base64');
+}
+
+function requiredObject(value: unknown, label: string): Json {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} is not an object`);
+  return value as Json;
+}
+
+/**
+ * Materialize the retained profile from the shipped graph.  This keeps the
+ * profile and both component selector schemas under one config authority while
+ * changing only the project expansion template and the validated map bytes.
+ */
+export function materializeRetainedContinuationConfig(preparedInput: Json, aggregateMap: Json): Json {
+  const prepared = JSON.parse(canonicalJson(preparedInput)) as Json;
+  const encodedMap = Buffer.from(canonicalJson(aggregateMap), 'utf8').toString('base64');
+  if (!encodedMap) throw new Error('retained aggregate map is empty');
+  const selectorSchema = componentCandidateSelectorSchema(prepared);
+  const subgraphs = requiredObject(prepared.subgraphs, 'onboarding subgraphs');
+  const discover = requiredObject(subgraphs['discover-project'], 'discover-project subgraph');
+  const discoverChecks = requiredObject(discover.checks, 'discover-project checks');
+  const materialize = requiredObject(discoverChecks.materialize_catalog, 'materialize_catalog check');
+  const expand = requiredObject(materialize.expand, 'materialize_catalog expansion');
+  if (expand.template !== 'onboard-component' && expand.template !== 'onboard-component-retained') {
+    throw new Error('materialize_catalog expansion does not use the shipped component template');
+  }
+  expand.template = 'onboard-component-retained';
+  const retainedComponentIds = utf8Sorted(Object.keys(aggregateMap));
+  const discoveryInspect = requiredObject(discoverChecks.inspect, 'discover-project inspect check');
+  if (retainedComponentIds.length === 0 || typeof discoveryInspect.message !== 'string') {
+    throw new Error('retained discovery requires a shipped project message and component identities');
+  }
+  discoveryInspect.message = `${discoveryInspect.message}\n\nRetained prior component identities to revalidate and preserve when still current: ${JSON.stringify(retainedComponentIds)}. Do not invent replacement component identities; the authenticated current WorkItem set remains authoritative.`;
+
+  const profiles = ['onboard-component', 'onboard-component-retained'];
+  for (const profileName of profiles) {
+    const profile = requiredObject(subgraphs[profileName], `${profileName} subgraph`);
+    const checks = requiredObject(profile.checks, `${profileName} checks`);
+    for (const checkName of ['inspect', 'spec_review']) {
+      const check = requiredObject(checks[checkName], `${profileName}.${checkName} check`);
+      const invocation = requiredObject(check.invocation, `${profileName}.${checkName} invocation`);
+      invocation.output_schema = selectorSchema;
+    }
+  }
+  const retainedProfile = requiredObject(subgraphs['onboard-component-retained'], 'onboard-component-retained subgraph');
+  const retainedChecks = requiredObject(retainedProfile.checks, 'onboard-component-retained checks');
+  const reviewed = requiredObject(retainedChecks['component-reviewed'], 'retained component-reviewed check');
+  if (reviewed.type !== 'command' || typeof reviewed.exec !== 'string') {
+    throw new Error('retained component-reviewed check is not a command');
+  }
+  const occurrences = reviewed.exec.split(RETAINED_AGGREGATE_MAP_SENTINEL).length - 1;
+  if (occurrences !== 1) throw new Error('retained component-reviewed command must contain one aggregate map sentinel');
+  reviewed.exec = reviewed.exec.replace(RETAINED_AGGREGATE_MAP_SENTINEL, encodedMap);
+
+  // Both selector invocations must be derived from this one claim branch.
+  const liveChecks = requiredObject(requiredObject(subgraphs['onboard-component'], 'onboard-component subgraph').checks, 'onboard-component checks');
+  const retainedFinalChecks = requiredObject(retainedProfile.checks, 'retained final checks');
+  const selectorSchemas = [
+    requiredObject(liveChecks.inspect, 'live inspect').invocation,
+    requiredObject(liveChecks.spec_review, 'live spec_review').invocation,
+    requiredObject(retainedFinalChecks.inspect, 'retained inspect').invocation,
+    requiredObject(retainedFinalChecks.spec_review, 'retained spec_review').invocation,
+  ].map(value => requiredObject(value, 'component selector invocation').output_schema);
+  if (selectorSchemas.some(value => value !== selectorSchema)) {
+    throw new Error('component selector output schemas were not derived from one claim branch');
+  }
+  // The retained graph intentionally has no live authoring or per-item
+  // reviewer expansion. Remove those dormant templates after deriving the
+  // selector bytes; retaining them would make the switched root expansion
+  // fail the compiler's unreachable-template gate.
+  delete subgraphs['onboard-component'];
+  delete subgraphs['native-requirement-review'];
+  return prepared;
+}
+
+/** Defer every generated component-scope generation until the project prefix is materialized. */
+export const retainedProjectPrefixDispatchGate: GeneratedDispatchGate = (
+  generation: NodeGenerationProjection,
+): GeneratedDispatchGateDecision => generation.scope.length > 1 ? 'defer' : 'dispatch';
 
 function onboardingConfigTemplate(): {prepared: Json; inspectCheck: Json} {
   const raw = yaml.load(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -1054,6 +1190,72 @@ export async function validateRetainedReviewExportAgainstCurrentProof(
     }
   }
   return Object.freeze(current);
+}
+
+export type RetainedContinuationPreparation = Readonly<{
+  config: VisorConfig;
+  retained: RetainedReviewExport;
+  aggregateMap: Json;
+  aggregateMapBase64: string;
+  currentRequirements: readonly RecoveryProofRequirementHash[];
+  materializedConfigPath: string;
+  materializedConfigSha256: string;
+  graphSemanticDigest: string;
+}>;
+
+/**
+ * Bind one validated retained export to a fresh, current Proof authority and
+ * compile the resulting retained graph.  The subject is intentionally not
+ * initialized here: retained continuation runs against an already initialized
+ * and promoted subject whose current WorkItems are rechecked by Proof.
+ */
+export async function loadRetainedContinuationConfig(
+  inputRoot: string,
+  proof: string,
+  subject: string,
+  output: string,
+  timeout: number,
+): Promise<RetainedContinuationPreparation> {
+  const {prepared, inspectCheck} = onboardingConfigTemplate();
+  const inventory = await loadCurrentOnboardingInventory(proof, subject, output, timeout);
+  await loadResolvedOnboardingAuthority(proof, subject, output, timeout, inventory, prepared, inspectCheck);
+  const baseConfig = await loadConfig(prepared, {strict: true});
+  const plan = compileClaimPlan(baseConfig);
+  const retained = readRetainedReviewExport(inputRoot, plan);
+  const currentRequirements = await validateRetainedReviewExportAgainstCurrentProof(
+    retained, proof, subject, output, timeout,
+  );
+  const aggregateMap = buildRetainedReviewedAggregateMap(retained);
+  const aggregateMapBase64 = encodeRetainedReviewedAggregateMap(retained);
+  const finalPrepared = materializeRetainedContinuationConfig(prepared, aggregateMap);
+  const config = await loadConfig(finalPrepared, {strict: true});
+  const graphSemanticDigest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+  const materializedConfigPath = path.join(output, 'preflight', 'retained-config.materialized.json');
+  const materializedConfigBytes = canonicalJson(config) + '\n';
+  writeText(materializedConfigPath, materializedConfigBytes);
+  fs.chmodSync(materializedConfigPath, 0o600);
+  const materializedConfigSha256 = `sha256:${createHash('sha256').update(materializedConfigBytes, 'utf8').digest('hex')}`;
+  const restoredConfig = await loadConfig(JSON.parse(materializedConfigBytes) as Json, {strict: true});
+  if (compileClaimPlan(restoredConfig).expansionPlan.graphSemanticDigest !== graphSemanticDigest) {
+    throw new Error('persisted retained materialized config does not reproduce its graph semantic digest');
+  }
+  const aggregateMapFile = path.join(output, 'preflight', 'retained-aggregate-map.json');
+  writeText(aggregateMapFile, canonicalJson(aggregateMap) + '\n');
+  fs.chmodSync(aggregateMapFile, 0o600);
+  writeJson(path.join(output, 'preflight', 'retained-continuation.json'), {
+    mode: 'retained-review-continuation',
+    export_root: fs.realpathSync(inputRoot),
+    packet_count: retained.packetCount,
+    component_ids: utf8Sorted(Object.keys(aggregateMap)),
+    aggregate_map_sha256: `sha256:${createHash('sha256').update(canonicalJson(aggregateMap), 'utf8').digest('hex')}`,
+    aggregate_map_base64_bytes: Buffer.byteLength(aggregateMapBase64, 'utf8'),
+    current_requirement_count: currentRequirements.length,
+    materialized_config_path: path.relative(output, materializedConfigPath),
+    materialized_config_sha256: materializedConfigSha256,
+    graph_semantic_digest: graphSemanticDigest,
+  });
+  return Object.freeze({config, retained, aggregateMap, aggregateMapBase64, currentRequirements,
+    materializedConfigPath, materializedConfigSha256, graphSemanticDigest});
 }
 
 export type RecoveryProofRequirementHash = Readonly<{
@@ -1988,7 +2190,7 @@ export function validateRecoverySelection(
   return {journal, bindings: Object.freeze(bindings), reviewPackets: Object.freeze(reviewPackets)};
 }
 
-function summarizeCheckpoint(checkpoint: unknown): Json {
+function summarizeCheckpoint(checkpoint: unknown, noNativeAdmissionClaimed = true): Json {
   if (!checkpoint || typeof checkpoint !== 'object') return {available: false};
   const events = Array.isArray((checkpoint as Json).events) ? (checkpoint as Json).events as Json[] : [];
   const completed = events.filter(event => event.type === 'AttemptCompleted');
@@ -2006,7 +2208,7 @@ function summarizeCheckpoint(checkpoint: unknown): Json {
     completed_by_check: byCheck,
     failed_by_check: Object.fromEntries(failed.map(event => [String(event.checkId || 'unknown'), (failed.filter(item => item.checkId === event.checkId).length)])),
     has_failures: failed.length > 0,
-    no_native_admission_claimed: true,
+    no_native_admission_claimed: noNativeAdmissionClaimed,
   };
 }
 
@@ -2016,6 +2218,11 @@ function summarizeCheckpoint(checkpoint: unknown): Json {
  * or runner-side manifest is authoritative for this boundary.
  */
 export function countAuthoritativeMaterializedComponents(config: VisorConfig, checkpoint: unknown): number {
+  return materializedComponentIds(config, checkpoint).length;
+}
+
+/** Return the exact current WorkItem component IDs owned by the active catalog. */
+export function materializedComponentIds(config: VisorConfig, checkpoint: unknown): readonly string[] {
   const plan = compileClaimPlan(config);
   const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
   const projection = journal.getInstanceProjection();
@@ -2054,7 +2261,214 @@ export function countAuthoritativeMaterializedComponents(config: VisorConfig, ch
       workItemIds.slice().sort().join('\u0000') !== componentIds.slice().sort().join('\u0000')) {
     throw new Error('materialized component WorkItems do not exactly match the current component catalog');
   }
-  return componentIds.length;
+  return Object.freeze(utf8Sorted(workItemIds));
+}
+
+/**
+ * Confirm that the final retained journal contains the current WorkItems, all
+ * component suffix receipts, and the project reconciliation receipt. Historical
+ * failures are not silently treated as completion.
+ */
+export function retainedContinuationCheckpointIsComplete(
+  config: VisorConfig,
+  checkpoint: unknown,
+  expectedComponentIds: readonly string[],
+): boolean {
+  try {
+    const plan = compileClaimPlan(config);
+    const projection = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint).getInstanceProjection();
+    if (Object.values(projection.generationsById).some(generation => generation.status === 'failed')) return false;
+    const actual = materializedComponentIds(config, checkpoint);
+    const expected = utf8Sorted(expectedComponentIds);
+    if (actual.join('\u0000') !== expected.join('\u0000')) return false;
+    const componentScope = (claim: {scope: readonly {kind: string; key?: string}[]}) => {
+      const last = claim.scope[claim.scope.length - 1];
+      return last && last.kind === 'keyed' && typeof last.key === 'string' ? last.key : undefined;
+    };
+    const exactParents = (actual: readonly string[], expected: readonly string[]): boolean =>
+      actual.length === expected.length &&
+      new Set(actual).size === actual.length &&
+      actual.every(parent => expected.includes(parent)) &&
+      expected.every(parent => actual.includes(parent));
+    const sortedParents = (actual: readonly string[], expected: readonly string[]): boolean =>
+      exactParents(actual, expected) && sameJson(actual, [...expected].sort());
+    const activeClaims = Object.values(projection.claimsById).filter(claim => claim.active);
+    const workItems = activeClaims.filter(claim =>
+      claim.kind === 'controller-item' && claim.claim === 'component.work_item@1' && componentScope(claim) !== undefined,
+    );
+    const workItemDigests = new Map<string, string>();
+    const suffix = [
+      ['proof.candidate@1', 'inspect'],
+      ['proof.admitted_receipt@1', 'proof_admit'],
+      ['proof.component_spec_review_candidate@1', 'spec_review'],
+      ['proof.component_spec_review_admitted_receipt@1', 'spec_review_admit'],
+    ] as const;
+    for (const componentId of expected) {
+      const currentWorkItems = workItems.filter(claim => componentScope(claim) === componentId);
+      if (currentWorkItems.length !== 1) return false;
+      const workItem = currentWorkItems[0];
+      const workItemPayload = workItem.payload;
+      const authority = workItemPayload && typeof workItemPayload === 'object' && !Array.isArray(workItemPayload)
+        ? (workItemPayload as Json).authority
+        : undefined;
+      const workItemDigest = authority && typeof authority === 'object' && !Array.isArray(authority) &&
+        typeof (authority as Json).work_item_digest === 'string'
+        ? (authority as Json).work_item_digest as string
+        : undefined;
+      if (!workItemDigest || !/^sha256:[0-9a-f]{64}$/.test(workItemDigest) || workItemDigests.has(componentId)) return false;
+      workItemDigests.set(componentId, workItemDigest);
+      const reviewed = activeClaims.filter(claim =>
+        claim.claim === 'native.component.reviewed@1' &&
+        claim.producerCheckId === 'component-reviewed' &&
+        componentScope(claim) === componentId,
+      );
+      if (reviewed.length !== 1 || reviewed[0].kind !== 'generated-output' ||
+          reviewed[0].subgraphInstanceId !== workItem.subgraphInstanceId ||
+          !sortedParents(reviewed[0].parentClaimIds, [workItem.claimId])) return false;
+      const candidates = activeClaims.filter(claim =>
+        claim.claim === 'proof.candidate@1' && claim.producerCheckId === 'inspect' && componentScope(claim) === componentId,
+      );
+      if (candidates.length !== 1 || candidates[0].kind !== 'generated-output' ||
+          candidates[0].subgraphInstanceId !== workItem.subgraphInstanceId ||
+          !sortedParents(candidates[0].parentClaimIds, [workItem.claimId, reviewed[0].claimId])) return false;
+      for (const [claimRef, producer] of suffix) {
+        const matches = activeClaims.filter(claim => claim.claim === claimRef && claim.producerCheckId === producer && componentScope(claim) === componentId);
+        if (matches.length !== 1) return false;
+        if (claimRef === 'proof.admitted_receipt@1' || claimRef === 'proof.component_spec_review_admitted_receipt@1') {
+          const receipt = matches[0].payload;
+          if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+              (receipt as Json).Status !== 'ADMITTED' || typeof (receipt as Json).ClaimID !== 'string' ||
+              typeof (receipt as Json).PayloadFingerprint !== 'string') return false;
+          const expectedClaim = claimRef === 'proof.admitted_receipt@1' ? candidates[0] : undefined;
+          if (expectedClaim && ((matches[0].payload as Json).ClaimID !== expectedClaim.claimId ||
+              (matches[0].payload as Json).PayloadFingerprint !== expectedClaim.payloadFingerprint)) return false;
+        }
+      }
+      const admission = activeClaims.filter(claim =>
+        claim.claim === 'proof.admitted_receipt@1' && claim.producerCheckId === 'proof_admit' && componentScope(claim) === componentId,
+      );
+      const stagedCandidates = activeClaims.filter(claim =>
+        claim.claim === 'proof.component_spec_review_candidate@1' && claim.producerCheckId === 'spec_review' && componentScope(claim) === componentId,
+      );
+      const stagedAdmissions = activeClaims.filter(claim =>
+        claim.claim === 'proof.component_spec_review_admitted_receipt@1' && claim.producerCheckId === 'spec_review_admit' && componentScope(claim) === componentId,
+      );
+      if (admission.length !== 1 || stagedCandidates.length !== 1 || stagedAdmissions.length !== 1 ||
+          !sortedParents(admission[0].parentClaimIds, [candidates[0].claimId]) ||
+          !sortedParents(stagedAdmissions[0].parentClaimIds, [stagedCandidates[0].claimId]) ||
+          !sortedParents(stagedCandidates[0].parentClaimIds, [workItem.claimId, candidates[0].claimId, admission[0].claimId])) return false;
+      const stagedReceipt = stagedAdmissions[0].payload;
+      if (!stagedReceipt || typeof stagedReceipt !== 'object' || Array.isArray(stagedReceipt) ||
+          (stagedReceipt as Json).ClaimID !== stagedCandidates[0].claimId ||
+          (stagedReceipt as Json).PayloadFingerprint !== stagedCandidates[0].payloadFingerprint) return false;
+    }
+    const reconciliations = activeClaims.filter(claim => claim.claim === 'proof.project_reconciliation_receipt@1' && claim.producerCheckId === 'project_reconcile');
+    if (reconciliations.length !== 1) return false;
+    const reconciliation = reconciliations[0];
+    if (!reconciliation || !reconciliation.payload || typeof reconciliation.payload !== 'object' || Array.isArray(reconciliation.payload) ||
+        (reconciliation.payload as Json).version !== 'proof.project-reconciliation-receipt/v1') return false;
+    const admissions = (reconciliation.payload as Json).component_admissions;
+    const covered = (reconciliation.payload as Json).covered_work_item_digests;
+    const expectedWorkItemDigests = expected.map(componentId => workItemDigests.get(componentId));
+    if (expectedWorkItemDigests.some((digest): digest is undefined => digest === undefined) ||
+        new Set(expectedWorkItemDigests).size !== expectedWorkItemDigests.length) return false;
+    const admissionRows = Array.isArray(admissions) ? admissions.map(value =>
+      value && typeof value === 'object' && !Array.isArray(value) ? value as Json : undefined,
+    ) : [];
+    if (!Array.isArray(admissions) || !Array.isArray(covered) || admissions.length !== expected.length || covered.length !== expected.length ||
+        new Set(covered.filter(value => typeof value === 'string')).size !== expected.length ||
+        utf8Sorted(covered.filter((value): value is string => typeof value === 'string')).join('\u0000') !== utf8Sorted(expectedWorkItemDigests as string[]).join('\u0000') ||
+        new Set(admissions.map(value => value && typeof value === 'object' && !Array.isArray(value) ? (value as Json).component_id : undefined)).size !== expected.length ||
+        admissionRows.some(value => !value || typeof value.component_id !== 'string' || !expected.includes(value.component_id) ||
+          typeof value.work_item_digest !== 'string' || value.work_item_digest !== workItemDigests.get(value.component_id))) return false;
+    const forbiddenChecks = new Set(['author-native-component', 'promote-native-component', 'enumerate-native-requirements', 'review-native-item', 'collect-proof-evidence']);
+    if (Object.values(projection.generationsById).some(generation => forbiddenChecks.has(generation.checkId))) return false;
+    const componentGenerations = Object.values(projection.generationsById).filter(generation => generation.scope.length > 1);
+    for (const componentId of expected) {
+      for (const checkId of ['component-reviewed', 'native-validation', 'inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify']) {
+        if (componentGenerations.filter(generation => generation.scope[generation.scope.length - 1]?.key === componentId &&
+          generation.checkId === checkId && generation.status === 'completed').length !== 1) return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The pre-resume frontier must not have started a component generation. */
+export function retainedFrontierHasNoComponentAttempts(checkpoint: unknown): boolean {
+  if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) return false;
+  const events = (checkpoint as Json).events;
+  if (!Array.isArray(events)) return false;
+  return !events.some(event => event && typeof event === 'object' && !Array.isArray(event) &&
+    (event as Json).type === 'AttemptStarted' && Array.isArray((event as Json).scope) &&
+    ((event as Json).scope as unknown[]).length > 1);
+}
+
+export type RetainedContinuationFrontier = Readonly<{
+  checkpoint: GraphJournalCheckpointV1;
+  materializedComponentIds: readonly string[];
+  expectedComponentIds: readonly string[];
+  componentAttemptsStarted: number;
+  zeroComponentAttempts: boolean;
+  setsEqual: boolean;
+}>;
+
+export type RetainedContinuationEngineRun = Readonly<{
+  initialResult: Awaited<ReturnType<StateMachineExecutionEngine['executeGroupedChecks']>>;
+  frontier: RetainedContinuationFrontier;
+  result: Awaited<ReturnType<StateMachineExecutionEngine['resumeGraphCheckpoint']>>['result'];
+  checkpoint: GraphJournalCheckpointV1;
+}>;
+
+/**
+ * Execute the retained project prefix, publish its durable frontier, then
+ * resume that exact checkpoint through the normal engine.  The callback is
+ * invoked after export and before either frontier predicate can fail, so the
+ * caller can retain diagnostic evidence even for a set mismatch.
+ */
+export async function executeRetainedContinuationEngine(
+  engine: StateMachineExecutionEngine,
+  config: VisorConfig,
+  timeout: number,
+  expectedComponentIds: readonly string[],
+  onFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>,
+): Promise<RetainedContinuationEngineRun> {
+  const initialResult = await engine.executeGroupedChecks(
+    PR, ['project'], timeout, config, 'json', false, config.max_parallelism, false,
+    undefined, retainedProjectPrefixDispatchGate,
+  );
+  const checkpoint = engine.exportGraphCheckpoint();
+  const materialized = materializedComponentIds(config, checkpoint);
+  const expected = Object.freeze(utf8Sorted(expectedComponentIds));
+  const zeroComponentAttempts = retainedFrontierHasNoComponentAttempts(checkpoint);
+  const componentAttemptsStarted = (checkpoint.events as readonly Json[]).filter(event =>
+    event.type === 'AttemptStarted' && Array.isArray(event.scope) && event.scope.length > 1,
+  ).length;
+  const frontier = Object.freeze({
+    checkpoint,
+    materializedComponentIds: materialized,
+    expectedComponentIds: expected,
+    componentAttemptsStarted,
+    zeroComponentAttempts,
+    setsEqual: materialized.join('\u0000') === expected.join('\u0000'),
+  });
+  if (onFrontier) await onFrontier(frontier);
+  if (!frontier.zeroComponentAttempts) {
+    throw new Error('retained project frontier started a component generation before aggregate set validation');
+  }
+  if (!frontier.setsEqual) {
+    throw new Error('retained aggregate map does not exactly match current materialized component WorkItems');
+  }
+  const resumed = await engine.resumeGraphCheckpoint({
+    checkpoint,
+    config,
+    prInfo: PR,
+    maxParallelism: config.max_parallelism,
+    failFast: false,
+  });
+  return Object.freeze({initialResult, frontier, result: resumed.result, checkpoint: resumed.checkpoint});
 }
 
 function writeCheckpoint(file: string, checkpoint: unknown): void {
@@ -2394,9 +2808,199 @@ async function runRecovery(
   console.log(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
 }
 
+type FreshRunnerRoots = Readonly<{subject: string; original: string; output: string}>;
+
+/**
+ * Run a retained review export through a fresh current Proof graph.  The
+ * subject is already initialized/promoted: this mode intentionally skips
+ * Proof init and all authoring/review expansion, then gates component dispatch
+ * until the current catalog has materialized exact WorkItems.
+ */
+async function runRetainedContinuation(
+  roots: FreshRunnerRoots,
+  proof: string,
+  timeout: number,
+  requestTimeout: number,
+  objectFormat: 'sha1' | 'sha256',
+  onPromptCaptured: (info: PublicPromptCaptureInfo) => void,
+  exportRoot: string,
+  preflightOnly: boolean,
+): Promise<void> {
+  const revision = assertRecoverySubject(roots.subject);
+  const resolvedExportRoot = realDirectory(exportRoot, 'retained review export root');
+  if (inside(resolvedExportRoot, roots.subject) || inside(roots.subject, resolvedExportRoot) ||
+      inside(resolvedExportRoot, roots.original) || inside(roots.original, resolvedExportRoot)) {
+    throw new Error('retained review export root must be disjoint from subject and protected original roots');
+  }
+  writeJson(path.join(roots.output, 'preflight.json'), {
+    status: 'retained-continuation-launch-boundary-passed',
+    mode: 'retained-review-continuation',
+    subject_root: roots.subject,
+    protected_original_root: roots.original,
+    subject_revision: revision,
+    proof_binary: proof,
+    request_timeout_ms: requestTimeout,
+    outer_timeout_ms: timeout,
+    object_format: objectFormat,
+    retained_export_root: resolvedExportRoot,
+    no_native_init: true,
+    no_authoring_or_per_requirement_review_dispatch: true,
+    note: 'Current Proof inventory, role authority, and requirement hashes are revalidated before graph dispatch.',
+  });
+  const registry = CheckProviderRegistry.getInstance();
+  registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
+  const preparation = await loadRetainedContinuationConfig(resolvedExportRoot, proof, roots.subject, roots.output, timeout);
+  const config = preparation.config;
+  const configPlan = compileClaimPlan(config);
+  writeJson(path.join(roots.output, 'preflight', 'retained-config-authority.json'), {
+    graph_semantic_digest: preparation.graphSemanticDigest,
+    materialized_config_path: path.relative(roots.output, preparation.materializedConfigPath),
+    materialized_config_sha256: preparation.materializedConfigSha256,
+    current_requirement_count: preparation.currentRequirements.length,
+    component_ids: utf8Sorted(Object.keys(preparation.aggregateMap)),
+    aggregate_map_base64_bytes: Buffer.byteLength(preparation.aggregateMapBase64, 'utf8'),
+  });
+  if (preflightOnly) {
+    writeJson(path.join(roots.output, 'preflight', 'summary.json'), {
+      status: 'retained-continuation-preflight-only-complete',
+      mode: 'retained-review-continuation',
+      packet_count: preparation.retained.packetCount,
+      current_requirement_count: preparation.currentRequirements.length,
+      no_engine_dispatch: true,
+    });
+    console.log(JSON.stringify({status: 'retained-continuation-preflight-only-complete', output: roots.output}, null, 2));
+    return;
+  }
+
+  const engine = new StateMachineExecutionEngine(roots.subject);
+  engine.setExecutionContext({hooks: {onPromptCaptured}});
+  let checkpoint: GraphJournalCheckpointV1;
+  let initialResult: unknown;
+  let finalResult: unknown;
+  const expectedFrontierComponents = utf8Sorted(Object.keys(preparation.aggregateMap));
+  try {
+    // The generated gate allows the project lane to reach materialize_catalog
+    // while leaving every component-scope generation at a ready frontier.
+    const engineRun = await executeRetainedContinuationEngine(
+      engine, config, timeout, expectedFrontierComponents, frontier => {
+        checkpoint = frontier.checkpoint;
+        writeCheckpoint(path.join(roots.output, 'retained-frontier-checkpoint.json'), frontier.checkpoint);
+        writeJson(path.join(roots.output, 'preflight', 'component-frontier.json'), {
+          status: frontier.zeroComponentAttempts && frontier.setsEqual
+            ? 'exact-current-component-frontier'
+            : 'component-frontier-mismatch',
+          checkpoint_sha256: frontier.checkpoint.integrity && typeof frontier.checkpoint.integrity.digest === 'string'
+            ? `sha256:${frontier.checkpoint.integrity.digest}`
+            : null,
+          graph_semantic_digest: frontier.checkpoint.graphSemanticDigest,
+          materialized_config_path: path.relative(roots.output, preparation.materializedConfigPath),
+          materialized_config_sha256: preparation.materializedConfigSha256,
+          materialized_component_ids: frontier.materializedComponentIds,
+          retained_aggregate_component_ids: frontier.expectedComponentIds,
+          component_attempts_released: false,
+          component_attempts_started: frontier.componentAttemptsStarted,
+          zero_component_attempts: frontier.zeroComponentAttempts,
+          sets_equal: frontier.setsEqual,
+        });
+      },
+    );
+    initialResult = engineRun.initialResult;
+    checkpoint = engineRun.checkpoint;
+    finalResult = engineRun.result;
+    writeJson(path.join(roots.output, 'checkpoint.json'), checkpoint);
+    writeJson(path.join(roots.output, 'visor-result.json'), finalResult);
+  } catch (error) {
+    try {
+      checkpoint = engine.exportGraphCheckpoint();
+      writeJson(path.join(roots.output, 'checkpoint.partial.json'), checkpoint);
+    } catch {
+      // Preserve the original engine error when no checkpoint exists.
+    }
+    throw error;
+  }
+
+  const postflight: Json = {};
+  for (const [name, args] of Object.entries({
+    requirements: ['req', 'list', '--format', 'json'],
+    validation: ['validate', '--variable-drift', '--format', 'json'],
+    audit: ['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json'],
+    checklist: ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'],
+    status: ['status', '--format', 'json'],
+  })) {
+    const run = runProof(proof, roots.subject, roots.output, 'postflight', args, timeout);
+    postflight[name] = {
+      exit_code: run.status,
+      stdout_file: 'commands/postflight/' + commandName(args) + '.stdout',
+      stderr_file: 'commands/postflight/' + commandName(args) + '.stderr',
+    };
+  }
+  writeJson(path.join(roots.output, 'postflight.json'), postflight);
+  const postflightSummary = summarizeNativePostflight(postflight, engine.getInstanceProjection());
+  const finalMaterialized = materializedComponentIds(config, checkpoint);
+  const expectedComponents = utf8Sorted(Object.keys(preparation.aggregateMap));
+  const journalComplete = retainedContinuationCheckpointIsComplete(config, checkpoint, expectedComponents);
+  const finalProjection = ExecutionJournal.restoreGraphCheckpoint(configPlan, checkpoint).getInstanceProjection();
+  const finalActiveClaims = Object.values(finalProjection.claimsById).filter(claim => claim.active);
+  const componentScope = (claim: {scope: readonly {kind: string; key?: string}[]}) => {
+    const last = claim.scope[claim.scope.length - 1];
+    return last && last.kind === 'keyed' && typeof last.key === 'string' ? last.key : undefined;
+  };
+  const admittedComponentIds = new Set(finalActiveClaims
+    .filter(claim => claim.claim === 'proof.admitted_receipt@1' && claim.producerCheckId === 'proof_admit' &&
+      claim.scope.length > 1 && componentScope(claim) !== undefined && expectedComponents.includes(componentScope(claim) as string) &&
+      claim.payload && typeof claim.payload === 'object' && !Array.isArray(claim.payload) &&
+      (claim.payload as Json).Status === 'ADMITTED')
+    .map(claim => componentScope(claim)));
+  const projectReconciliationReceipts = finalActiveClaims.filter(claim =>
+    claim.claim === 'proof.project_reconciliation_receipt@1' && claim.producerCheckId === 'project_reconcile',
+  ).length;
+  const forbiddenDispatchChecks = new Set(['author-native-component', 'promote-native-component', 'enumerate-native-requirements', 'review-native-item', 'collect-proof-evidence']);
+  const forbiddenDispatches = (checkpoint.events as readonly Json[]).filter(event =>
+    event.type === 'AttemptStarted' && typeof event.checkId === 'string' && forbiddenDispatchChecks.has(event.checkId),
+  ).length;
+  const newlyExecutedPerItemReviews = (checkpoint.events as readonly Json[]).filter(event =>
+    event.type === 'AttemptStarted' && event.checkId === 'review-native-item',
+  ).length;
+  const summary = {
+    status: postflightSummary.hard_failures.length > 0 || !journalComplete
+      ? 'retained-continuation-failed-postflight'
+      : 'retained-continuation-complete',
+    mode: 'retained-review-continuation',
+    retained_export_root: resolvedExportRoot,
+    retained_packet_count: preparation.retained.packetCount,
+    current_requirement_count: preparation.currentRequirements.length,
+    materialized_component_ids: finalMaterialized,
+    retained_aggregate_component_ids: expectedComponents,
+    checkpoint: summarizeCheckpoint(checkpoint, !journalComplete),
+    postflight,
+    open_native_checks: postflightSummary.open_native_checks,
+    journal_complete: journalComplete,
+    reused_review_packets: preparation.retained.packetCount,
+    newly_executed_per_item_reviews: newlyExecutedPerItemReviews,
+    components_admitted: admittedComponentIds.size,
+    project_reconciliation_receipts: projectReconciliationReceipts,
+    forbidden_dispatches: forbiddenDispatches,
+    no_historical_author_or_per_requirement_review_dispatch: forbiddenDispatches === 0,
+    result_recorded: finalResult !== undefined,
+    initial_result_recorded: initialResult !== undefined,
+    output: roots.output,
+  };
+  writeJson(path.join(roots.output, 'summary.json'), summary);
+  if (postflightSummary.hard_failures.length > 0 || !journalComplete) {
+    console.error(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
+    process.exitCode = 1;
+    return;
+  }
+  console.log(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
+}
+
 async function main(): Promise<void> {
   const values = parseArgs(process.argv.slice(2));
   const recovery = parseRecoveryArguments(values);
+  const retainedExport = values['retained-review-export'];
+  if (recovery && retainedExport !== undefined) {
+    throw new Error('--retained-review-export cannot be combined with checkpoint recovery arguments');
+  }
   const roots = recovery
     ? assertRecoveryRoots(
       required(values, 'subject-root'),
@@ -2418,7 +3022,9 @@ async function main(): Promise<void> {
     await runRecovery(values, roots, proof, timeout, requestTimeout, recovery);
     return;
   }
-  const revision = assertFreshSubject(roots.subject, process.env.SUBJECT_BASELINE_REVISION);
+  const revision = retainedExport !== undefined
+    ? assertRecoverySubject(roots.subject)
+    : assertFreshSubject(roots.subject, process.env.SUBJECT_BASELINE_REVISION);
   const objectFormat = gitObjectFormat(roots.subject);
   const codex = assertPrivateCodexHome(roots.subject, roots.original, roots.output);
   process.chdir(roots.subject);
@@ -2441,6 +3047,14 @@ async function main(): Promise<void> {
   process.env.VISOR_TRACE_DIR = process.env.VISOR_TRACE_DIR || path.join(roots.output, 'traces');
   const publicAiDirectory = path.join(roots.output, 'ai');
   const onPromptCaptured = configurePublicPromptCapture(publicAiDirectory);
+
+  if (retainedExport !== undefined) {
+    await runRetainedContinuation(
+      roots, proof, timeout, requestTimeout, objectFormat, onPromptCaptured,
+      retainedExport, values['preflight-only'] === 'true',
+    );
+    return;
+  }
 
   writeJson(path.join(roots.output, 'preflight.json'), {
     status: 'launch-boundary-passed',

@@ -5,7 +5,8 @@ import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
-import {sha256Canonical} from '../../src/state-machine/graph/claim-kernel';
+import {loadConfig} from '../../src/sdk';
+import {canonicalJson, sha256Canonical} from '../../src/state-machine/graph/claim-kernel';
 import {
   assertPrivateCodexHome,
   assertCanonicalOwnedPathsUnchanged,
@@ -15,6 +16,10 @@ import {
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
   inventoryAuthorDraft,
+  buildRetainedReviewedAggregateMap,
+  encodeRetainedReviewedAggregateMap,
+  materializeRetainedContinuationConfig,
+  retainedProjectPrefixDispatchGate,
   buildRetainedReviewedAggregate,
   loadRetainedOnboardingConfig,
   parseRecoveryArguments,
@@ -130,6 +135,25 @@ function shippedClaimPlan(): any {
     return materialized;
   };
   return compileClaimPlan(materializeResultSchemas(raw));
+}
+
+function shippedPreparedConfig(): any {
+  const configPath = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml');
+  const raw = yaml.load(fs.readFileSync(configPath, 'utf8')) as any;
+  const materializeResultSchemas = (value: any): any => {
+    if (Array.isArray(value)) return value.map(materializeResultSchemas);
+    if (!value || typeof value !== 'object') return value;
+    const materialized = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, materializeResultSchemas(child)]));
+    if (materialized.type === 'governed-proof-inspect' && typeof materialized.result_schema === 'string' &&
+        materialized.invocation && typeof materialized.invocation === 'object') {
+      materialized.invocation = {
+        ...materialized.invocation,
+        output_schema: Buffer.from(materialized.result_schema, 'utf8').toString('base64'),
+      };
+    }
+    return materialized;
+  };
+  return materializeResultSchemas(raw);
 }
 
 describe('native onboarding runner boundaries', () => {
@@ -932,5 +956,69 @@ describe('native onboarding runner boundaries', () => {
     delete wrongPayloadFingerprint.unexpected;
     fs.writeFileSync(path.join(exportRoot, 'manifest.json'), JSON.stringify(wrongPayloadFingerprint) + '\n');
     expect(() => readRetainedReviewExport(exportRoot, plan, 2)).toThrow(/exactly 2 packets/);
+  });
+
+  it('materializes one canonical retained map and gates component generations before dispatch', async () => {
+    const fixture = recoveryReviewPacketFixture(path.join(root, 'retained-map-source'));
+    const retained: any = {
+      manifestSha256: `sha256:${'1'.repeat(64)}`,
+      checkpointSha256: `sha256:${'2'.repeat(64)}`,
+      graphSemanticDigest: '3'.repeat(64),
+      packets: [{
+        componentId: fixture.component,
+        id: fixture.item.id,
+        filePath: fixture.item.file_path,
+        proofFileHash: fixture.item.proof_file_hash,
+        claimId: 'e'.repeat(64),
+        payloadFingerprint: sha256Canonical(fixture.packet),
+        packetSha256: `sha256:${'1'.repeat(64)}`,
+        bytes: Buffer.from(JSON.stringify(fixture.packet)),
+        packet: fixture.packet,
+      }],
+    };
+    const aggregateMap = buildRetainedReviewedAggregateMap(retained);
+    expect(Object.isFrozen(aggregateMap)).toBe(true);
+    expect(Object.isFrozen((aggregateMap as any)[fixture.component])).toBe(true);
+    const encoded = encodeRetainedReviewedAggregateMap(retained);
+    expect(JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))).toEqual(aggregateMap);
+
+    const prepared = shippedPreparedConfig();
+    const finalPrepared = materializeRetainedContinuationConfig(prepared, aggregateMap);
+    const materialize = finalPrepared.subgraphs['discover-project'].checks.materialize_catalog;
+    expect(materialize.expand.template).toBe('onboard-component-retained');
+    expect(finalPrepared.subgraphs['discover-project'].checks.inspect.message).toContain('["component-a"]');
+    expect(finalPrepared.subgraphs['onboard-component-retained'].checks['component-reviewed'].exec)
+      .not.toContain('__NATIVE_RETAINED_AGGREGATE_MAP_BASE64__');
+    const selector = finalPrepared.claim_types['proof.candidate@1'].schema.oneOf
+      .find((branch: any) => branch.properties?.schema?.const === 'reqproof.component-onboarding/v1');
+    expect(selector).toBeDefined();
+    expect(finalPrepared.subgraphs['onboard-component']).toBeUndefined();
+    expect(finalPrepared.subgraphs['native-requirement-review']).toBeUndefined();
+    for (const profile of ['onboard-component-retained']) {
+      for (const check of ['inspect', 'spec_review']) {
+        expect(finalPrepared.subgraphs[profile].checks[check].invocation.output_schema)
+          .toBe(finalPrepared.subgraphs['onboard-component-retained'].checks.inspect.invocation.output_schema);
+      }
+    }
+    expect(Buffer.from(finalPrepared.subgraphs['onboard-component-retained'].checks.inspect.invocation.output_schema, 'base64').toString())
+      .toContain('reqproof.component-onboarding/v1');
+    const configA = await loadConfig(finalPrepared, {strict: true});
+    const planA = compileClaimPlan(configA);
+    const restoredConfig = await loadConfig(JSON.parse(canonicalJson(configA)), {strict: true});
+    expect(compileClaimPlan(restoredConfig).expansionPlan.graphSemanticDigest)
+      .toBe(planA.expansionPlan.graphSemanticDigest);
+    const changedMap = JSON.parse(JSON.stringify(aggregateMap));
+    changedMap[fixture.component].reviews[0].candidate.decision = 'needs_review';
+    const configB = await loadConfig(materializeRetainedContinuationConfig(prepared, changedMap), {strict: true});
+    const planB = compileClaimPlan(configB);
+    const retainedTemplateA = planA.expansionPlan.templatesByName['onboard-component-retained'];
+    const retainedTemplateB = planB.expansionPlan.templatesByName['onboard-component-retained'];
+    expect(retainedTemplateA.nodesByKey['component-reviewed'].executionConfigDigest)
+      .not.toBe(retainedTemplateB.nodesByKey['component-reviewed'].executionConfigDigest);
+    expect(planB.expansionPlan.graphSemanticDigest).not.toBe(planA.expansionPlan.graphSemanticDigest);
+    const retainedCommand = finalPrepared.subgraphs['onboard-component-retained'].checks['component-reviewed'].exec as string;
+    expect(retainedCommand).toContain(encoded);
+    expect(retainedProjectPrefixDispatchGate({scope: [{kind: 'keyed', key: 'project'}]} as any)).toBe('dispatch');
+    expect(retainedProjectPrefixDispatchGate({scope: [{kind: 'keyed', key: 'project'}, {kind: 'keyed', key: 'component-a'}]} as any)).toBe('defer');
   });
 });

@@ -56,6 +56,40 @@ describe('native onboarding isolated writer wiring', () => {
     expect(() => validate({...base, source: {kind: 'retained_checkpoint', checkpoint_sha256: digest, graph_semantic_digest: 'not-a-digest', manifest_sha256: digest}})).toThrow();
   });
 
+  it('declares the exact retained prefix and reuses only the permanent admission suffix', () => {
+    const config = readConfig();
+    const live = config.subgraphs['onboard-component'];
+    const retained = config.subgraphs['onboard-component-retained'];
+    expect(retained.input).toEqual({name: 'component', claim: 'component.work_item@1'});
+    expect(Object.keys(retained.checks).sort()).toEqual([
+      'component-reviewed', 'inspect', 'native-validation', 'proof_admit',
+      'spec_review', 'spec_review_admit', 'verify',
+    ].sort());
+    expect(retained.checks['component-reviewed']).toEqual(expect.objectContaining({
+      type: 'command',
+      consumes: [{claim: 'component.work_item@1', as: 'component'}],
+      emits: [{claim: 'native.component.reviewed@1', from: 'output'}],
+    }));
+    const retainedCommand = retained.checks['component-reviewed'].exec;
+    expect(retainedCommand).toContain('__NATIVE_RETAINED_AGGREGATE_MAP_BASE64__');
+    expect(retainedCommand).toContain("Buffer.from(encoded, 'base64')");
+    expect(retainedCommand).not.toContain('NATIVE_ONBOARDING_OUTPUT_DIR');
+    expect(retainedCommand).not.toContain('NATIVE_ONBOARDING_REVIEW_EXPORT');
+    expect(retainedCommand).not.toContain('stdin');
+    for (const nodeKey of ['native-validation', 'inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify']) {
+      expect(retained.checks[nodeKey]).toBe(live.checks[nodeKey]);
+    }
+    expect(Object.keys(retained.checks)).not.toEqual(expect.arrayContaining([
+      'author-native-component', 'promote-native-component', 'enumerate-native-requirements',
+      'native-requirement-review', 'collect-proof-evidence',
+    ]));
+    for (const key of ['stdin', 'env', 'transform', 'transform_js', 'content', 'url', 'body', 'headers']) {
+      (retained.checks['component-reviewed'] as any)[key] = key === 'stdin' ? '' : {};
+      expect(() => compileClaimPlan(config as any)).toThrow();
+      delete (retained.checks['component-reviewed'] as any)[key];
+    }
+  });
+
   it('passes strict claim-graph validation with the local checkout and promotion stages', async () => {
     const config = readConfig();
     const inspect = config.subgraphs['discover-project'].checks.inspect;
@@ -293,7 +327,7 @@ describe('native onboarding isolated writer wiring', () => {
     expect(source.indexOf("['init', '--name', 'jsonparser'"))
       .toBeLessThan(source.indexOf("baseline-checkpoint.json"));
     expect(source.indexOf("baseline-checkpoint.json"))
-      .toBeLessThan(source.indexOf('executeGroupedChecks'));
+      .toBeLessThan(source.lastIndexOf('executeGroupedChecks'));
   });
 
   it('requires natural authoritative component and requirement counts', () => {
