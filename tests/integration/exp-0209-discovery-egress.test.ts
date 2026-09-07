@@ -327,7 +327,7 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
     expect(Object.keys(JSON.parse(candidateBytes.toString('utf8')).components[0].interfaces[0])).toEqual(['name', '\uE000', '\u{10000}']);
     let candidate = makeClaim('proof.candidate@1', candidatePayload, 'inspect', [project.claimId, inventory.claimId]);
     const proofScope = scope.map(part => ({ Kind: 'keyed', ExpansionOwnerCheck: part.expansionOwnerCheck, Key: part.key, SubgraphInstanceID: part.subgraphInstanceId }));
-    const candidateBinding = { ManagedRunID: sha256Canonical('candidate-managed'), SessionID: 'real-managed-session', CheckID: 'inspect', Scope: proofScope, NodeInstanceID: sha256Canonical('candidate-node'), NodeGenerationID: sha256Canonical('candidate-generation'), AttemptID: sha256Canonical('candidate-attempt'), Fence: 1 };
+    const candidateBinding = { ManagedRunID: sha256Canonical('candidate-managed'), SessionID: 'real-managed-session', CheckID: 'inspect', Scope: proofScope, NodeInstanceID: sha256Canonical('candidate-node'), NodeGenerationID: sha256Canonical('candidate-generation'), AttemptID: candidate.attemptId, Fence: 1 };
     const candidateTermination = { Version: 1, Type: 'ManagedRunTerminated', SessionID: candidateBinding.SessionID, Scope: proofScope, Binding: candidateBinding, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null };
     const candidateEnvelope = {
       Version: 'proof.role-result-candidate-envelope/v1', Invocation: invocationRequest, InvocationDigest: invocation.invocation_digest,
@@ -370,7 +370,7 @@ it('runs the real Proof inventory, admission, revalidation, and fresh WorkItems 
     candidateEnvelope.Publication.ClaimID = candidate.claimId;
     const admissionProvider = admitModule.createProofAdmitProviderFromCapability(capability);
     const admissionRun = admissionProvider.startManaged({
-      prInfo, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [] },
+      prInfo, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
       dependencyResults: new Map([['inspect', { issues: [], output: candidatePayload }]]), executionContext: { claims: { candidate } }, binding: binding('proof_admit'), executionConfigDigest: '2'.repeat(64), workingDirectory: root,
       proofAdmissionRequest: JSON.stringify({ version: 'proof.role-result-candidate-cli-request/v1', candidate: candidateEnvelope }),
     });
