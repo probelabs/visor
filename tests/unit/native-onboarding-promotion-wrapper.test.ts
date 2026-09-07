@@ -4,6 +4,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import {createExtendedLiquid} from '../../src/liquid-extensions';
+import {pinNativeOnboardingTsProject} from '../../examples/agent-governance/native-onboarding/run-onboarding';
 
 type Json = Record<string, any>;
 
@@ -68,7 +69,7 @@ function stubRoot(): string {
   return root;
 }
 
-type WrapperOptions = {outputDir?: string; omitOutputDir?: boolean};
+type WrapperOptions = {outputDir?: string; omitOutputDir?: boolean; tsNodeProject?: string};
 
 async function runWrapper(mode: 'promoted' | 'rejected' | 'throw', deps = fixtureDeps(), options: WrapperOptions = {}) {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-promotion-wrapper-run-'));
@@ -89,7 +90,7 @@ async function runWrapper(mode: 'promoted' | 'rejected' | 'throw', deps = fixtur
     NATIVE_PROMOTION_STUB_MODE: mode,
     NATIVE_PROMOTION_STUB_MARKER: markerPath,
     TS_NODE_TRANSPILE_ONLY: '1',
-    TS_NODE_PROJECT: path.resolve(__dirname, '../../tsconfig.json'),
+    TS_NODE_PROJECT: options.tsNodeProject ?? path.resolve(__dirname, '../../tsconfig.json'),
   };
   if (options.omitOutputDir) delete env.NATIVE_ONBOARDING_OUTPUT_DIR;
   const result = spawnSync('sh', ['-c', rendered], {
@@ -151,6 +152,43 @@ describe('native onboarding promotion command wrapper', () => {
       expect(fs.statSync(run.recordPath).mode & 0o777).toBe(0o600);
     } finally {
       dispose(run);
+    }
+  });
+
+  it('pins the Visor TypeScript project for a child wrapper from an arbitrary cwd', async () => {
+    const hostileRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-promotion-hostile-tsconfig-'));
+    const hostileProject = path.join(hostileRoot, 'tsconfig.json');
+    fs.writeFileSync(hostileProject, JSON.stringify({
+      compilerOptions: {module: 'NodeNext', moduleResolution: 'Classic', target: 'ES2022'},
+    }));
+    const previousProject = process.env.TS_NODE_PROJECT;
+    try {
+      const unpinned = await runWrapper('promoted', fixtureDeps(), {tsNodeProject: hostileProject});
+      try {
+        expect(unpinned.result.status).toBe(1);
+        expect(unpinned.result.stderr).toContain('TS5109');
+        expect(fs.existsSync(unpinned.markerPath)).toBe(false);
+      } finally {
+        dispose(unpinned);
+      }
+
+      process.env.TS_NODE_PROJECT = hostileProject;
+      const pinnedProject = pinNativeOnboardingTsProject();
+      expect(pinnedProject).toBe(path.resolve(__dirname, '../../tsconfig.json'));
+      expect(process.env.TS_NODE_PROJECT).toBe(pinnedProject);
+      const pinned = await runWrapper('promoted', fixtureDeps(), {tsNodeProject: pinnedProject});
+      try {
+        expect(pinned.result.status).toBe(0);
+        expect(pinned.result.stderr).toBe('');
+        expect(fs.existsSync(pinned.markerPath)).toBe(true);
+        expect(fs.readFileSync(pinned.recordPath, 'utf8')).toBe(pinned.result.stdout);
+      } finally {
+        dispose(pinned);
+      }
+    } finally {
+      if (previousProject === undefined) delete process.env.TS_NODE_PROJECT;
+      else process.env.TS_NODE_PROJECT = previousProject;
+      fs.rmSync(hostileRoot, {recursive: true, force: true});
     }
   });
 

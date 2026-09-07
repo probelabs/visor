@@ -293,6 +293,17 @@ export function serializeRoleInvocation(invocation: Json): string {
   return wire;
 }
 
+/**
+ * Pin child TypeScript imports to this repository's project configuration.
+ * Promotion runs from an isolated subject cwd, where an ambient project can
+ * otherwise make ts-node select an incompatible module/moduleResolution pair.
+ */
+export function pinNativeOnboardingTsProject(): string {
+  const project = fs.realpathSync(path.join(REPO_ROOT, 'tsconfig.json'));
+  process.env.TS_NODE_PROJECT = project;
+  return project;
+}
+
 function assertFreshSubject(subject: string, expectedRevision?: string): string {
   const status = String(execFileSync('git', ['-C', subject, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}));
   if (status.trim()) throw new Error('subject checkout must be clean and pinned before Proof init');
@@ -553,6 +564,7 @@ async function main(): Promise<void> {
   process.env.NATIVE_ONBOARDING_OUTPUT_DIR = roots.output;
   process.env.NATIVE_ONBOARDING_REPO_ROOT = REPO_ROOT;
   process.env.NATIVE_ONBOARDING_TS_NODE = fs.realpathSync(require.resolve('ts-node/register/transpile-only'));
+  pinNativeOnboardingTsProject();
   process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = path.join(roots.output, 'worktrees');
   fs.mkdirSync(process.env.NATIVE_ONBOARDING_WORKTREE_ROOT, {recursive: true});
   process.env.SUBJECT_BASELINE_REVISION = revision;
