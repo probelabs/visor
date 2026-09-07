@@ -5,6 +5,7 @@ import {execFileSync, spawnSync} from 'node:child_process';
 import yaml from 'js-yaml';
 import {
   assertPrivateCodexHome,
+  commitInitializedProofBaseline,
   serializeRoleInvocation,
   summarizeNativePostflight,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
@@ -83,6 +84,39 @@ describe('native onboarding runner boundaries', () => {
       'role_id', 'stance', 'subject', 'output_schema_id', 'output_schema',
     ]);
     expect(JSON.parse(wire)).toEqual(invocation);
+  });
+
+  it('commits initialized Proof files and makes them present in a checkout at the recorded baseline', () => {
+    const subject = path.join(root, 'subject-baseline');
+    const worker = path.join(root, 'worker-baseline');
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'source.txt'), 'source baseline\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all', '--', '.']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'source fixture']);
+    const sourceRevision = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+
+    fs.writeFileSync(path.join(subject, 'proof.yaml'), 'project:\n  name: fixture\n', 'utf8');
+    fs.mkdirSync(path.join(subject, 'specs', 'system', 'requirements'), {recursive: true});
+    fs.writeFileSync(
+      path.join(subject, 'specs', 'system', 'requirements', 'SYS-REQ-001.req.yaml'),
+      'id: SYS-REQ-001\ncomponent: fixture\n',
+      'utf8',
+    );
+    const baselineCommit = commitInitializedProofBaseline(subject, sourceRevision);
+
+    expect(baselineCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(baselineCommit).not.toBe(sourceRevision);
+    expect(execFileSync('git', ['-C', subject, 'status', '--porcelain'], {encoding: 'utf8'})).toBe('');
+    expect(execFileSync('git', ['-C', subject, 'show', `${baselineCommit}:proof.yaml`], {encoding: 'utf8'})).toContain('name: fixture');
+    expect(execFileSync('git', ['-C', subject, 'show', `${baselineCommit}:specs/system/requirements/SYS-REQ-001.req.yaml`], {encoding: 'utf8'})).toContain('SYS-REQ-001');
+
+    execFileSync('git', ['-C', subject, 'worktree', 'add', '--quiet', '--detach', worker, baselineCommit]);
+    expect(fs.readFileSync(path.join(worker, 'proof.yaml'), 'utf8')).toContain('name: fixture');
+    expect(fs.readFileSync(path.join(worker, 'specs/system/requirements/SYS-REQ-001.req.yaml'), 'utf8')).toContain('SYS-REQ-001');
+    execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
   });
 
   it('runs the CLI guard without a module-scope ReferenceError before Proof dispatch', () => {

@@ -22,6 +22,7 @@ export type NativePostflightSummary = {
 };
 
 const CONFIG_PATH = path.resolve(__dirname, 'visor-onboarding.yaml');
+const REPO_ROOT = path.resolve(__dirname, '../../../');
 const DEFAULT_TIMEOUT_MS = 1_800_000;
 let diagnosticOutput: string | undefined;
 
@@ -192,6 +193,48 @@ function gitObjectFormat(subject: string): 'sha1' | 'sha256' {
   return format;
 }
 
+/**
+ * Commit the files produced by Proof init as the immutable runtime baseline.
+ * The caller verifies that the subject was clean before init, so staging the
+ * resulting tree cannot absorb pre-existing source edits. This commit is a
+ * runtime fixture boundary, not a source change to the Visor repository.
+ */
+export function commitInitializedProofBaseline(subject: string, sourceRevision: string): string {
+  const currentRevision = String(execFileSync('git', ['-C', subject, 'rev-parse', '--verify', 'HEAD^{commit}'], {encoding: 'utf8'})).trim();
+  if (currentRevision !== sourceRevision) throw new Error('Proof init baseline subject HEAD changed from the source revision');
+  const changed = String(execFileSync('git', ['-C', subject, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}));
+  if (!changed.trim()) throw new Error('Proof init produced no files to commit for the native baseline');
+  execFileSync('git', ['-C', subject, 'add', '--all', '--', '.'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+  const staged = String(execFileSync('git', ['-C', subject, 'diff', '--cached', '--name-only'], {encoding: 'utf8'}));
+  const stagedPaths = staged.split('\n').map(value => value.trim()).filter(Boolean);
+  const allowedInitPath = (value: string): boolean =>
+    value === 'proof.yaml' || value === '.gitignore' ||
+    value.startsWith('specs/') || value.startsWith('proof/') ||
+    value.startsWith('baselines/') || value.startsWith('templates/') ||
+    value.startsWith('docs/');
+  const unexpectedPaths = stagedPaths.filter(value => !allowedInitPath(value));
+  if (unexpectedPaths.length > 0) {
+    execFileSync('git', ['-C', subject, 'reset', '--quiet'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+    throw new Error('Proof init baseline contains unexpected source paths: ' + unexpectedPaths.join(', '));
+  }
+  if (!stagedPaths.includes('proof.yaml')) {
+    execFileSync('git', ['-C', subject, 'reset', '--quiet'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+    throw new Error('Proof init baseline is missing tracked proof.yaml');
+  }
+  execFileSync('git', [
+    '-C', subject,
+    '-c', 'user.name=visor-native-onboarding',
+    '-c', 'user.email=visor-native-onboarding@localhost',
+    'commit', '--no-verify', '-m', 'initialize native Proof baseline',
+  ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+  const baseline = String(execFileSync('git', ['-C', subject, 'rev-parse', '--verify', 'HEAD^{commit}'], {encoding: 'utf8'})).trim();
+  if (!baseline || baseline === sourceRevision) throw new Error('Proof init baseline commit did not advance from the source revision');
+  const tracked = String(execFileSync('git', ['-C', subject, 'ls-tree', '-r', '--name-only', baseline], {encoding: 'utf8'}))
+    .split('\n').map(value => value.trim()).filter(Boolean);
+  if (!tracked.includes('proof.yaml')) throw new Error('Proof init baseline commit does not contain tracked proof.yaml');
+  return baseline;
+}
+
 export function assertPrivateCodexHome(subject: string, original: string, output: string): {home: string; configPresent: boolean} {
   const value = process.env.CODEX_HOME;
   if (!value || !path.isAbsolute(value)) throw new Error('CODEX_HOME must be an absolute private caller-provided directory');
@@ -340,6 +383,10 @@ async function main(): Promise<void> {
   process.env.VISOR_ORIGINAL_WORKDIR = roots.original;
   process.env.PROOF_BIN = proof;
   process.env.NATIVE_ONBOARDING_OUTPUT_DIR = roots.output;
+  process.env.NATIVE_ONBOARDING_REPO_ROOT = REPO_ROOT;
+  process.env.NATIVE_ONBOARDING_TS_NODE = fs.realpathSync(require.resolve('ts-node/register/transpile-only'));
+  process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = path.join(roots.output, 'worktrees');
+  fs.mkdirSync(process.env.NATIVE_ONBOARDING_WORKTREE_ROOT, {recursive: true});
   process.env.SUBJECT_BASELINE_REVISION = revision;
   process.env.USE_CODEX = 'true';
   process.env.DISABLE_FALLBACK = '1';
@@ -349,14 +396,15 @@ async function main(): Promise<void> {
   process.env.VISOR_DEBUG_ARTIFACTS = process.env.VISOR_DEBUG_ARTIFACTS || path.join(roots.output, 'ai');
 
   writeJson(path.join(roots.output, 'preflight.json'), {
-    status: 'passed',
+    status: 'launch-boundary-passed',
     subject_root: roots.subject,
     protected_original_root: roots.original,
     subject_revision: revision,
+    source_revision: revision,
     proof_binary: proof,
     request_timeout_ms: requestTimeout,
     outer_timeout_ms: timeout,
-    baseline_revision: objectFormat + ':' + revision,
+    baseline_commit: null,
     object_format: objectFormat,
     codex_home_is_private: true,
     codex_home_config_present: codex.configPresent,
@@ -367,6 +415,8 @@ async function main(): Promise<void> {
 
   const init = runProof(proof, roots.subject, roots.output, 'preflight', ['init', '--name', 'jsonparser', '--template', 'go-package', '--scope', '.', '--strict'], timeout);
   if (init.status !== 0) throw new Error('Proof init failed with exit ' + init.status);
+  const baselineCommit = commitInitializedProofBaseline(roots.subject, revision);
+  process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = baselineCommit;
   const baseline = runProof(proof, roots.subject, roots.output, 'preflight', ['req', 'list', '--format', 'json'], timeout);
   const baselineValue = parseJson(baseline, 'Proof baseline req list');
   writeJson(path.join(roots.output, 'preflight', 'requirements-baseline.json'), baselineValue);
@@ -376,6 +426,34 @@ async function main(): Promise<void> {
     throw new Error('Proof native status baseline is not an object');
   }
   writeJson(path.join(roots.output, 'preflight', 'native-status-baseline.json'), proofStatusValue);
+  writeJson(path.join(roots.output, 'preflight', 'baseline-checkpoint.json'), {
+    status: 'initialized-native-proof-baseline',
+    initialized: true,
+    canonical_root: roots.subject,
+    source_commit: revision,
+    baseline_commit: baselineCommit,
+    object_format: objectFormat,
+    requirements_baseline: path.join(roots.output, 'preflight', 'requirements-baseline.json'),
+    native_status_baseline: path.join(roots.output, 'preflight', 'native-status-baseline.json'),
+    checkouts_allowed_after: 'baseline-checkpoint.json',
+  });
+  writeJson(path.join(roots.output, 'preflight.json'), {
+    status: 'baseline-committed',
+    subject_root: roots.subject,
+    protected_original_root: roots.original,
+    subject_revision: revision,
+    source_revision: revision,
+    baseline_commit: baselineCommit,
+    proof_binary: proof,
+    request_timeout_ms: requestTimeout,
+    outer_timeout_ms: timeout,
+    object_format: objectFormat,
+    codex_home_is_private: true,
+    codex_home_config_present: codex.configPresent,
+    codex_mcp_plugins_hooks_rejected: true,
+    subject_codex_override_rejected: true,
+    note: 'No authentication, raw Codex config, or inherited tool capability is recorded.',
+  });
   writeText(path.join(roots.output, 'preflight-complete'), 'proof-init-and-baseline-complete\\n');
 
   const registry = CheckProviderRegistry.getInstance();

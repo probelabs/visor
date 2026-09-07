@@ -91,6 +91,70 @@ claim_types:
       required: [component_id]
       properties:
         component_id: {type: string, minLength: 1}
+        sorted_owned_paths:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+        proof_component_subject: {type: object}
+  component.prepared_work_item@1:
+    schema:
+      type: object
+      required: [component_id, sorted_owned_paths, baseline_commit]
+      properties:
+        component_id: {type: string, minLength: 1}
+        sorted_owned_paths:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+        proof_component_subject: {type: object}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+  component.checkout_target@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [component_id, baseline_commit, worktree_root]
+      properties:
+        component_id: {type: string, minLength: 1}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_root: {type: string, minLength: 1}
+  component.checkout@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [success, path, commit, worktree_id, is_worktree]
+      properties:
+        success: {const: true}
+        path: {type: string, minLength: 1}
+        commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_id: {type: string, minLength: 1}
+        repository: {type: string, minLength: 1}
+        is_worktree: {const: true}
+  native.promotion@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [status, component_id, baseline_commit, accepted_paths, ignored_paths, rejected_paths, checkpoint]
+      properties:
+        status: {enum: [promoted, rejected]}
+        component_id: {type: string, minLength: 1}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        accepted_paths: {type: array, items: {type: string, minLength: 1}}
+        ignored_paths: {type: array, items: {type: string, minLength: 1}}
+        rejected_paths: {type: array, items: {type: string, minLength: 1}}
+        reason: {type: string}
+        promoted_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        validation: {type: object}
+        checkpoint:
+          type: object
+          required: [baseline_commit, component_id, accepted_paths, ignored_paths, status]
+          properties:
+            baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+            component_id: {type: string, minLength: 1}
+            accepted_paths: {type: array, items: {type: string, minLength: 1}}
+            ignored_paths: {type: array, items: {type: string, minLength: 1}}
+            status: {enum: [promoted, rejected]}
   proof.project_reconciliation_receipt@1: {schema: {}}
   native.role.onboard@1: {schema: {type: string, minLength: 1}}
   native.role.spec_review@1: {schema: {type: string, minLength: 1}}
@@ -284,6 +348,84 @@ subgraphs:
   onboard-component:
     input: {name: component, claim: component.work_item@1}
     checks:
+      prepare-work-item:
+        type: command
+        timeout: 120000
+        schema: plain
+        consumes:
+          - {claim: component.work_item@1, as: component}
+        emits:
+          - {claim: component.prepared_work_item@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const deps = {{ outputs | json }};
+          const component = deps['materialize_catalog'];
+          if (!component || typeof component !== 'object' || typeof component.component_id !== 'string') {
+            throw new Error('component WorkItem is missing from the admitted catalog');
+          }
+          const sourcePaths = component.sorted_owned_paths;
+          if (!Array.isArray(sourcePaths) || sourcePaths.length === 0 || sourcePaths.some(path => typeof path !== 'string' || path.length === 0)) {
+            throw new Error('component WorkItem has no exact sorted_owned_paths');
+          }
+          const baselineCommit = process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+          if (!baselineCommit || !/^[0-9a-f]{40,64}$/.test(baselineCommit)) {
+            throw new Error('NATIVE_ONBOARDING_BASELINE_COMMIT must be the exact immutable baseline commit');
+          }
+          const output = {
+            ...component,
+            component_id: component.component_id,
+            sorted_owned_paths: sourcePaths,
+            baseline_commit: baselineCommit,
+          };
+          process.stdout.write(JSON.stringify(output));
+          NODE
+
+      checkout-target:
+        type: command
+        depends_on: [prepare-work-item]
+        timeout: 120000
+        schema: plain
+        consumes:
+          - {claim: component.prepared_work_item@1, as: work_item}
+        emits:
+          - {claim: component.checkout_target@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          const deps = {{ outputs | json }};
+          const workItem = deps['prepare-work-item'];
+          if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || typeof workItem.baseline_commit !== 'string') {
+            throw new Error('checkout target is missing the prepared WorkItem');
+          }
+          const root = process.env.NATIVE_ONBOARDING_WORKTREE_ROOT;
+          if (!root || !path.isAbsolute(root)) throw new Error('NATIVE_ONBOARDING_WORKTREE_ROOT must be absolute');
+          const digest = crypto.createHash('sha256')
+            .update(JSON.stringify({component_id: workItem.component_id, baseline_commit: workItem.baseline_commit}))
+            .digest('hex');
+          process.stdout.write(JSON.stringify({
+            component_id: workItem.component_id,
+            baseline_commit: workItem.baseline_commit,
+            worktree_root: path.join(root, digest),
+          }));
+          NODE
+
+      checkout-worktree:
+        type: git-checkout
+        depends_on: [checkout-target]
+        timeout: 900000
+        criticality: internal
+        repository: "{{ env.VISOR_WORKSPACE_MAIN_PROJECT }}"
+        ref: "{{ outputs['checkout-target'].baseline_commit }}"
+        working_directory: "{{ outputs['checkout-target'].worktree_root }}"
+        use_worktree: true
+        persist_worktree: true
+        clean: false
+        emits:
+          - {claim: component.checkout@1, from: output}
+
       role-onboard-component:
         type: command
         timeout: 120000
@@ -301,30 +443,42 @@ subgraphs:
 
       author-native-component:
         type: ai
-        depends_on: [role-onboard-component]
+        depends_on: [role-onboard-component, checkout-worktree]
         timeout: 1800000
         criticality: internal
         schema: plain
-        resource_group: proof-workspace-mutation
         consumes:
-          - {claim: component.work_item@1, as: component}
+          - {claim: component.prepared_work_item@1, as: work_item}
+          - {claim: component.checkout@1, as: checkout}
           - {claim: native.role.onboard@1, as: role}
         emits:
           - {claim: native.author.evidence@1, from: output}
         prompt: |
           You are the editable native Proof onboarding author for exactly one
-          authenticated component WorkItem. The current directory is the
-          authorized subject checkout. Use the runtime Proof executable from
-          PROOF_BIN and the exact WorkItem and built-in role supplied below.
-          Do not inspect or modify any protected original checkout.
+          authenticated component WorkItem. The supplied worker-root is the
+          exact persistent local git worktree for this component. Use the
+          runtime Proof executable from PROOF_BIN and the exact WorkItem,
+          worker-root, and built-in role supplied below. The caller binds this
+          worker-root to the isolated writer profile; do not invent another
+          path or checkout. Native tools.apply_patch may edit only allowed
+          native Proof files in that worker-root. The native exec carrier
+          may execute bounded Proof CLI commands with that worker-root as cwd.
+          Do not use Probe MCP Bash or alternate write paths/roots.
 
-          {{ outputs | json }}
+          WorkItem:
+          {{ outputs['prepare-work-item'] | json }}
+          Worker checkout:
+          {{ outputs['checkout-worktree'] | json }}
+          Built-in role:
+          {{ outputs['role-onboard-component'] | json }}
 
           Materialize real native Proof requirements, vars, annotations, and
           trace links supported by this component's source. Use original native
           Proof files and commands; do not create a custom compiler, opaque
           artifact manifest, or model-only requirement IDs. Keep source behavior
-          unchanged: source comments and Proof spec files are allowed. Bind
+          unchanged: source comments and Proof spec files are allowed. Do not
+          modify shared Proof checklists, audits, proof state, package/build
+          manifests, or unrelated component paths. Bind
           every requirement row and scoped variable you create to the exact
           WorkItem.component_id; do not use a neighboring component name. After
           writing, inspect the native rows and report an explicit
@@ -334,36 +488,74 @@ subgraphs:
           output is not a candidate, admission receipt, or approval.
         ai:
           model: gpt-5.6-luna
+          codex_execution_profile: luna-xhigh-isolated-writer-v1
+          codex_working_directory_from: checkout-worktree
           prompt_type: engineer
           allowEdit: true
-          allowBash: true
-          allowedTools: [search, extract, listFiles, edit, create, bash]
+          allowedTools: [search, extract, listFiles]
           max_iterations: 80
           timeout: 1500000
-          retry:
-            maxRetries: 0
-          bashConfig:
-            workingDirectory: .
-            disableDefaultAllow: true
-            deny: ["rm:*", "sudo:*", "git:push", "git:reset", "git:clean"]
-        ai_bash_config_js: |
-          if (!env.PROOF_BIN) return { allow: [] };
-          return {
-            allow: [
-              env.PROOF_BIN + ':*',
-              'git:status', 'git:diff', 'git:diff:*',
-              'go:test', 'go:test:*', 'go:vet', 'go:vet:*',
-            ],
+
+      promote-native-component:
+        type: command
+        depends_on: [author-native-component]
+        timeout: 900000
+        criticality: internal
+        resource_group: proof-workspace-mutation
+        schema: plain
+        consumes:
+          - {claim: component.prepared_work_item@1, as: work_item}
+          - {claim: component.checkout@1, as: checkout}
+          - {claim: native.author.evidence@1, as: author}
+        emits:
+          - {claim: native.promotion@1, from: output}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const path = require('node:path');
+          const {promoteNativeDelta} = require(path.join(
+            process.env.NATIVE_ONBOARDING_REPO_ROOT,
+            'examples/agent-governance/native-onboarding/native-promotion.ts',
+          ));
+          const proofBin = process.argv[2];
+          const deps = {{ outputs | json }};
+          const workItem = deps['prepare-work-item'];
+          const checkout = deps['checkout-worktree'];
+          if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || typeof workItem.baseline_commit !== 'string') {
+            throw new Error('promotion is missing the prepared WorkItem');
+          }
+          if (!checkout || typeof checkout !== 'object' || checkout.success !== true || checkout.is_worktree !== true || typeof checkout.path !== 'string' || typeof checkout.commit !== 'string' || typeof checkout.worktree_id !== 'string') {
+            throw new Error('promotion is missing the verified writer checkout');
+          }
+          const result = promoteNativeDelta({
+            canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT,
+            baselineCommit: workItem.baseline_commit,
+            writerCheckout: checkout,
+            workItem,
+            proofBin,
+            commitAcceptedArtifacts: true,
+            timeoutMs: Number(process.env.REQUEST_TIMEOUT),
+          });
+          const output = {
+            ...result,
+            component_id: workItem.component_id,
+            baseline_commit: result.checkpoint.baseline_commit,
           };
+          process.stdout.write(JSON.stringify(output));
+          if (result.status !== 'promoted') process.exitCode = 1;
+          NODE
 
       enumerate-native-requirements:
         type: command
-        depends_on: [author-native-component]
+        depends_on: [promote-native-component]
         timeout: 180000
         resource_group: proof-workspace-mutation
         schema: plain
         consumes:
-          - {claim: component.work_item@1, as: component}
+          - {claim: component.prepared_work_item@1, as: work_item}
+          - {claim: native.promotion@1, as: promotion}
           - {claim: native.author.evidence@1, as: author}
         emits:
           - {claim: native.requirement.catalog@1, from: output}
@@ -373,8 +565,10 @@ subgraphs:
           const {execFileSync} = require('node:child_process');
           const proof = process.argv[2];
           const deps = {{ outputs | json }};
-          const workItem = deps['materialize_catalog'];
+          const workItem = deps['prepare-work-item'];
           if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string') throw new Error('native requirement enumeration missing exact materialized WorkItem');
+          const promotion = deps['promote-native-component'];
+          if (!promotion || promotion.status !== 'promoted') throw new Error('native requirement enumeration requires successful promotion');
           const componentId = workItem.component_id;
           const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], {encoding: 'utf8'}));
           const unmapped = rows.filter(row => !row || typeof row.component !== 'string' || row.component.length === 0);

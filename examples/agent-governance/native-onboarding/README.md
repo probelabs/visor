@@ -185,10 +185,11 @@ subject-local Codex overrides, then runs `proof init` in the subject before
 loading the graph. It records only safe preflight facts; it never copies or
 prints authentication or raw Codex configuration.
 
-The fresh flow requires the reviewed Probe governed-profile source at commit
-`20f2f060` (the currently installed local module); this is still a source fix,
-not a published package release. The older `36c6cf04` source remains the
-historical Milestone A/B evidence and is not the fresh-flow pin.
+The isolated-writer flow requires the reviewed Probe source at commit
+`8bc0cc88` (currently installed from a clean local archive); this is not a new
+published package release. Earlier Probe pins describe historical runs, not
+the isolated-writer configuration. The bounded real-Luna writer exercise passed;
+the complete newly wired onboarding flow still needs its end-to-end run.
 
 ```sh
 SUBJECT_BASELINE_REVISION=cb835d480ac58e1b4be76afeac49e89ed651c3b5 \
@@ -210,13 +211,23 @@ For a zero-model boundary check on a disposable fresh subject, append
 onboard role invocation, and strictly validates the actual registered providers,
 but does not dispatch Visor checks or AI workers.
 
-The graph lets Proof discover its natural component count, materializes one
-authenticated WorkItem at a time under the shared
-`proof-workspace-mutation` resource group, asks an ordinary editable worker to
-author native files, re-lists and shows the actual native requirements and
-focused graphs, runs a separate Luna/xhigh read-only review, persists review
-packets, and serializes native validation/audit/checklist/status. Review output
-is a candidate packet only; authoring and review never become native approval.
+The runner commits initialized native Proof files as a separate runtime
+baseline, retaining the original source revision. The graph lets Proof discover
+natural components and supplies each exact native WorkItem to a distinct,
+persistent checkout of that initialized baseline. Luna authors can progress
+independently under the isolated writer profile. Only ownership-checked
+promotion, canonical requirement enumeration, and native validation use the
+shared `proof-workspace-mutation` resource. Promotion validates staged native
+files through Proof, preserves sibling ownership, and rejects conflicting
+changes; an interruption after writes start is a failure, not an unchanged
+rejection. It does not claim crash-atomic application or recovery.
+
+After promotion, the graph re-lists native requirements and focused graphs,
+runs separate Luna/xhigh read-only review, persists review packets, and records
+native validation/audit/checklist/status. Review output is evidence only;
+authoring, Git promotion, and review never become native approval. Independent
+author/reviewer overlap is enabled by this wiring but remains to be measured
+in the real flow.
 
 The current Graph-v2 compiler permits one nested expansion owner. This flow
 uses that owner for natural component scopes, so the output explicitly records
@@ -227,7 +238,7 @@ discovery candidate/admission, reviewed packets, native validation, and the
 uncompleted component-admission/project-reconciliation boundary. No approval
 is inferred when that boundary remains open.
 
-## Scope and deferred risk
+## Historical single-component milestone scope
 
 The slice is parser iteration/extraction, selected from the actual checkout by
 the worker. Implementation behavior must remain unchanged; source comments and
