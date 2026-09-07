@@ -7,6 +7,7 @@ import yaml from 'js-yaml';
 import {
   assertPrivateCodexHome,
   assertCanonicalOwnedPathsUnchanged,
+  assertCurrentProofRequirementHash,
   assertRecoveryRoots,
   commitInitializedProofBaseline,
   configurePublicPromptCapture,
@@ -590,6 +591,26 @@ describe('native onboarding runner boundaries', () => {
       destination_sha256: packets[0].sha256,
     })]);
     expect(() => stageRecoveryReviewPackets(output, packets)).toThrow(/EEXIST/);
+  });
+
+  it('requires the selected native review item to match the current Proof file hash and binding', () => {
+    const fixture = recoveryReviewPacketFixture(path.join(root, 'current-proof-hash'));
+    const current = [{
+      id: fixture.item.id,
+      componentId: fixture.component,
+      filePath: fixture.item.file_path,
+      proofFileHash: fixture.item.proof_file_hash,
+    }];
+    expect(() => assertCurrentProofRequirementHash(fixture.item, current)).not.toThrow();
+    expect(() => assertCurrentProofRequirementHash(fixture.item, [{
+      ...current[0],
+      proofFileHash: 'sha256:' + '2'.repeat(64),
+    }])).toThrow(/stale current Proof hash/);
+    expect(() => assertCurrentProofRequirementHash(fixture.item, [{
+      ...current[0],
+      componentId: 'other-component',
+    }])).toThrow(/stale current Proof hash/);
+    expect(() => assertCurrentProofRequirementHash(fixture.item, [current[0], current[0]])).toThrow(/stale current Proof hash/);
   });
 
   it('rejects aggregate, extra, tampered, and cross-scope retained packets', () => {
