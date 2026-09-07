@@ -310,6 +310,78 @@ function log(...args: unknown[]): void {
   logger.debug(args.join(' '));
 }
 
+type SafeProviderRequestTimeout = {
+  category: 'request_timeout';
+  method: 'initialize' | 'tools/call';
+  boundary: 'acquire' | 'query';
+  timeout_ms: number;
+  profileId: typeof LUNA_READONLY_PROFILE | typeof LUNA_ISOLATED_WRITER_PROFILE;
+  sessionId: string | null;
+};
+
+const SAFE_TIMEOUT_REQUEST_KEYS = [
+  'category',
+  'method',
+  'boundary',
+  'timeout_ms',
+  'profileId',
+  'sessionId',
+] as const;
+const SAFE_TIMEOUT_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/**
+ * Keep provider request-timeout telemetry to a fixed, non-sensitive record.
+ * Probe events may carry transport parameters or provider diagnostics; those
+ * are deliberately rejected rather than copied into logs or spans.
+ */
+function normalizeProviderRequestTimeout(data: unknown): SafeProviderRequestTimeout | undefined {
+  try {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined;
+    const record = data as Record<string, unknown>;
+    const keys = Reflect.ownKeys(record);
+    if (
+      keys.length !== SAFE_TIMEOUT_REQUEST_KEYS.length ||
+      keys.some(
+        key =>
+          typeof key !== 'string' ||
+          !(SAFE_TIMEOUT_REQUEST_KEYS as readonly string[]).includes(key)
+      )
+    ) {
+      return undefined;
+    }
+    if (
+      record.category !== 'request_timeout' ||
+      (record.method !== 'initialize' && record.method !== 'tools/call') ||
+      (record.boundary !== 'acquire' && record.boundary !== 'query') ||
+      (record.method === 'initialize' && record.boundary !== 'acquire') ||
+      (record.method === 'tools/call' && record.boundary !== 'query') ||
+      !Number.isInteger(record.timeout_ms) ||
+      (record.timeout_ms as number) < PROBE_REQUEST_TIMEOUT_MIN_MS ||
+      (record.timeout_ms as number) > PROBE_REQUEST_TIMEOUT_MAX_MS ||
+      (record.profileId !== LUNA_READONLY_PROFILE &&
+        record.profileId !== LUNA_ISOLATED_WRITER_PROFILE)
+    ) {
+      return undefined;
+    }
+    if (
+      record.sessionId !== null &&
+      (typeof record.sessionId !== 'string' || !SAFE_TIMEOUT_SESSION_ID.test(record.sessionId))
+    ) {
+      return undefined;
+    }
+    return {
+      category: 'request_timeout',
+      method: record.method as SafeProviderRequestTimeout['method'],
+      boundary: record.boundary as SafeProviderRequestTimeout['boundary'],
+      timeout_ms: record.timeout_ms as number,
+      profileId: record.profileId as SafeProviderRequestTimeout['profileId'],
+      sessionId: record.sessionId as string | null,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Generate current date XML tag for AI context
  */
@@ -1440,6 +1512,19 @@ export class AIReviewService {
           }
         );
       }
+
+      events.on('timeout.request', (data: unknown) => {
+        const safeRecord = normalizeProviderRequestTimeout(data);
+        if (!safeRecord) return;
+
+        // Serialize only the normalized fixed-shape record. In particular,
+        // never include the original event, transport params, or diagnostics.
+        logger.warn(`timeout.request ${JSON.stringify(safeRecord)}`);
+        try {
+          const { addEvent } = require('./telemetry/trace-helpers');
+          addEvent('visor.provider_request_timeout', safeRecord);
+        } catch {}
+      });
 
       events.on(
         'timeout.windingDown',

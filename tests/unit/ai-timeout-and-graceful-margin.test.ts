@@ -3,6 +3,32 @@
  * constants used when computing Probe's maxOperationTimeout from Visor's hard timeout.
  */
 
+import { EventEmitter } from 'node:events';
+import { AIReviewService } from '../../src/ai-review-service';
+import { logger } from '../../src/logger';
+import * as traceHelpers from '../../src/telemetry/trace-helpers';
+import { ProbeAgent } from '@probelabs/probe';
+
+jest.mock('@probelabs/probe', () => ({
+  ProbeAgent: jest.fn(),
+}));
+jest.mock('../../src/telemetry/trace-helpers', () => ({
+  ...jest.requireActual('../../src/telemetry/trace-helpers'),
+  addEvent: jest.fn(),
+}));
+
+const timeoutPrInfo = {
+  number: 1,
+  title: 'timeout request event test',
+  body: '',
+  author: 'test',
+  base: 'main',
+  head: 'feature',
+  files: [],
+  totalAdditions: 0,
+  totalDeletions: 0,
+};
+
 // These constants mirror the values in src/ai-review-service.ts
 const PROBE_GRACEFUL_MARGIN_MS = 90_000;
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120_000
@@ -189,5 +215,98 @@ describe('ai_timeout and graceful margin', () => {
         gracefulStopDeadline: 15000,
       });
     });
+  });
+});
+
+describe('safe Probe request timeout events', () => {
+  let warningLog: jest.SpyInstance;
+  let addEvent: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    addEvent = traceHelpers.addEvent as jest.Mock;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it.each([
+    ['initialize', 'acquire'],
+    ['tools/call', 'query'],
+  ])('records only the safe %s/%s request timeout event', async (method, boundary) => {
+    const events = new EventEmitter();
+    const record = {
+      category: 'request_timeout',
+      method,
+      boundary,
+      timeout_ms: 123456,
+      profileId: 'luna-xhigh-readonly-v1',
+      sessionId: 'session-safe-1',
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      events,
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(async () => {
+        events.emit('timeout.request', record);
+        return JSON.stringify({ issues: [] });
+      }),
+    }));
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).resolves.toEqual(
+      expect.objectContaining({ issues: [] })
+    );
+
+    const timeoutLines = warningLog.mock.calls
+      .map(([message]) => message)
+      .filter((message): message is string => message.startsWith('timeout.request '));
+    expect(timeoutLines).toEqual([`timeout.request ${JSON.stringify(record)}`]);
+    expect(addEvent.mock.calls.filter(([name]) => name === 'visor.provider_request_timeout')).toEqual([
+      ['visor.provider_request_timeout', record],
+    ]);
+  });
+
+  it('ignores malformed timeout events without logging unsafe fields', async () => {
+    const events = new EventEmitter();
+    const malformed = {
+      category: 'request_timeout',
+      method: 'tools/call',
+      boundary: 'acquire',
+      timeout_ms: 123456,
+      profileId: 'luna-xhigh-readonly-v1',
+      sessionId: 'session-safe-1',
+      params: { secret: 'must-not-be-logged' },
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      events,
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(async () => {
+        events.emit('timeout.request', malformed);
+        return JSON.stringify({ issues: [] });
+      }),
+    }));
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).resolves.toEqual(
+      expect.objectContaining({ issues: [] })
+    );
+
+    expect(
+      warningLog.mock.calls.filter(([message]) =>
+        typeof message === 'string' && message.startsWith('timeout.request ')
+      )
+    ).toHaveLength(0);
+    expect(addEvent.mock.calls.some(([name]) => name === 'visor.provider_request_timeout')).toBe(
+      false
+    );
+    expect(warningLog.mock.calls.flat().join(' ')).not.toContain('must-not-be-logged');
   });
 });
