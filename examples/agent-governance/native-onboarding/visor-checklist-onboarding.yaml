@@ -1,0 +1,913 @@
+# Fresh native Proof onboarding. Discovery and catalog authority stay on sealed
+# Proof providers. Authoring is editable work; review is read-only evidence.
+version: "1.0"
+max_parallelism: 3
+fail_fast: false
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+limits:
+  max_runs_per_check: 1
+
+claim_types:
+  project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [project_id, root]
+            properties:
+              project_id: {type: string, minLength: 1}
+              root: {type: string, minLength: 1}
+  project.discovery_item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [project_id, root]
+      properties:
+        project_id: {type: string, minLength: 1}
+        root: {type: string, minLength: 1}
+  proof.structural_inventory@1: {schema: {}}
+  proof.candidate@1:
+    schema:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [version, project_id, components]
+          properties:
+            version: {const: proof.component-catalog-candidate/v1}
+            project_id: {type: string, minLength: 1}
+            components:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, responsibility, owned_paths]
+                properties:
+                  id: {type: string, minLength: 1}
+                  responsibility: {type: string, minLength: 1}
+                  owned_paths:
+                    type: array
+                    minItems: 1
+                    uniqueItems: true
+                    description: Exact project-relative paths from Proof inventory.sorted_paths; include every file assigned to this component.
+                    items:
+                      type: string
+                      minLength: 1
+                      description: "Exact project-relative inventory path, never a component ID, import name, package name, or prose."
+                  dependency_closure:
+                    type: array
+                    uniqueItems: true
+                    description: If present and non-empty, exact project-relative paths for the transitive in-repository closure and every owned_paths entry; omit or leave empty when unknown so Proof defaults it to owned_paths.
+                    items:
+                      type: string
+                      minLength: 1
+                      description: "Exact project-relative inventory path, never a component ID, import name, package name, language label, or prose."
+                  entry_points: {type: array, items: {type: string, minLength: 1}}
+                  state_effects: {type: array, items: {type: string, minLength: 1}}
+                  interfaces: {type: array, items: {}}
+                  uncertainty: {type: array, items: {type: string, minLength: 1}}
+        - type: object
+          additionalProperties: false
+          required: [schema, project, shard, reviewedFiles, requirements, interfaces, findings, unknowns, repositoryMutated, commandsExecuted, checklistCompleted]
+          properties:
+            schema: {const: reqproof.component-onboarding/v1}
+            project: {type: string}
+            shard: {type: string}
+            reviewedFiles:
+              type: array
+              minItems: 1
+              maxItems: 64
+              items:
+                type: object
+                additionalProperties: false
+                required: [path, coordinates]
+                properties:
+                  path: {type: string}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            requirements:
+              type: array
+              minItems: 4
+              maxItems: 16
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, text, coordinates]
+                properties:
+                  id: {type: string, pattern: '^(STK|SYS|SW|INT)-'}
+                  text: {type: string}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            interfaces:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [name, coordinates]
+                properties:
+                  name: {type: string}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            findings:
+              type: array
+              maxItems: 32
+              items:
+                type: object
+                additionalProperties: false
+                required: [id, severity, title, calibration, confidence, coordinates]
+                properties:
+                  id: {type: string}
+                  severity: {enum: [info, low, medium, high, critical]}
+                  title: {type: string}
+                  calibration: {enum: [confirmed, likely, possible]}
+                  confidence: {type: number, minimum: 0, maximum: 1}
+                  coordinates:
+                    type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      required: [path, line]
+                      properties:
+                        path: {type: string}
+                        line: {type: integer, minimum: 1}
+            unknowns:
+              type: array
+              maxItems: 32
+              items: {type: string}
+            repositoryMutated: {const: false}
+            commandsExecuted: {const: false}
+            checklistCompleted: {const: false}
+  proof.admitted_receipt@1: {schema: {}}
+  proof.catalog_revalidation@1: {schema: {}}
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          minItems: 1
+          items: {type: object}
+  component.work_item@1:
+    schema:
+      type: object
+      required: [component_id]
+      properties:
+        component_id: {type: string, minLength: 1}
+        sorted_owned_paths:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+        proof_component_subject: {type: object}
+  component.prepared_work_item@1:
+    schema: &component_prepared_work_item_schema
+      type: object
+      required: [component_id, sorted_owned_paths, baseline_commit]
+      properties:
+        component_id: {type: string, minLength: 1}
+        sorted_owned_paths:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+        proof_component_subject: {type: object}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+  component.checkout_target@1:
+    schema: &component_checkout_target_schema
+      type: object
+      additionalProperties: false
+      required: [component_id, baseline_commit, worktree_root]
+      properties:
+        component_id: {type: string, minLength: 1}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_root: {type: string, minLength: 1}
+  component.checkout@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [success, path, ref, commit, worktree_id, repository, is_worktree]
+      properties:
+        success: {const: true}
+        path: {type: string, minLength: 1}
+        ref: {type: string, minLength: 1}
+        commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_id: {type: string, minLength: 1}
+        repository: {type: string, minLength: 1}
+        is_worktree: {const: true}
+        workspace_path: {type: string, minLength: 1}
+  native.promotion@1:
+    schema: &native_promotion_schema
+      type: object
+      additionalProperties: false
+      required: [status, component_id, baseline_commit, accepted_paths, ignored_paths, rejected_paths, checkpoint]
+      properties:
+        status: {enum: [promoted, rejected]}
+        component_id: {type: string, minLength: 1}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        accepted_paths: {type: array, items: {type: string, minLength: 1}}
+        ignored_paths: {type: array, items: {type: string, minLength: 1}}
+        rejected_paths: {type: array, items: {type: string, minLength: 1}}
+        reason: {type: string}
+        promoted_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        validation: {type: object}
+        checkpoint:
+          type: object
+          required: [baseline_commit, component_id, accepted_paths, ignored_paths, status]
+          properties:
+            baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+            component_id: {type: string, minLength: 1}
+            accepted_paths: {type: array, items: {type: string, minLength: 1}}
+            ignored_paths: {type: array, items: {type: string, minLength: 1}}
+            status: {enum: [promoted, rejected]}
+  proof.project_reconciliation_receipt@1: {schema: {}}
+  proof.checklist.snapshot@1:
+    schema: &checklist_snapshot_schema
+      type: object
+      additionalProperties: false
+      required: [schema_version, checklist, active, new_project, steps_total, steps_pending, counts, ok, verify_failed, eligible_step_ids, next, steps]
+      properties:
+        schema_version: {const: proof.checklist.show.v1}
+        checklist: {type: string, minLength: 1}
+        active: {type: boolean}
+        new_project: {type: boolean}
+        steps_total: {type: integer, minimum: 0}
+        steps_pending: {type: integer, minimum: 0}
+        ok: {type: boolean}
+        verify_failed: {type: array, items: {type: string}}
+        eligible_step_ids: {type: array, items: {type: string}}
+        definition_source: {type: string}
+        updated_at: {type: string}
+        next:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            step_id: {type: string}
+            title: {type: string}
+            role: {type: string}
+            verify_cmd: {type: string}
+            stamp: {type: string}
+            scope: {type: string}
+            notes_required: {type: boolean}
+            requires: {type: array, items: {type: string}}
+            required_checks: {type: array, items: {type: string}}
+        counts:
+          type: object
+          additionalProperties: false
+          required: [confirmed, skipped, not_applicable, pending, blocked]
+          properties:
+            confirmed: {type: integer, minimum: 0}
+            skipped: {type: integer, minimum: 0}
+            not_applicable: {type: integer, minimum: 0}
+            pending: {type: integer, minimum: 0}
+            blocked: {type: integer, minimum: 0}
+        steps:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [step_id, title, when, requires, stamp, scope, notes_required, invalidates, required_checks, stored_status, effective_status, applicable, eligible, unmet_requires, check_results]
+            properties:
+              step_id: {type: string, minLength: 1}
+              title: {type: string}
+              when: {type: string}
+              requires: {type: array, items: {type: string}}
+              stamp: {type: string}
+              scope: {type: string}
+              notes_required: {type: boolean}
+              invalidates: {type: array, items: {type: string}}
+              required_checks: {type: array, items: {type: string}}
+              stored_status: {type: string}
+              effective_status: {type: string}
+              applicable: {type: boolean}
+              eligible: {type: boolean}
+              unmet_requires: {type: array, items: {type: string}}
+              role: {type: string}
+              verify_cmd: {type: string}
+              confirmed_at: {type: string}
+              confirmed_by: {type: string}
+              note: {type: string}
+              skip_reason: {type: string}
+              scope_key: {type: string}
+              verify_result: {type: object, additionalProperties: true}
+              check_results:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, status, at]
+                  properties:
+                    id: {type: string}
+                    status: {type: string}
+                    at: {type: string}
+  proof.checklist.research-snapshot@1:
+    schema: *checklist_snapshot_schema
+  proof.checklist.skeleton-snapshot@1:
+    schema: *checklist_snapshot_schema
+  native.initialized.baseline@1:
+    schema: &initialized_baseline_schema
+      type: object
+      additionalProperties: false
+      required: [version, baseline_commit]
+      properties:
+        version: {const: native.initialized-baseline/v1}
+        baseline_commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+  native.role.onboard@1: {schema: {type: string, minLength: 1}}
+  native.role.spec_review@1: {schema: {type: string, minLength: 1}}
+  native.author.evidence@1: {schema: &native_author_evidence_schema {}}
+  native.requirement.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [component_id, items]
+      properties:
+        component_id: {type: string, minLength: 1}
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, component_id, file_path, proof_file_hash, spec_review_role, proof_snapshot, prepared_work_item]
+            properties:
+              id: {type: string, minLength: 1}
+              component_id: {type: string, minLength: 1}
+              file_path: {type: string, minLength: 1}
+              proof_file_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              spec_review_role: {type: string, minLength: 1}
+              proof_snapshot:
+                type: object
+                additionalProperties: false
+                required: [catalog_entry, req_show, spec_graph]
+                properties:
+                  catalog_entry: {type: object}
+                  req_show: {type: object}
+                  spec_graph: {type: object}
+              prepared_work_item: {type: object}
+  native.requirement.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, component_id, file_path, proof_file_hash, spec_review_role, proof_snapshot, prepared_work_item]
+      properties:
+        id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        file_path: {type: string, minLength: 1}
+        proof_file_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        spec_review_role: {type: string, minLength: 1}
+        proof_snapshot:
+          type: object
+          additionalProperties: false
+          required: [catalog_entry, req_show, spec_graph]
+          properties:
+            catalog_entry: {type: object}
+            req_show: {type: object}
+            spec_graph: {type: object}
+        prepared_work_item: {type: object}
+  native.review.candidate@1: {schema: {}}
+  native.review.packet@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, component_id, file_path, proof_file_hash, candidate, catalog_entry, req_show, spec_graph, prepared_work_item, freshness]
+      properties:
+        id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        file_path: {type: string, minLength: 1}
+        proof_file_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        candidate: {}
+        catalog_entry: {type: object}
+        req_show: {type: object}
+        spec_graph: {type: object}
+        prepared_work_item: {type: object}
+        freshness: {const: pending_component_fan_in}
+  native.component.reviewed@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [version, component_id, status, item_count, source, reviews]
+      properties:
+        version: {const: native.component.reviewed/v1}
+        component_id: {type: string, minLength: 1}
+        status: {const: reviewed-native-requirement-items}
+        item_count: {type: integer, minimum: 1}
+        source:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [kind, checkpoint_sha256, graph_semantic_digest, manifest_sha256]
+              properties:
+                kind: {const: current_graph}
+                checkpoint_sha256: {const: null}
+                graph_semantic_digest: {const: null}
+                manifest_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+            - type: object
+              additionalProperties: false
+              required: [kind, checkpoint_sha256, graph_semantic_digest, manifest_sha256]
+              properties:
+                kind: {const: retained_checkpoint}
+                checkpoint_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+                graph_semantic_digest: {type: string, pattern: '^[0-9a-f]{64}$'}
+                manifest_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        reviews:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, component_id, file_path, proof_file_hash, candidate, candidate_fingerprint, packet_sha256, retained_claim]
+            properties:
+              id: {type: string, minLength: 1}
+              component_id: {type: string, minLength: 1}
+              file_path: {type: string, minLength: 1}
+              proof_file_hash: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              candidate: {}
+              candidate_fingerprint: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              packet_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+              retained_claim:
+                type: [object, 'null']
+                additionalProperties: false
+                required: [claim_id, payload_fingerprint]
+                properties:
+                  claim_id: {type: string, pattern: '^[0-9a-f]{64}$'}
+                  payload_fingerprint: {type: string, pattern: '^[0-9a-f]{64}$'}
+  native.component.summary@1:
+    schema:
+      type: object
+      required: [component_id, status, freshness, validation, audit, checklist]
+      properties:
+        component_id: {type: string, minLength: 1}
+        status: {type: string, minLength: 1}
+        freshness: {type: array, minItems: 1}
+        validation: {type: object}
+        audit: {type: object}
+        checklist: {type: object}
+        open_native_checks: {type: array, items: {type: object}}
+  proof.component_spec_review_candidate@1: {schema: {type: object, additionalProperties: true}}
+  proof.component_spec_review_admitted_receipt@1: {schema: {type: object, additionalProperties: true}}
+
+checks:
+  checklist-bootstrap:
+    type: command
+    timeout: 120000
+    schema: *checklist_snapshot_schema
+    emits:
+      - {claim: proof.checklist.snapshot@1, from: output}
+    exec: |
+      set -eu
+      : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+      : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+      node -r "$NATIVE_ONBOARDING_TS_NODE" - <<NODE
+      const path = require('node:path');
+      const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+      process.stdout.write(JSON.stringify(executeJournaledChecklistStep('init', 'Initialized the fresh Proof subject at the journaled checklist bootstrap boundary.', true)));
+      NODE
+
+  project:
+    type: memory
+    depends_on: [checklist-bootstrap]
+    operation: set
+    key: project-catalog
+    value:
+      projects:
+        - project_id: jsonparser
+          root: .
+    emits:
+      - {claim: project.catalog@1, from: output}
+    consumes:
+      - {claim: proof.checklist.snapshot@1, as: bootstrap, cardinality: one}
+    expand:
+      claim: project.catalog@1
+      template: discover-project-checklist
+      items_pointer: /projects
+      key_pointer: /project_id
+      item_claim: project.discovery_item@1
+
+subgraphs:
+  discover-project-checklist:
+    input: {name: project, claim: project.discovery_item@1}
+    checks:
+      structural_inventory: &checklist_structural_inventory
+        type: proof-structural-inventory
+        consumes:
+          - {claim: project.discovery_item@1, as: project}
+        emits:
+          - {claim: proof.structural_inventory@1, from: output}
+      inspect:
+        type: governed-proof-inspect
+        message: >-
+          Discover natural independently onboardable components in the current
+          Proof inventory. Partition every observed path exactly once. The
+          `owned_paths` and `dependency_closure` values must be exact
+          project-relative path strings from `inventory.sorted_paths`: include
+          every owned path, and when a non-empty dependency closure is given,
+          include every owned path plus transitive in-repository dependency
+          files. Omit the closure or return it empty when dependencies are
+          unknown so Proof defaults it to the owned paths. Never put component
+          IDs, import/package names, language labels, or prose in either path
+          array; semantic dependency names belong in interfaces or uncertainty.
+        profile: luna-xhigh-readonly-v1
+        invocation:
+          role_id: onboard
+          stance: owner
+          subject: {kind: project}
+          output_schema_id: proof.component-catalog-candidate@1
+          output_schema: __ENCODE_FROM_RESULT_SCHEMA__
+        result_schema: >-
+          {"type":"object","additionalProperties":false,"required":["version","project_id","components"],"properties":{"version":{"const":"proof.component-catalog-candidate/v1"},"project_id":{"type":"string","minLength":1},"components":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["id","responsibility","owned_paths"],"properties":{"id":{"type":"string","minLength":1},"responsibility":{"type":"string","minLength":1},"owned_paths":{"type":"array","minItems":1,"uniqueItems":true,"description":"Exact project-relative paths from Proof inventory.sorted_paths; include every file assigned to this component.","items":{"type":"string","minLength":1,"description":"Exact project-relative inventory path, never a component ID, import name, package name, or prose."}},"dependency_closure":{"type":"array","description":"If present and non-empty, exact project-relative inventory paths for the transitive in-repository closure and every owned_paths entry; omit or leave empty when unknown so Proof defaults it to owned_paths.","items":{"type":"string","minLength":1,"description":"Exact project-relative inventory path, never a component ID, import name, package name, language label, or prose."}},"entry_points":{"type":"array","items":{"type":"string","minLength":1}},"state_effects":{"type":"array","items":{"type":"string","minLength":1}},"interfaces":{"type":"array","items":{}},"uncertainty":{"type":"array","items":{"type":"string","minLength":1}}}}}}}
+        consumes:
+          - {claim: project.discovery_item@1, as: project}
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+        emits:
+          - {claim: proof.candidate@1, from: output}
+      proof_admit: &checklist_proof_admit
+        type: proof-admit
+        consumes:
+          - {claim: proof.candidate@1, as: candidate}
+        emits:
+          - {claim: proof.admitted_receipt@1, from: output}
+      verify: &checklist_verify
+        type: noop
+        consumes:
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+      revalidate_catalog: &checklist_revalidate_catalog
+        type: proof-catalog-revalidate
+        depends_on: [verify]
+        consumes:
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+        emits:
+          - {claim: proof.catalog_revalidation@1, from: output}
+      checklist-research:
+        type: command
+        depends_on: [revalidate_catalog]
+        timeout: 120000
+        schema: *checklist_snapshot_schema
+        consumes:
+          - {claim: project.discovery_item@1, as: project}
+          - {claim: proof.catalog_revalidation@1, as: current_revalidation}
+        emits:
+          - {claim: proof.checklist.research-snapshot@1, from: output}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - <<'NODE'
+          const path = require('node:path');
+          const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          process.stdout.write(JSON.stringify(executeJournaledChecklistStep('research', 'Recorded governed project discovery and current catalog.', false)));
+          NODE
+      commit-initialized-baseline:
+        type: command
+        depends_on: [checklist-research]
+        timeout: 120000
+        schema: *initialized_baseline_schema
+        consumes:
+          - {claim: proof.checklist.research-snapshot@1, as: research}
+        emits:
+          - {claim: native.initialized.baseline@1, from: output}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - <<'NODE'
+          const path = require('node:path');
+          const {commitInitializedProofBaseline} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          const revision = process.env.SUBJECT_BASELINE_REVISION;
+          if (typeof revision !== 'string' || !/^[0-9a-f]{40,64}$/.test(revision)) throw new Error('SUBJECT_BASELINE_REVISION is required for the initialized baseline');
+          process.stdout.write(JSON.stringify({version: 'native.initialized-baseline/v1', baseline_commit: commitInitializedProofBaseline(process.cwd(), revision)}));
+          NODE
+      materialize_catalog: &checklist_materialize_catalog
+        type: proof-admitted-catalog
+        depends_on: [checklist-research, commit-initialized-baseline]
+        consumes:
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+          - {claim: proof.catalog_revalidation@1, as: current_revalidation}
+        emits:
+          - {claim: component.catalog@1, from: output}
+        expand: &checklist_materialize_expand
+          claim: component.catalog@1
+          template: checklist-onboard-component
+          items_pointer: /components
+          key_pointer: /component_id
+          item_claim: component.work_item@1
+      skeleton-ready:
+        type: noop
+        depends_on: [materialize_catalog]
+        wait_for_expansion:
+          owner: materialize_catalog
+          terminal_node: promote-native-component
+      checklist-skeleton:
+        type: command
+        depends_on: [skeleton-ready]
+        timeout: 120000
+        schema: *checklist_snapshot_schema
+        consumes:
+          - {claim: proof.checklist.research-snapshot@1, as: research}
+        emits:
+          - {claim: proof.checklist.skeleton-snapshot@1, from: output}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - <<'NODE'
+          const path = require('node:path');
+          const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          process.stdout.write(JSON.stringify(executeJournaledChecklistStep('skeleton', 'Confirmed the repository-wide native skeleton after component promotions.', true)));
+          NODE
+  checklist-onboard-component:
+    input: {name: component, claim: component.work_item@1}
+    checks:
+      prepare-work-item: &checklist_prepare_work_item
+        type: command
+        timeout: 120000
+        schema: *component_prepared_work_item_schema
+        consumes:
+          - {claim: component.work_item@1, as: component}
+        emits:
+          - {claim: component.prepared_work_item@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const deps = {{ outputs | json }};
+          const component = deps.component;
+          if (!component || typeof component !== 'object' || typeof component.component_id !== 'string') {
+            throw new Error('component WorkItem is missing from the admitted catalog');
+          }
+          const sourcePaths = component.sorted_owned_paths;
+          if (!Array.isArray(sourcePaths) || sourcePaths.length === 0 || sourcePaths.some(path => typeof path !== 'string' || path.length === 0)) {
+            throw new Error('component WorkItem has no exact sorted_owned_paths');
+          }
+          const baselineCommit = process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+          if (!baselineCommit || !/^[0-9a-f]{40,64}$/.test(baselineCommit)) {
+            throw new Error('NATIVE_ONBOARDING_BASELINE_COMMIT must be the exact immutable baseline commit');
+          }
+          const output = {
+            ...component,
+            component_id: component.component_id,
+            sorted_owned_paths: sourcePaths,
+            baseline_commit: baselineCommit,
+          };
+          process.stdout.write(JSON.stringify(output));
+          NODE
+
+      checkout-target: &checklist_checkout_target
+        type: command
+        depends_on: [prepare-work-item]
+        timeout: 120000
+        schema: *component_checkout_target_schema
+        consumes:
+          - {claim: component.prepared_work_item@1, as: work_item}
+        emits:
+          - {claim: component.checkout_target@1, from: output}
+        exec: |
+          set -eu
+          node - <<'NODE'
+          const crypto = require('node:crypto');
+          const path = require('node:path');
+          const deps = {{ outputs | json }};
+          const workItem = deps.work_item;
+          if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || typeof workItem.baseline_commit !== 'string') {
+            throw new Error('checkout target is missing the prepared WorkItem');
+          }
+          const root = process.env.NATIVE_ONBOARDING_WORKTREE_ROOT;
+          if (!root || !path.isAbsolute(root)) throw new Error('NATIVE_ONBOARDING_WORKTREE_ROOT must be absolute');
+          const digest = crypto.createHash('sha256')
+            .update(JSON.stringify({component_id: workItem.component_id, baseline_commit: workItem.baseline_commit}))
+            .digest('hex');
+          process.stdout.write(JSON.stringify({
+            component_id: workItem.component_id,
+            baseline_commit: workItem.baseline_commit,
+            worktree_root: path.join(root, digest),
+          }));
+          NODE
+
+      checkout-worktree: &checklist_checkout_worktree
+        type: git-checkout
+        depends_on: [checkout-target]
+        timeout: 900000
+        criticality: internal
+        resource_group: native-checkout-cache
+        repository: "{{ env.VISOR_WORKSPACE_MAIN_PROJECT }}"
+        ref: "{{ outputs.target.baseline_commit }}"
+        working_directory: "{{ outputs.target.worktree_root }}"
+        use_worktree: true
+        persist_worktree: true
+        clean: false
+        consumes:
+          - {claim: component.checkout_target@1, as: target}
+        emits:
+          - {claim: component.checkout@1, from: output}
+
+      role-onboard-component: &checklist_role_onboard_component
+        type: command
+        timeout: 120000
+        schema: plain
+        transform_js: |
+          return String(output);
+        consumes:
+          - {claim: component.work_item@1, as: component}
+        emits:
+          - {claim: native.role.onboard@1, from: output}
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          "$PROOF_BIN" role show onboard --format agent
+
+      author-native-component: &checklist_author_native_component
+        type: ai
+        depends_on: [role-onboard-component, checkout-worktree]
+        timeout: 1800000
+        criticality: internal
+        schema: plain
+        consumes:
+          - {claim: component.prepared_work_item@1, as: work_item}
+          - {claim: component.checkout@1, as: checkout}
+          - {claim: native.role.onboard@1, as: role}
+        emits:
+          - {claim: native.author.evidence@1, from: output}
+        prompt: |
+          You are the editable native Proof onboarding author for exactly one
+          authenticated component WorkItem. The supplied worker-root is the
+          exact persistent local git worktree for this component. Use the
+          runtime Proof executable from PROOF_BIN and the exact WorkItem,
+          worker-root, and built-in role supplied below. The caller binds this
+          worker-root to the isolated writer profile; do not invent another
+          path or checkout. Native tools.apply_patch may edit only allowed
+          native Proof files in that worker-root. The native exec carrier
+          may execute bounded Proof CLI commands with that worker-root as cwd.
+          Do not use Probe MCP Bash or alternate write paths/roots.
+
+          WorkItem:
+          {{ outputs.work_item | json }}
+          Worker checkout:
+          {{ outputs.checkout | json }}
+          Built-in role:
+          {{ outputs.role | json }}
+
+          Materialize real native Proof requirements, vars, annotations, and
+          trace links supported by this component's source. Use original native
+          Proof files and commands; do not create a custom compiler, opaque
+          artifact manifest, or model-only requirement IDs. Keep source behavior
+          unchanged: source comments and Proof spec files are allowed. Do not
+          modify shared Proof checklists, audits, proof state, package/build
+          manifests, or unrelated component paths. Bind
+          every requirement row and scoped variable you create to the exact
+          WorkItem.component_id; do not use a neighboring component name.
+          Source/comment/annotation edits are allowed only for paths in the
+          exact WorkItem.sorted_owned_paths. Do not edit an unowned README,
+          documentation, project-root metadata, sibling paths, shared Proof
+          checklist/state, or package/build files to record evidence. Put
+          narrative evidence in the final response/run artifacts. Component-owned
+          native requirement and variable files created through Proof remain
+          allowed and are checked at promotion. After
+          writing, inspect the native rows and report an explicit
+          unmapped_authored_requirements list for anything that cannot be
+          mapped to this WorkItem, then fail rather than silently omitting it.
+          Return an operational summary only after writing native files. This
+          output is not a candidate, admission receipt, or approval.
+        ai:
+          model: gpt-5.6-luna
+          codex_execution_profile: luna-xhigh-isolated-writer-v1
+          codex_working_directory_from: checkout-worktree
+          prompt_type: engineer
+          allowEdit: true
+          allowedTools: [search, extract, listFiles]
+          max_iterations: 80
+          timeout: 1500000
+
+      promote-native-component: &checklist_promote_native_component
+        type: command
+        depends_on: [author-native-component]
+        timeout: 900000
+        criticality: internal
+        resource_group: proof-workspace-mutation
+        schema: *native_promotion_schema
+        consumes:
+          - {claim: component.prepared_work_item@1, as: work_item}
+          - {claim: component.checkout@1, as: checkout}
+          - {claim: native.author.evidence@1, as: author}
+        emits:
+          - {claim: native.promotion@1, from: output}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const {promoteNativeDelta} = require(path.join(
+            process.env.NATIVE_ONBOARDING_REPO_ROOT,
+            'examples/agent-governance/native-onboarding/native-promotion.ts',
+          ));
+          const proofBin = process.argv[2];
+          const deps = {{ outputs | json }};
+          const outputDir = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+          if (typeof outputDir !== 'string' || !path.isAbsolute(outputDir)) {
+            throw new Error('NATIVE_ONBOARDING_OUTPUT_DIR must be an absolute path');
+          }
+          const outputRoot = path.resolve(outputDir);
+
+          function safeRecordPath(componentId) {
+            if (typeof componentId !== 'string' || componentId.length === 0 || Buffer.byteLength(componentId, 'utf8') > 180) {
+              throw new Error('promotion component id is missing or too long');
+            }
+            const encoded = Buffer.from(componentId, 'utf8').toString('base64')
+              .replace(/\+/g, '-')
+              .replace(/\//g, '_')
+              .replace(/=+$/, '');
+            const recordDir = path.resolve(outputRoot, 'promotion-results');
+            const recordPath = path.resolve(recordDir, `${encoded}.json`);
+            if (path.dirname(recordPath) !== recordDir || !recordPath.startsWith(`${recordDir}${path.sep}`)) {
+              throw new Error('promotion record path escapes the output directory');
+            }
+            return recordPath;
+          }
+
+          function persistRecord(componentId, record) {
+            const recordPath = safeRecordPath(componentId);
+            fs.mkdirSync(path.dirname(recordPath), {recursive: true, mode: 0o700});
+            const serialized = JSON.stringify(record);
+            fs.writeFileSync(recordPath, serialized, {encoding: 'utf8', mode: 0o600});
+            fs.chmodSync(recordPath, 0o600);
+          }
+
+          function boundedError(error) {
+            const message = error && typeof error.message === 'string' ? error.message : String(error);
+            return message.length > 2048 ? `${message.slice(0, 2048)}...[truncated]` : message;
+          }
+
+          let workItem;
+          try {
+            workItem = deps.work_item;
+            const checkout = deps.checkout;
+            if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || workItem.component_id.length === 0 || Buffer.byteLength(workItem.component_id, 'utf8') > 180 || typeof workItem.baseline_commit !== 'string') {
+              throw new Error('promotion is missing the prepared WorkItem');
+            }
+            if (!checkout || typeof checkout !== 'object' || checkout.success !== true || checkout.is_worktree !== true || typeof checkout.path !== 'string' || typeof checkout.commit !== 'string' || typeof checkout.worktree_id !== 'string') {
+              throw new Error('promotion is missing the verified writer checkout');
+            }
+            const result = promoteNativeDelta({
+              canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT,
+              baselineCommit: workItem.baseline_commit,
+              writerCheckout: checkout,
+              workItem,
+              proofBin,
+              commitAcceptedArtifacts: true,
+              timeoutMs: Number(process.env.REQUEST_TIMEOUT),
+            });
+            const output = {
+              ...result,
+              component_id: workItem.component_id,
+              baseline_commit: result.checkpoint.baseline_commit,
+            };
+            persistRecord(workItem.component_id, output);
+            process.stdout.write(JSON.stringify(output));
+            if (result.status !== 'promoted') process.exitCode = 1;
+          } catch (error) {
+            const componentId = workItem && typeof workItem.component_id === 'string' && workItem.component_id.length > 0 && Buffer.byteLength(workItem.component_id, 'utf8') <= 180 ? workItem.component_id : 'unknown';
+            persistRecord(componentId, {
+              status: 'failed',
+              reason: 'promotion wrapper failed',
+              error: boundedError(error),
+              component_id: componentId,
+            });
+            throw error;
+          }
+          NODE

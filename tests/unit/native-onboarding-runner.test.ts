@@ -22,6 +22,7 @@ import {
   executeRetainedContinuationEngine,
   retainedProjectPrefixDispatchGate,
   buildRetainedReviewedAggregate,
+  buildChecklistOnboardingConfig,
   loadRetainedOnboardingConfig,
   parseRecoveryArguments,
   readRetainedReviewExport,
@@ -170,6 +171,40 @@ describe('native onboarding runner boundaries', () => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     fs.rmSync(root, {recursive: true, force: true});
+  });
+
+  it('loads the checklist profile as a standalone native graph without mutating the shipped graph', async () => {
+    const base = shippedPreparedConfig();
+    const profile = buildChecklistOnboardingConfig(base);
+    expect((base.checks as any).project.depends_on).toBeUndefined();
+    expect((profile.checks as any)['checklist-bootstrap']).toMatchObject({
+      type: 'command',
+      schema: expect.objectContaining({type: 'object', additionalProperties: false}),
+    });
+    expect((profile.claim_types as any)['proof.checklist.snapshot@1'].schema).toEqual(expect.objectContaining({
+      type: 'object',
+      required: expect.arrayContaining(['schema_version', 'checklist', 'steps', 'counts']),
+    }));
+    expect((profile.checks as any).project.depends_on).toEqual(['checklist-bootstrap']);
+    expect((profile.checks as any).project.consumes).toEqual([{claim: 'proof.checklist.snapshot@1', cardinality: 'one', as: 'bootstrap'}]);
+    const checklistDiscover = (profile.subgraphs as any)['discover-project-checklist'];
+    expect(Object.keys(checklistDiscover.checks)).toEqual([
+      'structural_inventory', 'inspect', 'proof_admit', 'verify', 'revalidate_catalog',
+      'checklist-research', 'commit-initialized-baseline', 'materialize_catalog',
+      'skeleton-ready', 'checklist-skeleton',
+    ]);
+    expect(checklistDiscover.checks.inspect.invocation.subject).toEqual({kind: 'project'});
+    expect(checklistDiscover.checks.inspect.message).toContain('Discover natural independently onboardable components');
+    expect(checklistDiscover.checks.inspect.instructions).toBeUndefined();
+    expect(checklistDiscover.checks.inspect.invocation_digest).toBeUndefined();
+    expect(checklistDiscover.checks['checklist-research'].depends_on).toEqual(['revalidate_catalog']);
+    expect(checklistDiscover.checks['commit-initialized-baseline'].consumes).toEqual([{claim: 'proof.checklist.research-snapshot@1', as: 'research'}]);
+    expect(checklistDiscover.checks['skeleton-ready'].wait_for_expansion).toEqual({owner: 'materialize_catalog', terminal_node: 'promote-native-component'});
+    expect((profile.checks as any).project.expand.template).toBe('discover-project-checklist');
+    expect(checklistDiscover.checks.materialize_catalog.expand.template).toBe('checklist-onboard-component');
+    expect(Object.keys(profile.subgraphs)).toEqual(['discover-project-checklist', 'checklist-onboard-component']);
+    expect(() => compileClaimPlan(profile as any)).not.toThrow();
+    await expect(loadConfig(profile as any, {strict: true})).resolves.toBeDefined();
   });
 
   it('accepts a private minimal Codex home and rejects configured MCP before dispatch', () => {

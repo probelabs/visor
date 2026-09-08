@@ -14,7 +14,7 @@ import {
   sha256Canonical,
   type ClaimSchemaValidator,
 } from './claim-kernel';
-import { PROOF_ROLE_AUTHORITY_CLAIM, isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector } from '../../providers/governed-proof-inspect-check-provider';
+import { PROOF_ROLE_AUTHORITY_CLAIM, isGovernedProofComponentSelector, isGovernedProofProjectSelector, isGovernedProofSpecReviewSelector } from '../../providers/governed-proof-inspect-check-provider';
 
 const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
 const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -169,7 +169,7 @@ function reviewedComponentSelectorTemplateBindingAllowed(inputName: string | und
     consumes.some(value => exactConsume(value, 'native.component.reviewed@1', 'reviewed'));
 }
 
-function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false, specReviewSelectorAllowed = false): void {
+function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false, specReviewSelectorAllowed = false, projectSelectorAllowed = false): void {
   const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'depends_on', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
   if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
   if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
@@ -192,6 +192,15 @@ function validateGovernedInspectConfig(name: string, check: CheckConfig, compone
     let selectorSchema: unknown;
     try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'spec-review selector output schema is not JSON'); }
     if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'spec-review selector output schema is invalid');
+    return;
+  }
+  if (projectSelectorAllowed && isGovernedProofProjectSelector(record.invocation)) {
+    if (!validText(record.message, 32768) || ['instructions', 'invocation_digest', 'result_schema'].some(key => hasOwn(record, key))) rejectReservedProfile(name, 'project selector may author only its discovery message');
+    const selectorInvocation = record.invocation as Record<string, unknown>;
+    const decodedSelectorSchema = decodeGovernedSchema(selectorInvocation.output_schema);
+    let selectorSchema: unknown;
+    try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'project selector output schema is not JSON'); }
+    if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'project selector output schema is invalid');
     return;
   }
   if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
@@ -377,6 +386,194 @@ function rejectReservedProfile(templateName: string, detail: string): never {
     'RESERVED_PROOF_ADMISSION_PROFILE',
     `Subgraph template "${templateName}" violates the reserved proof admission profile: ${detail}`
   );
+}
+
+/**
+ * The checklist-driven onboarding profile is an additive, named project
+ * topology.  It is kept separate from discover-project so the historical
+ * native admission profile cannot be changed by a checklist run.  Only this
+ * exact sequence is allowed to add the journaled Proof checklist boundaries.
+ */
+function validateChecklistProjectTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority,
+): void {
+  const researchClaim = 'proof.checklist.research-snapshot@1';
+  const baselineClaim = 'native.initialized.baseline@1';
+  const skeletonClaim = 'proof.checklist.skeleton-snapshot@1';
+  const expectedTopology = [
+    'structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'revalidate_catalog',
+    'checklist-research', 'commit-initialized-baseline', 'materialize_catalog',
+    'skeleton-ready', 'checklist-skeleton',
+  ];
+  const expectedNodes = [...expectedTopology].sort();
+  if (inputName !== 'project' || inputClaim !== 'project.discovery_item@1' ||
+      nodeKeys.length !== expectedNodes.length || nodeKeys.some((key, index) => key !== expectedNodes[index]) ||
+      topology.join('\0') !== expectedTopology.join('\0')) {
+    rejectReservedProfile(name, `expected exactly the checklist topology ${expectedTopology.join(' -> ')}`);
+  }
+  if (!hasOwn(authority.claimTypes, researchClaim) || !hasOwn(authority.claimTypes, baselineClaim) || !hasOwn(authority.claimTypes, skeletonClaim)) {
+    rejectReservedProfile(name, 'checklist snapshot and initialized-baseline claims must be declared');
+  }
+  const exactClaimBindings = (node: string, expected: readonly [string, string][]): void => {
+    if (claimBindings(resolvedChecks[node]).join('\0') !== expected.map(value => JSON.stringify(value)).sort().join('\0')) {
+      rejectReservedProfile(name, `${node} has unexpected claim bindings`);
+    }
+  };
+  const structural = resolvedChecks.structural_inventory;
+  if (structural.type !== PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE ||
+      claimList(structural, 'consumes').join('\0') !== inputClaim ||
+      claimList(structural, 'emits').join('\0') !== PROOF_STRUCTURAL_INVENTORY_CLAIM) {
+    rejectReservedProfile(name, 'checklist structural_inventory must retain the exact Proof inventory binding');
+  }
+  const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) rejectReservedProfile(name, 'checklist inspect must use the governed project selector');
+  validateGovernedInspectConfig(name, inspect, false, false, true);
+  if (!isGovernedProofProjectSelector(inspect.invocation)) {
+    rejectReservedProfile(name, 'checklist project inspect must use the controller-owned project selector');
+  }
+  if (claimList(inspect, 'consumes').join('\0') !== [inputClaim, PROOF_STRUCTURAL_INVENTORY_CLAIM].sort().join('\0') ||
+      claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, 'checklist inspect must consume project and current inventory and emit only candidate');
+  }
+  const admit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (admit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimList(admit, 'consumes').join('\0') !== PROOF_CANDIDATE_CLAIM || claimList(admit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, 'checklist proof_admit must retain the exact candidate/admission suffix');
+  }
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE || claimList(verify, 'emits').length !== 0 ||
+      claimList(verify, 'consumes').join('\0') !== [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')) {
+    rejectReservedProfile(name, 'checklist verify must consume candidate and admission and emit none');
+  }
+  const revalidate = resolvedChecks.revalidate_catalog;
+  if (revalidate.type !== PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
+      claimList(revalidate, 'emits').join('\0') !== PROOF_CATALOG_REVALIDATION_CLAIM ||
+      claimList(revalidate, 'consumes').join('\0') !== [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')) {
+    rejectReservedProfile(name, 'checklist revalidate_catalog must retain the exact current-catalog binding');
+  }
+  const research = resolvedChecks['checklist-research'];
+  if (research.type !== 'command' || claimList(research, 'emits').join('\0') !== researchClaim) {
+    rejectReservedProfile(name, 'checklist-research must be a command emitting one research snapshot');
+  }
+  exactClaimBindings('checklist-research', [[inputClaim, 'project'], [PROOF_CATALOG_REVALIDATION_CLAIM, 'current_revalidation']]);
+  const baseline = resolvedChecks['commit-initialized-baseline'];
+  if (baseline.type !== 'command' || claimList(baseline, 'emits').join('\0') !== baselineClaim) {
+    rejectReservedProfile(name, 'commit-initialized-baseline must emit one immutable baseline claim');
+  }
+  exactClaimBindings('commit-initialized-baseline', [[researchClaim, 'research']]);
+  const materialize = resolvedChecks.materialize_catalog;
+  if (materialize.type !== PROOF_ADMITTED_CATALOG_PROVIDER_TYPE || claimList(materialize, 'emits').join('\0') !== 'component.catalog@1' ||
+      claimList(materialize, 'consumes').join('\0') !== [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM].sort().join('\0') ||
+      !materialize.expand || materialize.expand.template !== 'checklist-onboard-component') {
+    rejectReservedProfile(name, 'checklist materialize_catalog must retain current Proof catalog egress and named component prefix');
+  }
+  const skeletonReady = resolvedChecks['skeleton-ready'];
+  if (skeletonReady.type !== 'noop' || dependencyTokens(skeletonReady, `${name}.skeleton-ready`).join('\0') !== 'materialize_catalog' ||
+      !skeletonReady.wait_for_expansion || skeletonReady.wait_for_expansion.owner !== 'materialize_catalog' ||
+      skeletonReady.wait_for_expansion.terminal_node !== 'promote-native-component') {
+    rejectReservedProfile(name, 'skeleton-ready must wait for the exact component promotion terminal');
+  }
+  const skeleton = resolvedChecks['checklist-skeleton'];
+  if (skeleton.type !== 'command' || claimList(skeleton, 'emits').join('\0') !== skeletonClaim) {
+    rejectReservedProfile(name, 'checklist-skeleton must be a command emitting one skeleton snapshot');
+  }
+  exactClaimBindings('checklist-skeleton', [[researchClaim, 'research']]);
+  const expectedDependencies: Readonly<Record<string, readonly string[]>> = {
+    structural_inventory: [],
+    inspect: ['structural_inventory'],
+    [PROOF_ADMIT_NODE_KEY]: ['inspect'],
+    verify: ['inspect', PROOF_ADMIT_NODE_KEY],
+    revalidate_catalog: ['structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify'],
+    'checklist-research': ['revalidate_catalog'],
+    'commit-initialized-baseline': ['checklist-research'],
+    materialize_catalog: ['checklist-research', 'commit-initialized-baseline', 'revalidate_catalog', 'structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY],
+    'skeleton-ready': ['materialize_catalog'],
+    'checklist-skeleton': ['checklist-research', 'skeleton-ready'],
+  };
+  for (const node of expectedTopology) {
+    const expected = [...(expectedDependencies[node] || [])].sort().join('\0');
+    if ((dependencies[node] || []).join('\0') !== expected) rejectReservedProfile(name, `checklist profile has unexpected dependencies for ${node}`);
+  }
+}
+
+/**
+ * Checklist onboarding deliberately reuses only the mutation prefix of the
+ * ordinary component writer.  Keep this named profile exact: a typo that
+ * reintroduces requirement enumeration or an admission suffix would turn a
+ * checklist pause into an unreviewed component run.
+ */
+function validateChecklistComponentPrefixTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority,
+): void {
+  const expectedTopology = [
+    'prepare-work-item', 'role-onboard-component', 'checkout-target',
+    'checkout-worktree', 'author-native-component', 'promote-native-component',
+  ];
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1' ||
+      nodeKeys.length !== expectedTopology.length ||
+      nodeKeys.join('\0') !== [...expectedTopology].sort().join('\0') ||
+      topology.join('\0') !== expectedTopology.join('\0')) {
+    rejectReservedProfile(name, 'checklist component profile requires exactly the six-node prepare/checkout/role/author/promote prefix');
+  }
+  const expectedDependencies: Readonly<Record<string, readonly string[]>> = {
+    'prepare-work-item': [],
+    'checkout-target': ['prepare-work-item'],
+    'checkout-worktree': ['checkout-target'],
+    'role-onboard-component': [],
+    'author-native-component': ['checkout-worktree', 'prepare-work-item', 'role-onboard-component'],
+    'promote-native-component': ['author-native-component', 'checkout-worktree', 'prepare-work-item'],
+  };
+  for (const [nodeKey, expected] of Object.entries(expectedDependencies)) {
+    if ((dependencies[nodeKey] || []).join('\0') !== expected.join('\0')) {
+      rejectReservedProfile(name, `checklist component profile has unexpected dependencies for ${nodeKey}`);
+    }
+  }
+  const expectedClaims: Readonly<Record<string, {type: string; consumes: readonly [string, string][]; emits: string}>> = {
+    'prepare-work-item': {type: 'command', consumes: [['component.work_item@1', 'component']], emits: 'component.prepared_work_item@1'},
+    'checkout-target': {type: 'command', consumes: [['component.prepared_work_item@1', 'work_item']], emits: 'component.checkout_target@1'},
+    'checkout-worktree': {type: 'git-checkout', consumes: [['component.checkout_target@1', 'target']], emits: 'component.checkout@1'},
+    'role-onboard-component': {type: 'command', consumes: [['component.work_item@1', 'component']], emits: 'native.role.onboard@1'},
+    'author-native-component': {type: 'ai', consumes: [
+      ['component.prepared_work_item@1', 'work_item'],
+      ['component.checkout@1', 'checkout'],
+      ['native.role.onboard@1', 'role'],
+    ], emits: 'native.author.evidence@1'},
+    'promote-native-component': {type: 'command', consumes: [
+      ['component.prepared_work_item@1', 'work_item'],
+      ['component.checkout@1', 'checkout'],
+      ['native.author.evidence@1', 'author'],
+    ], emits: 'native.promotion@1'},
+  };
+  for (const [nodeKey, expected] of Object.entries(expectedClaims)) {
+    const check = resolvedChecks[nodeKey];
+    if (!check || check.type !== expected.type || claimBindings(check).join('\0') !== expected.consumes.map(value => JSON.stringify(value)).sort().join('\0') ||
+        claimList(check, 'emits').join('\0') !== expected.emits) {
+      rejectReservedProfile(name, `${nodeKey} is not the exact checklist component prefix node`);
+    }
+  }
+  if (Object.values(resolvedChecks).some(check =>
+    check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
+    claimList(check, 'emits').some(claim => claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CANDIDATE_CLAIM) ||
+    claimList(check, 'consumes').some(claim => claim === PROOF_ADMITTED_RECEIPT_CLAIM || claim === PROOF_CANDIDATE_CLAIM))) {
+    rejectReservedProfile(name, 'checklist component prefix cannot contain Proof admission or governed inspection nodes');
+  }
+  if (!hasOwn(authority.claimTypes, 'native.promotion@1')) {
+    rejectReservedProfile(name, 'checklist component prefix requires the shipped native promotion claim declaration');
+  }
 }
 
 /** Exact retained continuation prefix followed by the permanent admission suffix. */
@@ -638,6 +835,14 @@ function validateReservedProofAdmissionTemplate(
   const nativeLiveName = name === 'onboard-component' && inputClaim === 'component.work_item@1' && nodeKeys.includes('prepare-work-item');
   if ((nativeRetainedName || nativeLiveName) && !triggered) {
     rejectReservedProfile(name, 'reserved native component profile is missing its governed admission suffix');
+  }
+  if (name === 'discover-project-checklist') {
+    validateChecklistProjectTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    return;
+  }
+  if (name === 'checklist-onboard-component') {
+    validateChecklistComponentPrefixTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, dependencies, topology, authority);
+    return;
   }
   if (!triggered) return;
 
@@ -980,7 +1185,8 @@ function compileTemplate(
       validateGovernedInspectConfig(name, check,
         componentSelectorTemplateBindingAllowed(inputName, inputClaim, check) ||
         reviewedComponentSelectorTemplateBindingAllowed(inputName, inputClaim, check),
-        nodeKey === 'spec_review');
+        nodeKey === 'spec_review',
+        name === 'discover-project-checklist' && nodeKey === 'inspect');
     }
     for (const field of ['emits', 'consumes'] as const) {
       if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {

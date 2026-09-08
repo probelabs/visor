@@ -144,6 +144,16 @@ export function isGovernedProofSpecReviewSelector(value: unknown): boolean {
     plain(subject) && exact(subject, ['kind']) && subject.kind === 'component' &&
     visible(value.output_schema_id, 128) && typeof value.output_schema === 'string';
 }
+/** Authored selector for project discovery.  Project identity is deliberately
+ * omitted here: the current authenticated inventory and project item claims
+ * supply it at managed-run acquisition time. */
+export function isGovernedProofProjectSelector(value: unknown): boolean {
+  if (!plain(value) || !exact(value, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'])) return false;
+  const subject = value.subject;
+  return value.role_id === 'onboard' && value.stance === 'owner' &&
+    plain(subject) && exact(subject, ['kind']) && subject.kind === 'project' &&
+    visible(value.output_schema_id, 128) && typeof value.output_schema === 'string';
+}
 export function validateProofComponentInvocationAuthority(value: unknown): ProofComponentInvocationAuthorityV1 {
   if (!plain(value) || !exact(value, ['work_item_digest', 'subject', 'candidate', 'admission', 'work_item', 'catalog_revalidation_receipt']) || !validMaterialized(value)) fail('component authority is not closed');
   if (!wire(value.work_item_digest) || !plain(value.subject) || !exact(value.subject, ['version', 'project_id', 'component_id', 'sorted_owned_paths', 'sorted_dependency_closure', 'fingerprint']) || value.subject.version !== 'proof.component-subject/v1' || typeof value.subject.project_id !== 'string' || typeof value.subject.component_id !== 'string' || !wire(value.subject.fingerprint) || !Array.isArray(value.subject.sorted_owned_paths) || !Array.isArray(value.subject.sorted_dependency_closure)) fail('component authority subject is invalid');
@@ -212,6 +222,13 @@ export function projectGovernedProofInspectConfig(value: unknown): CheckProvider
   for (const key of Reflect.ownKeys(value)) if (!dataDescriptor(value, key)) fail(`config key ${String(key)} is not an enumerable data property`);
   for (const key of Object.keys(value)) { if (!(AUTHORED as readonly string[]).includes(key) && !CONTROLLER.has(key) && !GRAPH.has(key)) fail(`unknown config key ${key}`); if (GRAPH.has(key) && !validMaterialized(value[key])) fail(`graph config key ${key} is not materialized`); }
   if (value.type !== GOVERNED_PROOF_INSPECT_PROVIDER_NAME || value.profile !== PROFILE) fail('config fields are invalid');
+  if (isGovernedProofProjectSelector(value.invocation)) {
+    if (!text(value.message, 32768) || own(value, 'instructions') || own(value, 'invocation_digest') || own(value, 'result_schema')) fail('project selector may author only its discovery message');
+    const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
+    const parsed = jsonObject(decoded, 'output_schema');
+    if (!validMaterialized(parsed)) fail('output_schema contains non-materialized data');
+    return immutableCanonicalValue({ type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, message: value.message, invocation: value.invocation, profile: PROFILE }) as CheckProviderConfig;
+  }
   if (isGovernedProofComponentSelector(value.invocation) || isGovernedProofSpecReviewSelector(value.invocation)) {
     if (own(value, 'message') || own(value, 'instructions') || own(value, 'invocation_digest') || own(value, 'result_schema')) fail('component selector cannot author resolved Proof fields');
     const decoded = decodeSchema((value.invocation as Record<string, unknown>).output_schema);
@@ -701,6 +718,18 @@ function requiresRuntimeContext(config: CheckProviderConfig): RuntimeContextKind
     }
     return reviewedBinding ? 'reviewed-component' : undefined;
   }
+  if (isGovernedProofProjectSelector(config.invocation)) {
+    const consumes = config.consumes;
+    const exactConsume = (value: unknown, claim: string, as: string): boolean => plain(value) &&
+      (exact(value, ['claim', 'as']) || (exact(value, ['claim', 'as', 'cardinality']) && value.cardinality === 'one')) &&
+      value.claim === claim && value.as === as;
+    if (!Array.isArray(consumes) || consumes.length !== 2 || consumes.some(value => !plain(value)) ||
+        !consumes.some(value => exactConsume(value, PROJECT_DISCOVERY_CLAIM, 'project')) ||
+        !consumes.some(value => exactConsume(value, PROOF_STRUCTURAL_INVENTORY_CLAIM, 'current_inventory'))) {
+      fail('project selector bindings are not exact');
+    }
+    return 'project';
+  }
   const consumes = config.consumes;
   if (consumes === undefined) return undefined;
   if (!Array.isArray(consumes)) fail('config consumes is not an array');
@@ -819,7 +848,9 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
     const config = projectGovernedProofInspectConfig(request.checkConfig); if (!/^[0-9a-f]{64}$/.test(request.executionConfigDigest)) fail('executionConfigDigest is invalid');
     if (typeof request.workingDirectory !== 'string' || request.workingDirectory.length === 0) fail('workingDirectory is invalid');
     const binding = immutableCanonicalValue(request.binding);
-    const selector = isGovernedProofComponentSelector(request.checkConfig.invocation) || isGovernedProofSpecReviewSelector(request.checkConfig.invocation);
+    const componentSelector = isGovernedProofComponentSelector(request.checkConfig.invocation);
+    const projectSelector = isGovernedProofProjectSelector(request.checkConfig.invocation);
+    const selector = componentSelector || isGovernedProofSpecReviewSelector(request.checkConfig.invocation) || projectSelector;
     const reinspectionContext = request.reinspectionContext === undefined
       ? undefined
       : validateGovernedProofComponentReinspectionContext(request.reinspectionContext);
@@ -831,8 +862,12 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
     if (runtimeContextKind === 'project') {
       const invocation = config.invocation;
       const subject = plain(invocation) && plain(invocation.subject) ? invocation.subject : undefined;
-      if (!subject || subject.kind !== 'project' || typeof subject.id !== 'string' || typeof subject.fingerprint !== 'string') fail('project discovery invocation subject is invalid');
-      context = projectGovernedProofProjectDiscoveryContext(request.executionContext?.claims, binding, { projectId: subject.id, fingerprint: subject.fingerprint });
+      if (projectSelector) {
+        context = projectGovernedProofProjectDiscoveryContext(request.executionContext?.claims, binding);
+      } else {
+        if (!subject || subject.kind !== 'project' || typeof subject.id !== 'string' || typeof subject.fingerprint !== 'string') fail('project discovery invocation subject is invalid');
+        context = projectGovernedProofProjectDiscoveryContext(request.executionContext?.claims, binding, { projectId: subject.id, fingerprint: subject.fingerprint });
+      }
     } else if (runtimeContextKind === 'component' || runtimeContextKind === 'reviewed-component') {
       context = projectGovernedProofRuntimeContext(request.executionContext?.claims, binding);
     }
@@ -847,37 +882,60 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
       if (cancelled || closed) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
       let effective = config;
       if (selector) {
-        const authority = validateProofComponentInvocationAuthority(request.executionContext.proofComponentAuthority);
-        const subject = authority.subject;
-        if (reinspectionContext && reinspectionContext.component_id !== subject.component_id) fail('reinspection context component is detached from authority');
-        const componentClaim = request.executionContext.claims && (request.executionContext.claims as Record<string, unknown>).component;
-        if (!plain(componentClaim) || !plain(componentClaim.payload) || !plain(componentClaim.payload.authority)) fail('activated WorkItem authority is missing');
-        const expectedCompact = { component_id: subject.component_id, work_item_digest: authority.work_item_digest, subject };
-        if (canonicalJson((componentClaim.payload as Record<string, unknown>).authority) !== canonicalJson(expectedCompact)) fail('component authority is detached from activated WorkItem');
         const authored = config.invocation as Record<string, unknown>;
-        const c0Request = {
-          role_id: authored.role_id,
-          stance: authored.stance,
-          subject: { kind: 'component', id: subject.component_id, fingerprint: subject.fingerprint },
-          component_authority: authority,
-          ...(specReview ? { onboarding_stage: onboardingStage } : {}),
-          output_schema_id: authored.output_schema_id,
-          output_schema: authored.output_schema,
-        };
+        let c0Request: Record<string, unknown>;
+        if (projectSelector) {
+          if (!context || context.version !== GOVERNED_PROOF_PROJECT_CONTEXT_VERSION) fail('project selector context is unavailable');
+          const projectPayload = context.project.payload;
+          const inventoryPayload = context.current_inventory.payload;
+          const inventoryAuthority = plain(inventoryPayload) && plain(inventoryPayload.authority)
+            ? inventoryPayload.authority
+            : undefined;
+          if (!plain(projectPayload) || !plain(inventoryAuthority) || typeof projectPayload.project_id !== 'string' ||
+              typeof inventoryAuthority.subject_fingerprint !== 'string') fail('project selector context authority is invalid');
+          c0Request = {
+            role_id: authored.role_id,
+            stance: authored.stance,
+            subject: {kind: 'project', id: projectPayload.project_id, fingerprint: inventoryAuthority.subject_fingerprint},
+            output_schema_id: authored.output_schema_id,
+            output_schema: authored.output_schema,
+          };
+        } else {
+          const authority = validateProofComponentInvocationAuthority(request.executionContext.proofComponentAuthority);
+          const subject = authority.subject;
+          if (reinspectionContext && reinspectionContext.component_id !== subject.component_id) fail('reinspection context component is detached from authority');
+          const componentClaim = request.executionContext.claims && (request.executionContext.claims as Record<string, unknown>).component;
+          if (!plain(componentClaim) || !plain(componentClaim.payload) || !plain(componentClaim.payload.authority)) fail('activated WorkItem authority is missing');
+          const expectedCompact = { component_id: subject.component_id, work_item_digest: authority.work_item_digest, subject };
+          if (canonicalJson((componentClaim.payload as Record<string, unknown>).authority) !== canonicalJson(expectedCompact)) fail('component authority is detached from activated WorkItem');
+          c0Request = {
+            role_id: authored.role_id,
+            stance: authored.stance,
+            subject: { kind: 'component', id: subject.component_id, fingerprint: subject.fingerprint },
+            component_authority: authority,
+            ...(specReview ? { onboarding_stage: onboardingStage } : {}),
+            output_schema_id: authored.output_schema_id,
+            output_schema: authored.output_schema,
+          };
+        }
         const resolved = await proofAdmissionChild().resolveProofRoleInvocation(this.capability, c0Request, request.workingDirectory as string, c0Cancellation.signal);
         // C0 owns the process boundary.  A cancellation racing its final
         // response must be observed before any Probe runner is constructed.
         if (cancelled || closed || c0Cancellation.signal.aborted) throw new Error(PROOF_ADMISSION_UNAVAILABLE);
         const outputSchema = decodeSchema(resolved.output_schema);
-        const resolvedConfig = { type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, message: GOVERNED_PROOF_INSPECT_MESSAGE, instructions: resolved.instructions, invocation: c0Request, invocation_digest: resolved.invocation_digest, result_schema: outputSchema, profile: PROFILE };
+        const resolvedConfig = { type: GOVERNED_PROOF_INSPECT_PROVIDER_NAME, message: projectSelector ? config.message : GOVERNED_PROOF_INSPECT_MESSAGE, instructions: resolved.instructions, invocation: c0Request, invocation_digest: resolved.invocation_digest, result_schema: outputSchema, profile: PROFILE };
         // Component authorities retain Proof-owned RawMessage bytes (including
         // signed zero). Preserve that identity while freezing the resolved
         // selector; generic project/requirement startup remains graph-canonical.
-        effective = immutableProofCanonicalValue(resolvedConfig) as CheckProviderConfig;
+        effective = projectSelector
+          ? immutableCanonicalValue(resolvedConfig) as CheckProviderConfig
+          : immutableProofCanonicalValue(resolvedConfig) as CheckProviderConfig;
       }
       const invocation = effective.invocation as Record<string, unknown>;
       const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}), ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) };
-      runnerRequest = selector ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;
+      runnerRequest = componentSelector || specReview
+        ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest
+        : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;
       try {
         request.executionContext.hooks?.onPromptCaptured?.({
           step: request.binding.checkId,

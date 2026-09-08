@@ -25,6 +25,11 @@ import {
   emitNativeCampaignReport,
   type NativeCampaignReportInput,
 } from './native-campaign-report';
+import {
+  buildNativeChecklistProgressFromProjections,
+  renderNativeChecklistProgress,
+  type NativeChecklistProgress,
+} from './native-checklist-progress';
 
 type Json = Record<string, unknown>;
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -33,6 +38,49 @@ export type PublicPromptCaptureInfo = Readonly<{
   provider: string;
   prompt: string;
 }>;
+
+/**
+ * Persist the read-only checklist/graph projection alongside a runner run.
+ * Proof's full effective snapshot is supplied by the postflight command; no
+ * checklist state is re-read from files or synthesized from summary counts.
+ */
+export function writeNativeChecklistProgress(
+  output: string,
+  claimProjection: unknown,
+  instanceProjection: unknown,
+  checkpoint: unknown,
+  options: {paused?: boolean; resumed?: boolean} = {},
+): NativeChecklistProgress {
+  const progress = buildNativeChecklistProgressFromProjections({
+    claimProjection,
+    instanceProjection,
+    checkpoint,
+    paused: options.paused,
+    resumed: options.resumed,
+  });
+  const rendered = renderNativeChecklistProgress(progress);
+  writeText(path.join(output, 'progress.json'), rendered.json);
+  writeText(path.join(output, 'progress.txt'), rendered.text);
+  writeText(path.join(output, 'progress.html'), rendered.html + '\n');
+  return progress;
+}
+
+function writeRestoredChecklistProgress(
+  output: string,
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  options: {paused?: boolean; resumed?: boolean} = {},
+  liveInstanceProjection?: unknown,
+): NativeChecklistProgress {
+  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  return writeNativeChecklistProgress(
+    output,
+    journal.getClaimProjection(),
+    liveInstanceProjection ?? journal.getInstanceProjection(),
+    checkpoint,
+    options,
+  );
+}
 
 let publicPromptCaptureCounter = 0;
 
@@ -153,6 +201,7 @@ export function nativeOnboardingCountsAreConsistent(counts: NativeOnboardingComp
 }
 
 const CONFIG_PATH = path.resolve(__dirname, 'visor-onboarding.yaml');
+const CHECKLIST_CONFIG_PATH = path.resolve(__dirname, 'visor-checklist-onboarding.yaml');
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 // A natural component catalog can contain many independent review items after
 // each editable author/promotion. Keep the outer campaign budget bounded, but
@@ -181,6 +230,10 @@ function parseArgs(argv: string[]): Record<string, string> {
     if (!key.startsWith('--')) throw new Error('unexpected argument: ' + key);
     if (key === '--preflight-only') {
       result['preflight-only'] = 'true';
+      continue;
+    }
+    if (key === '--checklist-onboarding') {
+      result['checklist-onboarding'] = 'true';
       continue;
     }
     const value = argv[index + 1];
@@ -349,7 +402,7 @@ function commandName(args: string[]): string {
   return args.join('-').replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 128);
 }
 
-function runProof(proof: string, subject: string, output: string, phase: string, args: string[], timeout: number, input?: string): CommandResult {
+export function runProof(proof: string, subject: string, output: string, phase: string, args: string[], timeout: number, input?: string): CommandResult {
   const started = new Date().toISOString();
   const result = spawnSync(proof, args, {
     cwd: subject,
@@ -515,6 +568,13 @@ function encodeResultSchemas(value: unknown): unknown {
       ...invocation,
       output_schema: Buffer.from(output.result_schema, 'utf8').toString('base64'),
     };
+    const subject = invocation.subject;
+    if (subject && typeof subject === 'object' && !Array.isArray(subject) &&
+        (subject as Json).kind === 'project' &&
+        !Object.prototype.hasOwnProperty.call(subject, 'id') &&
+        !Object.prototype.hasOwnProperty.call(subject, 'fingerprint')) {
+      delete output.result_schema;
+    }
   }
   return output;
 }
@@ -653,11 +713,294 @@ export const retainedProjectPrefixDispatchGate: GeneratedDispatchGate = (
   generation: NodeGenerationProjection,
 ): GeneratedDispatchGateDecision => generation.scope.length > 1 ? 'defer' : 'dispatch';
 
-function onboardingConfigTemplate(): {prepared: Json; inspectCheck: Json} {
-  const raw = yaml.load(fs.readFileSync(CONFIG_PATH, 'utf8'));
+const checklistSkeletonPauseGate: GeneratedDispatchGate = (
+  generation: NodeGenerationProjection,
+): GeneratedDispatchGateDecision => generation.checkId === 'checklist-skeleton' ? 'defer' : 'dispatch';
+
+type ChecklistSkeletonFrontierAssessment = Readonly<{
+  ready: boolean;
+  expectedComponentIds: readonly string[];
+  promotedComponentIds: readonly string[];
+  componentAttemptsStarted: number;
+  skeletonGenerationIds: readonly string[];
+  reason?: string;
+}>;
+
+/**
+ * Inspect the exported component frontier without trusting the gate's return
+ * value.  A skeleton pause is meaningful only when every current component
+ * promotion completed, no active generation is failed/running, and exactly
+ * one skeleton generation is ready to run.
+ */
+export function assessChecklistSkeletonFrontier(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  expectedComponentIds?: readonly string[],
+): ChecklistSkeletonFrontierAssessment {
+  try {
+    const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
+    const expected = utf8Sorted(expectedComponentIds ?? materializedComponentIds(config, checkpoint));
+    const activeGenerationIds = new Set(Object.values(projection.activeGenerationIdByNode));
+    const active = Object.values(projection.generationsById).filter(generation =>
+      generation.status !== 'inactive' && activeGenerationIds.has(generation.nodeGenerationId),
+    );
+    const componentAttemptsStarted = checkpoint.events.filter(event =>
+      event.type === 'AttemptStarted' && event.scope.length > 1,
+    ).length;
+    const promotions = active.filter(generation =>
+      generation.checkId === 'promote-native-component' && generation.scope.length > 1,
+    );
+    const promotedComponentIds = utf8Sorted(promotions.flatMap(generation => {
+      const segment = generation.scope[generation.scope.length - 1];
+      return segment && segment.kind === 'keyed' ? [segment.key] : [];
+    }));
+    const skeleton = active.filter(generation => generation.checkId === 'checklist-skeleton');
+    const failedOrRunning = active.filter(generation => generation.status === 'failed' || generation.status === 'running');
+    const duplicatePromotions = new Set(promotedComponentIds).size !== promotedComponentIds.length;
+    const promotionsComplete = !duplicatePromotions &&
+      promotedComponentIds.length === expected.length &&
+      promotedComponentIds.every((id, index) => id === expected[index]) &&
+      promotions.every(generation => generation.status === 'completed');
+    const readySkeleton = skeleton.length === 1 && skeleton[0].status === 'ready' &&
+      activeGenerationIds.has(skeleton[0].nodeGenerationId);
+    let reason: string | undefined;
+    if (failedOrRunning.length > 0) reason = 'active checklist frontier contains failed or running generations';
+    else if (!promotionsComplete) reason = 'not every materialized component has exactly one completed promotion';
+    else if (!readySkeleton) reason = 'checklist-skeleton is not the single ready generation';
+    return Object.freeze({
+      ready: reason === undefined,
+      expectedComponentIds: Object.freeze(expected),
+      promotedComponentIds: Object.freeze(promotedComponentIds),
+      componentAttemptsStarted,
+      skeletonGenerationIds: Object.freeze(skeleton.map(generation => generation.nodeGenerationId)),
+      ...(reason ? {reason} : {}),
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unable to inspect checklist skeleton frontier';
+    return Object.freeze({
+      ready: false,
+      expectedComponentIds: Object.freeze([]),
+      promotedComponentIds: Object.freeze([]),
+      componentAttemptsStarted: 0,
+      skeletonGenerationIds: Object.freeze([]),
+      reason,
+    });
+  }
+}
+
+export function checklistSkeletonFrontierIsReady(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  expectedComponentIds?: readonly string[],
+): boolean {
+  return assessChecklistSkeletonFrontier(config, checkpoint, expectedComponentIds).ready;
+}
+
+function checklistSkeletonResumeDeltaIsValid(
+  config: VisorConfig,
+  before: GraphJournalCheckpointV1,
+  after: GraphJournalCheckpointV1,
+  expectedComponentIds: readonly string[],
+): boolean {
+  if (!checklistSkeletonFrontierIsReady(config, before, expectedComponentIds)) return false;
+  if (after.events.length <= before.events.length) return false;
+  const suffix = after.events.slice(before.events.length);
+  const attemptStartedChecks = suffix.filter(event => event.type === 'AttemptStarted').map(event => event.checkId);
+  if (attemptStartedChecks.length !== 1 || attemptStartedChecks[0] !== 'checklist-skeleton') return false;
+  const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), after).getInstanceProjection();
+  const activeGenerationIds = new Set(Object.values(projection.activeGenerationIdByNode));
+  const skeleton = Object.values(projection.generationsById).filter(generation =>
+    generation.checkId === 'checklist-skeleton' && generation.status !== 'inactive' && activeGenerationIds.has(generation.nodeGenerationId),
+  );
+  const activeGenerations = Object.values(projection.generationsById).filter(generation =>
+    generation.status !== 'inactive' && activeGenerationIds.has(generation.nodeGenerationId),
+  );
+  return skeleton.length === 1 && skeleton[0].status === 'completed' &&
+    !activeGenerations.some(generation => generation.status === 'failed' || generation.status === 'running');
+}
+
+async function loadChecklistMaterializedConfig(
+  checkpointPath: string,
+): Promise<{config: VisorConfig; checkpoint: GraphJournalCheckpointV1; materializedConfigPath: string}> {
+  const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as GraphJournalCheckpointV1;
+  const checkpointRoot = fs.realpathSync(path.dirname(checkpointPath));
+  const candidate = path.join(checkpointRoot, 'checklist-materialized-config.json');
+  const materializedConfigPath = fs.realpathSync(candidate);
+  if (!inside(materializedConfigPath, checkpointRoot) || !fs.statSync(materializedConfigPath).isFile()) {
+    throw new Error('checklist skeleton resume materialized config must be a sibling regular file');
+  }
+  const bytes = fs.readFileSync(materializedConfigPath, 'utf8');
+  const parsed = JSON.parse(bytes) as Json;
+  if (canonicalJson(parsed) + '\n' !== bytes) {
+    throw new Error('checklist skeleton resume materialized config is not canonical');
+  }
+  const config = await loadConfig(parsed as VisorConfig, {strict: true});
+  const graphDigest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+  if (checkpoint.graphSemanticDigest !== graphDigest) {
+    throw new Error('checklist skeleton resume config graph digest does not match checkpoint');
+  }
+  return {config, checkpoint, materializedConfigPath};
+}
+
+function persistChecklistMaterializedConfig(output: string, config: VisorConfig): {path: string; bytes: string; digest: string} {
+  const file = path.join(output, 'checklist-materialized-config.json');
+  const bytes = canonicalJson(config) + '\n';
+  writeText(file, bytes);
+  fs.chmodSync(file, 0o600);
+  return {
+    path: file,
+    bytes,
+    digest: `sha256:${createHash('sha256').update(bytes, 'utf8').digest('hex')}`,
+  };
+}
+
+function checklistBaselineCommitFromCheckpoint(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): string {
+  const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
+  const baselineClaims = Object.values(projection.claimsById).filter(claim =>
+    claim.active && claim.claim === 'native.initialized.baseline@1',
+  );
+  if (baselineClaims.length !== 1) throw new Error('checklist project prefix must publish exactly one active initialized baseline claim');
+  const baseline = baselineClaims[0];
+  const baselineResearchParent = projection.claimsById[baseline.parentClaimIds[0]];
+  const baselinePayload = baseline.payload && typeof baseline.payload === 'object' && !Array.isArray(baseline.payload)
+    ? baseline.payload as Json
+    : undefined;
+  if (baseline.producerCheckId !== 'commit-initialized-baseline' || baseline.scope.length !== 1 ||
+      baseline.scope[0]?.kind !== 'keyed' || baseline.parentClaimIds.length !== 1 ||
+      !baselineResearchParent || !baselineResearchParent.active || baselineResearchParent.claim !== CHECKLIST_RESEARCH_SNAPSHOT_CLAIM ||
+      baselineResearchParent.producerCheckId !== 'checklist-research' || canonicalJson(baselineResearchParent.scope) !== canonicalJson(baseline.scope) ||
+      !baselinePayload || Object.keys(baselinePayload).sort().join('\0') !== 'baseline_commit\0version' ||
+      baselinePayload.version !== 'native.initialized-baseline/v1' ||
+      typeof baselinePayload.baseline_commit !== 'string' || !/^[0-9a-f]{40,64}$/.test(baselinePayload.baseline_commit) ||
+      baseline.payloadFingerprint !== sha256Canonical(baselinePayload)) {
+    throw new Error('checklist initialized baseline claim is not the exact journaled command output');
+  }
+  return baselinePayload.baseline_commit as string;
+}
+
+/**
+ * Run the checklist profile through the same engine checkpoint boundary used
+ * by retained continuation.  The first pass is allowed to finish only the
+ * project lane; generated component generations are left ready, never
+ * attempted, until the checkpoint has been inspected and the journaled
+ * baseline claim has supplied the existing writer environment variable.
+ */
+export async function executeChecklistOnboardingEngine(
+  engine: StateMachineExecutionEngine,
+  config: VisorConfig,
+  timeout: number,
+  onFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>,
+  options: {
+    pauseBeforeSkeleton?: boolean;
+    onSkeletonFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>;
+  } = {},
+): Promise<RetainedContinuationEngineRun> {
+  const initialResult = await engine.executeGroupedChecks(
+    PR, ['project'], timeout, config, 'json', false, config.max_parallelism, false,
+    undefined, retainedProjectPrefixDispatchGate,
+  );
+  const checkpoint = engine.exportGraphCheckpoint();
+  if (initialResult.statistics.failedExecutions > 0) {
+    throw new Error(`checklist project prefix failed before component release (${initialResult.statistics.failedExecutions} failed executions)`);
+  }
+  const baselineCommit = checklistBaselineCommitFromCheckpoint(config, checkpoint);
+  const materialized = materializedComponentIds(config, checkpoint);
+  const componentAttemptsStarted = (checkpoint.events as readonly Json[]).filter(event =>
+    event.type === 'AttemptStarted' && Array.isArray(event.scope) && event.scope.length > 1,
+  ).length;
+  if (componentAttemptsStarted !== 0) throw new Error('checklist project prefix started a component before the release boundary');
+  const frontier = Object.freeze({
+    checkpoint,
+    materializedComponentIds: materialized,
+    expectedComponentIds: Object.freeze(materialized),
+    componentAttemptsStarted,
+    zeroComponentAttempts: true,
+    setsEqual: true,
+  });
+  if (onFrontier) await onFrontier(frontier);
+  const previousBaselineCommit = process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+  let resumed: Awaited<ReturnType<StateMachineExecutionEngine['resumeGraphCheckpoint']>>;
+  try {
+    process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = baselineCommit;
+    const componentPhase = await engine.resumeGraphCheckpoint({
+      checkpoint,
+      config,
+      prInfo: PR,
+      maxParallelism: config.max_parallelism,
+      failFast: false,
+      ...(options.pauseBeforeSkeleton ? {generatedDispatchGate: checklistSkeletonPauseGate} : {}),
+    });
+    if (options.pauseBeforeSkeleton) {
+      const assessment = assessChecklistSkeletonFrontier(config, componentPhase.checkpoint);
+      if (!assessment.ready) {
+        throw new Error(`checklist skeleton frontier is not ready: ${assessment.reason || 'frontier predicate failed'}`);
+      }
+      const skeletonFrontier = Object.freeze({
+        ...frontier,
+        checkpoint: componentPhase.checkpoint,
+        materializedComponentIds: assessment.expectedComponentIds,
+        expectedComponentIds: assessment.expectedComponentIds,
+        componentAttemptsStarted: assessment.componentAttemptsStarted,
+        zeroComponentAttempts: assessment.componentAttemptsStarted === 0,
+        setsEqual: assessment.promotedComponentIds.join('\u0000') === assessment.expectedComponentIds.join('\u0000'),
+      });
+      if (options.onSkeletonFrontier) await options.onSkeletonFrontier(skeletonFrontier);
+      resumed = componentPhase;
+    } else {
+      resumed = componentPhase;
+    }
+  } finally {
+    if (previousBaselineCommit === undefined) delete process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+    else process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = previousBaselineCommit;
+  }
+  return Object.freeze({
+    initialResult,
+    frontier,
+    result: resumed.result,
+    checkpoint: resumed.checkpoint,
+  });
+}
+
+/** Resume a persisted checklist frontier after the user-visible skeleton pause. */
+export async function resumeChecklistSkeleton(
+  engine: StateMachineExecutionEngine,
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  timeout: number,
+): Promise<Awaited<ReturnType<StateMachineExecutionEngine['resumeGraphCheckpoint']>>> {
+  if (!Number.isSafeInteger(timeout) || timeout < 1000) throw new Error('checklist skeleton resume timeout is invalid');
+  const baselineCommit = checklistBaselineCommitFromCheckpoint(config, checkpoint);
+  const expectedComponentIds = materializedComponentIds(config, checkpoint);
+  const assessment = assessChecklistSkeletonFrontier(config, checkpoint, expectedComponentIds);
+  if (!assessment.ready) {
+    throw new Error(`checklist skeleton resume requires a validated promoted frontier: ${assessment.reason || 'frontier predicate failed'}`);
+  }
+  const previousBaselineCommit = process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+  try {
+    process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = baselineCommit;
+    const resumed = await engine.resumeGraphCheckpoint({
+      checkpoint,
+      config,
+      prInfo: PR,
+      maxParallelism: config.max_parallelism,
+      failFast: false,
+    });
+    if (!checklistSkeletonResumeDeltaIsValid(config, checkpoint, resumed.checkpoint, expectedComponentIds)) {
+      throw new Error('checklist skeleton resume did not execute exactly the validated skeleton frontier');
+    }
+    return resumed;
+  } finally {
+    if (previousBaselineCommit === undefined) delete process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+    else process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = previousBaselineCommit;
+  }
+}
+
+function onboardingConfigTemplate(configPath = CONFIG_PATH): {prepared: Json; inspectCheck: Json} {
+  const raw = yaml.load(fs.readFileSync(configPath, 'utf8'));
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('onboarding YAML must be an object');
   const prepared = encodeResultSchemas(raw) as Json;
-  const inspect = ((prepared.subgraphs as Json)['discover-project'] as Json).checks as Json;
+  const discoverName = configPath === CHECKLIST_CONFIG_PATH ? 'discover-project-checklist' : 'discover-project';
+  const inspect = ((prepared.subgraphs as Json)[discoverName] as Json).checks as Json;
   const inspectCheck = inspect.inspect as Json;
   return {prepared, inspectCheck};
 }
@@ -756,6 +1099,80 @@ export async function loadOnboardingConfig(proof: string, subject: string, outpu
   const inventory = await loadCurrentOnboardingInventory(proof, subject, output, timeout);
   await loadResolvedOnboardingAuthority(proof, subject, output, timeout, inventory, prepared, inspectCheck);
   return loadConfig(prepared, {strict: true});
+}
+
+const CHECKLIST_SNAPSHOT_CLAIM = 'proof.checklist.snapshot@1';
+const CHECKLIST_RESEARCH_SNAPSHOT_CLAIM = 'proof.checklist.research-snapshot@1';
+
+
+/**
+ * Execute one journaled Proof checklist mutation and return its authoritative
+ * JSON readback.  Native YAML owns the graph/check dependencies; this helper
+ * only provides the shared command boundary and closed evidence checks.
+ */
+export function executeJournaledChecklistStep(stepId: string, note: string, verify: boolean): Json {
+  if (!/^[A-Za-z0-9_.-]{1,96}$/.test(stepId) || note.length === 0 || note.length > 8192) {
+    throw new Error('invalid journaled checklist step arguments');
+  }
+  const proof = process.env.PROOF_BIN;
+  const output = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+  if (typeof proof !== 'string' || proof.length === 0 || typeof output !== 'string' || !path.isAbsolute(output)) {
+    throw new Error('journaled checklist command environment is incomplete');
+  }
+  const run = (phase: string, args: string[]): CommandResult => runProof(
+    proof, process.cwd(), output, `checklist-${stepId}-${phase}`, args, 120000,
+  );
+  const json = (phase: string, args: string[]): Json => {
+    const result = run(phase, args);
+    if (result.status !== 0) throw new Error(`Proof checklist ${phase} failed`);
+    let value: unknown;
+    try { value = JSON.parse(result.stdout); } catch { throw new Error(`Proof checklist ${phase} returned invalid JSON`); }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Proof checklist ${phase} did not return an object`);
+    return value as Json;
+  };
+  const mutation = (args: string[]): void => {
+    if (run('confirm', args).status !== 0) throw new Error(`Proof checklist confirmation failed for ${stepId}`);
+  };
+  if (stepId === 'init') {
+    if (run('init', ['init', '--name', 'jsonparser', '--template', 'go-package', '--scope', '.', '--strict']).status !== 0) {
+      throw new Error('Proof init failed');
+    }
+  }
+  const before = json('before-show', ['checklist', 'show', '--format', 'json']);
+  const checklist = before.checklist;
+  if (before.schema_version !== 'proof.checklist.show.v1' || before.active !== true || before.new_project !== true || typeof checklist !== 'string' || checklist.length === 0) {
+    throw new Error('Proof checklist is not the active new-project campaign');
+  }
+  const row = Array.isArray(before.steps) ? before.steps.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value as Json).step_id === stepId) as Json | undefined : undefined;
+  if (!row || row.applicable !== true || row.eligible !== true || row.effective_status !== 'pending') {
+    throw new Error(`Proof checklist step ${stepId} is not currently eligible`);
+  }
+  mutation(['checklist', 'confirm', '--checklist', checklist, '--id', stepId, '--by', 'visor-checklist-driven-run', '--note', note, ...(verify ? ['--verify'] : [])]);
+  const after = json('after-show', ['checklist', 'show', '--checklist', checklist, '--format', 'json']);
+  const confirmed = Array.isArray(after.steps) ? after.steps.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value as Json).step_id === stepId) as Json | undefined : undefined;
+  const required = confirmed && Array.isArray(confirmed.required_checks) ? confirmed.required_checks : [];
+  const results = confirmed && Array.isArray(confirmed.check_results) ? confirmed.check_results : [];
+  const ids = new Set<string>();
+  const checksPass = required.length === results.length && results.every(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const result = value as Json;
+    if (typeof result.id !== 'string' || result.status !== 'pass' || typeof result.at !== 'string' || result.at.length === 0 || ids.has(result.id)) return false;
+    ids.add(result.id); return true;
+  }) && required.every(value => typeof value === 'string' && ids.has(value));
+  const verifyPass = confirmed && confirmed.stamp !== 'confirm+verify' || !!(confirmed && confirmed.verify_result && typeof confirmed.verify_result === 'object' && (confirmed.verify_result as Json).passed === true && (confirmed.verify_result as Json).exit_code === 0 && typeof (confirmed.verify_result as Json).at === 'string' && ((confirmed.verify_result as Json).at as string).length > 0);
+  if (after.new_project !== true || !confirmed || confirmed.effective_status !== 'confirmed' || confirmed.stored_status !== 'confirmed' || !checksPass || !verifyPass) {
+    throw new Error(`Proof checklist confirmation readback did not confirm ${stepId} with exact evidence`);
+  }
+  return after;
+}
+
+
+export function buildChecklistOnboardingConfig(_base: VisorConfig): VisorConfig {
+  // Compatibility entry point for callers that previously asked the runner
+  // to build an overlay. The checklist profile is now authored as native
+  // YAML; no topology is cloned, deleted, or renamed in TypeScript.
+  const {prepared} = onboardingConfigTemplate(CHECKLIST_CONFIG_PATH);
+  return prepared as VisorConfig;
 }
 
 type RetainedAuthorityFiles = Readonly<{
@@ -2769,7 +3186,7 @@ async function runRecovery(
     requirements: ['req', 'list', '--format', 'json'],
     validation: ['validate', '--variable-drift', '--format', 'json'],
     audit: ['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json'],
-    checklist: ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'],
+    checklist: checklistOnboarding ? ['checklist', 'show', '--format', 'json'] : ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'],
     status: ['status', '--format', 'json'],
   })) {
     const run = runProof(proof, roots.subject, roots.output, 'postflight', args, timeout);
@@ -3043,8 +3460,15 @@ async function main(): Promise<void> {
   }
   const recovery = parseRecoveryArguments(values);
   const retainedExport = values['retained-review-export'];
+  const checklistSkeletonResume = values['checklist-skeleton-resume'];
   if (recovery && retainedExport !== undefined) {
     throw new Error('--retained-review-export cannot be combined with checkpoint recovery arguments');
+  }
+  if (recovery && checklistSkeletonResume !== undefined) {
+    throw new Error('--checklist-skeleton-resume cannot be combined with checkpoint recovery arguments');
+  }
+  if (retainedExport !== undefined && checklistSkeletonResume !== undefined) {
+    throw new Error('--checklist-skeleton-resume cannot be combined with --retained-review-export');
   }
   const roots = recovery
     ? assertRecoveryRoots(
@@ -3057,6 +3481,7 @@ async function main(): Promise<void> {
     : assertRoots(required(values, 'subject-root'), required(values, 'original-root'), required(values, 'output'));
   diagnosticOutput = roots.output;
   const proof = executable(required(values, 'proof-bin'));
+  const checklistOnboarding = values['checklist-onboarding'] === 'true' || checklistSkeletonResume !== undefined;
   const timeout = values.timeout ? Number(values.timeout) : DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeout) || timeout < 1000) throw new Error('--timeout must be a positive millisecond integer');
   const requestTimeout = Number(process.env.REQUEST_TIMEOUT || '');
@@ -3067,9 +3492,21 @@ async function main(): Promise<void> {
     await runRecovery(values, roots, proof, timeout, requestTimeout, recovery);
     return;
   }
-  const revision = retainedExport !== undefined
+  const revision = retainedExport !== undefined || checklistSkeletonResume !== undefined
     ? assertRecoverySubject(roots.subject)
     : assertFreshSubject(roots.subject, process.env.SUBJECT_BASELINE_REVISION);
+  let checklistResumeCheckpointPath: string | undefined;
+  if (checklistSkeletonResume !== undefined) {
+    const candidate = path.resolve(checklistSkeletonResume);
+    const checkpoint = fs.realpathSync(candidate);
+    if (!fs.statSync(checkpoint).isFile() || !/checkpoint\.json$/.test(path.basename(checkpoint))) {
+      throw new Error('--checklist-skeleton-resume must name a retained checkpoint JSON file');
+    }
+    if (inside(checkpoint, roots.subject) || inside(checkpoint, roots.original)) {
+      throw new Error('checklist skeleton checkpoint must be outside subject and protected original roots');
+    }
+    checklistResumeCheckpointPath = checkpoint;
+  }
   const objectFormat = gitObjectFormat(roots.subject);
   const codex = assertPrivateCodexHome(roots.subject, roots.original, roots.output);
   process.chdir(roots.subject);
@@ -3119,76 +3556,233 @@ async function main(): Promise<void> {
     note: 'No authentication, raw Codex config, or inherited tool capability is recorded.',
   });
 
-  const init = runProof(proof, roots.subject, roots.output, 'preflight', ['init', '--name', 'jsonparser', '--template', 'go-package', '--scope', '.', '--strict'], timeout);
-  if (init.status !== 0) throw new Error('Proof init failed with exit ' + init.status);
-  const baselineCommit = commitInitializedProofBaseline(roots.subject, revision);
-  process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = baselineCommit;
-  const baseline = runProof(proof, roots.subject, roots.output, 'preflight', ['req', 'list', '--format', 'json'], timeout);
-  const baselineValue = parseJson(baseline, 'Proof baseline req list');
-  writeJson(path.join(roots.output, 'preflight', 'requirements-baseline.json'), baselineValue);
-  const proofStatus = runProof(proof, roots.subject, roots.output, 'preflight', ['status', '--format', 'json'], timeout);
-  const proofStatusValue = parseJson(proofStatus, 'Proof native status baseline');
-  if (!proofStatusValue || typeof proofStatusValue !== 'object' || Array.isArray(proofStatusValue)) {
-    throw new Error('Proof native status baseline is not an object');
+  if (checklistOnboarding) {
+    writeJson(path.join(roots.output, 'preflight.json'), {
+      status: checklistResumeCheckpointPath ? 'launch-ready-checklist-skeleton-resume' : 'launch-ready-checklist-init-journaled',
+      subject_root: roots.subject,
+      protected_original_root: roots.original,
+      subject_revision: revision,
+      source_revision: revision,
+      baseline_commit: null,
+      proof_binary: proof,
+      request_timeout_ms: requestTimeout,
+      outer_timeout_ms: timeout,
+      object_format: objectFormat,
+      codex_home_is_private: true,
+      codex_home_config_present: codex.configPresent,
+      codex_mcp_plugins_hooks_rejected: true,
+      subject_codex_override_rejected: true,
+      journaled_init_pending: true,
+      journaled_baseline_pending: true,
+      ...(checklistResumeCheckpointPath ? {checklist_skeleton_checkpoint: checklistResumeCheckpointPath} : {}),
+      note: 'Checklist bootstrap journals Proof init, confirmation, and immutable baseline commit as graph command boundaries.',
+    });
+  } else {
+    const init = runProof(proof, roots.subject, roots.output, 'preflight', ['init', '--name', 'jsonparser', '--template', 'go-package', '--scope', '.', '--strict'], timeout);
+    if (init.status !== 0) throw new Error('Proof init failed with exit ' + init.status);
+    const baselineCommit = commitInitializedProofBaseline(roots.subject, revision);
+    process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = baselineCommit;
+    const baseline = runProof(proof, roots.subject, roots.output, 'preflight', ['req', 'list', '--format', 'json'], timeout);
+    const baselineValue = parseJson(baseline, 'Proof baseline req list');
+    writeJson(path.join(roots.output, 'preflight', 'requirements-baseline.json'), baselineValue);
+    const proofStatus = runProof(proof, roots.subject, roots.output, 'preflight', ['status', '--format', 'json'], timeout);
+    const proofStatusValue = parseJson(proofStatus, 'Proof native status baseline');
+    if (!proofStatusValue || typeof proofStatusValue !== 'object' || Array.isArray(proofStatusValue)) {
+      throw new Error('Proof native status baseline is not an object');
+    }
+    writeJson(path.join(roots.output, 'preflight', 'native-status-baseline.json'), proofStatusValue);
+    writeJson(path.join(roots.output, 'preflight', 'baseline-checkpoint.json'), {
+      status: 'initialized-native-proof-baseline',
+      initialized: true,
+      canonical_root: roots.subject,
+      source_commit: revision,
+      baseline_commit: baselineCommit,
+      object_format: objectFormat,
+      requirements_baseline: path.join(roots.output, 'preflight', 'requirements-baseline.json'),
+      native_status_baseline: path.join(roots.output, 'preflight', 'native-status-baseline.json'),
+      checkouts_allowed_after: 'baseline-checkpoint.json',
+    });
+    writeJson(path.join(roots.output, 'preflight.json'), {
+      status: 'baseline-committed',
+      subject_root: roots.subject,
+      protected_original_root: roots.original,
+      subject_revision: revision,
+      source_revision: revision,
+      baseline_commit: baselineCommit,
+      proof_binary: proof,
+      request_timeout_ms: requestTimeout,
+      outer_timeout_ms: timeout,
+      object_format: objectFormat,
+      codex_home_is_private: true,
+      codex_home_config_present: codex.configPresent,
+      codex_mcp_plugins_hooks_rejected: true,
+      subject_codex_override_rejected: true,
+      note: 'No authentication, raw Codex config, or inherited tool capability is recorded.',
+    });
+    writeText(path.join(roots.output, 'preflight-complete'), 'proof-init-and-baseline-complete\\n');
   }
-  writeJson(path.join(roots.output, 'preflight', 'native-status-baseline.json'), proofStatusValue);
-  writeJson(path.join(roots.output, 'preflight', 'baseline-checkpoint.json'), {
-    status: 'initialized-native-proof-baseline',
-    initialized: true,
-    canonical_root: roots.subject,
-    source_commit: revision,
-    baseline_commit: baselineCommit,
-    object_format: objectFormat,
-    requirements_baseline: path.join(roots.output, 'preflight', 'requirements-baseline.json'),
-    native_status_baseline: path.join(roots.output, 'preflight', 'native-status-baseline.json'),
-    checkouts_allowed_after: 'baseline-checkpoint.json',
-  });
-  writeJson(path.join(roots.output, 'preflight.json'), {
-    status: 'baseline-committed',
-    subject_root: roots.subject,
-    protected_original_root: roots.original,
-    subject_revision: revision,
-    source_revision: revision,
-    baseline_commit: baselineCommit,
-    proof_binary: proof,
-    request_timeout_ms: requestTimeout,
-    outer_timeout_ms: timeout,
-    object_format: objectFormat,
-    codex_home_is_private: true,
-    codex_home_config_present: codex.configPresent,
-    codex_mcp_plugins_hooks_rejected: true,
-    subject_codex_override_rejected: true,
-    note: 'No authentication, raw Codex config, or inherited tool capability is recorded.',
-  });
-  writeText(path.join(roots.output, 'preflight-complete'), 'proof-init-and-baseline-complete\\n');
 
   const registry = CheckProviderRegistry.getInstance();
   registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
-  const config = await loadOnboardingConfig(proof, roots.subject, roots.output, timeout);
+  let config: VisorConfig;
+  let checklistResumeCheckpoint: GraphJournalCheckpointV1 | undefined;
+  let checklistResumeMaterializedConfigPath: string | undefined;
+  if (checklistOnboarding) {
+    // The checklist profile is a standalone native Visor graph.  Only the
+    // authored result-schema sentinel/materialization pass runs here; graph
+    // topology is read directly from the profile YAML.
+    if (checklistResumeCheckpointPath) {
+      const restored = await loadChecklistMaterializedConfig(checklistResumeCheckpointPath);
+      config = restored.config;
+      checklistResumeCheckpoint = restored.checkpoint;
+      checklistResumeMaterializedConfigPath = restored.materializedConfigPath;
+    } else {
+      const {prepared} = onboardingConfigTemplate(CHECKLIST_CONFIG_PATH);
+      config = await loadConfig(prepared as VisorConfig, {strict: true});
+    }
+  } else {
+    config = await loadOnboardingConfig(proof, roots.subject, roots.output, timeout);
+  }
+  if (checklistOnboarding) {
+    writeJson(path.join(roots.output, 'preflight', 'checklist-overlay.json'), {
+      mode: 'checklist-onboarding',
+      bootstrap_check: 'checklist-bootstrap',
+      research_check: 'checklist-research',
+      snapshot_claim: CHECKLIST_SNAPSHOT_CLAIM,
+      ordinary_graph_untouched: true,
+    });
+  }
   if (values['preflight-only'] === 'true') {
     writeJson(path.join(roots.output, 'preflight', 'summary.json'), {
       status: 'preflight-only-complete',
       subject_revision: revision,
-      requirements_baseline: 'recorded',
-      native_inventory: 'resolved',
-      project_role_invocation: 'resolved',
+      requirements_baseline: checklistOnboarding ? 'journaled_pending' : 'recorded',
+      native_inventory: checklistOnboarding ? 'journaled_pending' : 'resolved',
+      project_role_invocation: checklistOnboarding ? 'journaled_at_managed_acquisition' : 'resolved',
+      checklist_overlay: checklistOnboarding,
       strict_config: 'validated-with-actual-registered-providers',
       no_engine_dispatch: true,
+      ...(checklistResumeMaterializedConfigPath ? {
+        materialized_config: path.relative(roots.output, checklistResumeMaterializedConfigPath),
+        checkpoint: path.relative(roots.output, checklistResumeCheckpointPath as string),
+      } : {}),
     });
     console.log(JSON.stringify({status: 'preflight-only-complete', output: roots.output}, null, 2));
     return;
   }
   const engine = new StateMachineExecutionEngine(roots.subject);
+  let latestChecklistCheckpoint: GraphJournalCheckpointV1 | undefined = checklistResumeCheckpoint;
+  const refreshChecklistProgress = (options: {paused?: boolean; resumed?: boolean} = {}): void => {
+    if (!checklistOnboarding || !latestChecklistCheckpoint) return;
+    let liveInstanceProjection: unknown;
+    try {
+      liveInstanceProjection = engine.getInstanceProjection();
+      const exported = engine.exportGraphCheckpoint();
+      latestChecklistCheckpoint = exported;
+    } catch {
+      // A prompt hook can run while a managed generation is in flight, when
+      // the checkpoint is intentionally not exportable.  Keep the last
+      // durable checkpoint and pair it with the live operational projection.
+    }
+    try {
+      writeRestoredChecklistProgress(
+        roots.output,
+        config,
+        latestChecklistCheckpoint,
+        options,
+        liveInstanceProjection,
+      );
+    } catch {
+      // Progress is observational.  A render failure must never alter the
+      // graph outcome or turn a provider hook into an authority failure.
+    }
+  };
+  const checklistPromptHook = (info: PublicPromptCaptureInfo): void => {
+    onPromptCaptured(info);
+    refreshChecklistProgress();
+  };
+  const checklistCompleteHook = (): void => {
+    refreshChecklistProgress();
+  };
   engine.setExecutionContext({
-    hooks: {onPromptCaptured},
+    hooks: {
+      onPromptCaptured: checklistOnboarding ? checklistPromptHook : onPromptCaptured,
+      ...(checklistOnboarding ? {onCheckComplete: checklistCompleteHook} : {}),
+    },
   });
   let result: unknown;
   let checkpoint: unknown;
+  let checklistPausedBeforeSkeleton = false;
+  const checklistResumedFromSkeleton = checklistResumeCheckpointPath !== undefined;
   try {
-    result = await engine.executeGroupedChecks(PR, ['project'], timeout, config, 'json', false, config.max_parallelism, false);
-    checkpoint = engine.exportGraphCheckpoint();
+    if (checklistOnboarding) {
+      const checklistRun = checklistResumeCheckpointPath
+        ? await resumeChecklistSkeleton(
+          engine,
+          config,
+          checklistResumeCheckpoint as GraphJournalCheckpointV1,
+          timeout,
+        ).then(resumed => ({initialResult: undefined, frontier: undefined, result: resumed.result, checkpoint: resumed.checkpoint}))
+        : await executeChecklistOnboardingEngine(engine, config, timeout, frontier => {
+        latestChecklistCheckpoint = frontier.checkpoint;
+        const materialized = persistChecklistMaterializedConfig(roots.output, config);
+        writeCheckpoint(path.join(roots.output, 'checklist-frontier-checkpoint.json'), frontier.checkpoint);
+        const configGraphDigest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+        refreshChecklistProgress();
+        writeJson(path.join(roots.output, 'preflight', 'checklist-frontier.json'), {
+          status: 'checklist-project-prefix-complete',
+          checkpoint: 'checklist-frontier-checkpoint.json',
+          materialized_component_ids: frontier.materializedComponentIds,
+          component_attempts_started: frontier.componentAttemptsStarted,
+          zero_component_attempts: frontier.zeroComponentAttempts,
+          journaled_baseline_claim_required: true,
+          materialized_config: 'checklist-materialized-config.json',
+          materialized_config_sha256: materialized.digest,
+          graph_semantic_digest: configGraphDigest,
+          resume_same_graph: true,
+        });
+      }, {
+        pauseBeforeSkeleton: true,
+        onSkeletonFrontier: frontier => {
+          latestChecklistCheckpoint = frontier.checkpoint;
+          checklistPausedBeforeSkeleton = true;
+          const materialized = persistChecklistMaterializedConfig(roots.output, config);
+          writeCheckpoint(path.join(roots.output, 'checklist-skeleton-frontier-checkpoint.json'), frontier.checkpoint);
+          refreshChecklistProgress({paused: true});
+          writeJson(path.join(roots.output, 'preflight', 'checklist-skeleton-frontier.json'), {
+            status: 'checklist-skeleton-ready-paused',
+            checkpoint: 'checklist-skeleton-frontier-checkpoint.json',
+            materialized_component_ids: frontier.materializedComponentIds,
+            component_attempts_started: frontier.componentAttemptsStarted,
+            zero_component_attempts: frontier.zeroComponentAttempts,
+            sets_equal: frontier.setsEqual,
+            materialized_config: 'checklist-materialized-config.json',
+            materialized_config_sha256: materialized.digest,
+            resume_command: '--checklist-skeleton-resume checklist-skeleton-frontier-checkpoint.json',
+          });
+        },
+      });
+      result = checklistRun.result;
+      checkpoint = checklistRun.checkpoint;
+    } else {
+      result = await engine.executeGroupedChecks(PR, ['project'], timeout, config, 'json', false, config.max_parallelism, false);
+      checkpoint = engine.exportGraphCheckpoint();
+    }
+    if (checklistOnboarding && checkpoint && typeof checkpoint === 'object') {
+      latestChecklistCheckpoint = checkpoint as GraphJournalCheckpointV1;
+      refreshChecklistProgress(checklistResumedFromSkeleton ? {resumed: true} : {});
+    }
     writeJson(path.join(roots.output, 'checkpoint.json'), checkpoint);
     writeJson(path.join(roots.output, 'visor-result.json'), result);
+    if (checklistPausedBeforeSkeleton) {
+      writeJson(path.join(roots.output, 'postflight.json'), {
+        status: 'checklist-skeleton-ready-paused',
+        checkpoint: 'checklist-skeleton-frontier-checkpoint.json',
+        note: 'Fresh process resume is required to execute checklist-skeleton confirmation/readback.',
+      });
+      console.log(JSON.stringify({status: 'checklist-skeleton-ready-paused', output: roots.output}, null, 2));
+      return;
+    }
   } catch (error) {
     try {
       checkpoint = engine.exportGraphCheckpoint();
@@ -3213,6 +3807,79 @@ async function main(): Promise<void> {
     try { postflightValues[name] = JSON.parse(run.stdout); } catch { postflightValues[name] = undefined; }
   }
   writeJson(path.join(roots.output, 'postflight.json'), postflight);
+  let checklistProgress: NativeChecklistProgress | undefined;
+  if (checklistOnboarding && postflightValues.checklist && typeof postflightValues.checklist === 'object' &&
+      !Array.isArray(postflightValues.checklist) && checkpoint !== undefined) {
+    latestChecklistCheckpoint = checkpoint as GraphJournalCheckpointV1;
+    try {
+      checklistProgress = writeRestoredChecklistProgress(
+        roots.output,
+        config,
+        latestChecklistCheckpoint,
+        checklistResumedFromSkeleton ? {resumed: true} : {},
+        engine.getInstanceProjection(),
+      );
+    } catch {
+      checklistProgress = undefined;
+    }
+  }
+  if (checklistOnboarding) {
+    const checkpointObject = checkpoint && typeof checkpoint === 'object'
+      ? checkpoint as GraphJournalCheckpointV1
+      : undefined;
+    const statistics = result && typeof result === 'object' ? (result as Json).statistics as Json | undefined : undefined;
+    const failedExecutions = statistics && typeof statistics.failedExecutions === 'number' ? statistics.failedExecutions : null;
+    const checkpointEvents = checkpointObject?.events ?? [];
+    const executionClean = failedExecutions === 0 && !checkpointEvents.some(event =>
+      event.type === 'AttemptFailed' || event.type === 'CheckErrored',
+    );
+    const steps = checklistProgress?.checklist.steps ?? [];
+    const requiredSteps = ['init', 'research', 'skeleton'];
+    const confirmedSteps = requiredSteps.every(stepId => steps.some(step => step.id === stepId && step.state === 'confirmed'));
+    const skeletonSnapshot = checklistProgress?.evidence.proof_snapshot.stage === 'skeleton';
+    const resumeDelta = checklistResumeCheckpoint && checkpointObject
+      ? checklistSkeletonResumeDeltaIsValid(
+        config,
+        checklistResumeCheckpoint,
+        checkpointObject,
+        materializedComponentIds(config, checklistResumeCheckpoint),
+      )
+      : false;
+    const checklistRecord = postflight.checklist && typeof postflight.checklist === 'object' && !Array.isArray(postflight.checklist)
+      ? postflight.checklist as Json
+      : undefined;
+    const checklistShowSucceeded = checklistRecord?.exit_code === 0;
+    const checklistComplete = !!checklistProgress && skeletonSnapshot && confirmedSteps &&
+      checklistShowSucceeded && executionClean && resumeDelta;
+    const checklistSummary = {
+      status: checklistComplete
+        ? 'checklist-onboarding-complete-with-later-proof-steps-pending'
+        : 'checklist-onboarding-incomplete',
+      mode: 'checklist-onboarding',
+      checklist_snapshot_stage: checklistProgress?.evidence.proof_snapshot.stage ?? 'bootstrap',
+      confirmed_steps: steps.filter(step => step.state === 'confirmed').map(step => step.id),
+      later_proof_steps_pending: true,
+      later_proof_steps_note: 'Component admission, specification review, and reconciliation remain outside this checklist slice.',
+      execution: {
+        failed_executions: failedExecutions,
+        contract_failures: checkpointEvents.filter(event => event.type === 'AttemptFailed' || event.type === 'CheckErrored').length,
+        skeleton_resume_delta_valid: resumeDelta,
+      },
+      postflight,
+      open_native_checks: summarizeNativePostflight(postflight, engine.getInstanceProjection()).open_native_checks,
+      checklist_progress: checklistProgress ? 'progress.json' : null,
+      checkpoint: checkpointObject ? summarizeCheckpoint(checkpointObject, false) : {available: false},
+      output: roots.output,
+    };
+    writeJson(path.join(roots.output, 'summary.json'), checklistSummary);
+    if (!checklistComplete) {
+      console.error(JSON.stringify({status: checklistSummary.status, output: roots.output}, null, 2));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(JSON.stringify({status: checklistSummary.status, output: roots.output}, null, 2));
+    return;
+  }
   const postflightSummary = summarizeNativePostflight(postflight, engine.getInstanceProjection());
   const checkpointSummary = summarizeCheckpoint(checkpoint);
   checkpointSummary.mode = 'export-only-no-resume-wired';
@@ -3273,6 +3940,7 @@ async function main(): Promise<void> {
     count_consistency: {authoritative: authoritativeComponentError === null, consistent: countConsistency, error: authoritativeComponentError},
     failure_reason: failed ? 'failed attempt outside the explicit project-reconciliation boundary, incomplete natural component/item review counts, unavailable authoritative component catalog, empty native requirement catalog, or nonzero native validation/status' : null,
     checkpoint: checkpointSummary,
+    checklist_progress: checklistProgress ? 'progress.json' : null,
     output: roots.output,
   };
   writeJson(path.join(roots.output, 'summary.json'), summary);

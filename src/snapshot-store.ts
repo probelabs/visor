@@ -117,7 +117,7 @@ import {
   immutableProofCandidateEvidence,
   type GovernedWireMode,
 } from './providers/proof-wire';
-import { governedProofComponentReinspectionContextDigest, validateGovernedProofComponentReinspectionContext, validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector, type GovernedProofComponentReinspectionContextV1, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
+import { governedProofComponentReinspectionContextDigest, validateGovernedProofComponentReinspectionContext, validateProofCandidateEvidence, validateProofComponentInvocationAuthority, isGovernedProofComponentSelector, isGovernedProofProjectSelector, isGovernedProofSpecReviewSelector, type GovernedProofComponentReinspectionContextV1, type ProofCandidateEvidenceV1, type ProofComponentInvocationAuthorityV1 } from './providers/governed-proof-inspect-check-provider';
 import {
   compareProofStrings,
   proofCatalogRevalidationReceiptIdentityJson,
@@ -1346,9 +1346,13 @@ function validateCheckpointPlanAuthority(
         const evidence = validateProofCandidateEvidence(event.proofCandidateEvidence);
         if (event.wireMode !== governedWireModeFromEvidence(evidence)) checkpointAuthorityFailure('Generated claim wire mode is detached from governed invocation');
         const candidatePayload = governedCanonicalJson(event.payload, event.wireMode);
-        const selector = stagedCandidate ? isGovernedProofSpecReviewSelector(node.check.invocation) : isGovernedProofComponentSelector(node.check.invocation);
+        const componentSelector = !stagedCandidate && isGovernedProofComponentSelector(node.check.invocation);
+        const projectSelector = !stagedCandidate && isGovernedProofProjectSelector(node.check.invocation);
+        const selector = stagedCandidate ? isGovernedProofSpecReviewSelector(node.check.invocation) : componentSelector || projectSelector;
         const invocation = evidence.role.invocation as Record<string, unknown>;
-        const selectorBound = selector && invocation.role_id === (stagedCandidate ? 'spec-review' : 'onboard') && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && (!stagedCandidate || invocation.onboarding_stage !== undefined) && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
+        const selectorBound = projectSelector
+          ? invocation.role_id === 'onboard' && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'project'
+          : selector && invocation.role_id === (stagedCandidate ? 'spec-review' : 'onboard') && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && (!stagedCandidate || invocation.onboarding_stage !== undefined) && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
         if ((!selector && (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation))) || (selector && !selectorBound) || evidence.probe.resultIdentity.resultDigest !== governedResultDigest(event.payload, event.wireMode) || evidence.probe.resultIdentity.canonicalBytes !== Buffer.byteLength(candidatePayload, 'utf8')) {
           checkpointAuthorityFailure('Generated proof candidate evidence is detached from compiled inspect or payload authority');
         }
@@ -3572,13 +3576,17 @@ export class ExecutionJournal {
         const evidence = validateProofCandidateEvidence(input.proofCandidateEvidence);
         const candidateWireMode = governedWireModeFromEvidence(evidence);
         if (input.wireMode !== undefined && input.wireMode !== candidateWireMode) throw new Error('wire mode is detached from governed invocation');
-        const selector = stagedCandidateEmission ? isGovernedProofSpecReviewSelector(node.check.invocation) : isGovernedProofComponentSelector(node.check.invocation);
+        const componentSelector = !stagedCandidateEmission && isGovernedProofComponentSelector(node.check.invocation);
+        const projectSelector = !stagedCandidateEmission && isGovernedProofProjectSelector(node.check.invocation);
+        const selector = stagedCandidateEmission ? isGovernedProofSpecReviewSelector(node.check.invocation) : componentSelector || projectSelector;
         const invocation = evidence.role.invocation as Record<string, unknown>;
-        const selectorBound = selector && invocation.role_id === (stagedCandidateEmission ? 'spec-review' : 'onboard') && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && (!stagedCandidateEmission || invocation.onboarding_stage !== undefined) && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
+        const selectorBound = projectSelector
+          ? invocation.role_id === 'onboard' && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'project'
+          : selector && invocation.role_id === (stagedCandidateEmission ? 'spec-review' : 'onboard') && invocation.stance === 'owner' && invocation.output_schema_id === (node.check.invocation as Record<string, unknown>).output_schema_id && invocation.output_schema === (node.check.invocation as Record<string, unknown>).output_schema && !!invocation.component_authority && (!stagedCandidateEmission || invocation.onboarding_stage !== undefined) && invocation.subject && typeof invocation.subject === 'object' && (invocation.subject as Record<string, unknown>).kind === 'component';
         if ((!selector && (evidence.role.invocationDigest !== node.check.invocation_digest || canonicalJson(evidence.role.invocation) !== canonicalJson(node.check.invocation))) || (selector && !selectorBound)) {
           throw new Error('evidence invocation is detached from compiled inspect config');
         }
-        if (selector) {
+        if (selector && !projectSelector) {
           const authority = this.getProofComponentInvocationAuthority(generation.nodeGenerationId);
           if (governedCanonicalJson(invocation.component_authority, 'proof') !== governedCanonicalJson(authority, 'proof')) {
             throw new Error('component invocation authority is detached from the exact journal lineage');
@@ -3590,7 +3598,7 @@ export class ExecutionJournal {
         }
         const expectedStage = stagedCandidateEmission ? this.getProofComponentOnboardingStageContext(generation.nodeGenerationId) : undefined;
         if (stagedCandidateEmission && canonicalJson((invocation as Record<string, unknown>).onboarding_stage) !== canonicalJson(expectedStage)) throw new Error('onboarding stage context is detached from the exact journal lineage');
-        const expectedReinspection = selector && !stagedCandidateEmission ? this.getProofComponentReinspectionContext(generation.nodeGenerationId) : undefined;
+        const expectedReinspection = componentSelector ? this.getProofComponentReinspectionContext(generation.nodeGenerationId) : undefined;
         const actualReinspection = evidence.reinspectionContext;
         if ((expectedReinspection === undefined) !== (actualReinspection === undefined) ||
             (expectedReinspection && (!actualReinspection || canonicalJson(expectedReinspection) !== canonicalJson(actualReinspection) || evidence.reinspectionContextDigest !== governedProofComponentReinspectionContextDigest(expectedReinspection)))) {

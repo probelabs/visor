@@ -106,6 +106,23 @@ function specReviewSelector(): any {
   };
 }
 
+function projectSelector(): any {
+  return {
+    type: 'governed-proof-inspect',
+    message: 'Partition the authenticated current inventory into components.',
+    profile: 'luna-xhigh-readonly-v1',
+    invocation: {
+      role_id: 'onboard', stance: 'owner', subject: {kind: 'project'},
+      output_schema_id: 'proof.component-catalog-candidate@1',
+      output_schema: Buffer.from('{"type":"object"}', 'utf8').toString('base64'),
+    },
+    consumes: [
+      {claim: PROJECT_DISCOVERY_CLAIM, as: 'project'},
+      {claim: PROOF_STRUCTURAL_INVENTORY_CLAIM, as: 'current_inventory'},
+    ],
+  };
+}
+
 describe('governed Proof inspect provider', () => {
   it('is sealed unavailable in the product registry shape', async () => {
     const provider = new GovernedProofInspectCheckProvider();
@@ -166,6 +183,20 @@ describe('governed Proof inspect provider', () => {
     const provider = createGovernedProofInspectProviderForFocusedTest(factory);
     expect(() => provider.startManaged({ ...request(), checkConfig: selector })).toThrow('paired controller onboarding context');
     expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('accepts a project selector with an authored discovery message but no authored identity', () => {
+    const selector = projectSelector();
+    const projected = projectGovernedProofInspectConfig(selector);
+    expect(projected).toEqual(expect.objectContaining({
+      type: selector.type,
+      message: selector.message,
+      profile: selector.profile,
+      invocation: selector.invocation,
+    }));
+    for (const field of ['instructions', 'invocation_digest', 'result_schema']) {
+      expect(() => projectGovernedProofInspectConfig({...selector, [field]: 'forged'})).toThrow('project selector');
+    }
   });
 
   it('derives stage artifacts from internal claim IDs, not projected view metadata', () => {
