@@ -784,6 +784,18 @@ subgraphs:
           may execute bounded Proof CLI commands with that worker-root as cwd.
           Do not use Probe MCP Bash or alternate write paths/roots.
 
+          For checklist and audit inspection, use only the active checklist
+          JSON and these explicitly named checks: validate_passes,
+          annotation_validity, and levels_connected. Use only
+          `proof audit --no-cache --check validate_passes --check
+          annotation_validity --check levels_connected --format json` and
+          `proof checklist show --format json` for that inspection. Do not
+          run any unscoped audit or checklist state mutator. Do not run
+          checklist check, confirm, skip, or reset: the coordinator is the
+          sole checklist mutator and records the authoritative state.
+          This restriction does not prevent the read-only req, var, and
+          source-validation inspection needed to inspect authored rows.
+
           WorkItem:
           {{ outputs.work_item | json }}
           Worker checkout:

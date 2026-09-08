@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {
+  activeChecklistNameFromProofShow,
+  classifyNonAuthoritativeChecklistRefresh,
   promoteNativeDelta,
+  type NativeChecklistRefreshFile,
   type NativePromotionInput,
 } from '../../examples/agent-governance/native-onboarding/native-promotion';
 
@@ -39,6 +42,7 @@ function createFixture(options: {seedComponentBAliases?: boolean} = {}): {
   baselineCommit: string;
   workItem: NativePromotionInput['workItem'];
   componentBRequirementPath: string;
+  checklistStatePath: string;
   untouchedNativePaths: string[];
   cleanup: () => void;
 } {
@@ -117,6 +121,7 @@ function createFixture(options: {seedComponentBAliases?: boolean} = {}): {
   ]);
   if (options.seedComponentBAliases) {
     for (const alias of [
+      'specs/stakeholder/variables/component_b.vars.yaml',
       'specs/software/variables/component_b.vars.yaml',
       'specs/integration/variables/component_b.vars.yaml',
     ]) {
@@ -125,7 +130,20 @@ function createFixture(options: {seedComponentBAliases?: boolean} = {}): {
     }
   }
   const checklistPath = '.proof/onboard-checklist-state.json';
+  const checklistStatePath = 'proof/checklists/onboard_v1.state.yaml';
   fs.mkdirSync(path.join(canonicalRoot, '.proof'), {recursive: true});
+  fs.mkdirSync(path.dirname(path.join(canonicalRoot, checklistStatePath)), {recursive: true});
+  fs.writeFileSync(path.join(canonicalRoot, checklistStatePath), [
+    'checklist: onboard_v1',
+    'updated_at: "2026-09-08T20:09:27Z"',
+    'steps:',
+    '    init:',
+    '        status: pending',
+    '        check_results: []',
+    '    research:',
+    '        status: pending',
+    '        check_results: []',
+  ].join('\n') + '\n', 'utf8');
   const checklistState = proof(canonicalRoot, ['checklist', 'show', 'onboard_v1', '--format', 'json']);
   JSON.parse(checklistState);
   fs.writeFileSync(path.join(canonicalRoot, checklistPath), checklistState);
@@ -143,10 +161,12 @@ function createFixture(options: {seedComponentBAliases?: boolean} = {}): {
     writerRoot: fs.realpathSync(writerRoot),
     baselineCommit,
     componentBRequirementPath: componentBRequirement.file,
+    checklistStatePath,
     untouchedNativePaths: [
       componentARequirement.file,
       'specs/system/variables/component_a.vars.yaml',
       checklistPath,
+      checklistStatePath,
     ],
     workItem: {
       component_id: 'component_b',
@@ -194,6 +214,125 @@ function canonicalBytes(root: string, relativePaths: string[]): Map<string, Buff
   );
 }
 
+function refreshFile(value: string): NativeChecklistRefreshFile {
+  return {kind: 'file', bytes: Buffer.from(value, 'utf8')};
+}
+
+function checklistState(updatedAt: string, resultAt: string, semantic = 'confirmed'): string {
+  return [
+    'checklist: onboard_v1',
+    'campaign_new_project: true',
+    `updated_at: "${updatedAt}"`,
+    'steps:',
+    '  init:',
+    `    status: ${semantic}`,
+    '    check_results:',
+    '      - id: validate_passes',
+    '        status: pass',
+    `        at: "${resultAt}"`,
+    '      - id: role_prompt_hygiene',
+    '        status: pass',
+    `        at: "${resultAt}"`,
+    '  research:',
+    '    status: pending',
+    '    check_results: []',
+  ].join('\n') + '\n';
+}
+
+describe('non-authoritative Proof checklist refresh classifier', () => {
+  const status = {
+    schema_version: 'proof.checklist.show.v1',
+    checklist: 'onboard_v1',
+    active: true,
+  };
+  const baseline = checklistState('2026-09-08T20:09:27Z', '2026-09-08T20:09:27Z');
+  const current = checklistState('2026-09-08T21:14:05Z', '2026-09-08T21:14:05Z');
+
+  it('ignores only forward timestamp refreshes and returns raw byte hashes', () => {
+    expect(activeChecklistNameFromProofShow(status)).toBe('onboard_v1');
+    const result = classifyNonAuthoritativeChecklistRefresh({
+      expectedChecklist: 'onboard_v1',
+      path: 'proof/checklists/onboard_v1.state.yaml',
+      gitStatus: 'M',
+      baseline: refreshFile(baseline),
+      current: refreshFile(current),
+    });
+    expect(result).toMatchObject({
+      kind: 'ignored',
+      path: 'proof/checklists/onboard_v1.state.yaml',
+      checklist: 'onboard_v1',
+      disposition: 'non-authoritative-proof-checklist-refresh',
+      baseline_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      current_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+    });
+  });
+
+  it.each([
+    ['semantic state change', checklistState('2026-09-08T21:14:05Z', '2026-09-08T21:14:05Z', 'skipped')],
+    ['backward timestamp', checklistState('2026-09-08T19:00:00Z', '2026-09-08T19:00:00Z')],
+  ])('rejects %s', (_label, changed) => {
+    const result = classifyNonAuthoritativeChecklistRefresh({
+      expectedChecklist: 'onboard_v1',
+      path: 'proof/checklists/onboard_v1.state.yaml',
+      gitStatus: 'M',
+      baseline: refreshFile(baseline),
+      current: refreshFile(changed),
+    });
+    expect(result.kind).toBe('rejected');
+  });
+
+  it.each([
+    ['wrong path', 'proof/checklists/other.state.yaml', baseline, current],
+    ['wrong state name', 'proof/checklists/onboard_v1.state.yaml', baseline, current.replace('checklist: onboard_v1', 'checklist: other')],
+  ])('does not accept %s', (_label, candidatePath, oldBytes, newBytes) => {
+    const result = classifyNonAuthoritativeChecklistRefresh({
+      expectedChecklist: 'onboard_v1',
+      path: candidatePath,
+      gitStatus: 'M',
+      baseline: refreshFile(oldBytes),
+      current: refreshFile(newBytes),
+    });
+    expect(result.kind).not.toBe('ignored');
+  });
+
+  it('rejects an untrusted or inactive checklist projection', () => {
+    expect(() => activeChecklistNameFromProofShow({...status, active: false})).toThrow();
+    expect(() => activeChecklistNameFromProofShow({...status, schema_version: 'other'})).toThrow();
+  });
+
+  it.each([
+    ['non-modification status', {gitStatus: '??'}],
+    ['missing check timestamp', {current: refreshFile(current.replace(/\n        at: "[^"]+"\n(?=  research:)/, '\n'))}],
+    ['added check result', {current: refreshFile(current.replace(/\n  research:/, '\n      - id: extra\n        status: pass\n        at: "2026-09-08T21:14:05Z"\n  research:'))}],
+    ['non-timestamp status change', {current: refreshFile(current.replace('status: confirmed', 'status: skipped'))}],
+    ['confirmed_at change', {current: refreshFile(current.replace('status: confirmed', 'status: confirmed\n    confirmed_at: "2026-09-08T21:14:05Z"'))}],
+  ])('rejects %s before treating the state file as ignored', (_label, overrides) => {
+    const result = classifyNonAuthoritativeChecklistRefresh({
+      expectedChecklist: 'onboard_v1',
+      path: 'proof/checklists/onboard_v1.state.yaml',
+      gitStatus: 'M',
+      baseline: refreshFile(baseline),
+      current: refreshFile(current),
+      ...overrides,
+    });
+    expect(result.kind).toBe('rejected');
+  });
+
+  it.each([
+    ['symlink', {kind: 'symlink', linkText: 'outside.state.yaml'} as NativeChecklistRefreshFile],
+    ['missing', {kind: 'missing'} as NativeChecklistRefreshFile],
+  ])('rejects a %s exact state path', (_label, candidate) => {
+    const result = classifyNonAuthoritativeChecklistRefresh({
+      expectedChecklist: 'onboard_v1',
+      path: 'proof/checklists/onboard_v1.state.yaml',
+      gitStatus: 'M',
+      baseline: refreshFile(baseline),
+      current: candidate,
+    });
+    expect(result.kind).toBe('rejected');
+  });
+});
+
 describeNative('native onboarding promotion boundary', () => {
   it('promotes only the component-B native delta and preserves component A', () => {
     const fixture = createFixture();
@@ -223,11 +362,40 @@ describeNative('native onboarding promotion boundary', () => {
     }
   });
 
+  it('ignores a forward-only Proof checklist timestamp refresh without copying it', () => {
+    const fixture = createFixture();
+    try {
+      const writerState = path.join(fixture.writerRoot, fixture.checklistStatePath);
+      const canonicalState = path.join(fixture.canonicalRoot, fixture.checklistStatePath);
+      if (!fs.existsSync(writerState) || !fs.existsSync(canonicalState)) {
+        throw new Error('Proof fixture did not create the canonical checklist state file');
+      }
+      const canonicalBefore = fs.readFileSync(canonicalState);
+      const refreshed = fs.readFileSync(writerState, 'utf8')
+        .replace(/^(updated_at:\s*["']).*?(["']\s*)$/m, (_match, prefix, suffix) => `${prefix}2099-01-01T00:00:00Z${suffix}`)
+        .replace(/^(\s+at:\s*["']).*?(["']\s*)$/gm, (_match, prefix, suffix) => `${prefix}2099-01-01T00:00:00Z${suffix}`);
+      if (refreshed === fs.readFileSync(writerState, 'utf8')) throw new Error('fixture state has no timestamp leaves');
+      fs.writeFileSync(writerState, refreshed, 'utf8');
+      fs.writeFileSync(path.join(fixture.writerRoot, 'b.go'), 'package native\n// timestamp-only checklist refresh\nfunc B() int { return 2 }\n');
+
+      const result = promoteNativeDelta(promotionInput(fixture));
+
+      expect(result.status).toBe('promoted');
+      expect(result.ignored_paths).toContain(fixture.checklistStatePath);
+      expect(result.accepted_paths).not.toContain(fixture.checklistStatePath);
+      expect(fs.readFileSync(canonicalState)).toEqual(canonicalBefore);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it('promotes a Proof-owned regular variable file with exact same-component aliases', () => {
     const fixture = createFixture();
     try {
       const target = 'specs/system/variables/component_b.vars.yaml';
       const aliases = [
+        'specs/stakeholder/variables/component_b.vars.yaml',
         'specs/software/variables/component_b.vars.yaml',
         'specs/integration/variables/component_b.vars.yaml',
       ];

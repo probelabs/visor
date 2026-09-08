@@ -10,7 +10,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
 import {execFileSync, spawnSync} from 'node:child_process';
+import yaml from 'js-yaml';
 
 type Json = Record<string, unknown>;
 
@@ -93,8 +95,195 @@ interface FileSnapshot {
   linkText?: string;
 }
 
+/** A bounded view of one candidate checklist-state file. */
+export type NativeChecklistRefreshFile =
+  | {kind: 'file'; bytes: Buffer}
+  | {kind: 'symlink'; linkText: string}
+  | {kind: 'missing'};
+
+export type NativeChecklistRefreshClassification =
+  | {kind: 'not-applicable'}
+  | {kind: 'rejected'; reason: string}
+  | {
+      kind: 'ignored';
+      path: string;
+      checklist: string;
+      disposition: 'non-authoritative-proof-checklist-refresh';
+      baseline_sha256: string;
+      current_sha256: string;
+    };
+
+export interface NativeChecklistRefreshInput {
+  /** The active name obtained from the canonical Proof checklist readback. */
+  expectedChecklist: string;
+  /** Project-relative Git path from the writer delta. */
+  path: string;
+  /** The exact Git status for this path (`M` or porcelain ` M`). */
+  gitStatus: string;
+  baseline: NativeChecklistRefreshFile;
+  current: NativeChecklistRefreshFile;
+}
+
 const DEFAULT_TIMEOUT_MS = 120_000;
 const SHA256_FILE_HASH = /^sha256:[0-9a-f]{64}$/;
+const SAFE_CHECKLIST_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function plainObject(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null ? value as Record<string, unknown> : undefined;
+}
+
+/** Resolve the active checklist only from Proof's versioned JSON projection. */
+export function activeChecklistNameFromProofShow(value: unknown): string {
+  const shown = plainObject(value);
+  if (!shown || shown.schema_version !== 'proof.checklist.show.v1' || shown.active !== true ||
+      typeof shown.checklist !== 'string' || !SAFE_CHECKLIST_NAME.test(shown.checklist)) {
+    throw new Error('Proof checklist show is not an active proof.checklist.show.v1 projection');
+  }
+  return shown.checklist;
+}
+
+function rfc3339Millis(value: unknown): number | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = RFC3339.exec(value);
+  if (!match) return undefined;
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return undefined;
+  const daysInMonth = new Date(Date.UTC(Number(match[1]), month, 0)).getUTCDate();
+  if (day < 1 || day > daysInMonth) return undefined;
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : undefined;
+}
+
+type TimestampEntry = {segments: string[]; value: string};
+
+function checklistTimestampEntries(value: unknown): TimestampEntry[] {
+  const state = plainObject(value);
+  if (!state || !Object.prototype.hasOwnProperty.call(state, 'updated_at') ||
+      rfc3339Millis(state.updated_at) === undefined) {
+    throw new Error('checklist state must contain a strict RFC3339 updated_at');
+  }
+  const entries: TimestampEntry[] = [{segments: ['updated_at'], value: state.updated_at as string}];
+  const steps = state.steps;
+  const stepEntries: Array<[string, unknown]> = Array.isArray(steps)
+    ? steps.map((step, index) => [String(index), step])
+    : (() => {
+        const stepMap = plainObject(steps);
+        if (!stepMap) throw new Error('checklist state steps must be an array or map');
+        return Object.entries(stepMap);
+      })();
+  for (const [stepKey, rawStep] of stepEntries) {
+    const step = plainObject(rawStep);
+    if (!step) throw new Error(`checklist state step ${stepKey} must be an object`);
+    if (!Object.prototype.hasOwnProperty.call(step, 'check_results')) continue;
+    if (!Array.isArray(step.check_results)) throw new Error(`checklist state step ${stepKey} check_results must be an array`);
+    for (let resultIndex = 0; resultIndex < step.check_results.length; resultIndex += 1) {
+      const result = plainObject(step.check_results[resultIndex]);
+      if (!result || !Object.prototype.hasOwnProperty.call(result, 'at') || rfc3339Millis(result.at) === undefined) {
+        throw new Error(`checklist state check result ${stepKey}/${resultIndex} must contain a strict RFC3339 at`);
+      }
+      entries.push({
+        segments: ['steps', stepKey, 'check_results', String(resultIndex), 'at'],
+        value: result.at as string,
+      });
+    }
+  }
+  return entries;
+}
+
+function cloneParsedState(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneParsedState);
+  const object = plainObject(value);
+  if (object) return Object.fromEntries(Object.entries(object).map(([key, item]) => [key, cloneParsedState(item)]));
+  return value;
+}
+
+function setParsedPath(root: unknown, segments: string[], value: string): void {
+  let current: any = root;
+  for (let index = 0; index < segments.length - 1; index += 1) current = current[segments[index]];
+  current[segments[segments.length - 1]] = value;
+}
+
+function checklistRefreshHash(bytes: Buffer): string {
+  return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+}
+
+function refreshRejected(reason: string): NativeChecklistRefreshClassification {
+  return {kind: 'rejected', reason};
+}
+
+/**
+ * Classify the one Proof state file a writer may have refreshed incidentally.
+ * The file is ignored only when the parsed state differs by forward timestamps
+ * at already-existing timestamp leaves; it is never copied or staged.
+ */
+export function classifyNonAuthoritativeChecklistRefresh(
+  input: NativeChecklistRefreshInput,
+): NativeChecklistRefreshClassification {
+  const expected = input?.expectedChecklist;
+  const relativePath = input?.path;
+  if (typeof expected !== 'string' || !SAFE_CHECKLIST_NAME.test(expected)) {
+    return refreshRejected('expected checklist name is not safe');
+  }
+  const expectedPath = `proof/checklists/${expected}.state.yaml`;
+  if (relativePath !== expectedPath) return {kind: 'not-applicable'};
+
+  try {
+    if (input.gitStatus !== 'M' && input.gitStatus !== ' M') {
+      return refreshRejected('checklist refresh must be an exact Git modification (M)');
+    }
+    if (!input.baseline || input.baseline.kind !== 'file') return refreshRejected('checklist baseline must be a regular file');
+    if (!input.current || input.current.kind !== 'file') return refreshRejected('checklist refresh must remain a regular file');
+    if (!Buffer.isBuffer(input.baseline.bytes) || !Buffer.isBuffer(input.current.bytes)) {
+      return refreshRejected('checklist snapshots must contain file bytes');
+    }
+    const baselineDocument = yaml.load(input.baseline.bytes.toString('utf8'), {schema: yaml.JSON_SCHEMA});
+    const currentDocument = yaml.load(input.current.bytes.toString('utf8'), {schema: yaml.JSON_SCHEMA});
+    const baselineState = plainObject(baselineDocument);
+    const currentState = plainObject(currentDocument);
+    if (baselineState?.checklist !== expected || currentState?.checklist !== expected) {
+      return refreshRejected('checklist state does not match the active checklist');
+    }
+    const baselineEntries = checklistTimestampEntries(baselineDocument);
+    const currentEntries = checklistTimestampEntries(currentDocument);
+    if (baselineEntries.length !== currentEntries.length) return refreshRejected('checklist timestamp leaves were added or removed');
+    const currentByPath = new Map(currentEntries.map(entry => [entry.segments.join('\0'), entry]));
+    let changed = 0;
+    for (const baselineEntry of baselineEntries) {
+      const key = baselineEntry.segments.join('\0');
+      const currentEntry = currentByPath.get(key);
+      if (!currentEntry) return refreshRejected('checklist timestamp leaves were reordered or removed');
+      if (currentEntry.value !== baselineEntry.value) {
+        const before = rfc3339Millis(baselineEntry.value);
+        const after = rfc3339Millis(currentEntry.value);
+        if (before === undefined || after === undefined || after < before) {
+          return refreshRejected('checklist timestamp refresh moves a timestamp backwards or is not strict RFC3339');
+        }
+        changed += 1;
+      }
+    }
+    if (changed === 0) return refreshRejected('checklist refresh did not change an allowed timestamp');
+    const restored = cloneParsedState(currentDocument);
+    for (const baselineEntry of baselineEntries) setParsedPath(restored, baselineEntry.segments, baselineEntry.value);
+    if (!isDeepStrictEqual(restored, baselineDocument)) return refreshRejected('checklist refresh changes semantic Proof state');
+    return {
+      kind: 'ignored',
+      path: relativePath,
+      checklist: expected,
+      disposition: 'non-authoritative-proof-checklist-refresh',
+      baseline_sha256: checklistRefreshHash(input.baseline.bytes),
+      current_sha256: checklistRefreshHash(input.current.bytes),
+    };
+  } catch (error) {
+    return refreshRejected(error instanceof Error ? error.message : 'invalid checklist refresh');
+  }
+}
 
 function rejected(
   input: NativePromotionInput,
@@ -725,6 +914,37 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     const rejectedPaths: string[] = [];
     const acceptedPaths: string[] = [];
     const reqCandidates: string[] = [];
+    const checklistRefreshRejections: string[] = [];
+    const canonicalChecklistPaths = new Set<string>();
+    let activeChecklist: string | undefined;
+    let checklistStatus: unknown;
+    const classifyWriterChecklistPath = (relativePath: string, gitStatus: string): NativeChecklistRefreshClassification => {
+      if (!/^proof\/checklists\/[^/]+\.state\.ya?ml$/.test(relativePath)) return {kind: 'not-applicable'};
+      if (checklistStatus === undefined) {
+        const show = proof(input.proofBin, canonicalRoot, ['checklist', 'show', '--format', 'json'], timeoutMs);
+        checklistStatus = parseProofJson(show, 'Proof active checklist show');
+        activeChecklist = activeChecklistNameFromProofShow(checklistStatus);
+      }
+      const expected = activeChecklist;
+      if (!expected) return {kind: 'rejected', reason: 'Proof active checklist is unavailable'};
+      const baselineSnapshot = gitSnapshotAtCommit(canonicalRoot, input.baselineCommit, relativePath);
+      const currentSnapshot = fileSnapshot(writerRoot, relativePath);
+      return classifyNonAuthoritativeChecklistRefresh({
+        expectedChecklist: expected,
+        path: relativePath,
+        gitStatus,
+        baseline: baselineSnapshot
+          ? baselineSnapshot.kind === 'symlink'
+            ? {kind: 'symlink', linkText: baselineSnapshot.linkText || ''}
+            : {kind: 'file', bytes: baselineSnapshot.bytes || Buffer.alloc(0)}
+          : {kind: 'missing'},
+        current: currentSnapshot
+          ? currentSnapshot.kind === 'symlink'
+            ? {kind: 'symlink', linkText: currentSnapshot.linkText || ''}
+            : {kind: 'file', bytes: currentSnapshot.bytes || Buffer.alloc(0)}
+          : {kind: 'missing'},
+      });
+    };
     for (const entry of changed) {
       verifyExistingParent(writerRoot, entry.path, 'writer delta path');
       if (entry.status.startsWith('D') || entry.status.startsWith('R') || entry.status.startsWith('C')) {
@@ -733,6 +953,19 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       }
       if (isPrivateProofPath(entry.path)) {
         ignoredPaths.push(entry.path);
+        continue;
+      }
+      if (entry.path.startsWith('proof/')) {
+        const refresh = classifyWriterChecklistPath(entry.path, entry.status);
+        if (refresh.kind === 'ignored') {
+          ignoredPaths.push(refresh.path);
+          canonicalChecklistPaths.add(refresh.path);
+        } else if (refresh.kind === 'rejected') {
+          rejectedPaths.push(entry.path);
+          checklistRefreshRejections.push(`${entry.path}: ${refresh.reason}`);
+        } else {
+          rejectedPaths.push(entry.path);
+        }
         continue;
       }
       if (isProtectedPath(entry.path)) {
@@ -754,7 +987,10 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       rejectedPaths.push(entry.path);
     }
     if (rejectedPaths.length) {
-      return rejected(input, 'writer delta contains deleted, renamed, protected, sibling, or out-of-scope paths', [], ignoredPaths, rejectedPaths);
+      const reason = checklistRefreshRejections.length
+        ? `writer delta contains a rejected checklist refresh: ${checklistRefreshRejections.join('; ')}`
+        : 'writer delta contains deleted, renamed, protected, sibling, or out-of-scope paths';
+      return rejected(input, reason, [], ignoredPaths, rejectedPaths);
     }
 
     const componentId = input.workItem.component_id;
@@ -864,6 +1100,11 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       if (staged.validation.status !== 0) {
         return rejected(input, `Proof staging validation failed with exit ${staged.validation.status}: ${commandDetail(staged.validation)}`, [], ignoredPaths, [], validation);
       }
+      // Capture central Proof state immediately before the only canonical write
+      // boundary. The ignored state file is never part of the staged paths.
+      const canonicalChecklistSnapshots = new Map<string, FileSnapshot | undefined>(
+        [...canonicalChecklistPaths].map(relativePath => [relativePath, fileSnapshot(canonicalRoot, relativePath)])
+      );
       const promotedCommit = applyAcceptedFiles(
         input,
         canonicalRoot,
@@ -876,6 +1117,11 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
           applicationStarted = true;
         }
       );
+      for (const [relativePath, before] of canonicalChecklistSnapshots) {
+        if (!snapshotsEqual(before, fileSnapshot(canonicalRoot, relativePath))) {
+          throw new Error(`canonical checklist state changed during promotion: ${relativePath}`);
+        }
+      }
       return {
         status: 'promoted',
         accepted_paths: dedupedAccepted,

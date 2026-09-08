@@ -30,6 +30,11 @@ import {
   renderNativeChecklistProgress,
   type NativeChecklistProgress,
 } from './native-checklist-progress';
+import {
+  activeChecklistNameFromProofShow,
+  classifyNonAuthoritativeChecklistRefresh,
+  type NativeChecklistRefreshFile,
+} from './native-promotion';
 
 type Json = Record<string, unknown>;
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -43,6 +48,32 @@ export type ChecklistProgressRefreshOptions = Readonly<{
   paused?: boolean;
   resumed?: boolean;
 }>;
+
+export type RecoveryTerminalStage =
+  | 'retry'
+  | 'selected-retry'
+  | 'postflight'
+  | 'incomplete'
+  | 'terminal';
+
+export type RecoveryTerminalDescriptor = Readonly<{
+  failure_code: 'RETRY_FAILED' | 'POSTFLIGHT_FAILED' | 'RECOVERY_INCOMPLETE' | 'RECOVERY_FAILED';
+  evidence: 'failure.stderr' | 'summary.json' | 'postflight.json';
+  result?: 'visor-result.json';
+}>;
+
+const RECOVERY_TERMINAL_DESCRIPTORS: Readonly<Record<RecoveryTerminalStage, RecoveryTerminalDescriptor>> = {
+  retry: Object.freeze({failure_code: 'RETRY_FAILED', evidence: 'failure.stderr'}),
+  'selected-retry': Object.freeze({failure_code: 'RETRY_FAILED', evidence: 'summary.json', result: 'visor-result.json'}),
+  postflight: Object.freeze({failure_code: 'POSTFLIGHT_FAILED', evidence: 'postflight.json'}),
+  incomplete: Object.freeze({failure_code: 'RECOVERY_INCOMPLETE', evidence: 'summary.json'}),
+  terminal: Object.freeze({failure_code: 'RECOVERY_FAILED', evidence: 'failure.stderr'}),
+};
+
+/** Describe the closed recovery outcome without inspecting or retaining provider data. */
+export function describeRecoveryTerminal(stage: RecoveryTerminalStage): RecoveryTerminalDescriptor {
+  return RECOVERY_TERMINAL_DESCRIPTORS[stage];
+}
 
 /** Derive one immutable progress observation from the selected run boundary. */
 export function checklistProgressRefreshOptions(
@@ -1635,6 +1666,36 @@ async function loadCurrentOnboardingInventory(proof: string, subject: string, ou
   return inventory;
 }
 
+function activeChecklistNameFromCheckpoint(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+): string {
+  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  // This is the same root/expanded active-snapshot selector used by the
+  // canonical CLI/HTML progress projection.  It validates claim identity,
+  // producer, scope, payload fingerprint, and stage lineage before exposing
+  // the trusted checklist name.
+  const progress = buildNativeChecklistProgressFromProjections({
+    claimProjection: journal.getClaimProjection(),
+    instanceProjection: journal.getInstanceProjection(),
+    checkpoint,
+  });
+  return progress.checklist.name;
+}
+
+async function loadCurrentChecklistShow(
+  proof: string,
+  subject: string,
+  output: string,
+  timeout: number,
+): Promise<{name: string; show: unknown}> {
+  const show = parseJson(
+    runProof(proof, subject, output, 'preflight', ['checklist', 'show', '--format', 'json'], timeout),
+    'Proof checklist show',
+  );
+  return {name: activeChecklistNameFromProofShow(show), show};
+}
+
 async function loadResolvedOnboardingAuthority(
   proof: string,
   subject: string,
@@ -2260,9 +2321,13 @@ export type RecoveryProofRequirementHash = Readonly<{
 type RecoveryDraftInventoryEntry = Readonly<{
   path: string;
   status: string;
-  kind: 'file' | 'symlink' | 'missing';
+  kind: 'file' | 'symlink' | 'missing' | 'ignored';
   sha256?: string;
   link_target?: string;
+  checklist?: string;
+  disposition?: 'non-authoritative-proof-checklist-refresh';
+  baseline_sha256?: string;
+  current_sha256?: string;
 }>;
 
 type RecoveryDraftInventory = Readonly<{
@@ -2271,6 +2336,10 @@ type RecoveryDraftInventory = Readonly<{
   component_id: string;
   files: readonly RecoveryDraftInventoryEntry[];
   sha256: string;
+}>;
+
+type ChecklistRefreshContext = Readonly<{
+  expectedChecklist: string;
 }>;
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -2382,6 +2451,15 @@ function currentFileValue(root: string, relativePath: string):
   throw new Error(`recovery path is not a regular file or symlink: ${relativePath}`);
 }
 
+function toChecklistRefreshFile(
+  value: {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | {kind: 'missing'} | undefined,
+): NativeChecklistRefreshFile {
+  if (value === undefined || value.kind === 'missing') return {kind: 'missing'};
+  return value.kind === 'file'
+    ? {kind: 'file', bytes: value.bytes}
+    : {kind: 'symlink', linkText: value.link_target};
+}
+
 function fileValuesEqual(
   left: {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | undefined,
   right: {kind: 'file'; bytes: Buffer} | {kind: 'symlink'; link_target: string} | undefined,
@@ -2466,11 +2544,34 @@ export function inventoryAuthorDraft(
   baselineCommit: string,
   componentId: string,
   ownedSourcePaths: readonly string[],
+  checklistRefresh?: ChecklistRefreshContext,
 ): RecoveryDraftInventory {
   const owned = new Set(ownedSourcePaths);
   const files = parseGitStatusNul(root).map(({path: relativePath, status}) => {
     const allowedSource = owned.has(relativePath);
     const allowedNative = nativePathBelongsToComponent(root, baselineCommit, relativePath, componentId);
+    if (checklistRefresh && relativePath.startsWith('proof/')) {
+      const classification = classifyNonAuthoritativeChecklistRefresh({
+        expectedChecklist: checklistRefresh.expectedChecklist,
+        path: relativePath,
+        gitStatus: status,
+        baseline: toChecklistRefreshFile(gitSnapshotAtCommit(root, baselineCommit, relativePath) || {kind: 'missing'}),
+        current: toChecklistRefreshFile(currentFileValue(root, relativePath)),
+      });
+      if (classification.kind === 'ignored') {
+        return {
+          path: classification.path,
+          status,
+          kind: 'ignored',
+          checklist: classification.checklist,
+          disposition: classification.disposition,
+          baseline_sha256: classification.baseline_sha256,
+          current_sha256: classification.current_sha256,
+        } satisfies RecoveryDraftInventoryEntry;
+      }
+      if (classification.kind === 'rejected') throw new Error(classification.reason);
+      throw new Error(`recovery author draft path is outside WorkItem ownership: ${relativePath}`);
+    }
     if (!allowedSource && !allowedNative) {
       throw new Error(`recovery author draft path is outside WorkItem ownership: ${relativePath}`);
     }
@@ -2492,11 +2593,18 @@ export function inventoryAuthorDraft(
   });
 }
 
-function assertDraftInventoryUnchanged(
+export function assertDraftInventoryUnchanged(
   expected: RecoveryDraftInventory,
   ownedSourcePaths: readonly string[],
 ): void {
-  const actual = inventoryAuthorDraft(expected.root, expected.baseline_commit, expected.component_id, ownedSourcePaths);
+  const expectedChecklist = expected.files.find(file => file.kind === 'ignored')?.checklist;
+  const actual = inventoryAuthorDraft(
+    expected.root,
+    expected.baseline_commit,
+    expected.component_id,
+    ownedSourcePaths,
+    expectedChecklist ? {expectedChecklist} : undefined,
+  );
   if (actual.sha256 !== expected.sha256 || !sameJson(actual.files, expected.files)) {
     throw new Error(`recovery author draft changed before retry dispatch for ${expected.component_id}`);
   }
@@ -2861,7 +2969,11 @@ export function validateRecoverySelection(
   inventory: Json,
   externalSideEffects: RecoverySideEffects,
   currentProofRequirements: readonly RecoveryProofRequirementHash[] = [],
-  options: Readonly<{allowEmptyAuthorDraft?: boolean; allowHistoricalAuthorRetry?: boolean}> = {},
+  options: Readonly<{
+    allowEmptyAuthorDraft?: boolean;
+    allowHistoricalAuthorRetry?: boolean;
+    expectedChecklist?: string;
+  }> = {},
 ): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]; reviewPackets: readonly RecoveryReviewPacket[]} {
   const plan = compileClaimPlan(config);
   if (checkpoint.graphSemanticDigest !== plan.expansionPlan.graphSemanticDigest) {
@@ -3050,7 +3162,13 @@ export function validateRecoverySelection(
     let draftInventory: RecoveryDraftInventory | undefined;
     if (authorReplay) {
       if (!checkoutPath) throw new Error(`Recovery author generation ${generationId} has no retained checkout`);
-      draftInventory = inventoryAuthorDraft(checkoutPath, baselineCommit, workItemPayload.component_id, ownedSourcePaths);
+      draftInventory = inventoryAuthorDraft(
+        checkoutPath,
+        baselineCommit,
+        workItemPayload.component_id,
+        ownedSourcePaths,
+        options.expectedChecklist ? {expectedChecklist: options.expectedChecklist} : undefined,
+      );
       if (!options.allowEmptyAuthorDraft && draftInventory.files.length === 0) {
         throw new Error(`Recovery author draft inventory is empty for ${workItemPayload.component_id}`);
       }
@@ -3593,6 +3711,7 @@ async function runRecovery(
   if (!fs.statSync(checkpointPath).isFile()) {
     throw new Error('recover-checkpoint must be a retained checkpoint file');
   }
+  const recoveryProgressOptions = checklistProgressRefreshOptions(checkpointPath);
   const checkpointRoot = realDirectory(path.dirname(checkpointPath), 'retained checkpoint root');
   if (!inside(checkpointPath, priorOutput)) {
     if (path.basename(checkpointPath) !== 'checkpoint.json') {
@@ -3628,7 +3747,7 @@ async function runRecovery(
   let latestRecoveryCheckpoint = validatedInput;
   let recoveryConfig: VisorConfig | undefined;
   let recoveryMaterializedConfigPath: string | undefined;
-  const persistRecoveryTerminal = (stage: string, error: unknown): void => {
+  const persistRecoveryTerminal = (stage: RecoveryTerminalStage, error: unknown): void => {
     void error;
     try { writeCheckpoint(path.join(roots.output, 'checkpoint.partial.json'), latestRecoveryCheckpoint); } catch { /* preserve primary error */ }
     if (checklistRecovery && recoveryConfig && recoveryMaterializedConfigPath) {
@@ -3638,32 +3757,32 @@ async function runRecovery(
         writeText(destination, configBytes);
         fs.chmodSync(destination, 0o600);
       } catch { /* preserve primary error */ }
-      try { writeRestoredChecklistProgress(roots.output, recoveryConfig, latestRecoveryCheckpoint); } catch { /* observational */ }
+      try {
+        writeRestoredChecklistProgress(
+          roots.output,
+          recoveryConfig,
+          latestRecoveryCheckpoint,
+          recoveryProgressOptions,
+        );
+      } catch { /* observational */ }
     }
     try {
-      const failureCode = stage === 'retry'
-        ? 'RETRY_FAILED'
-        : stage === 'postflight'
-          ? 'POSTFLIGHT_FAILED'
-          : stage === 'incomplete'
-            ? 'RECOVERY_INCOMPLETE'
-            : 'RECOVERY_FAILED';
-      const evidence = stage === 'retry' || stage === 'terminal'
-        ? 'failure.stderr'
-        : stage === 'postflight'
-          ? 'postflight.json'
-          : 'summary.json';
+      const descriptor = describeRecoveryTerminal(stage);
+      const emittedStage = stage === 'selected-retry' ? 'retry' : stage;
       writeJson(path.join(roots.output, 'recovery', 'closed-diagnostic.json'), {
         version: 1,
         kind: 'native-onboarding-recovery-failure',
-        stage,
-        failure_code: failureCode,
-        detail: stage === 'postflight'
+        stage: emittedStage,
+        failure_code: descriptor.failure_code,
+        detail: descriptor.failure_code === 'POSTFLIGHT_FAILED'
           ? 'Postflight failure evidence is retained in postflight.json and commands/postflight; this record contains no provider payload or raw stderr.'
-          : stage === 'incomplete'
+          : descriptor.failure_code === 'RECOVERY_INCOMPLETE'
             ? 'Incomplete recovery evidence is retained in summary.json, checkpoint.partial.json, and progress.json; this record contains no provider payload or raw stderr.'
+            : descriptor.result
+              ? 'Selected retry remained failed; summary.json and visor-result.json retain the engine outcome; this record contains no provider payload or raw stderr.'
             : 'Runner failure detail is retained in failure.stderr; this record contains no provider payload or raw stderr.',
-        evidence,
+        evidence: descriptor.evidence,
+        ...(descriptor.result ? {result: descriptor.result} : {}),
         checkpoint: 'checkpoint.partial.json',
         ...(checklistRecovery && recoveryConfig ? {
           materialized_config: 'checklist-materialized-config.json',
@@ -3766,8 +3885,29 @@ async function runRecovery(
     config = retained.config;
     retainedAuthority = retained.authority.inventory;
   }
+  const expectedChecklist = checklistRecovery
+    ? activeChecklistNameFromCheckpoint(config, validatedInput)
+    : undefined;
+  if (expectedChecklist !== undefined) {
+    const currentChecklist = await loadCurrentChecklistShow(
+      proof,
+      roots.subject,
+      roots.output,
+      timeout,
+    );
+    if (currentChecklist.name !== expectedChecklist) {
+      throw new Error('current Proof checklist does not match the trusted active checkpoint checklist');
+    }
+  }
   if (checklistRecovery) {
-    try { writeRestoredChecklistProgress(roots.output, config, latestRecoveryCheckpoint); } catch { /* observational */ }
+    try {
+      writeRestoredChecklistProgress(
+        roots.output,
+        config,
+        latestRecoveryCheckpoint,
+        recoveryProgressOptions,
+      );
+    } catch { /* observational */ }
   }
   // Refresh the current subject inventory as a separate freshness check, but
   // never bind the recovery graph to post-promotion role/schema bytes. Those
@@ -3807,7 +3947,11 @@ async function runRecovery(
     currentInventory,
     externalSideEffects,
     currentProofRequirements,
-    checklistRecovery ? {allowEmptyAuthorDraft: true, allowHistoricalAuthorRetry: true} : {},
+    checklistRecovery ? {
+      allowEmptyAuthorDraft: true,
+      allowHistoricalAuthorRetry: true,
+      expectedChecklist,
+    } : {},
   );
   const draftInventories = authority.bindings
     .filter(binding => binding.draftInventory)
@@ -3837,7 +3981,13 @@ async function runRecovery(
       try { liveInstanceProjection = engine.getInstanceProjection(); } catch { /* observational */ }
     }
     try {
-      writeRestoredChecklistProgress(roots.output, recoveryConfig, latestRecoveryCheckpoint, {resumed: true}, liveInstanceProjection);
+      writeRestoredChecklistProgress(
+        roots.output,
+        recoveryConfig,
+        latestRecoveryCheckpoint,
+        recoveryProgressOptions,
+        liveInstanceProjection,
+      );
     } catch { /* observational */ }
   };
   const recoveryPromptHook = (info: PublicPromptCaptureInfo): void => {
@@ -3872,7 +4022,10 @@ async function runRecovery(
         latestRecoveryCheckpoint = retryCheckpoint;
         for (const binding of authority.bindings) {
           if (binding.draftInventory) {
-            assertDraftInventoryUnchanged(binding.draftInventory, binding.ownedSourcePaths || []);
+            assertDraftInventoryUnchanged(
+              binding.draftInventory,
+              binding.ownedSourcePaths || [],
+            );
           }
         }
         writeCheckpoint(path.join(roots.output, 'recovery', 'retry-prefix-checkpoint.json'), retryCheckpoint);
@@ -3896,7 +4049,14 @@ async function runRecovery(
   writeCheckpoint(path.join(roots.output, 'checkpoint.json'), resumed.checkpoint);
   writeJson(path.join(roots.output, 'visor-result.json'), resumed.result);
   if (checklistRecovery) {
-    try { writeRestoredChecklistProgress(roots.output, config, resumed.checkpoint); } catch { /* observational */ }
+    try {
+      writeRestoredChecklistProgress(
+        roots.output,
+        config,
+        resumed.checkpoint,
+        recoveryProgressOptions,
+      );
+    } catch { /* observational */ }
   }
   const unresolved = currentUnresolvedGenerations(config, resumed.checkpoint);
   const finalProjection: any = ExecutionJournal.restoreGraphCheckpoint(
@@ -3914,7 +4074,14 @@ async function runRecovery(
     : undefined;
   if (checklistFrontier?.ready) {
     writeCheckpoint(path.join(roots.output, 'checklist-skeleton-frontier-checkpoint.json'), resumed.checkpoint);
-    try { writeRestoredChecklistProgress(roots.output, config, resumed.checkpoint, {paused: true}); } catch { /* observational */ }
+    try {
+      writeRestoredChecklistProgress(
+        roots.output,
+        config,
+        resumed.checkpoint,
+        {...recoveryProgressOptions, paused: true},
+      );
+    } catch { /* observational */ }
   }
 
   const postflight: Json = {};
@@ -3978,7 +4145,12 @@ async function runRecovery(
   const incompleteRecovery = selectedStillFailed.length > 0 || unresolved.length > 0 ||
     (checklistRecovery && !checklistFrontier?.ready);
   if (hardPostflightFailure || incompleteRecovery) {
-    persistRecoveryTerminal(hardPostflightFailure ? 'postflight' : 'incomplete', new Error(`recovery terminal state: ${summary.status}`));
+    const terminalStage: RecoveryTerminalStage = hardPostflightFailure
+      ? 'postflight'
+      : selectedStillFailed.length > 0
+        ? 'selected-retry'
+        : 'incomplete';
+    persistRecoveryTerminal(terminalStage, new Error(`recovery terminal state: ${summary.status}`));
     recoveryTerminalPersistence = undefined;
     console.error(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
     process.exitCode = 1;

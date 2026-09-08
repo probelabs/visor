@@ -20,6 +20,7 @@ import {
   commitInitializedProofBaseline,
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
+  assertDraftInventoryUnchanged,
   inventoryAuthorDraft,
   isCurrentFailedRetryAttempt,
   buildRetainedReviewedAggregateMap,
@@ -30,6 +31,7 @@ import {
   buildRetainedReviewedAggregate,
   buildChecklistOnboardingConfig,
   checklistProgressRefreshOptions,
+  describeRecoveryTerminal,
   loadRetainedOnboardingConfig,
   loadChecklistMaterializedConfig,
   parseChecklistPrefixRetryArguments,
@@ -194,6 +196,16 @@ describe('native onboarding runner boundaries', () => {
     expect(Object.isFrozen(resumed)).toBe(true);
   });
 
+  it.each([
+    ['retry', {failure_code: 'RETRY_FAILED', evidence: 'failure.stderr'}],
+    ['selected-retry', {failure_code: 'RETRY_FAILED', evidence: 'summary.json', result: 'visor-result.json'}],
+    ['postflight', {failure_code: 'POSTFLIGHT_FAILED', evidence: 'postflight.json'}],
+    ['incomplete', {failure_code: 'RECOVERY_INCOMPLETE', evidence: 'summary.json'}],
+    ['terminal', {failure_code: 'RECOVERY_FAILED', evidence: 'failure.stderr'}],
+  ] as const)('describes closed recovery terminal stage %s without provider artifacts', (stage, expected) => {
+    expect(describeRecoveryTerminal(stage)).toEqual(expected);
+  });
+
   it('persists one canonical retry progress view for CLI text and static HTML', () => {
     const output = path.join(root, 'retry-progress');
     const snapshot = {
@@ -237,19 +249,37 @@ describe('native onboarding runner boundaries', () => {
       parentClaimIds: [],
       active: true,
     };
+    const resumedOptions = checklistProgressRefreshOptions('/tmp/checkpoint.json');
     const progress = writeNativeChecklistProgress(
       output,
       {claims: {[claimId]: claim}, activeClaimIdsByRef: {'proof.checklist.snapshot@1': claimId}},
       {claimsById: {}, generationsById: {}, activeGenerationIdByNode: {}},
       undefined,
+      resumedOptions,
     );
     const json = fs.readFileSync(path.join(output, 'progress.json'), 'utf8');
     const html = fs.readFileSync(path.join(output, 'progress.html'), 'utf8');
     expect(JSON.parse(json)).toEqual(progress);
+    expect(JSON.parse(json).resumed).toBe(true);
     const embedded = html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
     expect(embedded).toBeDefined();
     expect(JSON.parse(embedded as string)).toEqual(JSON.parse(json));
-    expect(fs.readFileSync(path.join(output, 'progress.txt'), 'utf8')).toContain('onboard_v1');
+    expect(fs.readFileSync(path.join(output, 'progress.txt'), 'utf8')).toContain('paused=false resumed=true');
+
+    const paused = writeNativeChecklistProgress(
+      output,
+      {claims: {[claimId]: claim}, activeClaimIdsByRef: {'proof.checklist.snapshot@1': claimId}},
+      {claimsById: {}, generationsById: {}, activeGenerationIdByNode: {}},
+      undefined,
+      {...resumedOptions, paused: true},
+    );
+    const pausedJson = fs.readFileSync(path.join(output, 'progress.json'), 'utf8');
+    const pausedHtml = fs.readFileSync(path.join(output, 'progress.html'), 'utf8');
+    expect(JSON.parse(pausedJson)).toEqual(paused);
+    expect(JSON.parse(pausedJson)).toMatchObject({paused: true, resumed: true});
+    expect(pausedHtml).toContain('paused=true');
+    expect(pausedHtml).toContain('resumed=true');
+    expect(fs.readFileSync(path.join(output, 'progress.txt'), 'utf8')).toContain('paused=true resumed=true');
   });
 
   it('loads the checklist profile as a standalone native graph without mutating the shipped graph', async () => {
@@ -1105,6 +1135,100 @@ describe('native onboarding runner boundaries', () => {
       .toThrow(/changed WorkItem-owned paths: owned.go/);
     fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n\nconst Owned = 1\n', 'utf8');
     execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
+  });
+
+  it('labels an exact checklist timestamp refresh as non-authoritative while retaining owned symlinks', () => {
+    const subject = path.join(root, 'checklist-refresh-subject');
+    const worker = path.join(root, 'checklist-refresh-worktree');
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n', 'utf8');
+    const checklistPath = path.join(subject, 'proof', 'checklists', 'onboard_v1.state.yaml');
+    fs.mkdirSync(path.dirname(checklistPath), {recursive: true});
+    const baselineChecklist = [
+      'checklist: onboard_v1',
+      'updated_at: "2026-09-08T20:00:00Z"',
+      'steps:',
+      '  - step_id: init',
+      '    check_results:',
+      '      - id: validate_passes',
+      '        status: pass',
+      '        at: "2026-09-08T20:00:00Z"',
+      '',
+    ].join('\n');
+    fs.writeFileSync(checklistPath, baselineChecklist, 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'checklist refresh baseline']);
+    const baseline = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    execFileSync('git', ['-C', subject, 'worktree', 'add', '--quiet', '--detach', worker, baseline]);
+    try {
+      fs.writeFileSync(path.join(worker, 'owned.go'), 'package fixture\n\nconst Updated = 1\n', 'utf8');
+      fs.symlinkSync('owned.go', path.join(worker, 'owned-link'));
+      fs.writeFileSync(path.join(worker, 'proof', 'checklists', 'onboard_v1.state.yaml'), baselineChecklist
+        .replaceAll('2026-09-08T20:00:00Z', '2026-09-08T20:01:00Z'), 'utf8');
+      const inventory = inventoryAuthorDraft(worker, baseline, 'component-a', ['owned.go', 'owned-link'], {expectedChecklist: 'onboard_v1'});
+      const refresh = inventory.files.find(file => file.kind === 'ignored');
+      expect(refresh).toMatchObject({
+        path: 'proof/checklists/onboard_v1.state.yaml',
+        status: ' M',
+        kind: 'ignored',
+        checklist: 'onboard_v1',
+        disposition: 'non-authoritative-proof-checklist-refresh',
+        baseline_sha256: `sha256:${createHash('sha256').update(baselineChecklist, 'utf8').digest('hex')}`,
+        current_sha256: `sha256:${createHash('sha256').update(baselineChecklist.replaceAll('2026-09-08T20:00:00Z', '2026-09-08T20:01:00Z'), 'utf8').digest('hex')}`,
+      });
+      expect(refresh).not.toHaveProperty('sha256');
+      expect(inventory.files.find(file => file.path === 'owned-link')).toMatchObject({
+        kind: 'symlink',
+        link_target: 'owned.go',
+      });
+      expect(inventory.sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+      expect(() => assertDraftInventoryUnchanged(inventory, ['owned.go', 'owned-link'])).not.toThrow();
+
+      fs.writeFileSync(path.join(worker, 'proof', 'checklists', 'onboard_v1.state.yaml'), baselineChecklist
+        .replaceAll('2026-09-08T20:00:00Z', '2026-09-08T20:02:00Z'), 'utf8');
+      expect(() => assertDraftInventoryUnchanged(inventory, ['owned.go', 'owned-link']))
+        .toThrow(/draft changed before retry dispatch/);
+    } finally {
+      execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
+    }
+  });
+
+  it.each([
+    ['semantic', (value: string) => value.replace('step_id: init', 'step_id: changed')],
+    ['backward timestamp', (value: string) => value.replaceAll('2026-09-08T20:00:00Z', '2026-09-08T19:59:00Z')],
+  ] as const)('rejects checklist %s refreshes instead of bypassing ownership', (_label, mutate) => {
+    const subject = path.join(root, 'checklist-reject-subject-' + _label.replaceAll(' ', '-'));
+    const worker = path.join(root, 'checklist-reject-worker-' + _label.replaceAll(' ', '-'));
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    const checklistPath = path.join(subject, 'proof', 'checklists', 'onboard_v1.state.yaml');
+    fs.mkdirSync(path.dirname(checklistPath), {recursive: true});
+    const baselineChecklist = [
+      'checklist: onboard_v1',
+      'updated_at: "2026-09-08T20:00:00Z"',
+      'steps:',
+      '  - step_id: init',
+      '    check_results: []',
+      '',
+    ].join('\n');
+    fs.writeFileSync(checklistPath, baselineChecklist, 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'checklist rejection baseline']);
+    const baseline = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    execFileSync('git', ['-C', subject, 'worktree', 'add', '--quiet', '--detach', worker, baseline]);
+    try {
+      fs.writeFileSync(path.join(worker, 'proof', 'checklists', 'onboard_v1.state.yaml'), mutate(baselineChecklist), 'utf8');
+      expect(() => inventoryAuthorDraft(worker, baseline, 'component-a', [], {expectedChecklist: 'onboard_v1'}))
+        .toThrow(/checklist|outside WorkItem ownership/);
+    } finally {
+      execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
+    }
   });
 
   it('allows a chained checkpoint by its explicit disjoint checkpoint root', () => {

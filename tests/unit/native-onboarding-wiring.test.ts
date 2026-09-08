@@ -15,10 +15,15 @@ import {nativeOnboardingCountsAreConsistent} from '../../examples/agent-governan
 type Json = Record<string, any>;
 
 const CONFIG_PATH = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-onboarding.yaml');
+const CHECKLIST_CONFIG_PATH = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-checklist-onboarding.yaml');
 const RUNNER_PATH = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/run-onboarding.ts');
 
 function readConfig(): Json {
   return yaml.load(fs.readFileSync(CONFIG_PATH, 'utf8')) as Json;
+}
+
+function readChecklistConfig(): Json {
+  return yaml.load(fs.readFileSync(CHECKLIST_CONFIG_PATH, 'utf8')) as Json;
 }
 
 describe('native onboarding isolated writer wiring', () => {
@@ -132,8 +137,8 @@ describe('native onboarding isolated writer wiring', () => {
   });
 
   it('binds only the admitted WorkItem, exact checkout, and built-in role into the writer prompt', async () => {
-    const config = readConfig();
-    const author = config.subgraphs['onboard-component'].checks['author-native-component'];
+    const checklistConfig = readChecklistConfig();
+    const author = checklistConfig.subgraphs['checklist-onboard-component'].checks['author-native-component'];
     expect(author.ai).toEqual(expect.objectContaining({
       model: 'gpt-5.6-luna',
       codex_execution_profile: 'luna-xhigh-isolated-writer-v1',
@@ -152,6 +157,13 @@ describe('native onboarding isolated writer wiring', () => {
     expect(author.prompt).toContain('Native tools.apply_patch may edit only allowed');
     expect(author.prompt).toMatch(/The native exec carrier\s+may execute bounded Proof CLI commands/);
     expect(author.prompt).toMatch(/Do not use Probe MCP Bash or alternate\s+write paths\/roots/);
+    expect(author.prompt).toContain('validate_passes');
+    expect(author.prompt).toContain('annotation_validity');
+    expect(author.prompt).toContain('levels_connected');
+    expect(author.prompt).toContain('proof checklist show --format json');
+    expect(author.prompt).toContain('sole checklist mutator');
+    expect(author.prompt).not.toContain('process_checklist');
+    expect(author.prompt).not.toMatch(/proof audit\s+--format json/);
 
     const liquid = createExtendedLiquid();
     const rendered = await liquid.parseAndRender(author.prompt, {
