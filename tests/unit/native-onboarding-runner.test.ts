@@ -39,6 +39,7 @@ import {
   summarizeNativePostflight,
   validateRetainedReviewExportAgainstCurrentProof,
   validateChecklistPrefixRetrySelection,
+  writeNativeChecklistProgress,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
 
 function recoveryReviewPacketFixture(root: string): {
@@ -188,6 +189,64 @@ describe('native onboarding runner boundaries', () => {
     const resumed = checklistProgressRefreshOptions('/tmp/checklist-skeleton-frontier-checkpoint.json');
     expect(resumed).toEqual({resumed: true});
     expect(Object.isFrozen(resumed)).toBe(true);
+  });
+
+  it('persists one canonical retry progress view for CLI text and static HTML', () => {
+    const output = path.join(root, 'retry-progress');
+    const snapshot = {
+      schema_version: 'proof.checklist.show.v1',
+      checklist: 'onboard_v1',
+      active: true,
+      new_project: true,
+      steps_total: 1,
+      steps_pending: 1,
+      counts: {confirmed: 0, skipped: 0, not_applicable: 0, pending: 1, blocked: 0},
+      ok: false,
+      verify_failed: [],
+      eligible_step_ids: ['research'],
+      next: {step_id: 'research'},
+      steps: [{
+        step_id: 'research',
+        title: 'Research',
+        when: 'new_project',
+        requires: [],
+        stamp: 'confirm',
+        scope: 'repo',
+        notes_required: true,
+        invalidates: [],
+        required_checks: [],
+        stored_status: 'pending',
+        effective_status: 'pending',
+        applicable: true,
+        eligible: true,
+        unmet_requires: [],
+        check_results: [],
+      }],
+    };
+    const claimId = 'a'.repeat(64);
+    const claim = {
+      claimId,
+      claim: 'proof.checklist.snapshot@1',
+      payload: snapshot,
+      payloadFingerprint: sha256Canonical(snapshot),
+      producerCheckId: 'checklist-bootstrap',
+      scope: [],
+      parentClaimIds: [],
+      active: true,
+    };
+    const progress = writeNativeChecklistProgress(
+      output,
+      {claims: {[claimId]: claim}, activeClaimIdsByRef: {'proof.checklist.snapshot@1': claimId}},
+      {claimsById: {}, generationsById: {}, activeGenerationIdByNode: {}},
+      undefined,
+    );
+    const json = fs.readFileSync(path.join(output, 'progress.json'), 'utf8');
+    const html = fs.readFileSync(path.join(output, 'progress.html'), 'utf8');
+    expect(JSON.parse(json)).toEqual(progress);
+    const embedded = html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(json));
+    expect(fs.readFileSync(path.join(output, 'progress.txt'), 'utf8')).toContain('onboard_v1');
   });
 
   it('loads the checklist profile as a standalone native graph without mutating the shipped graph', async () => {

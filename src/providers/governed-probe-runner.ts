@@ -105,6 +105,7 @@ type GovernedProbeFailureDiagnostic = Readonly<{
     predicate: typeof GOVERNED_CODEX_EXEC_EVENT_PREDICATES[number];
     eventType: 'item.started' | 'item.completed';
     itemType: 'agent_message' | 'reasoning' | 'mcp_tool_call' | 'command_execution' | 'file_change';
+    itemStatus?: 'failed' | 'declined';
     eventFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
     itemFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
   }>;
@@ -291,19 +292,30 @@ function governedCodexExecEventFields(value: unknown): readonly GovernedCodexExe
 }
 
 function governedCodexExecEvent(value: unknown): GovernedProbeFailureDiagnostic['event'] | null {
-  const event = closedDataObject(value, ['source', 'predicate', 'eventType', 'itemType', 'eventFields', 'itemFields']);
+  if (!value || typeof value !== 'object') return null;
+  let keys: PropertyKey[];
+  try { keys = Reflect.ownKeys(value); } catch { return null; }
+  const hasItemStatus = keys.includes('itemStatus');
+  const event = closedDataObject(value, hasItemStatus
+    ? ['source', 'predicate', 'eventType', 'itemType', 'itemStatus', 'eventFields', 'itemFields']
+    : ['source', 'predicate', 'eventType', 'itemType', 'eventFields', 'itemFields']);
+  const predicate = event && enumValue(event.predicate, GOVERNED_CODEX_EXEC_EVENT_PREDICATES);
   if (!event || event.source !== GOVERNED_CODEX_EXEC_EVENT_VERSION ||
-      !enumValue(event.predicate, GOVERNED_CODEX_EXEC_EVENT_PREDICATES) ||
+      !predicate ||
       !enumValue(event.eventType, ['item.started', 'item.completed'] as const) ||
       !enumValue(event.itemType, ['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change'] as const)) return null;
+  if (hasItemStatus && predicate !== 'item_status') return null;
+  const itemStatus = hasItemStatus ? enumValue(event.itemStatus, ['failed', 'declined'] as const) : null;
+  if (hasItemStatus && !itemStatus) return null;
   const eventFields = governedCodexExecEventFields(event.eventFields);
   const itemFields = governedCodexExecEventFields(event.itemFields);
   if (!eventFields || !itemFields) return null;
   return Object.freeze({
     source: GOVERNED_CODEX_EXEC_EVENT_VERSION,
-    predicate: enumValue(event.predicate, GOVERNED_CODEX_EXEC_EVENT_PREDICATES)!,
+    predicate,
     eventType: enumValue(event.eventType, ['item.started', 'item.completed'] as const)!,
     itemType: enumValue(event.itemType, ['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change'] as const)!,
+    ...(itemStatus ? {itemStatus} : {}),
     eventFields,
     itemFields,
   });

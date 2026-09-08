@@ -1256,15 +1256,31 @@ async function runChecklistPrefixRetry(
     governedCodexTransport,
     timeout,
   });
+  let latestRetryCheckpoint = selection.journal.exportGraphCheckpoint(parsedCheckpoint.sessionId);
   const configPlan = compileClaimPlan(config);
   const materialized = persistChecklistMaterializedConfig(roots.output, config);
-  writeCheckpoint(path.join(retryDirectory, 'validated-prefix-checkpoint.json'), selection.journal.exportGraphCheckpoint(parsedCheckpoint.sessionId));
-  try {
-    writeRestoredChecklistProgress(retryDirectory, config, parsedCheckpoint, {});
-  } catch {
-    // Progress is observational; retained checkpoint and retry artifacts remain
-    // authoritative if an older prefix cannot be rendered.
-  }
+  writeCheckpoint(path.join(retryDirectory, 'validated-prefix-checkpoint.json'), latestRetryCheckpoint);
+  const persistRetryProgress = (
+    options: ChecklistProgressRefreshOptions = {},
+    liveInstanceProjection?: unknown,
+  ): void => {
+    for (const progressOutput of [roots.output, retryDirectory]) {
+      try {
+        writeRestoredChecklistProgress(
+          progressOutput,
+          config,
+          latestRetryCheckpoint,
+          options,
+          liveInstanceProjection,
+        );
+      } catch {
+        // Progress is observational; retained checkpoints and public command
+        // evidence remain authoritative when a partial projection is not yet
+        // renderable.
+      }
+    }
+  };
+  persistRetryProgress();
   writeJson(path.join(roots.output, 'preflight.json'), {
     status: 'launch-ready-checklist-prefix-retry',
     mode: 'checklist-prefix-retry',
@@ -1296,11 +1312,31 @@ async function runChecklistPrefixRetry(
   });
 
   const engine = new StateMachineExecutionEngine(roots.subject);
+  const refreshRetryProgress = (options: ChecklistProgressRefreshOptions = {}): void => {
+    let liveInstanceProjection: unknown;
+    try {
+      liveInstanceProjection = engine.getInstanceProjection();
+      latestRetryCheckpoint = engine.exportGraphCheckpoint();
+    } catch {
+      // A provider prompt may be observed while the current generated
+      // attempt is in flight and therefore not exportable. Keep the last
+      // durable checkpoint and pair it with the live operational projection.
+      try { liveInstanceProjection = engine.getInstanceProjection(); } catch { /* observational */ }
+    }
+    persistRetryProgress(options, liveInstanceProjection);
+  };
+  const retryPromptHook = (info: PublicPromptCaptureInfo): void => {
+    onPromptCaptured(info);
+    refreshRetryProgress();
+  };
   engine.setExecutionContext({
     governedCodexTransport: governedCodexTransport as 'exec-jsonl-default-auth-v1',
     codexBin: governedCodexBin,
     codexSha256: governedCodexSha256,
-    hooks: {onPromptCaptured},
+    hooks: {
+      onPromptCaptured: retryPromptHook,
+      onCheckComplete: () => refreshRetryProgress(),
+    },
   });
   let retried: Awaited<ReturnType<typeof executeChecklistPrefixRetryEngine>>;
   try {
@@ -1311,6 +1347,7 @@ async function runChecklistPrefixRetry(
       retry.retryGenerationId,
       timeout,
       retryCheckpoint => {
+        latestRetryCheckpoint = retryCheckpoint;
         writeCheckpoint(path.join(retryDirectory, 'on-retry-checkpoint.json'), retryCheckpoint);
         writeJson(path.join(retryDirectory, 'on-retry-checkpoint-manifest.json'), {
           version: 1,
@@ -1323,9 +1360,11 @@ async function runChecklistPrefixRetry(
           materialized_config_sha256: materialized.digest,
           persisted_before_dispatch: true,
         });
+        persistRetryProgress();
       },
       {
         onFrontier: frontier => {
+          latestRetryCheckpoint = frontier.checkpoint;
           writeCheckpoint(path.join(roots.output, 'checklist-prefix-frontier-checkpoint.json'), frontier.checkpoint);
           writeJson(path.join(roots.output, 'preflight', 'checklist-prefix-frontier.json'), {
             status: 'checklist-project-prefix-complete-after-retry',
@@ -1338,9 +1377,10 @@ async function runChecklistPrefixRetry(
             graph_semantic_digest: configPlan.expansionPlan.graphSemanticDigest,
             retry_generation_id: retry.retryGenerationId,
           });
-          try { writeRestoredChecklistProgress(roots.output, config, frontier.checkpoint, {}); } catch { /* observational */ }
+          persistRetryProgress();
         },
         onSkeletonFrontier: frontier => {
+          latestRetryCheckpoint = frontier.checkpoint;
           writeCheckpoint(path.join(roots.output, 'checklist-skeleton-frontier-checkpoint.json'), frontier.checkpoint);
           writeJson(path.join(roots.output, 'preflight', 'checklist-skeleton-frontier.json'), {
             status: 'checklist-skeleton-ready-paused',
@@ -1353,26 +1393,25 @@ async function runChecklistPrefixRetry(
             materialized_config_sha256: materialized.digest,
             resume_command: '--checklist-skeleton-resume checklist-skeleton-frontier-checkpoint.json',
           });
+          persistRetryProgress({paused: true});
         },
       },
     );
   } catch (error) {
     try {
-      writeCheckpoint(path.join(roots.output, 'checkpoint.partial.json'), engine.exportGraphCheckpoint());
-      writeRestoredChecklistProgress(retryDirectory, config, engine.exportGraphCheckpoint(), {});
+      latestRetryCheckpoint = engine.exportGraphCheckpoint();
+      writeCheckpoint(path.join(roots.output, 'checkpoint.partial.json'), latestRetryCheckpoint);
     } catch {
       // Preserve the original retry error even if the provider failed before a
       // quiescent checkpoint could be exported.
     }
+    persistRetryProgress();
     throw error;
   }
   writeCheckpoint(path.join(roots.output, 'checkpoint.json'), retried.checkpoint);
   writeJson(path.join(roots.output, 'visor-result.json'), retried.result);
-  try {
-    writeRestoredChecklistProgress(retryDirectory, config, retried.checkpoint, {});
-  } catch {
-    // Progress is observational and cannot change the retry result.
-  }
+  latestRetryCheckpoint = retried.checkpoint;
+  persistRetryProgress({paused: true});
   writeJson(path.join(roots.output, 'summary.json'), {
     status: 'checklist-skeleton-ready-paused',
     mode: 'checklist-prefix-retry',

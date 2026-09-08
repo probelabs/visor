@@ -279,6 +279,35 @@ describe('private governed Probe runner', () => {
           event,
         },
       });
+      expect(sanitizeGovernedAnswerFailure(governedFailure({
+        answerFailureStage: 'provider_engine',
+        providerEngineFailureBoundary: 'query',
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_ITEM',
+          event: {...event, itemStatus: 'failed'},
+        },
+      }))).toEqual({answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query'});
+    }
+    for (const itemStatus of ['failed', 'declined']) {
+      const event = {...baseEvent, predicate: 'item_status', itemStatus};
+      expect(sanitizeGovernedAnswerFailure(governedFailure({
+        answerFailureStage: 'provider_engine',
+        providerEngineFailureBoundary: 'query',
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_ITEM',
+          event,
+        },
+      }))).toEqual({
+        answerFailureStage: 'provider_engine',
+        providerEngineFailureBoundary: 'query',
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_ITEM',
+          event,
+        },
+      });
     }
   });
 
