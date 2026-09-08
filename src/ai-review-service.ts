@@ -969,6 +969,12 @@ export interface AIReviewConfig {
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code' | 'codex';
   /** Closed Probe/Codex execution profile for ordinary governed AI work. */
   codexExecutionProfile?: 'luna-xhigh-readonly-v1' | 'luna-xhigh-isolated-writer-v1';
+  /** Explicit opt-in Probe transport selected by native onboarding. */
+  governedCodexTransport?: 'exec-jsonl-default-auth-v1';
+  /** Absolute caller-selected Codex executable for the selected transport. */
+  codexBin?: string;
+  /** Caller-supplied SHA-256 (bare or sha256:-prefixed). */
+  codexSha256?: string;
   /** Internal provenance selector bound by AICheckProvider from a git-checkout dependency. */
   codexWorkingDirectoryFrom?: string;
   debug?: boolean; // Enable debug mode
@@ -1107,6 +1113,18 @@ export class AIReviewService {
       throw new Error(
         `Unsupported codex_execution_profile: ${String(this.config.codexExecutionProfile)}`
       );
+    }
+    if (this.config.governedCodexTransport !== undefined) {
+      if (this.config.governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+          this.config.codexExecutionProfile === undefined ||
+          typeof this.config.codexBin !== 'string' ||
+          !path.isAbsolute(this.config.codexBin) ||
+          typeof this.config.codexSha256 !== 'string' ||
+          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(this.config.codexSha256)) {
+        throw new Error('governed Codex transport requires a governed profile and validated executable identity');
+      }
+    } else if (this.config.codexBin !== undefined || this.config.codexSha256 !== undefined) {
+      throw new Error('governed Codex executable requires an explicit transport');
     }
 
     this.sessionRegistry = SessionRegistry.getInstance();
@@ -3152,6 +3170,15 @@ If you receive a message that the time limit has been reached or your operation 
         (options as any).retry = undefined;
         (options as any).fallback = undefined;
         options.governedCodexProfile = governedCodexProfile;
+      }
+
+      if (this.config.governedCodexTransport !== undefined) {
+        // Probe owns the exec launch and its public JSONL receipt validator.
+        // This adapter carries only the explicit selector and caller-bound
+        // executable identity; it does not parse or recreate that receipt.
+        (options as ProbeAgentOptions & Record<string, unknown>).governedCodexTransport = this.config.governedCodexTransport;
+        (options as ProbeAgentOptions & Record<string, unknown>).codexBin = this.config.codexBin;
+        (options as ProbeAgentOptions & Record<string, unknown>).codexSha256 = this.config.codexSha256;
       }
 
       // Governed Codex calls must not inherit Probe's ambient REQUEST_TIMEOUT:

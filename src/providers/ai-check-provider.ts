@@ -1051,6 +1051,23 @@ export class AICheckProvider extends CheckProvider {
     // Extract AI configuration - only set properties that are explicitly provided.
     // Workspace / allowedFolders will be derived below from the execution context.
     const aiConfig: AIReviewConfig = {};
+    const governedCodexTransport = sessionInfo?.governedCodexTransport;
+    const codexBin = sessionInfo?.codexBin;
+    const codexSha256 = sessionInfo?.codexSha256;
+    if (governedCodexTransport !== undefined) {
+      if (governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+          typeof codexBin !== 'string' ||
+          !path.isAbsolute(codexBin) ||
+          typeof codexSha256 !== 'string' ||
+          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(codexSha256)) {
+        throw new Error('governed Codex transport identity is invalid');
+      }
+      aiConfig.governedCodexTransport = governedCodexTransport;
+      aiConfig.codexBin = codexBin;
+      aiConfig.codexSha256 = codexSha256;
+    } else if (codexBin !== undefined || codexSha256 !== undefined) {
+      throw new Error('governed Codex executable requires an explicit transport');
+    }
 
     // Check-level AI configuration (ai object)
     if (config.ai) {

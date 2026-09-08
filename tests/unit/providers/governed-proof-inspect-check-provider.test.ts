@@ -258,6 +258,35 @@ describe('governed Proof inspect provider', () => {
     expect(cancel).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('carries the explicit default-auth exec identity through the run-scoped context', async () => {
+    let captured: any;
+    const provider = createGovernedProofInspectProviderForFocusedTest(requestValue => {
+      captured = requestValue;
+      return { answer: runnerResult, cancel: jest.fn(), close: jest.fn() };
+    });
+    const codexBin = '/opt/codex/bin/codex';
+    const codexSha256 = 'a'.repeat(64);
+    const run = provider.startManaged({
+      ...request(),
+      executionContext: { governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin, codexSha256 },
+    });
+    await expect(run.outcome).resolves.toMatchObject({kind: 'succeeded-proof-candidate'});
+    expect(captured).toEqual(expect.objectContaining({ governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin, codexSha256 }));
+    await run.close();
+  });
+
+  it('fails closed when an executable identity is supplied without the selector', async () => {
+    const factory = jest.fn(() => ({ answer: runnerResult, cancel: jest.fn(), close: jest.fn() }));
+    const provider = createGovernedProofInspectProviderForFocusedTest(factory);
+    const run = provider.startManaged({
+      ...request(),
+      executionContext: { codexBin: '/opt/codex/bin/codex', codexSha256: 'a'.repeat(64) },
+    });
+    await expect(run.outcome).rejects.toThrow('governed Codex executable requires an explicit transport');
+    expect(factory).not.toHaveBeenCalled();
+    await run.close();
+  });
+
   it('captures the canonical public prompt before preview and ignores hook mutation or failure', async () => {
     const events: string[] = [];
     const preview = jest.fn(() => {

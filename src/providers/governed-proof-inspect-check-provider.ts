@@ -20,6 +20,10 @@ import {
 
 type ProofAdmissionCliChildModule = typeof import('./proof-admission-cli-child');
 let proofAdmissionCliChildModule: ProofAdmissionCliChildModule | undefined;
+type ProbeExecReceiptModule = {
+  validateGovernedCodexExecAttestation?: (value: unknown) => unknown;
+};
+let probeExecReceiptModule: ProbeExecReceiptModule | undefined;
 /**
  * Keep the child-process boundary lazy.  Besides avoiding any process work at
  * module load, this lets callers install the trusted capability before the
@@ -27,6 +31,16 @@ let proofAdmissionCliChildModule: ProofAdmissionCliChildModule | undefined;
  */
 function proofAdmissionChild(): ProofAdmissionCliChildModule {
   return proofAdmissionCliChildModule ??= require('./proof-admission-cli-child') as ProofAdmissionCliChildModule;
+}
+
+/**
+ * Probe owns the exec JSONL formatter/validator. Keep this lookup lazy so an
+ * older installed Probe remains usable for the existing MCP transport, while
+ * the explicit exec selector fails closed until the reviewed export exists.
+ */
+function probeExecReceiptValidator(): ((value: unknown) => unknown) | undefined {
+  if (!probeExecReceiptModule) probeExecReceiptModule = require('@probelabs/probe') as ProbeExecReceiptModule;
+  return probeExecReceiptModule.validateGovernedCodexExecAttestation;
 }
 
 export const GOVERNED_PROOF_INSPECT_PROVIDER_NAME = 'governed-proof-inspect';
@@ -343,6 +357,11 @@ export interface GovernedProbeRunnerRequest {
   readonly executionConfigDigest: string;
   readonly binding: ManagedRunBindingV1;
   readonly workingDirectory: string;
+  /** Explicit opt-in transport selected by the native onboarding runner. */
+  readonly governedCodexTransport?: 'exec-jsonl-default-auth-v1';
+  /** Caller-validated executable identity; Probe rechecks it before launch. */
+  readonly codexBin?: string;
+  readonly codexSha256?: string;
   /** Sealed runtime context; present only for the canonical onboarding profiles. */
   readonly context?: GovernedProofRuntimeContext;
   readonly contextDigest?: string;
@@ -351,8 +370,8 @@ export interface GovernedProbeRunnerRequest {
   readonly reinspectionContextDigest?: string;
 }
 export interface GovernedProbeDispatchPreview {
-  readonly source: 'probe-host-tools-call';
-  readonly tool: 'codex';
+  readonly source: 'probe-host-tools-call' | 'probe-host-exec';
+  readonly tool: 'codex' | 'codex-exec';
   readonly promptDigest: string;
   readonly promptBytes: number;
 }
@@ -370,6 +389,33 @@ function validateAttestation(
   expectedDispatch?: GovernedProbeDispatchPreview
 ): Record<string, unknown> {
   if (!validMaterialized(att)) fail('attestation contains non-materialized data');
+  if (plain(att) && att.version === 'probe.governed-codex-exec-attestation/v1') {
+    const validator = probeExecReceiptValidator();
+    if (!validator) fail('exec attestation validator is unavailable');
+    let validated: unknown;
+    try {
+      validated = validator(att);
+    } catch {
+      fail('exec attestation is invalid');
+    }
+    if (!plain(validated) || validated.profileId !== PROFILE || !plain(validated.executionContext) ||
+        !exact(validated.executionContext, ['source', 'invocationDigest']) ||
+        validated.executionContext.source !== 'caller' ||
+        validated.executionContext.invocationDigest !== digest ||
+        !plain(validated.dispatch) ||
+        !exact(validated.dispatch, ['source', 'tool', 'promptDigest', 'promptBytes']) ||
+        validated.dispatch.source !== 'probe-host-exec' ||
+        validated.dispatch.tool !== 'codex-exec') {
+      fail('exec attestation binding is invalid');
+    }
+    if (expectedDispatch && (
+      expectedDispatch.source !== 'probe-host-exec' ||
+      expectedDispatch.tool !== 'codex-exec' ||
+      validated.dispatch.promptDigest !== expectedDispatch.promptDigest ||
+      validated.dispatch.promptBytes !== expectedDispatch.promptBytes
+    )) fail('exec attestation dispatch is detached from the Probe preview');
+    return immutableCanonicalValue(validated) as Record<string, unknown>;
+  }
   if (!plain(att) || !exact(att, ['version', 'profileId', 'requested', 'observed', 'executionContext', 'dispatch', 'evidence', 'usage']) || att.version !== 'probe.governed-codex-attestation/v2' || att.profileId !== PROFILE) fail('attestation header invalid');
   const requested = att.requested, observed = att.observed, ctx = att.executionContext, dispatch = att.dispatch, evidence = att.evidence, usage = att.usage;
   if (!plain(requested) || !exact(requested, ['profileDigest', 'cwdDigest', 'probeToolsDigest', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy']) || !bare(requested.profileDigest) || !bare(requested.cwdDigest) || !bare(requested.probeToolsDigest) || requested.model !== 'gpt-5.6-luna' || requested.reasoningEffort !== 'xhigh' || requested.sandbox !== 'read-only' || requested.approvalPolicy !== 'never') fail('requested attestation invalid');
@@ -932,7 +978,17 @@ export class GovernedProofInspectCheckProvider extends CheckProvider {
           : immutableProofCanonicalValue(resolvedConfig) as CheckProviderConfig;
       }
       const invocation = effective.invocation as Record<string, unknown>;
-      const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(context ? { context, contextDigest } : {}), ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) };
+        const governedCodexTransport = request.executionContext.governedCodexTransport;
+        const codexBin = request.executionContext.codexBin;
+        const codexSha256 = request.executionContext.codexSha256;
+        if (governedCodexTransport !== undefined && (
+          governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+          typeof codexBin !== 'string' ||
+          typeof codexSha256 !== 'string' ||
+          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(codexSha256)
+        )) fail('governed Codex transport identity is invalid');
+        if (governedCodexTransport === undefined && (codexBin !== undefined || codexSha256 !== undefined)) fail('governed Codex executable requires an explicit transport');
+        const runnerConfig = { message: effective.message, instructions: effective.instructions, invocation, invocationDigest: effective.invocation_digest, resultSchema: effective.result_schema, executionConfigDigest: request.executionConfigDigest, binding, workingDirectory: request.workingDirectory, ...(governedCodexTransport ? { governedCodexTransport, codexBin, codexSha256 } : {}), ...(context ? { context, contextDigest } : {}), ...(reinspectionContext ? { reinspectionContext, reinspectionContextDigest: governedProofComponentReinspectionContextDigest(reinspectionContext) } : {}) };
       runnerRequest = componentSelector || specReview
         ? immutableProofCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest
         : immutableCanonicalValue(runnerConfig) as GovernedProbeRunnerRequest;

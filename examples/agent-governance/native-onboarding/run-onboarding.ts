@@ -390,11 +390,11 @@ export function assertRecoveryRoots(
   return {subject, original, output, priorOutput, checkpoint};
 }
 
-function executable(value: string): string {
-  if (!path.isAbsolute(value)) throw new Error('--proof-bin must be an absolute path');
+function executable(value: string, option = '--proof-bin'): string {
+  if (!path.isAbsolute(value)) throw new Error(option + ' must be an absolute path');
   const resolved = fs.realpathSync(value);
   const stat = fs.statSync(resolved);
-  if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error('--proof-bin is not executable');
+  if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error(option + ' is not executable');
   return resolved;
 }
 
@@ -565,6 +565,42 @@ export function assertPrivateCodexHome(subject: string, original: string, output
     if (fs.existsSync(path.join(subject, name))) throw new Error('subject contains unsupported Codex override ' + name);
   }
   return {home, configPresent: true};
+}
+
+/**
+ * The default-auth exec transport deliberately does not consult CODEX_HOME.
+ * Keep the subject-local override checks from the normal profile, but require
+ * the ambient home selector to be absent before any Proof/graph work starts.
+ */
+export function assertCodexHomeAbsent(subject: string, original: string, output: string): {home: string; configPresent: boolean} {
+  if (process.env.CODEX_HOME !== undefined) {
+    throw new Error('CODEX_HOME must be absent for exec-jsonl-default-auth-v1');
+  }
+  for (const name of ['.codex', '.codexrc', 'codex.toml']) {
+    if (fs.existsSync(path.join(subject, name))) throw new Error('subject contains unsupported Codex override ' + name);
+  }
+  // Keep the arguments explicit so a future caller cannot accidentally widen
+  // the protected-root policy while this selector has no home directory.
+  if (!path.isAbsolute(subject) || !path.isAbsolute(original) || !path.isAbsolute(output)) {
+    throw new Error('exec-jsonl-default-auth-v1 roots must be absolute');
+  }
+  return {home: '', configPresent: false};
+}
+
+/**
+ * Verify the caller-selected Codex executable before any checklist graph
+ * work. Probe repeats this check immediately before launch; keeping the
+ * runner-side check here prevents a stale or mistyped identity from reaching
+ * Proof initialization or journal mutation.
+ */
+export function verifyCodexBinarySha256(executablePath: string, suppliedSha256: string): string {
+  const normalized = suppliedSha256.startsWith('sha256:') ? suppliedSha256.slice('sha256:'.length) : suppliedSha256;
+  if (!path.isAbsolute(executablePath) || !/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new Error('--codex-sha256 must be a lowercase 64-character SHA-256 digest (optionally sha256:-prefixed)');
+  }
+  const actual = createHash('sha256').update(fs.readFileSync(executablePath)).digest('hex');
+  if (actual !== normalized) throw new Error('--codex-sha256 does not match --codex-bin bytes');
+  return `sha256:${actual}`;
 }
 
 function encodeResultSchemas(value: unknown): unknown {
@@ -3502,6 +3538,33 @@ async function main(): Promise<void> {
   diagnosticOutput = roots.output;
   const proof = executable(required(values, 'proof-bin'));
   const checklistOnboarding = values['checklist-onboarding'] === 'true' || checklistSkeletonResume !== undefined;
+  const governedCodexTransport = values['governed-codex-transport'];
+  const codexBinArg = values['codex-bin'];
+  const codexSha256Arg = values['codex-sha256'];
+  if (recovery && governedCodexTransport !== undefined) {
+    throw new Error('--governed-codex-transport cannot be combined with checkpoint recovery');
+  }
+  if (governedCodexTransport !== undefined && !checklistOnboarding) {
+    throw new Error('--governed-codex-transport is only valid with --checklist-onboarding');
+  }
+  if ((codexBinArg !== undefined || codexSha256Arg !== undefined) && governedCodexTransport === undefined) {
+    throw new Error('--codex-bin and --codex-sha256 require --governed-codex-transport exec-jsonl-default-auth-v1');
+  }
+  let governedCodexBin: string | undefined;
+  let governedCodexSha256: string | undefined;
+  if (governedCodexTransport !== undefined) {
+    if (governedCodexTransport !== 'exec-jsonl-default-auth-v1') {
+      throw new Error('--governed-codex-transport must be exec-jsonl-default-auth-v1');
+    }
+    if (!codexBinArg || !codexSha256Arg) {
+      throw new Error('--codex-bin and --codex-sha256 are required for exec-jsonl-default-auth-v1');
+    }
+    if (!/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(codexSha256Arg)) {
+      throw new Error('--codex-sha256 must be a lowercase 64-character SHA-256 digest (optionally sha256:-prefixed)');
+    }
+    governedCodexBin = executable(codexBinArg, '--codex-bin');
+    governedCodexSha256 = verifyCodexBinarySha256(governedCodexBin, codexSha256Arg);
+  }
   const timeout = values.timeout ? Number(values.timeout) : DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeout) || timeout < 1000) throw new Error('--timeout must be a positive millisecond integer');
   const requestTimeout = Number(process.env.REQUEST_TIMEOUT || '');
@@ -3528,7 +3591,9 @@ async function main(): Promise<void> {
     checklistResumeCheckpointPath = checkpoint;
   }
   const objectFormat = gitObjectFormat(roots.subject);
-  const codex = assertPrivateCodexHome(roots.subject, roots.original, roots.output);
+  const codex = governedCodexTransport === 'exec-jsonl-default-auth-v1'
+    ? assertCodexHomeAbsent(roots.subject, roots.original, roots.output)
+    : assertPrivateCodexHome(roots.subject, roots.original, roots.output);
   process.chdir(roots.subject);
   if (fs.realpathSync(process.cwd()) !== roots.subject) throw new Error('runner cwd did not resolve to the validated subject root');
 
@@ -3569,9 +3634,22 @@ async function main(): Promise<void> {
     outer_timeout_ms: timeout,
     baseline_commit: null,
     object_format: objectFormat,
-    codex_home_is_private: true,
-    codex_home_config_present: codex.configPresent,
-    codex_mcp_plugins_hooks_rejected: true,
+    ...(governedCodexTransport === 'exec-jsonl-default-auth-v1' ? {
+      codex_home_is_private: false,
+      codex_home_absent: true,
+      codex_home_config_present: false,
+      codex_user_config_ignored: true,
+      codex_rules_ignored: true,
+    } : {
+      codex_home_is_private: true,
+      codex_home_config_present: codex.configPresent,
+      codex_mcp_plugins_hooks_rejected: true,
+    }),
+    ...(governedCodexTransport ? {
+      governed_codex_transport: governedCodexTransport,
+      codex_bin: governedCodexBin,
+      codex_sha256: governedCodexSha256,
+    } : {}),
     subject_codex_override_rejected: true,
     note: 'No authentication, raw Codex config, or inherited tool capability is recorded.',
   });
@@ -3588,9 +3666,22 @@ async function main(): Promise<void> {
       request_timeout_ms: requestTimeout,
       outer_timeout_ms: timeout,
       object_format: objectFormat,
-      codex_home_is_private: true,
-      codex_home_config_present: codex.configPresent,
-      codex_mcp_plugins_hooks_rejected: true,
+      ...(governedCodexTransport === 'exec-jsonl-default-auth-v1' ? {
+        codex_home_is_private: false,
+        codex_home_absent: true,
+        codex_home_config_present: false,
+        codex_user_config_ignored: true,
+        codex_rules_ignored: true,
+      } : {
+        codex_home_is_private: true,
+        codex_home_config_present: codex.configPresent,
+        codex_mcp_plugins_hooks_rejected: true,
+      }),
+      ...(governedCodexTransport ? {
+        governed_codex_transport: governedCodexTransport,
+        codex_bin: governedCodexBin,
+        codex_sha256: governedCodexSha256,
+      } : {}),
       subject_codex_override_rejected: true,
       journaled_init_pending: true,
       journaled_baseline_pending: true,
@@ -3726,6 +3817,11 @@ async function main(): Promise<void> {
     refreshChecklistProgress(checklistProgressObservation);
   };
   engine.setExecutionContext({
+    ...(governedCodexTransport === 'exec-jsonl-default-auth-v1' ? {
+      governedCodexTransport,
+      codexBin: governedCodexBin,
+      codexSha256: governedCodexSha256,
+    } : {}),
     hooks: {
       onPromptCaptured: checklistOnboarding ? checklistPromptHook : onPromptCaptured,
       ...(checklistOnboarding ? {onCheckComplete: checklistCompleteHook} : {}),

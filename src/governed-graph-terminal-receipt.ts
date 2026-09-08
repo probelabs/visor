@@ -18,9 +18,12 @@ export const PROOF_ONBOARDING_CANDIDATE_CLAIM = 'proof.onboarding_candidate@1';
 const SHA = /^[0-9a-f]{64}$/;
 const FAILURE_CODES = new Set(['MANAGED_HANDLE_INVALID','MANAGED_BINDING_MISMATCH','MANAGED_START_FAILED','MANAGED_STARTED_RECEIPT_INVALID','MANAGED_OUTCOME_FAILED','MANAGED_OUTCOME_RECEIPT_INVALID','MANAGED_DEADLINE_EXCEEDED','MANAGED_CANCEL_FAILED','MANAGED_CANCEL_RECEIPT_INVALID','MANAGED_CLOSE_FAILED','MANAGED_CLEANUP_RECEIPT_INVALID','MANAGED_SANDBOX_UNSUPPORTED','MANAGED_DEBOUNCE_UNSUPPORTED','MANAGED_FATAL_SUMMARY','MANAGED_FAIL_IF','MANAGED_HALT_EXECUTION','MANAGED_CLAIM_VALIDATION_FAILED','MANAGED_POST_PROVIDER_FAILED']);
 const ATTESTATION_VERSION = 'probe.governed-codex-attestation/v2';
+const EXEC_ATTESTATION_VERSION = 'probe.governed-codex-exec-attestation/v1';
 const ATTESTATION_PROFILE = 'luna-xhigh-readonly-v1';
 const ATTESTATION_DISPATCH_SOURCE = 'probe-host-tools-call';
 const ATTESTATION_DISPATCH_TOOL = 'codex';
+const EXEC_ATTESTATION_DISPATCH_SOURCE = 'probe-host-exec';
+const EXEC_ATTESTATION_DISPATCH_TOOL = 'codex-exec';
 const own = (v: object, k: PropertyKey) => Object.prototype.hasOwnProperty.call(v, k);
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 function data(v: object, k: PropertyKey): boolean { const d = Object.getOwnPropertyDescriptor(v, k); return !!d && 'value' in d && !!d.enumerable; }
@@ -48,7 +51,7 @@ export interface GovernedGraphTerminalReceipt {
   readonly graphSemanticDigest: string;
   readonly componentCount: number;
   readonly nodes: Readonly<Record<'inspect' | 'proof_admit' | 'verify', { terminalCount: number; status: 'completed' | 'failed' | 'nonterminal' | 'absent' }>>;
-  readonly attestation: Readonly<{ version: string; profileId: string; dispatch: { source: string; tool: string }; eventCount: number; usage: { status: 'unavailable' } }> | null;
+  readonly attestation: Readonly<{ version: string; profileId: string; dispatch: { source: string; tool: string }; eventCount: number; usage: { status: 'unavailable' | 'observed' } }> | null;
   readonly candidateClaimId: string | null;
   readonly admittedReceiptClaimId: string | null;
   readonly verifyInputClaimIds: readonly string[];
@@ -381,7 +384,10 @@ export function finalizeGovernedGraphTerminalReceipt(draft: GovernedGraphAnyTerm
 function validateAttestation(value: unknown, allowNull = true): void {
   if (value === null && allowNull) return;
   const a: any = value;
-  if (!plain(a) || !exact(a, ['version','profileId','dispatch','eventCount','usage']) || a.version !== ATTESTATION_VERSION || a.profileId !== ATTESTATION_PROFILE || !plain(a.dispatch) || !exact(a.dispatch, ['source','tool']) || a.dispatch.source !== ATTESTATION_DISPATCH_SOURCE || a.dispatch.tool !== ATTESTATION_DISPATCH_TOOL || !plain(a.usage) || !exact(a.usage, ['status']) || a.usage.status !== 'unavailable' || typeof a.eventCount !== 'number' || !Number.isSafeInteger(a.eventCount) || a.eventCount < 0 || a.eventCount > 1024) throw new Error('invalid governed attestation');
+  if (!plain(a) || !exact(a, ['version','profileId','dispatch','eventCount','usage']) || !plain(a.dispatch) || !exact(a.dispatch, ['source','tool']) || !plain(a.usage) || !exact(a.usage, ['status']) || typeof a.eventCount !== 'number' || !Number.isSafeInteger(a.eventCount) || a.eventCount < 0 || a.eventCount > 1024) throw new Error('invalid governed attestation');
+  const legacy = a.version === ATTESTATION_VERSION && a.profileId === ATTESTATION_PROFILE && a.dispatch.source === ATTESTATION_DISPATCH_SOURCE && a.dispatch.tool === ATTESTATION_DISPATCH_TOOL && a.usage.status === 'unavailable';
+  const exec = a.version === EXEC_ATTESTATION_VERSION && a.profileId === ATTESTATION_PROFILE && a.dispatch.source === EXEC_ATTESTATION_DISPATCH_SOURCE && a.dispatch.tool === EXEC_ATTESTATION_DISPATCH_TOOL && a.usage.status === 'observed';
+  if (!legacy && !exec) throw new Error('invalid governed attestation');
 }
 
 function validateMultiTerminalReceipt(value: any): asserts value is GovernedGraphMultiTerminalReceipt {

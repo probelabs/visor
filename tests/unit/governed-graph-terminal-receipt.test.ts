@@ -19,6 +19,22 @@ describe('governed terminal receipt', () => {
     expect(bytes.toString('utf8')).not.toContain('decision');
   });
 
+  it('accepts the compact default-auth exec attestation summary', () => {
+    const value = receipt();
+    value.attestation = {
+      version: 'probe.governed-codex-exec-attestation/v1',
+      profileId: 'luna-xhigh-readonly-v1',
+      dispatch: {source: 'probe-host-exec', tool: 'codex-exec'},
+      eventCount: 5,
+      usage: {status: 'observed'},
+    };
+    expect(() => validateGovernedGraphTerminalReceipt(value)).not.toThrow();
+    expect(serializeGovernedGraphTerminalReceipt(value).toString('utf8')).toBe(canonicalJson(value) + '\n');
+    for (const profileId of ['luna-xhigh-readonly-native-exec-v1', 'luna-xhigh-isolated-writer-v1']) {
+      expect(() => validateGovernedGraphTerminalReceipt({ ...value, attestation: { ...value.attestation, profileId } })).toThrow('invalid governed attestation');
+    }
+  });
+
   it('fails closed for unknown, symbol, accessor, malformed unicode, noncanonical, and failed variants', () => {
     expect(() => validateGovernedGraphTerminalReceipt({ ...receipt(), payload: 'secret' })).toThrow();
     expect(() => validateGovernedGraphTerminalReceipt(Object.assign(receipt(), { [Symbol('x')]: 1 }))).toThrow();
@@ -41,7 +57,10 @@ describe('governed terminal receipt', () => {
   });
 
   it('finalizes a failed clean graph only with exit 1 and clean memory', () => {
-    const { status: _status, memoryStatus: _memoryStatus, exitStatus: _exitStatus, ...draft } = receipt('failed');
+    const draft = receipt('failed');
+    delete draft.status;
+    delete draft.memoryStatus;
+    delete draft.exitStatus;
     const finalized = finalizeGovernedGraphTerminalReceipt(draft, 'failed', 'clean', 1);
     expect(finalized.status).toBe('failed'); expect(finalized.failureCode).toBe('MANAGED_OUTCOME_FAILED');
     expect(() => finalizeGovernedGraphTerminalReceipt({ ...draft, failureCode: null }, 'failed', 'clean', 1)).toThrow();

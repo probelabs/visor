@@ -81,6 +81,16 @@ export interface CheckProviderConfig {
  * Execution context passed to check providers
  */
 export interface ExecutionContext {
+  /**
+   * Explicit run-scoped governed Codex transport.  This is intentionally a
+   * closed selector rather than a provider/config switch: ordinary checks
+   * remain on their existing Probe transport when it is absent.
+   */
+  governedCodexTransport?: 'exec-jsonl-default-auth-v1';
+  /** Absolute caller-selected Codex executable for the governed exec transport. */
+  codexBin?: string;
+  /** Caller-supplied SHA-256 (bare or sha256:-prefixed); Probe revalidates it. */
+  codexSha256?: string;
   /** Session information for AI session reuse */
   parentSessionId?: string;
   reuseSession?: boolean;

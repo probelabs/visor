@@ -9,6 +9,8 @@ import {loadConfig} from '../../src/sdk';
 import {canonicalJson, sha256Canonical} from '../../src/state-machine/graph/claim-kernel';
 import {
   assertPrivateCodexHome,
+  assertCodexHomeAbsent,
+  verifyCodexBinarySha256,
   assertCanonicalOwnedPathsUnchanged,
   assertCurrentProofRequirementHash,
   assertRecoveryRoots,
@@ -242,6 +244,34 @@ describe('native onboarding runner boundaries', () => {
     fs.writeFileSync(path.join(home, 'config.toml'), '[mcp_servers.proof]\ncommand = "proof"\n', 'utf8');
     expect(() => assertPrivateCodexHome(subject, original, path.join(root, 'output-2')))
       .toThrow(/must not configure MCP/);
+  });
+
+  it('requires the explicit default-auth exec transport to run without CODEX_HOME', () => {
+    const subject = path.join(root, 'subject-exec');
+    const original = path.join(root, 'original-exec');
+    const output = path.join(root, 'output-exec');
+    fs.mkdirSync(subject);
+    fs.mkdirSync(original);
+    fs.mkdirSync(output);
+    delete process.env.CODEX_HOME;
+
+    expect(assertCodexHomeAbsent(subject, original, output)).toEqual({home: '', configPresent: false});
+
+    process.env.CODEX_HOME = path.join(root, 'ambient-home');
+    expect(() => assertCodexHomeAbsent(subject, original, output)).toThrow(/CODEX_HOME must be absent/);
+    fs.writeFileSync(path.join(subject, '.codexrc'), 'unreviewed override', 'utf8');
+    delete process.env.CODEX_HOME;
+    expect(() => assertCodexHomeAbsent(subject, original, output)).toThrow(/unsupported Codex override/);
+  });
+
+  it('verifies the selected Codex executable bytes before dispatch', () => {
+    const codexBin = path.join(root, 'codex-exec');
+    fs.writeFileSync(codexBin, 'synthetic executable bytes', 'utf8');
+    const digest = createHash('sha256').update(fs.readFileSync(codexBin)).digest('hex');
+    expect(verifyCodexBinarySha256(codexBin, digest)).toBe(`sha256:${digest}`);
+    expect(verifyCodexBinarySha256(codexBin, `sha256:${digest}`)).toBe(`sha256:${digest}`);
+    expect(() => verifyCodexBinarySha256(codexBin, '0'.repeat(64))).toThrow(/does not match/);
+    expect(() => verifyCodexBinarySha256(codexBin, 'not-a-digest')).toThrow(/64-character SHA-256/);
   });
 
   it('records validation and status failures while keeping audit/checklist gaps visible', () => {

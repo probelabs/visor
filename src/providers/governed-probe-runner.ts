@@ -338,6 +338,9 @@ const PROBE_TOOLS: ['search', 'extract', 'listFiles'] = [
 type ExactProbeAgentOptions = ProbeAgentOptions & {
   readonly searchDelegate: false;
   readonly enableExecutePlan: false;
+  governedCodexTransport?: 'mcp-server-v1' | 'exec-jsonl-default-auth-v1';
+  codexBin?: string;
+  codexSha256?: string;
 };
 
 type GovernedProbeRunnerBudget = { limit: number; consumed: number };
@@ -426,6 +429,23 @@ export class GovernedProbeAgentRunner implements GovernedProbeRunner {
         'message:assistant': (payload: unknown): void => this.captureCandidate(payload),
       },
     };
+    if (request.governedCodexTransport !== undefined) {
+      if (request.governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+          typeof request.codexSha256 !== 'string' ||
+          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(request.codexSha256) ||
+          typeof request.codexBin !== 'string' ||
+          !isAbsolute(request.codexBin)) {
+        throw new Error('GOVERNED_PROOF_INVALID: governed Codex executable identity is invalid');
+      }
+      // These options are intentionally copied only for the explicit
+      // transport selector. Probe owns the launch/receipt validator; Visor
+      // does not inspect or reconstruct its JSONL wire.
+      options.governedCodexTransport = request.governedCodexTransport;
+      options.codexBin = request.codexBin;
+      options.codexSha256 = request.codexSha256;
+    } else if (request.codexBin !== undefined || request.codexSha256 !== undefined) {
+      throw new Error('GOVERNED_PROOF_INVALID: governed Codex executable requires an explicit transport');
+    }
     this.agent = new ProbeAgent(options);
   }
 

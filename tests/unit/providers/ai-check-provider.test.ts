@@ -250,6 +250,26 @@ describe('AICheckProvider', () => {
       });
     });
 
+    it('carries the explicit default-auth exec identity from execution context', async () => {
+      const mockReview = { overallScore: 90, totalIssues: 0, criticalIssues: 0, comments: [] };
+      const mockService = { executeReview: jest.fn().mockResolvedValue(mockReview) };
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(configValue => {
+        capturedConfig = configValue;
+        return mockService;
+      });
+
+      const codexBin = '/opt/codex/bin/codex';
+      const codexSha256 = 'a'.repeat(64);
+      await provider.execute(mockPRInfo, { type: 'ai', prompt: 'all' }, undefined, {
+        governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin, codexSha256,
+      });
+
+      expect(capturedConfig).toEqual(expect.objectContaining({
+        governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin, codexSha256,
+      }));
+    });
+
     it('should pass enableDelegate and allowEdit flags to service', async () => {
       const mockReview = {
         overallScore: 90,
