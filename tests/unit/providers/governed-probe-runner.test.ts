@@ -138,6 +138,76 @@ describe('private governed Probe runner', () => {
     expect(sanitizeGovernedAnswerFailure(new Error('secret message'))).toEqual({ answerFailureStage: 'unknown' });
   });
 
+  it('keeps the closed exec diagnostic on the public answer failure record', async () => {
+    const stderrText = 'access token could not be refreshed because your refresh token was revoked';
+    const failure = governedFailure({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        stderr: {
+          source: 'codex-exec-stderr/v1',
+          bytes: Buffer.byteLength(stderrText, 'utf8'),
+          digest: rawSha256(stderrText),
+          safeMessage: 'access_token_refresh_revoked',
+        },
+      },
+    });
+    answerGoverned.mockRejectedValueOnce(failure);
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(JSON.parse(writes[0])).toEqual(expect.objectContaining({
+        schema: 'governed-probe-failure/v1',
+        phase: 'answer',
+        failure: {
+          answerFailureStage: 'provider_engine',
+          providerEngineFailureBoundary: 'query',
+          providerEngineDiagnostic: {
+            version: 'probe.governed-codex-exec-failure/v1',
+            code: 'GOVERNED_CODEX_EXEC_EXIT',
+            stderr: {
+              source: 'codex-exec-stderr/v1',
+              bytes: Buffer.byteLength(stderrText, 'utf8'),
+              digest: rawSha256(stderrText),
+              safeMessage: 'access_token_refresh_revoked',
+            },
+          },
+        },
+      }));
+      expect(writes[0]).not.toContain(stderrText);
+      expect(writes[0]).not.toContain('secret stack');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('drops malformed or accessor-backed exec diagnostics without widening the failure record', () => {
+    const base = {
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+    };
+    const valid = {
+      version: 'probe.governed-codex-exec-failure/v1',
+      code: 'GOVERNED_CODEX_EXEC_EXIT',
+      stderr: {source: 'codex-exec-stderr/v1', bytes: 1, digest: `sha256:${'a'.repeat(64)}`},
+    };
+    for (const diagnostic of [
+      {...valid, code: 'GOVERNED_CODEX_EXEC_PRIVATE'},
+      {...valid, extra: 'secret'},
+      {...valid, stderr: {...valid.stderr, safeMessage: 'arbitrary'}},
+      {...valid, stderr: {...valid.stderr, digest: 'not-a-digest'}},
+    ]) {
+      expect(sanitizeGovernedAnswerFailure(governedFailure({...base, providerEngineDiagnostic: diagnostic}))).toEqual(base);
+    }
+    const accessor = governedFailure(base);
+    Object.defineProperty(accessor, 'providerEngineDiagnostic', {enumerable: true, get: () => valid});
+    expect(sanitizeGovernedAnswerFailure(accessor)).toEqual(base);
+  });
+
   it('emits one public preview failure record and rethrows the original Probe error', async () => {
     const failure = governedFailure({
       answerFailureStage: 'native_event_grammar',

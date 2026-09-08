@@ -55,6 +55,26 @@ const GOVERNED_CANDIDATE_VERSIONS = ['probe.governed-answer-candidate/v1'] as co
 const GOVERNED_CANDIDATE_ORIGINS = ['result_content', 'raw_final', 'none'] as const;
 const GOVERNED_CANDIDATE_SHAPES = ['empty', 'non_json', 'malformed_json', 'valid_json'] as const;
 const GOVERNED_CANDIDATE_CAPTURE_LIMIT = 131072;
+const GOVERNED_CODEX_EXEC_FAILURE_CODES = [
+  'GOVERNED_CODEX_EXEC_ANSWER_CARDINALITY', 'GOVERNED_CODEX_EXEC_CANCELLED',
+  'GOVERNED_CODEX_EXEC_CANONICAL', 'GOVERNED_CODEX_EXEC_CLEANUP',
+  'GOVERNED_CODEX_EXEC_CONFIG', 'GOVERNED_CODEX_EXEC_DUPLICATE',
+  'GOVERNED_CODEX_EXEC_EVENT', 'GOVERNED_CODEX_EXEC_EVENT_CATEGORY',
+  'GOVERNED_CODEX_EXEC_EVENT_LIMIT', 'GOVERNED_CODEX_EXEC_EVENT_ORDER',
+  'GOVERNED_CODEX_EXEC_EXIT', 'GOVERNED_CODEX_EXEC_INCOMPLETE',
+  'GOVERNED_CODEX_EXEC_INCOMPLETE_ITEM', 'GOVERNED_CODEX_EXEC_ITEM',
+  'GOVERNED_CODEX_EXEC_ITEM_ORDER', 'GOVERNED_CODEX_EXEC_ITEM_STATUS',
+  'GOVERNED_CODEX_EXEC_JSONL', 'GOVERNED_CODEX_EXEC_MCP',
+  'GOVERNED_CODEX_EXEC_MCP_EVIDENCE', 'GOVERNED_CODEX_EXEC_ONE_QUERY',
+  'GOVERNED_CODEX_EXEC_OUTPUT_OVERFLOW', 'GOVERNED_CODEX_EXEC_SETUP',
+  'GOVERNED_CODEX_EXEC_SPAWN', 'GOVERNED_CODEX_EXEC_TIMEOUT',
+  'GOVERNED_CODEX_EXEC_TOOL_POLICY', 'GOVERNED_CODEX_EXEC_USAGE',
+  'GOVERNED_CODEX_EXEC_VERSION',
+] as const;
+const GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION = 'probe.governed-codex-exec-failure/v1';
+const GOVERNED_CODEX_EXEC_STDERR_VERSION = 'codex-exec-stderr/v1';
+const GOVERNED_CODEX_EXEC_SAFE_MESSAGES = ['access_token_refresh_revoked'] as const;
+const GOVERNED_CODEX_EXEC_STDERR_MAX_BYTES = 1024 * 1024;
 const GOVERNED_CANDIDATE_BOUNDARY_KEYS = [
   'selectedOrigin', 'selectedChunkCount', 'selectedBytes', 'resultTextItemCount', 'resultTextBytes',
   'rawFinalMessageCount', 'rawFinalPartCount', 'rawFinalBytes',
@@ -62,7 +82,17 @@ const GOVERNED_CANDIDATE_BOUNDARY_KEYS = [
 const GOVERNED_CANDIDATE_KEYS = ['version', 'text', 'boundary'] as const;
 
 type GovernedProbeFailureStage = typeof ANSWER_FAILURE_STAGES[number];
-type GovernedProbeFailureProjection = Readonly<Record<string, GovernedProbeFailureStage | string | null>>;
+type GovernedProbeFailureDiagnostic = Readonly<{
+  version: typeof GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION;
+  code: typeof GOVERNED_CODEX_EXEC_FAILURE_CODES[number];
+  stderr?: Readonly<{
+    source: typeof GOVERNED_CODEX_EXEC_STDERR_VERSION;
+    bytes: number;
+    digest: `sha256:${string}`;
+    safeMessage?: typeof GOVERNED_CODEX_EXEC_SAFE_MESSAGES[number];
+  }>;
+}>;
+type GovernedProbeFailureProjection = Readonly<Record<string, GovernedProbeFailureStage | string | null | GovernedProbeFailureDiagnostic>>;
 export type GovernedProbeFailurePhase = 'acquire' | 'preview' | 'initialize' | 'answer';
 export type GovernedCandidateOrigin = typeof GOVERNED_CANDIDATE_ORIGINS[number];
 export type GovernedCandidateShape = typeof GOVERNED_CANDIDATE_SHAPES[number];
@@ -209,6 +239,43 @@ function enumValue<T extends readonly string[]>(value: unknown, values: T): T[nu
   return typeof value === 'string' && (values as readonly string[]).includes(value) ? value as T[number] : null;
 }
 
+function governedCodexExecDiagnostic(value: unknown): GovernedProbeFailureDiagnostic | null {
+  if (!value || typeof value !== 'object') return null;
+  let keys: PropertyKey[];
+  try { keys = Reflect.ownKeys(value); } catch { return null; }
+  const hasStderr = keys.includes('stderr');
+  const diagnostic = closedDataObject(value, hasStderr ? ['version', 'code', 'stderr'] : ['version', 'code']);
+  if (!diagnostic || diagnostic.version !== GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION) return null;
+  const code = enumValue(diagnostic.code, GOVERNED_CODEX_EXEC_FAILURE_CODES);
+  if (!code) return null;
+  if (!hasStderr) return Object.freeze({version: GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION, code});
+
+  const stderrValue = diagnostic.stderr;
+  if (!stderrValue || typeof stderrValue !== 'object') return null;
+  let stderrKeys: PropertyKey[];
+  try { stderrKeys = Reflect.ownKeys(stderrValue); } catch { return null; }
+  const hasSafeMessage = stderrKeys.includes('safeMessage');
+  const stderr = closedDataObject(stderrValue, hasSafeMessage
+    ? ['source', 'bytes', 'digest', 'safeMessage']
+    : ['source', 'bytes', 'digest']);
+  if (!stderr || stderr.source !== GOVERNED_CODEX_EXEC_STDERR_VERSION ||
+      typeof stderr.bytes !== 'number' || !Number.isSafeInteger(stderr.bytes) ||
+      stderr.bytes < 1 || stderr.bytes > GOVERNED_CODEX_EXEC_STDERR_MAX_BYTES ||
+      typeof stderr.digest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(stderr.digest)) return null;
+  const safeMessage = hasSafeMessage ? enumValue(stderr.safeMessage, GOVERNED_CODEX_EXEC_SAFE_MESSAGES) : null;
+  if (hasSafeMessage && !safeMessage) return null;
+  return Object.freeze({
+    version: GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION,
+    code,
+    stderr: Object.freeze({
+      source: GOVERNED_CODEX_EXEC_STDERR_VERSION,
+      bytes: stderr.bytes,
+      digest: stderr.digest as `sha256:${string}`,
+      ...(safeMessage ? {safeMessage} : {}),
+    }),
+  });
+}
+
 /**
  * Project Probe's deliberately closed GovernedAnswerFailure shape without
  * exposing arbitrary Error properties, messages, stacks, or causes.
@@ -217,9 +284,11 @@ export function sanitizeGovernedAnswerFailure(error: unknown): GovernedProbeFail
   const name = ownDataValue(error, 'name', false);
   if (name !== 'GovernedAnswerFailure') return Object.freeze({ answerFailureStage: 'unknown' });
   const stage = enumValue(ownDataValue(error, 'answerFailureStage'), ANSWER_FAILURE_STAGES) ?? 'unknown';
-  const output: Record<string, GovernedProbeFailureStage | string | null> = { answerFailureStage: stage };
+  const output: Record<string, GovernedProbeFailureStage | string | null | GovernedProbeFailureDiagnostic> = { answerFailureStage: stage };
   if (stage === 'provider_engine') {
     output.providerEngineFailureBoundary = enumValue(ownDataValue(error, 'providerEngineFailureBoundary'), PROVIDER_ENGINE_FAILURE_BOUNDARIES);
+    const diagnostic = governedCodexExecDiagnostic(ownDataValue(error, 'providerEngineDiagnostic'));
+    if (diagnostic) output.providerEngineDiagnostic = diagnostic;
   } else if (stage === 'native_event_grammar') {
     const boundary = enumValue(ownDataValue(error, 'nativeEventFailureBoundary'), NATIVE_EVENT_FAILURE_BOUNDARIES);
     output.nativeEventFailureBoundary = boundary;
