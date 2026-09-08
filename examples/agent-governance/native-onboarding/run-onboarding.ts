@@ -2492,6 +2492,21 @@ export function assertCanonicalOwnedPathsUnchanged(
   }
 }
 
+/** Require the current subject revision to retain the journaled baseline in its history. */
+export function assertRecoveryBaselineAncestor(root: string, baselineCommit: string, currentCommit: string): void {
+  const result = spawnSync('git', [
+    '-C', root, 'merge-base', '--is-ancestor', baselineCommit, currentCommit,
+  ], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']});
+  if (result.status === 0) return;
+  if (result.status === 1) {
+    throw new Error(`Git baseline ${baselineCommit} is not an ancestor of current revision ${currentCommit}`);
+  }
+  const detail = result.error instanceof Error
+    ? result.error.message
+    : String(result.stderr || '').trim();
+  throw new Error(`Git ancestry check failed${result.status === null ? '' : ` with exit ${result.status}`}: ${detail || 'unknown Git error'}`);
+}
+
 function isNativeComponentPath(relativePath: string): boolean {
   return /^specs\/(?:stakeholder|system|software|integration)\/(?:requirements\/[^/]+\.req\.ya?ml|variables\/[^/]+\.vars\.ya?ml)$/.test(relativePath);
 }
@@ -2607,6 +2622,84 @@ export function assertDraftInventoryUnchanged(
   );
   if (actual.sha256 !== expected.sha256 || !sameJson(actual.files, expected.files)) {
     throw new Error(`recovery author draft changed before retry dispatch for ${expected.component_id}`);
+  }
+}
+
+function assertIsolatedAuthorRecoveryBindings(
+  bindings: readonly RecoveryBinding[],
+  retryGenerationIds: readonly string[],
+  expectedBaselineCommit?: string,
+): void {
+  if (bindings.length !== retryGenerationIds.length || retryGenerationIds.length === 0) {
+    throw new Error('isolated draft replay requires one failed-author binding and inventory per selected generation');
+  }
+  const selectedGenerationIds = new Set(retryGenerationIds);
+  const seenGenerationIds = new Set<string>();
+  const componentIds = new Set<string>();
+  const checkoutRoots: string[] = [];
+  const promotablePathOwners = new Map<string, string>();
+  let commonBaseline: string | undefined;
+  for (const binding of bindings) {
+    if (!selectedGenerationIds.has(binding.generationId) || seenGenerationIds.has(binding.generationId)) {
+      throw new Error('isolated draft replay selected generations do not bind one-to-one to author recoveries');
+    }
+    seenGenerationIds.add(binding.generationId);
+    if (!binding.checkoutPath || !binding.draftInventory || !binding.ownedSourcePaths) {
+      throw new Error('isolated draft replay requires a retained checkout and inventory for every failed author');
+    }
+    const checkoutRoot = fs.realpathSync(binding.checkoutPath);
+    if (checkoutRoot !== binding.checkoutPath || !fs.statSync(checkoutRoot).isDirectory()) {
+      throw new Error('isolated draft replay requires distinct real retained checkout roots');
+    }
+    if (binding.draftInventory.root !== checkoutRoot) {
+      throw new Error('isolated draft replay inventory root does not match its retained checkout');
+    }
+    if (componentIds.has(binding.componentId)) {
+      throw new Error(`isolated draft replay selected duplicate component ${binding.componentId}`);
+    }
+    componentIds.add(binding.componentId);
+    if (commonBaseline !== undefined && commonBaseline !== binding.baselineCommit) {
+      throw new Error('isolated draft replay selected author baselines do not match');
+    }
+    commonBaseline = binding.baselineCommit;
+    if (expectedBaselineCommit !== undefined && binding.baselineCommit !== expectedBaselineCommit) {
+      throw new Error('isolated draft replay author baseline does not match the checklist initialized baseline');
+    }
+    const ignoredPaths = new Set(binding.draftInventory.files
+      .filter(file => file.kind === 'ignored')
+      .map(file => file.path));
+    const promotablePaths = [
+      ...binding.ownedSourcePaths.filter(relativePath => !ignoredPaths.has(relativePath)),
+      ...binding.draftInventory.files
+        .filter(file => file.kind !== 'ignored' && isNativeComponentPath(file.path))
+        .map(file => file.path),
+    ];
+    const localPaths = new Set<string>();
+    for (const relativePath of promotablePaths) {
+      if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes('..')) {
+        throw new Error(`isolated draft replay has an unsafe promotable path: ${relativePath}`);
+      }
+      if (localPaths.has(relativePath)) {
+        throw new Error(`isolated draft replay has overlapping promotable path ${relativePath}`);
+      }
+      localPaths.add(relativePath);
+      const owner = promotablePathOwners.get(relativePath);
+      if (owner !== undefined) {
+        throw new Error(`isolated draft replay selected overlapping promotable path ${relativePath} for ${owner} and ${binding.componentId}`);
+      }
+      promotablePathOwners.set(relativePath, binding.componentId);
+    }
+    checkoutRoots.push(checkoutRoot);
+  }
+  if (seenGenerationIds.size !== retryGenerationIds.length) {
+    throw new Error('isolated draft replay selected generations do not bind one-to-one to author recoveries');
+  }
+  for (let left = 0; left < checkoutRoots.length; left += 1) {
+    for (let right = left + 1; right < checkoutRoots.length; right += 1) {
+      if (inside(checkoutRoots[left], checkoutRoots[right]) || inside(checkoutRoots[right], checkoutRoots[left])) {
+        throw new Error('isolated draft replay retained checkout roots must be pairwise disjoint');
+      }
+    }
   }
 }
 
@@ -2973,6 +3066,7 @@ export function validateRecoverySelection(
     allowEmptyAuthorDraft?: boolean;
     allowHistoricalAuthorRetry?: boolean;
     expectedChecklist?: string;
+    expectedBaselineCommit?: string;
   }> = {},
 ): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]; reviewPackets: readonly RecoveryReviewPacket[]} {
   const plan = compileClaimPlan(config);
@@ -2982,9 +3076,6 @@ export function validateRecoverySelection(
   if (externalSideEffects !== 'absent' && externalSideEffects !== 'safely_idempotent' &&
       externalSideEffects !== 'isolated_draft_replay') {
     throw new Error('Recovery has an unsupported external side-effect disposition');
-  }
-  if (externalSideEffects === 'isolated_draft_replay' && retryGenerationIds.length !== 1) {
-    throw new Error('isolated draft replay requires exactly one selected author generation');
   }
   const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
   const projection: any = journal.getInstanceProjection();
@@ -2998,8 +3089,9 @@ export function validateRecoverySelection(
     throw new Error('review-native-item recovery must select only review-native-item leaves with absent external side effects');
   }
   if (externalSideEffects === 'isolated_draft_replay' &&
-      selectedChecks.some(checkId => checkId !== 'author-native-component')) {
-    throw new Error('isolated draft replay must select only failed author leaves');
+      (selectedChecks.length !== retryGenerationIds.length ||
+        selectedChecks.some(checkId => checkId !== 'author-native-component'))) {
+    throw new Error('isolated draft replay must explicitly select only failed author leaves');
   }
   const authority = inventory.authority && typeof inventory.authority === 'object' && !Array.isArray(inventory.authority)
     ? inventory.authority as Json
@@ -3307,6 +3399,9 @@ export function validateRecoverySelection(
       ...(authorReplay ? {ownedSourcePaths: Object.freeze([...ownedSourcePaths])} : {}),
       ...(draftInventory ? {draftInventory} : {}),
     }));
+  }
+  if (externalSideEffects === 'isolated_draft_replay') {
+    assertIsolatedAuthorRecoveryBindings(bindings, retryGenerationIds, options.expectedBaselineCommit);
   }
   // Exercise the same immutable kernel eligibility check that the resumed
   // engine will use.  This is deliberately a separately restored journal so
@@ -3733,9 +3828,6 @@ async function runRecovery(
       externalSideEffects !== 'isolated_draft_replay') {
     throw new Error('--external-side-effects must be absent, safely_idempotent, or isolated_draft_replay');
   }
-  if (externalSideEffects === 'isolated_draft_replay' && generationIds.length !== 1) {
-    throw new Error('isolated_draft_replay requires exactly one failed author generation');
-  }
 
   const checklistRecovery = checklistOnboarding && governedCodexTransport === 'exec-jsonl-default-auth-v1';
   if (checklistOnboarding && !checklistRecovery) {
@@ -3885,6 +3977,9 @@ async function runRecovery(
     config = retained.config;
     retainedAuthority = retained.authority.inventory;
   }
+  const checklistBaselineCommit = checklistRecovery
+    ? checklistBaselineCommitFromCheckpoint(config, validatedInput)
+    : undefined;
   const expectedChecklist = checklistRecovery
     ? activeChecklistNameFromCheckpoint(config, validatedInput)
     : undefined;
@@ -3934,10 +4029,7 @@ async function runRecovery(
     throw new Error('recovery configuration graph digest does not match the checkpoint authority');
   }
   if (checklistRecovery) {
-    const baselineCommit = checklistBaselineCommitFromCheckpoint(config, validatedInput);
-    if (baselineCommit !== revision) {
-      throw new Error('checklist recovery subject HEAD does not match the journaled native baseline claim');
-    }
+    assertRecoveryBaselineAncestor(roots.subject, checklistBaselineCommit as string, revision);
   }
   const authority = validateRecoverySelection(
     config,
@@ -3951,13 +4043,14 @@ async function runRecovery(
       allowEmptyAuthorDraft: true,
       allowHistoricalAuthorRetry: true,
       expectedChecklist,
+      expectedBaselineCommit: checklistBaselineCommit,
     } : {},
   );
   const draftInventories = authority.bindings
     .filter(binding => binding.draftInventory)
     .map(binding => binding.draftInventory);
-  if (externalSideEffects === 'isolated_draft_replay' && draftInventories.length !== 1) {
-    throw new Error('isolated_draft_replay requires one retained author draft inventory');
+  if (externalSideEffects === 'isolated_draft_replay' && draftInventories.length !== generationIds.length) {
+    throw new Error('isolated_draft_replay requires one retained author draft inventory per selected failed author');
   }
   if (authority.reviewPackets.length > 0) {
     stageRecoveryReviewPackets(roots.output, authority.reviewPackets);
@@ -4007,7 +4100,7 @@ async function runRecovery(
   });
   let resumed: Awaited<ReturnType<StateMachineExecutionEngine['retryGraphCheckpoint']>>;
   const retainedBaselineCommit = checklistRecovery
-    ? checklistBaselineCommitFromCheckpoint(config, validatedInput)
+    ? checklistBaselineCommit
     : undefined;
   const previousBaselineCommit = process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
   try {

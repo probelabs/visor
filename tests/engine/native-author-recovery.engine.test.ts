@@ -90,6 +90,7 @@ function recoveryConfig(): VisorConfig {
           'promote-native-component': {
             type: 'author-recovery-fixture',
             depends_on: ['author-native-component'],
+            resource_group: 'proof-workspace-mutation',
             consumes: [
               { claim: 'component.prepared_work_item@1', as: 'workItem' },
               { claim: 'component.checkout@1', as: 'checkout' },
@@ -289,6 +290,34 @@ function completeGeneration(
   return { generation, attempt };
 }
 
+type FailedAuthorCheckpointOptions = Readonly<{
+  workItems?: Partial<Record<ComponentId, AuthorWorkItemOverrides>>;
+  checkouts?: Partial<Record<ComponentId, AuthorCheckoutOverrides>>;
+}>;
+
+function failedAuthorCheckpoint(
+  fixture: GitFixture,
+  config: VisorConfig,
+  options: FailedAuthorCheckpointOptions = {},
+): {journal: ExecutionJournal; checkpoint: any; failedGenerations: any[]} {
+  const plan = compileClaimPlan(config);
+  const journal = new ExecutionJournal(plan);
+  publishCatalog(journal);
+  for (const component of ['A', 'B'] as const) {
+    completeGeneration(journal, 'prepare-work-item', component, workItem(fixture, component, options.workItems?.[component]));
+    completeGeneration(journal, 'checkout-worktree', component, checkout(fixture, component, options.checkouts?.[component]));
+    completeGeneration(journal, 'role-onboard-component', component, 'native onboard role v1');
+  }
+  const failedGenerations = (['A', 'B'] as const).map(component => {
+    const failedAuthor = generationFor(journal, 'author-native-component', component);
+    const attempt = journal.startGeneratedAttempt(failedAuthor.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    journal.failGeneratedAttempt(attempt, 'MANAGED_START_FAILED');
+    return failedAuthor;
+  });
+  return {journal, checkpoint: journal.exportGraphCheckpoint(SESSION_ID), failedGenerations};
+}
+
 function generationForNativeItem(journal: ExecutionJournal, checkId: string, itemId: string): any {
   const generation = journal.queryReadyWork().find(value =>
     value.checkId === checkId && value.scope.at(-1)?.key === itemId
@@ -305,25 +334,45 @@ function completeNativeGeneration(journal: ExecutionJournal, checkId: string, it
   return {generation, attempt};
 }
 
-function workItem(fixture: GitFixture, component: ComponentId): Record<string, unknown> {
+type AuthorWorkItemOverrides = Readonly<{
+  componentId?: string;
+  baselineCommit?: string;
+  ownedPath?: string;
+}>;
+
+type AuthorCheckoutOverrides = Readonly<{
+  path?: string;
+  baselineCommit?: string;
+}>;
+
+function workItem(
+  fixture: GitFixture,
+  component: ComponentId,
+  overrides: AuthorWorkItemOverrides = {},
+): Record<string, unknown> {
+  const componentId = overrides.componentId || component;
   return {
-    component_id: component,
-    baseline_commit: fixture.baselineCommit,
+    component_id: componentId,
+    baseline_commit: overrides.baselineCommit || fixture.baselineCommit,
     project_id: PROJECT_ID,
     proof_component_subject: {
-      component_id: component,
+      component_id: componentId,
       fingerprint: PROOF_FINGERPRINT,
     },
-    sorted_owned_paths: [`owned-${component.toLowerCase()}.txt`],
+    sorted_owned_paths: [overrides.ownedPath || `owned-${component.toLowerCase()}.txt`],
   };
 }
 
-function checkout(fixture: GitFixture, component: ComponentId): Record<string, unknown> {
+function checkout(
+  fixture: GitFixture,
+  component: ComponentId,
+  overrides: AuthorCheckoutOverrides = {},
+): Record<string, unknown> {
   return {
     success: true,
-    path: fixture.checkouts[component],
-    commit: fixture.baselineCommit,
-    ref: fixture.baselineCommit,
+    path: overrides.path || fixture.checkouts[component],
+    commit: overrides.baselineCommit || fixture.baselineCommit,
+    ref: overrides.baselineCommit || fixture.baselineCommit,
     worktree_id: `fixture-worktree-${component}`,
     repository: fixture.subject,
     is_worktree: true,
@@ -340,7 +389,7 @@ class AuthorRecoveryFixtureProvider extends CheckProvider {
   async validateConfig(): Promise<boolean> { return true; }
   async isAvailable(): Promise<boolean> { return true; }
   getRequirements(): string[] { return []; }
-  getSupportedConfigKeys(): string[] { return ['type']; }
+  getSupportedConfigKeys(): string[] { return ['type', 'resource_group']; }
 
   async execute(
     _pr: PRInfo,
@@ -358,6 +407,70 @@ class AuthorRecoveryFixtureProvider extends CheckProvider {
     }
     if (checkId === 'promote-native-component') {
       return { issues: [], output: { component_id: component, promoted: true } };
+    }
+    throw new Error(`unexpected recovery check ${checkId}`);
+  }
+}
+
+class MultiAuthorRecoveryFixtureProvider extends CheckProvider {
+  authorEntries = 0;
+  activeAuthors = 0;
+  maxConcurrentAuthors = 0;
+  activePromotions = 0;
+  maxConcurrentPromotions = 0;
+  private readonly authorOverlap: Promise<void>;
+  private releaseAuthorOverlap!: () => void;
+
+  constructor(private readonly calls: string[]) {
+    super();
+    this.authorOverlap = new Promise<void>(resolve => {
+      this.releaseAuthorOverlap = resolve;
+    });
+  }
+
+  getName(): string { return 'author-recovery-fixture'; }
+  getDescription(): string { return 'Deterministic concurrent isolated author recovery provider'; }
+  async validateConfig(): Promise<boolean> { return true; }
+  async isAvailable(): Promise<boolean> { return true; }
+  getRequirements(): string[] { return []; }
+  getSupportedConfigKeys(): string[] { return ['type', 'resource_group']; }
+
+  async execute(
+    _pr: PRInfo,
+    providerConfig: CheckProviderConfig,
+    _dependencies?: Map<string, ReviewSummary>,
+    context?: ExecutionContext,
+  ): Promise<ReviewSummary> {
+    const checkId = String(providerConfig.checkName);
+    const scope = context?.scope || [];
+    const component = String(scope[scope.length - 1]?.key || '');
+    if (component !== 'A' && component !== 'B') throw new Error(`unexpected provider dispatch for ${component || 'root'}`);
+    this.calls.push(`${checkId}:${component}`);
+    if (checkId === 'author-native-component') {
+      this.activeAuthors += 1;
+      this.authorEntries += 1;
+      this.maxConcurrentAuthors = Math.max(this.maxConcurrentAuthors, this.activeAuthors);
+      if (this.authorEntries === 2) this.releaseAuthorOverlap();
+      try {
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          this.authorOverlap,
+          new Promise<void>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('author recovery did not overlap')), 250);
+          }),
+        ]);
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+      } finally {
+        this.activeAuthors -= 1;
+      }
+      return {issues: [], output: {component_id: component, replayed: true}};
+    }
+    if (checkId === 'promote-native-component') {
+      this.activePromotions += 1;
+      this.maxConcurrentPromotions = Math.max(this.maxConcurrentPromotions, this.activePromotions);
+      await new Promise<void>(resolve => setTimeout(resolve, 10));
+      this.activePromotions -= 1;
+      return {issues: [], output: {component_id: component, promoted: true}};
     }
     throw new Error(`unexpected recovery check ${checkId}`);
   }
@@ -540,6 +653,149 @@ describe('native isolated author recovery', () => {
       externalSideEffects: 'isolated_draft_replay',
     })).toThrow();
     expect(retryPrefixJournal.readRuntimeEvents()).toEqual(retryPrefix.events);
+  });
+
+  it('atomically selects two isolated authors, runs them concurrently, and serializes promotions', async () => {
+    const current = fixture!;
+    fs.writeFileSync(path.join(current.checkouts.A, 'owned-a.txt'), 'A retained draft\n');
+    const config = recoveryConfig();
+    const plan = compileClaimPlan(config);
+    const prepared = failedAuthorCheckpoint(current, config);
+    const checkpoint = prepared.checkpoint;
+    const oldCheckpointBytes = JSON.stringify(checkpoint);
+    const selectedGenerationIds = prepared.failedGenerations
+      .map(generation => generation.nodeGenerationId)
+      .sort();
+    const inventory = {
+      authority: {
+        project_id: PROJECT_ID,
+        subject_fingerprint: PROOF_FINGERPRINT,
+      },
+    };
+    const roots = {
+      subject: fs.realpathSync(current.subject),
+      priorOutput: fs.realpathSync(current.priorOutput),
+    };
+    const selected = validateRecoverySelection(
+      config,
+      checkpoint,
+      selectedGenerationIds,
+      roots,
+      inventory,
+      'isolated_draft_replay',
+      [],
+      {allowEmptyAuthorDraft: true, expectedBaselineCommit: current.baselineCommit},
+    );
+    expect(selected.bindings).toHaveLength(2);
+    expect(selected.bindings.map(binding => binding.componentId).sort()).toEqual(['A', 'B']);
+    expect(selected.bindings.every(binding => binding.draftInventory?.files.length === 1)).toBe(true);
+
+    const calls: string[] = [];
+    const provider = new MultiAuthorRecoveryFixtureProvider(calls);
+    registry.register(provider);
+    try {
+      let retryPrefix: any;
+      const engine = new StateMachineExecutionEngine(current.subject);
+      const resumed = await engine.retryGraphCheckpoint({
+        checkpoint: JSON.parse(JSON.stringify(checkpoint)),
+        config,
+        prInfo,
+        retryGenerationIds: selectedGenerationIds,
+        externalSideEffects: 'isolated_draft_replay',
+        onRetryCheckpoint: prefix => {
+          expect(calls).toEqual([]);
+          retryPrefix = prefix;
+          const retrySuffix = prefix.events.slice(checkpoint.events.length);
+          expect(retrySuffix).toHaveLength(2);
+          expect(retrySuffix.map((event: any) => event.type)).toEqual(['AttemptRetryRequested', 'AttemptRetryRequested']);
+          expect(retrySuffix.map((event: any) => event.nodeGenerationId)).toEqual(selectedGenerationIds);
+        },
+        maxParallelism: 2,
+        failFast: false,
+      });
+
+      expect(JSON.stringify(checkpoint)).toBe(oldCheckpointBytes);
+      expect(retryPrefix.events.slice(0, checkpoint.events.length)).toEqual(checkpoint.events);
+      expect(retryPrefix.events.filter((event: any) =>
+        event.type === 'AttemptRetryRequested' && selectedGenerationIds.includes(event.nodeGenerationId)
+      )).toHaveLength(2);
+      expect(provider.authorEntries).toBe(2);
+      expect(provider.maxConcurrentAuthors).toBe(2);
+      expect(provider.maxConcurrentPromotions).toBe(1);
+      expect(calls.filter(call => call.startsWith('author-native-component:')).sort()).toEqual([
+        'author-native-component:A', 'author-native-component:B',
+      ]);
+      expect(calls.filter(call => call.startsWith('promote-native-component:')).sort()).toEqual([
+        'promote-native-component:A', 'promote-native-component:B',
+      ]);
+      const projection = ExecutionJournal.restoreGraphCheckpoint(
+        plan,
+        JSON.parse(JSON.stringify(resumed.checkpoint)),
+      ).getInstanceProjection();
+      for (const generationId of selectedGenerationIds) {
+        expect(projection.generationsById[generationId].status).toBe('completed');
+      }
+      expect(Object.values(projection.claimsById).filter((claim: any) =>
+        claim.active === true && claim.claim === 'native.component.promoted@1'
+      ).map((claim: any) => claim.scope.at(-1)?.key).sort()).toEqual(['A', 'B']);
+    } finally {
+      registry.unregister('author-recovery-fixture');
+    }
+  });
+
+  it.each([
+    ['shared checkout', 'shared-checkout', /checkout roots/],
+    ['duplicate component', 'duplicate-component', /duplicate component/],
+    ['overlapping promotable path', 'overlapping-path', /overlapping promotable path/],
+    ['mismatched baseline', 'mismatched-baseline', /baselines? (?:do|does) not match/],
+  ] as const)('rejects %s before retry events or provider calls', (_label, scenario, expectedError) => {
+    const current = fixture!;
+    const config = recoveryConfig();
+    let options: FailedAuthorCheckpointOptions = {};
+    if (scenario === 'shared-checkout') {
+      options = {checkouts: {B: {path: current.checkouts.A}}};
+    } else if (scenario === 'duplicate-component') {
+      fs.writeFileSync(path.join(current.checkouts.B, 'owned-b.txt'), 'B baseline\n');
+      options = {workItems: {B: {componentId: 'A'}}};
+    } else if (scenario === 'overlapping-path') {
+      fs.writeFileSync(path.join(current.checkouts.A, 'owned-a.txt'), 'A retained draft\n');
+      fs.writeFileSync(path.join(current.checkouts.B, 'owned-b.txt'), 'B baseline\n');
+      fs.writeFileSync(path.join(current.checkouts.B, 'owned-a.txt'), 'B retained draft\n');
+      options = {workItems: {B: {ownedPath: 'owned-a.txt'}}};
+    } else {
+      const descendant = git(current.subject, ['rev-parse', 'HEAD']);
+      git(current.subject, ['worktree', 'remove', '--force', current.checkouts.B]);
+      git(current.subject, ['worktree', 'add', '--quiet', '--detach', current.checkouts.B, descendant]);
+      fs.writeFileSync(path.join(current.checkouts.B, 'owned-b.txt'), 'B retained draft\n');
+      options = {
+        workItems: {B: {baselineCommit: descendant}},
+        checkouts: {B: {baselineCommit: descendant}},
+      };
+    }
+    const prepared = failedAuthorCheckpoint(current, config, options);
+    const checkpoint = prepared.checkpoint;
+    const oldCheckpointBytes = JSON.stringify(checkpoint);
+    const inventory = {authority: {project_id: PROJECT_ID, subject_fingerprint: PROOF_FINGERPRINT}};
+    const roots = {subject: fs.realpathSync(current.subject), priorOutput: fs.realpathSync(current.priorOutput)};
+    const calls: string[] = [];
+    const provider = new MultiAuthorRecoveryFixtureProvider(calls);
+    registry.register(provider);
+    try {
+      expect(() => validateRecoverySelection(
+        config,
+        checkpoint,
+        prepared.failedGenerations.map(generation => generation.nodeGenerationId).sort(),
+        roots,
+        inventory,
+        'isolated_draft_replay',
+        [],
+        {allowEmptyAuthorDraft: true, expectedBaselineCommit: current.baselineCommit},
+      )).toThrow(expectedError);
+      expect(calls).toEqual([]);
+      expect(JSON.stringify(checkpoint)).toBe(oldCheckpointBytes);
+    } finally {
+      registry.unregister('author-recovery-fixture');
+    }
   });
 
   it('retries only failed native review leaves and reuses retained sibling packets', async () => {

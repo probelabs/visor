@@ -21,6 +21,7 @@ import {
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
   assertDraftInventoryUnchanged,
+  assertRecoveryBaselineAncestor,
   inventoryAuthorDraft,
   isCurrentFailedRetryAttempt,
   buildRetainedReviewedAggregateMap,
@@ -669,6 +670,52 @@ describe('native onboarding runner boundaries', () => {
     } finally {
       execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
     }
+  });
+
+  it('accepts retained baseline ancestry while preserving selected owned-path conflict checks', () => {
+    const subject = path.join(root, 'ancestry-subject');
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n\nconst Owned = 1\n', 'utf8');
+    fs.writeFileSync(path.join(subject, 'sibling.go'), 'package fixture\n\nconst Sibling = 1\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'ancestry baseline']);
+    const baseline = execFileSync('git', ['-C', subject, 'rev-parse', '--verify', 'HEAD^{commit}'], {encoding: 'utf8'}).trim();
+
+    expect(() => assertRecoveryBaselineAncestor(subject, baseline, baseline)).not.toThrow();
+    expect(() => assertCanonicalOwnedPathsUnchanged(subject, baseline, ['owned.go'])).not.toThrow();
+
+    fs.writeFileSync(path.join(subject, 'sibling.go'), 'package fixture\n\nconst Sibling = 2\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', 'sibling.go']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'unrelated sibling promotion']);
+    const siblingDescendant = execFileSync('git', ['-C', subject, 'rev-parse', '--verify', 'HEAD^{commit}'], {encoding: 'utf8'}).trim();
+    expect(() => assertRecoveryBaselineAncestor(subject, baseline, siblingDescendant)).not.toThrow();
+    expect(() => assertCanonicalOwnedPathsUnchanged(subject, baseline, ['owned.go'])).not.toThrow();
+
+    const emptyTree = execFileSync('git', ['-C', subject, 'mktree'], {encoding: 'utf8', input: ''}).trim();
+    const unrelatedHistory = execFileSync('git', ['-C', subject, 'commit-tree', emptyTree], {
+      encoding: 'utf8',
+      input: 'unrelated history\n',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'fixture',
+        GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'fixture',
+        GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+      },
+    }).trim();
+    expect(() => assertRecoveryBaselineAncestor(subject, baseline, unrelatedHistory)).toThrow(/not an ancestor/);
+    expect(() => assertRecoveryBaselineAncestor(subject, 'not-a-commit', siblingDescendant)).toThrow(/Git ancestry check failed/);
+
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n\nconst Owned = 2\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', 'owned.go']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'selected owned path changed']);
+    const changedDescendant = execFileSync('git', ['-C', subject, 'rev-parse', '--verify', 'HEAD^{commit}'], {encoding: 'utf8'}).trim();
+    expect(() => assertRecoveryBaselineAncestor(subject, baseline, changedDescendant)).not.toThrow();
+    expect(() => assertCanonicalOwnedPathsUnchanged(subject, baseline, ['owned.go']))
+      .toThrow(/changed WorkItem-owned paths: owned\.go/);
   });
 
   it('accepts a clean historical author retry only for its current failed attempt', () => {
