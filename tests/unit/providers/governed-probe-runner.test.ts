@@ -252,6 +252,36 @@ describe('private governed Probe runner', () => {
     });
   });
 
+  it('preserves the value-free projection for item error and start-payload predicates', () => {
+    const baseEvent = {
+      source: 'codex-exec-rejected-item/v1',
+      eventType: 'item.started',
+      itemType: 'command_execution',
+      eventFields: [{name: 'type', type: 'string', size: 18}],
+      itemFields: [{name: 'error', type: 'object'}],
+    };
+    for (const predicate of ['item_error', 'item_started_payload']) {
+      const event = {...baseEvent, predicate};
+      expect(sanitizeGovernedAnswerFailure(governedFailure({
+        answerFailureStage: 'provider_engine',
+        providerEngineFailureBoundary: 'query',
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_ITEM',
+          event,
+        },
+      }))).toEqual({
+        answerFailureStage: 'provider_engine',
+        providerEngineFailureBoundary: 'query',
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_ITEM',
+          event,
+        },
+      });
+    }
+  });
+
   it('drops malformed or accessor-backed exec diagnostics without widening the failure record', () => {
     const base = {
       answerFailureStage: 'provider_engine',

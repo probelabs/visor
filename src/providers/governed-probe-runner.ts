@@ -78,7 +78,8 @@ const GOVERNED_CODEX_EXEC_STDERR_MAX_BYTES = 1024 * 1024;
 const GOVERNED_CODEX_EXEC_EVENT_VERSION = 'codex-exec-rejected-item/v1';
 const GOVERNED_CODEX_EXEC_EVENT_PREDICATES = [
   'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
-  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_status', 'item_changes', 'tool_id',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_status', 'item_error',
+  'item_started_payload', 'item_changes', 'tool_id',
 ] as const;
 const GOVERNED_CODEX_EXEC_EVENT_TYPES = ['null', 'array', 'object', 'string', 'number', 'boolean'] as const;
 const GOVERNED_CODEX_EXEC_EVENT_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
