@@ -23,6 +23,7 @@ import {
   retainedProjectPrefixDispatchGate,
   buildRetainedReviewedAggregate,
   buildChecklistOnboardingConfig,
+  checklistProgressRefreshOptions,
   loadRetainedOnboardingConfig,
   parseRecoveryArguments,
   readRetainedReviewExport,
@@ -173,6 +174,15 @@ describe('native onboarding runner boundaries', () => {
     fs.rmSync(root, {recursive: true, force: true});
   });
 
+  it('derives an immutable resumed observation from a skeleton checkpoint path', () => {
+    const fresh = checklistProgressRefreshOptions(undefined);
+    expect(fresh).toEqual({});
+    expect(Object.isFrozen(fresh)).toBe(true);
+    const resumed = checklistProgressRefreshOptions('/tmp/checklist-skeleton-frontier-checkpoint.json');
+    expect(resumed).toEqual({resumed: true});
+    expect(Object.isFrozen(resumed)).toBe(true);
+  });
+
   it('loads the checklist profile as a standalone native graph without mutating the shipped graph', async () => {
     const base = shippedPreparedConfig();
     const profile = buildChecklistOnboardingConfig(base);
@@ -189,15 +199,22 @@ describe('native onboarding runner boundaries', () => {
     expect((profile.checks as any).project.consumes).toEqual([{claim: 'proof.checklist.snapshot@1', cardinality: 'one', as: 'bootstrap'}]);
     const checklistDiscover = (profile.subgraphs as any)['discover-project-checklist'];
     expect(Object.keys(checklistDiscover.checks)).toEqual([
-      'structural_inventory', 'inspect', 'proof_admit', 'verify', 'revalidate_catalog',
-      'checklist-research', 'commit-initialized-baseline', 'materialize_catalog',
+      'structural_inventory', 'inspect', 'proof_admit', 'verify', 'research-catalog-authority',
+      'checklist-research', 'commit-initialized-baseline', 'revalidate_catalog',
+      'materialize_catalog',
       'skeleton-ready', 'checklist-skeleton',
     ]);
     expect(checklistDiscover.checks.inspect.invocation.subject).toEqual({kind: 'project'});
     expect(checklistDiscover.checks.inspect.message).toContain('Discover natural independently onboardable components');
     expect(checklistDiscover.checks.inspect.instructions).toBeUndefined();
     expect(checklistDiscover.checks.inspect.invocation_digest).toBeUndefined();
-    expect(checklistDiscover.checks['checklist-research'].depends_on).toEqual(['revalidate_catalog']);
+    expect(checklistDiscover.checks['research-catalog-authority'].emits).toEqual([
+      {claim: 'proof.checklist.research-catalog-authority@1', from: 'output'},
+    ]);
+    expect(checklistDiscover.checks['checklist-research'].depends_on).toEqual(['research-catalog-authority']);
+    expect(checklistDiscover.checks.revalidate_catalog.depends_on).toEqual([
+      'checklist-research', 'commit-initialized-baseline',
+    ]);
     expect(checklistDiscover.checks['commit-initialized-baseline'].consumes).toEqual([{claim: 'proof.checklist.research-snapshot@1', as: 'research'}]);
     expect(checklistDiscover.checks['skeleton-ready'].wait_for_expansion).toEqual({owner: 'materialize_catalog', terminal_node: 'promote-native-component'});
     expect((profile.checks as any).project.expand.template).toBe('discover-project-checklist');

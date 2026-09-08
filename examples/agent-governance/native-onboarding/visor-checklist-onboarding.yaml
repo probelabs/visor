@@ -170,6 +170,7 @@ claim_types:
             checklistCompleted: {const: false}
   proof.admitted_receipt@1: {schema: {}}
   proof.catalog_revalidation@1: {schema: {}}
+  proof.checklist.research-catalog-authority@1: {schema: {}}
   component.catalog@1:
     schema:
       type: object
@@ -563,7 +564,7 @@ subgraphs:
         consumes:
           - {claim: proof.candidate@1, as: candidate}
           - {claim: proof.admitted_receipt@1, as: receipt}
-      revalidate_catalog: &checklist_revalidate_catalog
+      research-catalog-authority: &checklist_research_catalog_authority
         type: proof-catalog-revalidate
         depends_on: [verify]
         consumes:
@@ -571,15 +572,15 @@ subgraphs:
           - {claim: proof.candidate@1, as: candidate}
           - {claim: proof.admitted_receipt@1, as: receipt}
         emits:
-          - {claim: proof.catalog_revalidation@1, from: output}
+          - {claim: proof.checklist.research-catalog-authority@1, from: output}
       checklist-research:
         type: command
-        depends_on: [revalidate_catalog]
+        depends_on: [research-catalog-authority]
         timeout: 120000
         schema: *checklist_snapshot_schema
         consumes:
           - {claim: project.discovery_item@1, as: project}
-          - {claim: proof.catalog_revalidation@1, as: current_revalidation}
+          - {claim: proof.checklist.research-catalog-authority@1, as: research_authority}
         emits:
           - {claim: proof.checklist.research-snapshot@1, from: output}
         exec: |
@@ -611,6 +612,15 @@ subgraphs:
           if (typeof revision !== 'string' || !/^[0-9a-f]{40,64}$/.test(revision)) throw new Error('SUBJECT_BASELINE_REVISION is required for the initialized baseline');
           process.stdout.write(JSON.stringify({version: 'native.initialized-baseline/v1', baseline_commit: commitInitializedProofBaseline(process.cwd(), revision)}));
           NODE
+      revalidate_catalog: &checklist_revalidate_catalog
+        type: proof-catalog-revalidate
+        depends_on: [checklist-research, commit-initialized-baseline]
+        consumes:
+          - {claim: proof.structural_inventory@1, as: current_inventory}
+          - {claim: proof.candidate@1, as: candidate}
+          - {claim: proof.admitted_receipt@1, as: receipt}
+        emits:
+          - {claim: proof.catalog_revalidation@1, from: output}
       materialize_catalog: &checklist_materialize_catalog
         type: proof-admitted-catalog
         depends_on: [checklist-research, commit-initialized-baseline]

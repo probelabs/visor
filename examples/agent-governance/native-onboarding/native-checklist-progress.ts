@@ -252,6 +252,23 @@ function verifyPassed(step: Json): boolean | undefined {
   );
 }
 
+/**
+ * Render-only wording for required-check evidence.  A pending row with no
+ * check results is not a failed check, and a subset of passing stamps is not
+ * an all-pass assertion.  Keep this classification shared by CLI and HTML.
+ */
+function requiredCheckEvidenceLabel(step: NativeChecklistProgressStep): string {
+  if (step.required_checks.length === 0) return 'none / not required';
+  if (step.check_results.length === 0) return 'not evaluated';
+  const required = new Set(step.required_checks);
+  const recordedRequired = step.check_results.filter(
+    result => isRecord(result) && typeof result.id === 'string' && required.has(result.id)
+  ) as Json[];
+  if (recordedRequired.some(result => result.status !== 'pass')) return 'fail';
+  if (step.evidence.required_checks_pass === true) return 'pass';
+  return 'incomplete';
+}
+
 function stepState(
   step: Json,
   requiredPass: boolean,
@@ -977,10 +994,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
   const json = `${canonicalJson(progress)}\n`;
   const counts = progress.checklist.counts;
   const rows = progress.checklist.steps.map(step => {
-    const checks =
-      step.required_checks.length === 0
-        ? 'none'
-        : `${step.evidence.required_checks_pass ? 'pass' : 'fail'}:${step.required_checks.join(',')}`;
+    const checks = `${requiredCheckEvidenceLabel(step)}${step.required_checks.length === 0 ? '' : `:${step.required_checks.join(',')}`}`;
     const verify = step.verify_required
       ? ` verify=${step.evidence.verify_pass === true ? 'pass' : step.evidence.verify_pass === false ? 'fail' : 'missing'}`
       : '';
@@ -1039,7 +1053,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
     ].join('\n') + '\n';
   const htmlChecklistRows = progress.checklist.steps.map(
     step =>
-      `<tr><td class="state"><span class="badge state-${escapedHtml(step.state)}">${escapedHtml(step.state)}</span></td><td>${escapedHtml(step.id)}</td><td>${escapedHtml(step.title)}</td><td>${escapedHtml(step.required_checks.length === 0 ? 'required checks: none / not required' : step.evidence.required_checks_pass ? 'required checks: pass' : 'required checks: fail')}${step.verify_required ? escapedHtml(`; verify: ${step.evidence.verify_pass === true ? 'pass' : step.evidence.verify_pass === false ? 'fail' : 'missing'}`) : ''}${step.unmet_requires.length ? `<br><small>blocked by ${escapedHtml(step.unmet_requires.join(', '))}</small>` : ''}</td></tr>`
+      `<tr><td class="state"><span class="badge state-${escapedHtml(step.state)}">${escapedHtml(step.state)}</span></td><td>${escapedHtml(step.id)}</td><td>${escapedHtml(step.title)}</td><td>${escapedHtml(`required checks: ${requiredCheckEvidenceLabel(step)}`)}${step.verify_required ? escapedHtml(`; verify: ${step.evidence.verify_pass === true ? 'pass' : step.evidence.verify_pass === false ? 'fail' : 'missing'}`) : ''}${step.unmet_requires.length ? `<br><small>blocked by ${escapedHtml(step.unmet_requires.join(', '))}</small>` : ''}</td></tr>`
   );
   const htmlOperationalRows = operationalRows.map(row => {
     const metrics =

@@ -247,6 +247,77 @@ describe('native checklist progress projection', () => {
     );
   });
 
+  it('renders unevaluated, failed, and partial required-check evidence consistently', () => {
+    const blocked = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'skeleton',
+            title: 'Skeleton',
+            stamp: 'confirm',
+            effective_status: 'pending',
+            stored_status: 'pending',
+            applicable: true,
+            eligible: false,
+            requires: ['research'],
+            unmet_requires: ['research'],
+            required_checks: ['requirements'],
+            check_results: [],
+          },
+        ],
+      }),
+    });
+    const blockedRendered = renderNativeChecklistProgress(blocked);
+    expect(blockedRendered.text).toContain('checks=not evaluated:requirements');
+    expect(blockedRendered.html).toContain('required checks: not evaluated');
+
+    const warning = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'research',
+            title: 'Research',
+            stamp: 'confirm',
+            effective_status: 'confirmed',
+            stored_status: 'confirmed',
+            applicable: true,
+            eligible: false,
+            requires: [],
+            unmet_requires: [],
+            required_checks: ['structure'],
+            check_results: [{ id: 'structure', status: 'warn' }],
+          },
+        ],
+      }),
+    });
+    const warningRendered = renderNativeChecklistProgress(warning);
+    expect(warningRendered.text).toContain('checks=fail:structure');
+    expect(warningRendered.html).toContain('required checks: fail');
+
+    const partial = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'research',
+            title: 'Research',
+            stamp: 'confirm',
+            effective_status: 'confirmed',
+            stored_status: 'confirmed',
+            applicable: true,
+            eligible: false,
+            requires: [],
+            unmet_requires: [],
+            required_checks: ['structure', 'requirements'],
+            check_results: [{ id: 'structure', status: 'pass' }],
+          },
+        ],
+      }),
+    });
+    const partialRendered = renderNativeChecklistProgress(partial);
+    expect(partialRendered.text).toContain('checks=incomplete:structure,requirements');
+    expect(partialRendered.html).toContain('required checks: incomplete');
+  });
+
   it('keeps skipped and not-applicable dispositions distinct from pending work', () => {
     const progress = buildNativeChecklistProgress({
       proofSnapshot: snapshot({

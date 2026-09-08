@@ -39,6 +39,18 @@ export type PublicPromptCaptureInfo = Readonly<{
   prompt: string;
 }>;
 
+export type ChecklistProgressRefreshOptions = Readonly<{
+  paused?: boolean;
+  resumed?: boolean;
+}>;
+
+/** Derive one immutable progress observation from the selected run boundary. */
+export function checklistProgressRefreshOptions(
+  checkpointPath: string | undefined,
+): ChecklistProgressRefreshOptions {
+  return Object.freeze(checkpointPath === undefined ? {} : {resumed: true});
+}
+
 /**
  * Persist the read-only checklist/graph projection alongside a runner run.
  * Proof's full effective snapshot is supplied by the postflight command; no
@@ -69,7 +81,7 @@ function writeRestoredChecklistProgress(
   output: string,
   config: VisorConfig,
   checkpoint: GraphJournalCheckpointV1,
-  options: {paused?: boolean; resumed?: boolean} = {},
+  options: ChecklistProgressRefreshOptions = {},
   liveInstanceProjection?: unknown,
 ): NativeChecklistProgress {
   const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
@@ -892,6 +904,11 @@ export async function executeChecklistOnboardingEngine(
   onFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>,
   options: {
     pauseBeforeSkeleton?: boolean;
+    /** Persist the project-prefix result before any baseline/frontier assertion can throw. */
+    onProjectPrefix?: (evidence: {
+      initialResult: Awaited<ReturnType<StateMachineExecutionEngine['executeGroupedChecks']>>;
+      checkpoint: GraphJournalCheckpointV1;
+    }) => void | Promise<void>;
     onSkeletonFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>;
   } = {},
 ): Promise<RetainedContinuationEngineRun> {
@@ -900,6 +917,9 @@ export async function executeChecklistOnboardingEngine(
     undefined, retainedProjectPrefixDispatchGate,
   );
   const checkpoint = engine.exportGraphCheckpoint();
+  if (options.onProjectPrefix) {
+    await options.onProjectPrefix({initialResult, checkpoint});
+  }
   if (initialResult.statistics.failedExecutions > 0) {
     throw new Error(`checklist project prefix failed before component release (${initialResult.statistics.failedExecutions} failed executions)`);
   }
@@ -3672,7 +3692,7 @@ async function main(): Promise<void> {
   }
   const engine = new StateMachineExecutionEngine(roots.subject);
   let latestChecklistCheckpoint: GraphJournalCheckpointV1 | undefined = checklistResumeCheckpoint;
-  const refreshChecklistProgress = (options: {paused?: boolean; resumed?: boolean} = {}): void => {
+  const refreshChecklistProgress = (options: ChecklistProgressRefreshOptions = {}): void => {
     if (!checklistOnboarding || !latestChecklistCheckpoint) return;
     let liveInstanceProjection: unknown;
     try {
@@ -3697,12 +3717,13 @@ async function main(): Promise<void> {
       // graph outcome or turn a provider hook into an authority failure.
     }
   };
+  const checklistProgressObservation = checklistProgressRefreshOptions(checklistResumeCheckpointPath);
   const checklistPromptHook = (info: PublicPromptCaptureInfo): void => {
     onPromptCaptured(info);
-    refreshChecklistProgress();
+    refreshChecklistProgress(checklistProgressObservation);
   };
   const checklistCompleteHook = (): void => {
-    refreshChecklistProgress();
+    refreshChecklistProgress(checklistProgressObservation);
   };
   engine.setExecutionContext({
     hooks: {
@@ -3723,12 +3744,12 @@ async function main(): Promise<void> {
           checklistResumeCheckpoint as GraphJournalCheckpointV1,
           timeout,
         ).then(resumed => ({initialResult: undefined, frontier: undefined, result: resumed.result, checkpoint: resumed.checkpoint}))
-        : await executeChecklistOnboardingEngine(engine, config, timeout, frontier => {
+      : await executeChecklistOnboardingEngine(engine, config, timeout, frontier => {
         latestChecklistCheckpoint = frontier.checkpoint;
         const materialized = persistChecklistMaterializedConfig(roots.output, config);
         writeCheckpoint(path.join(roots.output, 'checklist-frontier-checkpoint.json'), frontier.checkpoint);
         const configGraphDigest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
-        refreshChecklistProgress();
+        refreshChecklistProgress(checklistProgressObservation);
         writeJson(path.join(roots.output, 'preflight', 'checklist-frontier.json'), {
           status: 'checklist-project-prefix-complete',
           checkpoint: 'checklist-frontier-checkpoint.json',
@@ -3742,13 +3763,24 @@ async function main(): Promise<void> {
           resume_same_graph: true,
         });
       }, {
+        onProjectPrefix: ({initialResult: projectPrefixResult, checkpoint: projectPrefixCheckpoint}) => {
+          latestChecklistCheckpoint = projectPrefixCheckpoint;
+          writeJson(path.join(roots.output, 'preflight', 'checklist-project-prefix-result.json'), projectPrefixResult);
+          writeCheckpoint(path.join(roots.output, 'preflight', 'checklist-project-prefix-checkpoint.json'), projectPrefixCheckpoint);
+          writeJson(path.join(roots.output, 'preflight', 'checklist-project-prefix.json'), {
+            status: 'checklist-project-prefix-exported',
+            result: 'checklist-project-prefix-result.json',
+            checkpoint: 'checklist-project-prefix-checkpoint.json',
+            graph_semantic_digest: projectPrefixCheckpoint.graphSemanticDigest,
+          });
+        },
         pauseBeforeSkeleton: true,
         onSkeletonFrontier: frontier => {
           latestChecklistCheckpoint = frontier.checkpoint;
           checklistPausedBeforeSkeleton = true;
           const materialized = persistChecklistMaterializedConfig(roots.output, config);
           writeCheckpoint(path.join(roots.output, 'checklist-skeleton-frontier-checkpoint.json'), frontier.checkpoint);
-          refreshChecklistProgress({paused: true});
+          refreshChecklistProgress({...checklistProgressObservation, paused: true});
           writeJson(path.join(roots.output, 'preflight', 'checklist-skeleton-frontier.json'), {
             status: 'checklist-skeleton-ready-paused',
             checkpoint: 'checklist-skeleton-frontier-checkpoint.json',
@@ -3770,7 +3802,7 @@ async function main(): Promise<void> {
     }
     if (checklistOnboarding && checkpoint && typeof checkpoint === 'object') {
       latestChecklistCheckpoint = checkpoint as GraphJournalCheckpointV1;
-      refreshChecklistProgress(checklistResumedFromSkeleton ? {resumed: true} : {});
+      refreshChecklistProgress(checklistProgressObservation);
     }
     writeJson(path.join(roots.output, 'checkpoint.json'), checkpoint);
     writeJson(path.join(roots.output, 'visor-result.json'), result);

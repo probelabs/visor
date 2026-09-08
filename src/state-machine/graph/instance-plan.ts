@@ -406,11 +406,12 @@ function validateChecklistProjectTemplate(
   authority: ExpansionCompileAuthority,
 ): void {
   const researchClaim = 'proof.checklist.research-snapshot@1';
+  const researchAuthorityClaim = 'proof.checklist.research-catalog-authority@1';
   const baselineClaim = 'native.initialized.baseline@1';
   const skeletonClaim = 'proof.checklist.skeleton-snapshot@1';
   const expectedTopology = [
-    'structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'revalidate_catalog',
-    'checklist-research', 'commit-initialized-baseline', 'materialize_catalog',
+    'structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify', 'research-catalog-authority',
+    'checklist-research', 'commit-initialized-baseline', 'revalidate_catalog', 'materialize_catalog',
     'skeleton-ready', 'checklist-skeleton',
   ];
   const expectedNodes = [...expectedTopology].sort();
@@ -419,7 +420,7 @@ function validateChecklistProjectTemplate(
       topology.join('\0') !== expectedTopology.join('\0')) {
     rejectReservedProfile(name, `expected exactly the checklist topology ${expectedTopology.join(' -> ')}`);
   }
-  if (!hasOwn(authority.claimTypes, researchClaim) || !hasOwn(authority.claimTypes, baselineClaim) || !hasOwn(authority.claimTypes, skeletonClaim)) {
+  if (!hasOwn(authority.claimTypes, researchClaim) || !hasOwn(authority.claimTypes, researchAuthorityClaim) || !hasOwn(authority.claimTypes, baselineClaim) || !hasOwn(authority.claimTypes, skeletonClaim)) {
     rejectReservedProfile(name, 'checklist snapshot and initialized-baseline claims must be declared');
   }
   const exactClaimBindings = (node: string, expected: readonly [string, string][]): void => {
@@ -452,17 +453,23 @@ function validateChecklistProjectTemplate(
       claimList(verify, 'consumes').join('\0') !== [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')) {
     rejectReservedProfile(name, 'checklist verify must consume candidate and admission and emit none');
   }
+  const researchAuthority = resolvedChecks['research-catalog-authority'];
+  if (researchAuthority.type !== PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
+      claimList(researchAuthority, 'emits').join('\0') !== researchAuthorityClaim ||
+      claimList(researchAuthority, 'consumes').join('\0') !== [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')) {
+    rejectReservedProfile(name, 'checklist research-catalog-authority must retain the exact pre-baseline Proof binding');
+  }
   const revalidate = resolvedChecks.revalidate_catalog;
   if (revalidate.type !== PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
       claimList(revalidate, 'emits').join('\0') !== PROOF_CATALOG_REVALIDATION_CLAIM ||
       claimList(revalidate, 'consumes').join('\0') !== [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')) {
-    rejectReservedProfile(name, 'checklist revalidate_catalog must retain the exact current-catalog binding');
+    rejectReservedProfile(name, 'checklist revalidate_catalog must retain the exact post-baseline current-catalog binding');
   }
   const research = resolvedChecks['checklist-research'];
   if (research.type !== 'command' || claimList(research, 'emits').join('\0') !== researchClaim) {
     rejectReservedProfile(name, 'checklist-research must be a command emitting one research snapshot');
   }
-  exactClaimBindings('checklist-research', [[inputClaim, 'project'], [PROOF_CATALOG_REVALIDATION_CLAIM, 'current_revalidation']]);
+  exactClaimBindings('checklist-research', [[inputClaim, 'project'], [researchAuthorityClaim, 'research_authority']]);
   const baseline = resolvedChecks['commit-initialized-baseline'];
   if (baseline.type !== 'command' || claimList(baseline, 'emits').join('\0') !== baselineClaim) {
     rejectReservedProfile(name, 'commit-initialized-baseline must emit one immutable baseline claim');
@@ -490,9 +497,10 @@ function validateChecklistProjectTemplate(
     inspect: ['structural_inventory'],
     [PROOF_ADMIT_NODE_KEY]: ['inspect'],
     verify: ['inspect', PROOF_ADMIT_NODE_KEY],
-    revalidate_catalog: ['structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify'],
-    'checklist-research': ['revalidate_catalog'],
+    'research-catalog-authority': ['structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'verify'],
+    'checklist-research': ['research-catalog-authority'],
     'commit-initialized-baseline': ['checklist-research'],
+    revalidate_catalog: ['structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY, 'checklist-research', 'commit-initialized-baseline'],
     materialize_catalog: ['checklist-research', 'commit-initialized-baseline', 'revalidate_catalog', 'structural_inventory', 'inspect', PROOF_ADMIT_NODE_KEY],
     'skeleton-ready': ['materialize_catalog'],
     'checklist-skeleton': ['checklist-research', 'skeleton-ready'],
