@@ -7,6 +7,7 @@
  * infer completion from counts, filenames, or process exit status.
  */
 import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
+import type { ClaimProjection } from '../../../src/state-machine/graph/claim-kernel';
 import type { InstanceProjection } from '../../../src/state-machine/graph/instance-kernel';
 
 type Json = Record<string, unknown>;
@@ -319,6 +320,214 @@ function validateSnapshotClaim(
   const source = claimName as ChecklistSnapshotClaim;
   const stage = CHECKLIST_SNAPSHOT_CLAIMS[source];
   return { ...(claimId ? { claim_id: claimId } : {}), source, ...(stage ? { stage } : {}) };
+}
+
+type SelectedChecklistSnapshotClaim = Readonly<{
+  claim: Json;
+  stage: 'bootstrap' | 'research' | 'skeleton';
+}>;
+
+function requireClaimId(value: unknown, label: string): string {
+  const claimId = requiredString(value, label);
+  if (!/^[0-9a-f]{64}$/.test(claimId)) throw new Error(`${label} must be a 64-hex claim ID`);
+  return claimId;
+}
+
+function validateCandidateShape(candidate: Json, claimId: string, label: string): void {
+  if (candidate.claimId !== claimId)
+    throw new Error(`${label} claimId does not match its projection key`);
+  requireClaimId(candidate.claimId, `${label} claimId`);
+  if (!isRecord(candidate.payload)) throw new Error(`${label} payload must be an object`);
+  if (candidate.payloadFingerprint !== sha256Canonical(candidate.payload)) {
+    throw new Error(`${label} payloadFingerprint does not match its payload`);
+  }
+  if (!Array.isArray(candidate.scope)) throw new Error(`${label} scope must be an array`);
+  if (
+    !Array.isArray(candidate.parentClaimIds) ||
+    candidate.parentClaimIds.some(parent => typeof parent !== 'string')
+  ) {
+    throw new Error(`${label} parentClaimIds must be an array of strings`);
+  }
+}
+
+function validateRootBootstrapCandidate(candidate: Json, claimId: string): Json {
+  validateCandidateShape(candidate, claimId, 'root checklist bootstrap claim');
+  if (
+    candidate.claim !== 'proof.checklist.snapshot@1' ||
+    candidate.producerCheckId !== 'checklist-bootstrap' ||
+    canonicalJson(candidate.scope) !== '[]' ||
+    candidate.parentClaimIds.length !== 0
+  ) {
+    throw new Error(
+      'root checklist bootstrap claim has an invalid producer, scope, or parent lineage'
+    );
+  }
+  return { ...candidate, active: true };
+}
+
+function validateProjectScope(scope: unknown, label: string): Json[] {
+  if (
+    !Array.isArray(scope) ||
+    scope.length !== 1 ||
+    !isRecord(scope[0]) ||
+    scope[0].kind !== 'keyed' ||
+    typeof scope[0].key !== 'string' ||
+    scope[0].key.length === 0 ||
+    typeof scope[0].expansionOwnerCheck !== 'string' ||
+    scope[0].expansionOwnerCheck.length === 0 ||
+    typeof scope[0].subgraphInstanceId !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(scope[0].subgraphInstanceId) ||
+    !hasExactKeys(scope[0], ['kind', 'expansionOwnerCheck', 'key', 'subgraphInstanceId'])
+  ) {
+    throw new Error(`${label} must use one keyed project scope`);
+  }
+  return scope as Json[];
+}
+
+function validateExpandedStageCandidate(
+  candidate: Json,
+  claimId: string,
+  stage: 'research' | 'skeleton'
+): Json {
+  validateCandidateShape(candidate, claimId, `expanded checklist ${stage} claim`);
+  if (
+    candidate.claim !== `proof.checklist.${stage}-snapshot@1` ||
+    candidate.producerCheckId !== `checklist-${stage}`
+  ) {
+    throw new Error(`expanded checklist ${stage} claim has an invalid producer or claim reference`);
+  }
+  validateProjectScope(candidate.scope, `expanded checklist ${stage} claim`);
+  return { ...candidate, active: true };
+}
+
+function activeRootChecklistClaims(projection: unknown): SelectedChecklistSnapshotClaim[] {
+  if (
+    !isRecord(projection) ||
+    !isRecord(projection.claims) ||
+    !isRecord(projection.activeClaimIdsByRef)
+  ) {
+    throw new Error('root claim projection is malformed');
+  }
+  const selected: SelectedChecklistSnapshotClaim[] = [];
+  const seenIds = new Set<string>();
+  for (const [claimRef, claimIdValue] of Object.entries(projection.activeClaimIdsByRef)) {
+    if (!Object.prototype.hasOwnProperty.call(CHECKLIST_SNAPSHOT_CLAIMS, claimRef)) {
+      const foreignCandidate =
+        typeof claimIdValue === 'string' ? projection.claims[claimIdValue] : undefined;
+      if (
+        isRecord(foreignCandidate) &&
+        Object.prototype.hasOwnProperty.call(CHECKLIST_SNAPSHOT_CLAIMS, foreignCandidate.claim)
+      ) {
+        throw new Error(
+          `active root checklist claim reference ${claimRef} does not match its supported claim`
+        );
+      }
+      continue;
+    }
+    const claimId = requireClaimId(claimIdValue, `active root ${claimRef} claim ID`);
+    if (seenIds.has(claimId)) throw new Error(`duplicate active root checklist claim ${claimId}`);
+    seenIds.add(claimId);
+    const candidate = projection.claims[claimId];
+    if (!isRecord(candidate))
+      throw new Error(`active root ${claimRef} claim is missing from claims`);
+    if (candidate.claim !== claimRef)
+      throw new Error(`active root ${claimRef} claim reference does not match its record`);
+    if (claimRef !== 'proof.checklist.snapshot@1') {
+      throw new Error(`root ${claimRef} claim is foreign to the root bootstrap stage`);
+    }
+    selected.push({
+      claim: validateRootBootstrapCandidate(candidate, claimId),
+      stage: 'bootstrap',
+    });
+  }
+  return selected;
+}
+
+function activeExpandedChecklistClaims(projection: unknown): SelectedChecklistSnapshotClaim[] {
+  if (!isRecord(projection) || !isRecord(projection.claimsById)) {
+    throw new Error('expanded instance projection is malformed');
+  }
+  const selected: SelectedChecklistSnapshotClaim[] = [];
+  const seenByStage = new Set<string>();
+  for (const [claimIdKey, candidateValue] of Object.entries(projection.claimsById)) {
+    if (!isRecord(candidateValue) || candidateValue.active !== true) continue;
+    const claim = optionalString(candidateValue.claim);
+    const stage =
+      claim === 'proof.checklist.research-snapshot@1'
+        ? 'research'
+        : claim === 'proof.checklist.skeleton-snapshot@1'
+          ? 'skeleton'
+          : undefined;
+    if (!stage && claim === 'proof.checklist.snapshot@1') {
+      throw new Error('expanded checklist bootstrap claim is foreign to the root stage');
+    }
+    if (!stage) continue;
+    const claimId = requireClaimId(claimIdKey, `active expanded ${stage} claim ID`);
+    const candidate = validateExpandedStageCandidate(candidateValue, claimId, stage);
+    if (seenByStage.has(stage))
+      throw new Error(`duplicate active expanded checklist ${stage} claim`);
+    seenByStage.add(stage);
+    selected.push({ claim: candidate, stage });
+  }
+  return selected;
+}
+
+/**
+ * Select the latest lineage-consistent Proof checklist snapshot from the two
+ * journal projections. Root ClaimProjection owns bootstrap; expanded
+ * InstanceProjection owns research/skeleton. All renderers consume the one
+ * resulting canonical projection, so they cannot disagree about stage source.
+ */
+export type NativeChecklistProjectionInput = Readonly<{
+  claimProjection: ClaimProjection | unknown;
+  instanceProjection: InstanceProjection | unknown;
+  checkpoint?: unknown;
+  checkpointTimestamp?: unknown;
+  paused?: boolean;
+  resumed?: boolean;
+}>;
+
+export function buildNativeChecklistProgressFromProjections(
+  input: NativeChecklistProjectionInput
+): NativeChecklistProgress {
+  const candidates = [
+    ...activeRootChecklistClaims(input.claimProjection),
+    ...activeExpandedChecklistClaims(input.instanceProjection),
+  ];
+  const bootstrap = candidates.find(candidate => candidate.stage === 'bootstrap');
+  const research = candidates.find(candidate => candidate.stage === 'research');
+  const skeleton = candidates.find(candidate => candidate.stage === 'skeleton');
+  if (!bootstrap) {
+    throw new Error('active expanded checklist stage requires an active root bootstrap claim');
+  }
+  if (skeleton) {
+    const skeletonScope = skeleton.claim.scope;
+    if (!research) {
+      throw new Error('active skeleton checklist claim requires an active research claim');
+    }
+    const researchId = research.claim.claimId;
+    if (
+      skeleton.claim.parentClaimIds.length !== 1 ||
+      skeleton.claim.parentClaimIds[0] !== researchId ||
+      canonicalJson(skeletonScope) !== canonicalJson(research.claim.scope)
+    ) {
+      throw new Error(
+        'active skeleton checklist claim must name the active research parent at the same scope'
+      );
+    }
+  }
+  const selected = skeleton ?? research ?? bootstrap;
+  if (!selected) throw new Error('no active supported Proof checklist snapshot claim was found');
+  return buildNativeChecklistProgress({
+    proofSnapshot: selected.claim.payload,
+    proofSnapshotClaim: selected.claim,
+    instanceProjection: input.instanceProjection,
+    checkpoint: input.checkpoint,
+    checkpointTimestamp: input.checkpointTimestamp,
+    requireProofSnapshotClaim: true,
+    paused: input.paused,
+    resumed: input.resumed,
+  });
 }
 
 function checkpointEvidence(

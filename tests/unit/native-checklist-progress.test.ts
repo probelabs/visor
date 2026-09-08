@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 import {
   buildNativeChecklistProgress,
+  buildNativeChecklistProgressFromProjections,
   renderNativeChecklistProgress,
 } from '../../examples/agent-governance/native-onboarding/native-checklist-progress';
 import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
@@ -75,6 +76,65 @@ function snapshot(overrides: Record<string, unknown> = {}): Record<string, unkno
       },
     ],
     ...overrides,
+  };
+}
+
+function projectScope(key = 'project'): Record<string, unknown>[] {
+  return [
+    {
+      kind: 'keyed',
+      expansionOwnerCheck: 'project',
+      key,
+      subgraphInstanceId: 'd'.repeat(64),
+    },
+  ];
+}
+
+function rootClaim(
+  payload: Record<string, unknown>,
+  claimId = 'b'.repeat(64)
+): Record<string, unknown> {
+  return {
+    claimId,
+    claim: 'proof.checklist.snapshot@1',
+    payload,
+    payloadFingerprint: sha256Canonical(payload),
+    producerCheckId: 'checklist-bootstrap',
+    scope: [],
+    parentClaimIds: [],
+  };
+}
+
+function rootProjection(claims: Record<string, unknown>[]): Record<string, unknown> {
+  const byId = Object.fromEntries(claims.map(claim => [claim.claimId, claim]));
+  const activeClaimIdsByRef = Object.fromEntries(claims.map(claim => [claim.claim, claim.claimId]));
+  return { claims: byId, activeClaimIdsByRef };
+}
+
+function expandedClaim(
+  payload: Record<string, unknown>,
+  stage: 'research' | 'skeleton',
+  claimId: string,
+  scope: Record<string, unknown>[] = projectScope(),
+  parentClaimIds: string[] = []
+): Record<string, unknown> {
+  return {
+    claimId,
+    claim: `proof.checklist.${stage}-snapshot@1`,
+    payload,
+    payloadFingerprint: sha256Canonical(payload),
+    producerCheckId: `checklist-${stage}`,
+    scope,
+    parentClaimIds,
+    active: true,
+  };
+}
+
+function instanceProjection(claims: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    claimsById: Object.fromEntries(claims.map(claim => [claim.claimId, claim])),
+    generationsById: {},
+    activeGenerationIdByNode: {},
   };
 }
 
@@ -437,6 +497,154 @@ describe('native checklist progress projection', () => {
         proofSnapshotClaim: { ...claim, claim: 'other' },
       })
     ).toThrow(/active proof.checklist/);
+  });
+
+  it('selects the root bootstrap snapshot when no expanded stage exists', () => {
+    const proofSnapshot = snapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: instanceProjection([]),
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'proof.checklist.snapshot@1',
+      claim_id: 'b'.repeat(64),
+    });
+  });
+
+  it('selects research over the root bootstrap snapshot', () => {
+    const proofSnapshot = snapshot();
+    const research = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: instanceProjection([research]),
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'proof.checklist.research-snapshot@1',
+      stage: 'research',
+      claim_id: 'c'.repeat(64),
+    });
+  });
+
+  it('requires skeleton to name the active research parent at the exact project scope', () => {
+    const proofSnapshot = snapshot();
+    const scope = projectScope();
+    const researchId = 'c'.repeat(64);
+    const research = expandedClaim(proofSnapshot, 'research', researchId, scope);
+    const skeletonId = 'd'.repeat(64);
+    const skeleton = expandedClaim(proofSnapshot, 'skeleton', skeletonId, scope, [researchId]);
+    const input = {
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: instanceProjection([research, skeleton]),
+    };
+    expect(
+      buildNativeChecklistProgressFromProjections(input).evidence.proof_snapshot
+    ).toMatchObject({
+      source: 'proof.checklist.skeleton-snapshot@1',
+      stage: 'skeleton',
+      claim_id: skeletonId,
+    });
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        ...input,
+        instanceProjection: instanceProjection([
+          research,
+          expandedClaim(proofSnapshot, 'skeleton', skeletonId, scope, ['e'.repeat(64)]),
+        ]),
+      })
+    ).toThrow(/active research parent/);
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        ...input,
+        instanceProjection: instanceProjection([
+          research,
+          expandedClaim(proofSnapshot, 'skeleton', skeletonId, projectScope('other'), [researchId]),
+        ]),
+      })
+    ).toThrow(/active research parent/);
+  });
+
+  it('fails closed on inactive, duplicate, and foreign supported candidates', () => {
+    const proofSnapshot = snapshot();
+    const inactive = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));
+    inactive.active = false;
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([inactive]),
+      })
+    ).not.toThrow();
+
+    const activeResearch = expandedClaim(proofSnapshot, 'research', 'a'.repeat(64));
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([]),
+        instanceProjection: instanceProjection([activeResearch]),
+      })
+    ).toThrow(/active root bootstrap/);
+
+    const duplicateResearch = expandedClaim(proofSnapshot, 'research', 'a'.repeat(64));
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([inactive, duplicateResearch]),
+      })
+    ).not.toThrow();
+    const duplicateResearch2 = expandedClaim(
+      proofSnapshot,
+      'research',
+      'f'.repeat(64),
+      projectScope('other')
+    );
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([duplicateResearch, duplicateResearch2]),
+      })
+    ).toThrow(/duplicate active expanded checklist research/);
+
+    const foreign = expandedClaim(proofSnapshot, 'research', '0'.repeat(64));
+    foreign.producerCheckId = 'foreign';
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([foreign]),
+      })
+    ).toThrow(/invalid producer/);
+  });
+
+  it('keeps rendered JSON identical across restored projections and options', () => {
+    const proofSnapshot = snapshot();
+    const researchId = 'c'.repeat(64);
+    const research = expandedClaim(proofSnapshot, 'research', researchId);
+    const input = {
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: {
+        ...instanceProjection([research]),
+        generationsById: {
+          next: {
+            nodeGenerationId: 'next',
+            status: 'ready',
+            scope: projectScope(),
+          },
+        },
+        activeGenerationIdByNode: { next: 'next' },
+      },
+      checkpoint: {
+        sessionId: 'session',
+        frontier: { eventCount: 4, lastEventId: 4 },
+        graphSemanticDigest: 'graph',
+        integrity: { digest: 'integrity' },
+      },
+      checkpointTimestamp: '2026-09-08T00:00:00Z',
+      paused: true,
+      resumed: true,
+    };
+    const first = buildNativeChecklistProgressFromProjections(input);
+    const restored = buildNativeChecklistProgressFromProjections(JSON.parse(JSON.stringify(input)));
+    expect(renderNativeChecklistProgress(first).json).toBe(
+      renderNativeChecklistProgress(restored).json
+    );
+    expect(first.resumable).toBe(true);
   });
 
   it('renders deterministic text and escaped HTML without changing the JSON payload', () => {
