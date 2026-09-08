@@ -21,6 +21,10 @@ import { CheckProviderRegistry } from '../../../src/providers/check-provider-reg
 import { createProofAdmissionCapability, goCompatibleProofJson } from '../../../src/providers/proof-admission-cli-child';
 import type { PRInfo } from '../../../src/pr-analyzer';
 import type { VisorConfig } from '../../../src/types/config';
+import {
+  emitNativeCampaignReport,
+  type NativeCampaignReportInput,
+} from './native-campaign-report';
 
 type Json = Record<string, unknown>;
 type CommandResult = { status: number; stdout: string; stderr: string };
@@ -2813,6 +2817,40 @@ async function runRecovery(
 
 type FreshRunnerRoots = Readonly<{subject: string; original: string; output: string}>;
 
+function readCampaignReportJson(file: string, label: string): unknown {
+  const resolved = fs.realpathSync(path.resolve(file));
+  if (!fs.statSync(resolved).isFile()) throw new Error(`${label} must be a file`);
+  return JSON.parse(fs.readFileSync(resolved, 'utf8')) as unknown;
+}
+
+/**
+ * Static report mode intentionally has no subject/protected-original/proof
+ * arguments. It replays public checkpoint data and copies only packet files
+ * that the report builder has verified against the supplied export manifest.
+ */
+async function runCampaignReport(values: Record<string, string>): Promise<void> {
+  const input: NativeCampaignReportInput = {
+    epoch: values['campaign-report-epoch'] || 'author-review-recovery',
+    checkpoint: readCampaignReportJson(required(values, 'campaign-report-checkpoint'), 'campaign checkpoint'),
+    ...(values['campaign-report-prior-checkpoint']
+      ? {priorCheckpoint: readCampaignReportJson(values['campaign-report-prior-checkpoint'], 'prior campaign checkpoint')}
+      : {}),
+    packetRoot: required(values, 'campaign-report-packet-root'),
+    ...(values['campaign-report-postflight']
+      ? {postflight: readCampaignReportJson(values['campaign-report-postflight'], 'campaign postflight')}
+      : {}),
+  };
+  const output = path.resolve(required(values, 'campaign-report-output'));
+  const artifacts = emitNativeCampaignReport(output, input);
+  console.log(JSON.stringify({
+    status: 'native-campaign-report-complete',
+    output,
+    files: artifacts.files,
+    warnings: artifacts.warnings,
+    counts: artifacts.report.counts,
+  }, null, 2));
+}
+
 /**
  * Run a retained review export through a fresh current Proof graph.  The
  * subject is already initialized/promoted: this mode intentionally skips
@@ -2999,6 +3037,10 @@ async function runRetainedContinuation(
 
 async function main(): Promise<void> {
   const values = parseArgs(process.argv.slice(2));
+  if (values['campaign-report-checkpoint'] !== undefined) {
+    await runCampaignReport(values);
+    return;
+  }
   const recovery = parseRecoveryArguments(values);
   const retainedExport = values['retained-review-export'];
   if (recovery && retainedExport !== undefined) {
