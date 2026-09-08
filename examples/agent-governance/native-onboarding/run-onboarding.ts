@@ -984,9 +984,6 @@ export function validateChecklistPrefixRetrySelection(
     throw new Error('checklist prefix retry requires the selected failed inspect generation before component release');
   }
   const events = validated.events as unknown as readonly Json[];
-  if (events.some(event => event.type === 'AttemptRetryRequested' && event.nodeGenerationId === retryGenerationId)) {
-    throw new Error('checklist prefix retry generation has already been reopened');
-  }
   const failedAttempts = events.filter(event =>
     event.type === 'AttemptFailed' && event.nodeGenerationId === retryGenerationId && event.checkId === 'inspect',
   );
@@ -999,6 +996,137 @@ export function validateChecklistPrefixRetrySelection(
     throw new Error('checklist prefix retry requires a prefix with no component attempt release');
   }
   return Object.freeze({journal, generation, prefixEventCount: validated.events.length});
+}
+
+export type ChecklistBootstrapRetrySubjectGuard = Readonly<{
+  proof: string;
+  subject: string;
+  protectedOriginal: string;
+  priorOutput: string;
+  output: string;
+  config: VisorConfig;
+  checkpoint: GraphJournalCheckpointV1;
+  governedCodexTransport: string;
+  timeout: number;
+}>;
+
+/**
+ * Verify the only source-tree state that a retained checklist prefix may
+ * carry.  This is deliberately checklist-retry-only: generic recovery still
+ * requires a clean subject.  The retained preflight is the authority for the
+ * original launch roots and revision, while Proof's read-only checklist show
+ * binds the three expected init files to the journaled root claim.
+ */
+export function assertChecklistBootstrapRetrySubject(
+  input: ChecklistBootstrapRetrySubjectGuard,
+): string {
+  const {
+    proof, subject, protectedOriginal, priorOutput, output, config, checkpoint,
+    governedCodexTransport, timeout,
+  } = input;
+  if (!path.isAbsolute(output) || !path.isAbsolute(priorOutput)) {
+    throw new Error('checklist prefix retry subject guard requires absolute output roots');
+  }
+  if (!Number.isSafeInteger(timeout) || timeout < 1000) {
+    throw new Error('checklist prefix retry subject guard timeout is invalid');
+  }
+  const currentSubject = fs.realpathSync(subject);
+  const currentOriginal = fs.realpathSync(protectedOriginal);
+  const currentPriorOutput = fs.realpathSync(priorOutput);
+  const currentProof = fs.realpathSync(proof);
+  const preflightPath = path.join(currentPriorOutput, 'preflight.json');
+  if (!fs.existsSync(preflightPath) || !fs.statSync(preflightPath).isFile()) {
+    throw new Error('checklist prefix retry retained preflight.json is missing');
+  }
+  let retained: Json;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+    retained = parsed as Json;
+  } catch (error) {
+    throw new Error('checklist prefix retry retained preflight.json is invalid: ' + String(error));
+  }
+  const retainedPath = (key: string): string => {
+    const value = retained[key];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error(`checklist prefix retry retained preflight is missing ${key}`);
+    }
+    try { return fs.realpathSync(value); } catch { throw new Error(`checklist prefix retry retained preflight ${key} is not a real path`); }
+  };
+  if (retainedPath('subject_root') !== currentSubject || retainedPath('protected_original_root') !== currentOriginal) {
+    throw new Error('checklist prefix retry subject roots do not match retained preflight');
+  }
+  const retainedProof = retainedPath('proof_binary');
+  if (retainedProof !== currentProof) {
+    throw new Error('checklist prefix retry Proof binary does not match retained preflight');
+  }
+  if (retained.governed_codex_transport !== governedCodexTransport) {
+    throw new Error('checklist prefix retry governed transport does not match retained preflight');
+  }
+  const head = gitScalar(currentSubject, ['rev-parse', '--verify', 'HEAD^{commit}'], 'checklist retry subject');
+  const subjectRevision = retained.subject_revision;
+  const sourceRevision = retained.source_revision;
+  if (typeof subjectRevision !== 'string' || !/^[0-9a-f]{40,64}$/.test(subjectRevision) ||
+      typeof sourceRevision !== 'string' || sourceRevision !== subjectRevision || sourceRevision !== head) {
+    throw new Error('checklist prefix retry subject HEAD does not match retained preflight source revision');
+  }
+
+  const status = String(execFileSync('git', [
+    '-C', currentSubject, 'status', '--porcelain=v1', '--untracked-files=all',
+  ], {encoding: 'utf8'}));
+  const expectedStatus = [
+    ' M .gitignore',
+    '?? proof.yaml',
+    '?? proof/checklists/onboard_v1.state.yaml',
+  ];
+  const actualStatus = status.split(/\r?\n/).filter(Boolean);
+  if (actualStatus.length !== expectedStatus.length ||
+      [...actualStatus].sort().join('\n') !== [...expectedStatus].sort().join('\n')) {
+    throw new Error('checklist prefix retry subject has unexpected Proof bootstrap dirt');
+  }
+  for (const relativePath of ['.gitignore', 'proof.yaml', 'proof/checklists/onboard_v1.state.yaml']) {
+    const stat = fs.lstatSync(path.join(currentSubject, relativePath));
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`checklist prefix retry expected regular Proof bootstrap file: ${relativePath}`);
+    }
+  }
+  for (const relativePath of ['proof', 'proof/checklists']) {
+    const stat = fs.lstatSync(path.join(currentSubject, relativePath));
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error(`checklist prefix retry expected regular Proof bootstrap directory: ${relativePath}`);
+    }
+  }
+  const headIgnore = gitSnapshotAtCommit(currentSubject, head, '.gitignore');
+  if (!headIgnore || headIgnore.kind !== 'file') {
+    throw new Error('checklist prefix retry subject baseline is missing a regular .gitignore');
+  }
+  const currentIgnore = fs.readFileSync(path.join(currentSubject, '.gitignore'));
+  const expectedIgnore = Buffer.concat([headIgnore.bytes, Buffer.from(PROOF_INIT_GITIGNORE_BLOCK, 'utf8')]);
+  if (!currentIgnore.equals(expectedIgnore)) {
+    throw new Error('checklist prefix retry .gitignore does not contain the exact Proof init local-state block');
+  }
+
+  const validated = ExecutionJournal.validateGraphCheckpointIntegrity(checkpoint);
+  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), validated);
+  const projection = journal.getClaimProjection() as any;
+  const activeId = projection.activeClaimIdsByRef?.[CHECKLIST_SNAPSHOT_CLAIM];
+  const activeClaims = Object.values(projection.claims || {}).filter((claim: any) =>
+    claim && claim.claimId === activeId && claim.claim === CHECKLIST_SNAPSHOT_CLAIM &&
+    Array.isArray(claim.scope) && claim.scope.length === 0 && claim.producerCheckId === 'checklist-bootstrap',
+  ) as any[];
+  if (typeof activeId !== 'string' || activeClaims.length !== 1 || activeClaims[0].claimId !== activeId ||
+      !activeClaims[0].payload || activeClaims[0].payloadFingerprint !== sha256Canonical(activeClaims[0].payload)) {
+    throw new Error('checklist prefix retry checkpoint lacks exactly one active root bootstrap checklist claim');
+  }
+  const shown = parseJson(
+    runProof(proof, currentSubject, output, 'checklist-prefix-retry-subject-guard',
+      ['checklist', 'show', 'onboard_v1', '--format', 'json'], timeout),
+    'Proof checklist bootstrap retry readback',
+  );
+  if (!deepJsonEqual(shown, activeClaims[0].payload)) {
+    throw new Error('Proof checklist bootstrap readback does not match the retained root claim');
+  }
+  return head;
 }
 
 /** Reopen one retained failed inspect through the public engine retry API. */
@@ -1117,6 +1245,17 @@ async function runChecklistPrefixRetry(
   const {prepared} = onboardingConfigTemplate(CHECKLIST_CONFIG_PATH);
   const config = await loadConfig(prepared as unknown as VisorConfig, {strict: true});
   const selection = validateChecklistPrefixRetrySelection(config, parsedCheckpoint, retry.retryGenerationId);
+  const subjectRevision = assertChecklistBootstrapRetrySubject({
+    proof,
+    subject: roots.subject,
+    protectedOriginal: roots.original,
+    priorOutput: roots.priorOutput,
+    output: roots.output,
+    config,
+    checkpoint: selection.journal.exportGraphCheckpoint(parsedCheckpoint.sessionId),
+    governedCodexTransport,
+    timeout,
+  });
   const configPlan = compileClaimPlan(config);
   const materialized = persistChecklistMaterializedConfig(roots.output, config);
   writeCheckpoint(path.join(retryDirectory, 'validated-prefix-checkpoint.json'), selection.journal.exportGraphCheckpoint(parsedCheckpoint.sessionId));
@@ -1132,6 +1271,8 @@ async function runChecklistPrefixRetry(
     subject_root: roots.subject,
     protected_original_root: roots.original,
     prior_output: roots.priorOutput,
+    subject_revision: subjectRevision,
+    source_revision: subjectRevision,
     checkpoint: roots.checkpoint,
     checkpoint_event_count: selection.prefixEventCount,
     retry_generation_id: retry.retryGenerationId,
@@ -1487,6 +1628,12 @@ export async function loadOnboardingConfig(proof: string, subject: string, outpu
 
 const CHECKLIST_SNAPSHOT_CLAIM = 'proof.checklist.snapshot@1';
 const CHECKLIST_RESEARCH_SNAPSHOT_CLAIM = 'proof.checklist.research-snapshot@1';
+
+// Proof init owns this exact three-line local-state addition.  The retry
+// subject guard treats it as a narrow, expected bootstrap mutation; every
+// other source-tree mutation is refused before the engine can dispatch.
+const PROOF_INIT_GITIGNORE_BLOCK =
+  '\n# ReqProof local-only state (versionable .proof/ audit objects stay tracked).\n.proof/\n';
 
 
 /**
@@ -3927,9 +4074,11 @@ async function main(): Promise<void> {
     await runRecovery(values, roots, proof, timeout, requestTimeout, recovery);
     return;
   }
-  const revision = retainedExport !== undefined || checklistSkeletonResume !== undefined || checklistPrefixRetry !== undefined
+  const revision = retainedExport !== undefined || checklistSkeletonResume !== undefined
     ? assertRecoverySubject(roots.subject)
-    : assertFreshSubject(roots.subject, process.env.SUBJECT_BASELINE_REVISION);
+    : checklistPrefixRetry !== undefined
+      ? gitScalar(roots.subject, ['rev-parse', '--verify', 'HEAD^{commit}'], 'checklist retry subject')
+      : assertFreshSubject(roots.subject, process.env.SUBJECT_BASELINE_REVISION);
   let checklistResumeCheckpointPath: string | undefined;
   if (checklistSkeletonResume !== undefined) {
     const candidate = path.resolve(checklistSkeletonResume);

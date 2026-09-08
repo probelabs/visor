@@ -196,4 +196,43 @@ describe('failed generated checkpoint retry', () => {
     const summarize = Object.values(projection.generationsById).find(generation => generation.checkId === 'summarize');
     expect(summarize?.status).toBe('ready');
   });
+
+  it('permits a second retry after a fresh failure while rejecting a pending retry prefix', () => {
+    const config = retryConfig();
+    const plan = compileClaimPlan(config);
+    const journal = new ExecutionJournal(plan);
+    const request = journal.requestCatalogReconciliation({sessionId: 'retry-second-failure-session', ownerCheck: OWNER});
+    const catalogAttempt = journal.startCatalogRequestAttempt(request.requestId);
+    journal.scheduleCatalogRequestAttempt(catalogAttempt);
+    journal.completeAttempt({...catalogAttempt, payload: {items: [{id: 'A', revision: 1}]}});
+    const inspect = journal.queryReadyWork().find(generation => generation.checkId === 'inspect')!;
+    const first = journal.startGeneratedAttempt(inspect.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(first);
+    journal.failGeneratedAttempt(first, 'first failure');
+    const firstRetry = journal.retryFailedGeneratedAttempts({
+      sessionId: 'retry-second-failure-session',
+      nodeGenerationIds: [inspect.nodeGenerationId],
+      externalSideEffects: 'absent',
+    });
+    expect(firstRetry).toHaveLength(1);
+
+    const pendingRetry = ExecutionJournal.restoreGraphCheckpoint(plan, journal.exportGraphCheckpoint('retry-second-failure-session'));
+    expect(() => pendingRetry.retryFailedGeneratedAttempts({
+      sessionId: 'retry-second-failure-session',
+      nodeGenerationIds: [inspect.nodeGenerationId],
+      externalSideEffects: 'absent',
+    })).toThrow(/eligible failed leaf/);
+
+    const second = journal.startGeneratedAttempt(inspect.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(second);
+    journal.failGeneratedAttempt(second, 'second failure');
+    const secondRetry = journal.retryFailedGeneratedAttempts({
+      sessionId: 'retry-second-failure-session',
+      nodeGenerationIds: [inspect.nodeGenerationId],
+      externalSideEffects: 'absent',
+    });
+    expect(secondRetry).toHaveLength(1);
+    expect(secondRetry[0].priorAttemptId).toBe(second.attemptId);
+    expect(secondRetry[0].priorAttemptId).not.toBe(first.attemptId);
+  });
 });

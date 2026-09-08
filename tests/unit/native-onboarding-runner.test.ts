@@ -16,6 +16,7 @@ import {
   assertCanonicalOwnedPathsUnchanged,
   assertCurrentProofRequirementHash,
   assertRecoveryRoots,
+  assertChecklistBootstrapRetrySubject,
   commitInitializedProofBaseline,
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
@@ -621,6 +622,82 @@ describe('native onboarding runner boundaries', () => {
       validate.mockReturnValue(withComponentAttempt as any);
       expect(() => validateChecklistPrefixRetrySelection(config, withComponentAttempt as any, generationId))
         .toThrow(/component attempt release/);
+    } finally {
+      validate.mockRestore();
+      restore.mockRestore();
+    }
+  });
+
+  it('guards checklist retry subjects to the exact Proof bootstrap state and root claim', () => {
+    const subject = path.join(root, 'guard-subject');
+    const original = path.join(root, 'guard-original');
+    const prior = path.join(root, 'guard-prior');
+    const output = path.join(root, 'guard-output');
+    const proof = path.join(root, 'guard-proof');
+    fs.mkdirSync(subject, {recursive: true});
+    fs.mkdirSync(original, {recursive: true});
+    fs.mkdirSync(prior, {recursive: true});
+    fs.mkdirSync(output, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['init', '--quiet', original]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, '.gitignore'), '*.test\n', 'utf8');
+    fs.writeFileSync(path.join(subject, 'source.txt'), 'fixture\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'guard baseline']);
+    const head = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    fs.appendFileSync(path.join(subject, '.gitignore'),
+      '\n# ReqProof local-only state (versionable .proof/ audit objects stay tracked).\n.proof/\n', 'utf8');
+    fs.writeFileSync(path.join(subject, 'proof.yaml'), 'project:\n  name: fixture\n', 'utf8');
+    fs.mkdirSync(path.join(subject, 'proof/checklists'), {recursive: true});
+    fs.writeFileSync(path.join(subject, 'proof/checklists/onboard_v1.state.yaml'), 'campaign_new_project: true\n', 'utf8');
+    fs.writeFileSync(proof, '#!/bin/sh\nprintf \'%s\' \'{"schema_version":"proof.checklist.show.v1","checklist":"onboard_v1","active":true,"new_project":true,"steps":[],"counts":{"confirmed":0,"skipped":0,"not_applicable":0,"pending":0,"blocked":0},"steps_total":0,"steps_pending":0}\'\n', 'utf8');
+    fs.chmodSync(proof, 0o755);
+    const snapshot = {
+      schema_version: 'proof.checklist.show.v1', checklist: 'onboard_v1', active: true,
+      new_project: true, steps: [], counts: {confirmed: 0, skipped: 0, not_applicable: 0, pending: 0, blocked: 0},
+      steps_total: 0, steps_pending: 0,
+    };
+    const claimId = 'a'.repeat(64);
+    const checkpoint = {graphSemanticDigest: 'b'.repeat(64), events: []} as any;
+    const claim = {
+      claimId, claim: 'proof.checklist.snapshot@1', producerCheckId: 'checklist-bootstrap',
+      scope: [], parentClaimIds: [], payload: snapshot, payloadFingerprint: sha256Canonical(snapshot),
+    };
+    const validate = jest.spyOn(ExecutionJournal, 'validateGraphCheckpointIntegrity').mockReturnValue(checkpoint);
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockReturnValue({
+      getClaimProjection: () => ({
+        activeClaimIdsByRef: {'proof.checklist.snapshot@1': claimId},
+        claims: {[claimId]: claim},
+      }),
+    } as any);
+    try {
+      const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+      fs.writeFileSync(path.join(prior, 'preflight.json'), JSON.stringify({
+        subject_root: subject,
+        protected_original_root: original,
+        subject_revision: head,
+        source_revision: head,
+        proof_binary: proof,
+        governed_codex_transport: 'exec-jsonl-default-auth-v1',
+      }) + '\n', 'utf8');
+      expect(assertChecklistBootstrapRetrySubject({
+        proof, subject, protectedOriginal: original, priorOutput: prior, output,
+        config, checkpoint, governedCodexTransport: 'exec-jsonl-default-auth-v1', timeout: 120000,
+      })).toBe(head);
+      expect(fs.readFileSync(path.join(output, 'commands/checklist-prefix-retry-subject-guard/checklist-show-onboard_v1---format-json.stdout'), 'utf8')).toContain('proof.checklist.show.v1');
+      fs.writeFileSync(path.join(subject, 'unrelated.txt'), 'must be rejected\n', 'utf8');
+      expect(() => assertChecklistBootstrapRetrySubject({
+        proof, subject, protectedOriginal: original, priorOutput: prior, output,
+        config, checkpoint, governedCodexTransport: 'exec-jsonl-default-auth-v1', timeout: 120000,
+      })).toThrow(/unexpected Proof bootstrap dirt/);
+      fs.rmSync(path.join(subject, 'unrelated.txt'));
+      fs.appendFileSync(path.join(subject, '.gitignore'), 'tampered\n', 'utf8');
+      expect(() => assertChecklistBootstrapRetrySubject({
+        proof, subject, protectedOriginal: original, priorOutput: prior, output,
+        config, checkpoint, governedCodexTransport: 'exec-jsonl-default-auth-v1', timeout: 120000,
+      })).toThrow(/\.gitignore/);
     } finally {
       validate.mockRestore();
       restore.mockRestore();
