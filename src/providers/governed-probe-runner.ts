@@ -75,6 +75,14 @@ const GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION = 'probe.governed-codex-exe
 const GOVERNED_CODEX_EXEC_STDERR_VERSION = 'codex-exec-stderr/v1';
 const GOVERNED_CODEX_EXEC_SAFE_MESSAGES = ['access_token_refresh_revoked'] as const;
 const GOVERNED_CODEX_EXEC_STDERR_MAX_BYTES = 1024 * 1024;
+const GOVERNED_CODEX_EXEC_EVENT_VERSION = 'codex-exec-rejected-item/v1';
+const GOVERNED_CODEX_EXEC_EVENT_PREDICATES = [
+  'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_status', 'item_changes', 'tool_id',
+] as const;
+const GOVERNED_CODEX_EXEC_EVENT_TYPES = ['null', 'array', 'object', 'string', 'number', 'boolean'] as const;
+const GOVERNED_CODEX_EXEC_EVENT_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+const GOVERNED_CODEX_EXEC_EVENT_MAX_FIELDS = 32;
 const GOVERNED_CANDIDATE_BOUNDARY_KEYS = [
   'selectedOrigin', 'selectedChunkCount', 'selectedBytes', 'resultTextItemCount', 'resultTextBytes',
   'rawFinalMessageCount', 'rawFinalPartCount', 'rawFinalBytes',
@@ -90,6 +98,14 @@ type GovernedProbeFailureDiagnostic = Readonly<{
     bytes: number;
     digest: `sha256:${string}`;
     safeMessage?: typeof GOVERNED_CODEX_EXEC_SAFE_MESSAGES[number];
+  }>;
+  event?: Readonly<{
+    source: typeof GOVERNED_CODEX_EXEC_EVENT_VERSION;
+    predicate: typeof GOVERNED_CODEX_EXEC_EVENT_PREDICATES[number];
+    eventType: 'item.started' | 'item.completed';
+    itemType: 'agent_message' | 'reasoning' | 'mcp_tool_call' | 'command_execution' | 'file_change';
+    eventFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
+    itemFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
   }>;
 }>;
 type GovernedProbeFailureProjection = Readonly<Record<string, GovernedProbeFailureStage | string | null | GovernedProbeFailureDiagnostic>>;
@@ -239,16 +255,74 @@ function enumValue<T extends readonly string[]>(value: unknown, values: T): T[nu
   return typeof value === 'string' && (values as readonly string[]).includes(value) ? value as T[number] : null;
 }
 
+type GovernedCodexExecEventField = Readonly<{
+  name: string;
+  type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number];
+  size?: number;
+}>;
+
+function governedCodexExecEventFields(value: unknown): readonly GovernedCodexExecEventField[] | null {
+  if (!Array.isArray(value) || value.length > GOVERNED_CODEX_EXEC_EVENT_MAX_FIELDS) return null;
+  const fields: GovernedCodexExecEventField[] = [];
+  let previous: GovernedCodexExecEventField | undefined;
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const ownKeys = Reflect.ownKeys(item);
+    const hasSize = ownKeys.includes('size');
+    const field = closedDataObject(item, hasSize ? ['name', 'type', 'size'] : ['name', 'type']);
+    if (!field || typeof field.name !== 'string' ||
+        (field.name !== '<unsafe>' && !GOVERNED_CODEX_EXEC_EVENT_FIELD_NAME.test(field.name)) ||
+        !enumValue(field.type, GOVERNED_CODEX_EXEC_EVENT_TYPES) ||
+        (hasSize && (!Number.isSafeInteger(field.size) || (field.size as number) < 0))) return null;
+    const normalized = Object.freeze({
+      name: field.name,
+      type: enumValue(field.type, GOVERNED_CODEX_EXEC_EVENT_TYPES)!,
+      ...(hasSize ? {size: field.size as number} : {}),
+    });
+    if ((normalized.type === 'string' || normalized.type === 'array') !== hasSize) return null;
+    if (previous && (previous.name > normalized.name ||
+        (previous.name === normalized.name && previous.type > normalized.type) ||
+        (previous.name === normalized.name && previous.type === normalized.type && (previous.size ?? -1) > (normalized.size ?? -1)))) return null;
+    previous = normalized;
+    fields.push(normalized);
+  }
+  return Object.freeze(fields);
+}
+
+function governedCodexExecEvent(value: unknown): GovernedProbeFailureDiagnostic['event'] | null {
+  const event = closedDataObject(value, ['source', 'predicate', 'eventType', 'itemType', 'eventFields', 'itemFields']);
+  if (!event || event.source !== GOVERNED_CODEX_EXEC_EVENT_VERSION ||
+      !enumValue(event.predicate, GOVERNED_CODEX_EXEC_EVENT_PREDICATES) ||
+      !enumValue(event.eventType, ['item.started', 'item.completed'] as const) ||
+      !enumValue(event.itemType, ['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change'] as const)) return null;
+  const eventFields = governedCodexExecEventFields(event.eventFields);
+  const itemFields = governedCodexExecEventFields(event.itemFields);
+  if (!eventFields || !itemFields) return null;
+  return Object.freeze({
+    source: GOVERNED_CODEX_EXEC_EVENT_VERSION,
+    predicate: enumValue(event.predicate, GOVERNED_CODEX_EXEC_EVENT_PREDICATES)!,
+    eventType: enumValue(event.eventType, ['item.started', 'item.completed'] as const)!,
+    itemType: enumValue(event.itemType, ['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change'] as const)!,
+    eventFields,
+    itemFields,
+  });
+}
+
 function governedCodexExecDiagnostic(value: unknown): GovernedProbeFailureDiagnostic | null {
   if (!value || typeof value !== 'object') return null;
   let keys: PropertyKey[];
   try { keys = Reflect.ownKeys(value); } catch { return null; }
   const hasStderr = keys.includes('stderr');
-  const diagnostic = closedDataObject(value, hasStderr ? ['version', 'code', 'stderr'] : ['version', 'code']);
+  const hasEvent = keys.includes('event');
+  const diagnostic = closedDataObject(value, hasStderr
+    ? (hasEvent ? ['version', 'code', 'stderr', 'event'] : ['version', 'code', 'stderr'])
+    : (hasEvent ? ['version', 'code', 'event'] : ['version', 'code']));
   if (!diagnostic || diagnostic.version !== GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION) return null;
   const code = enumValue(diagnostic.code, GOVERNED_CODEX_EXEC_FAILURE_CODES);
   if (!code) return null;
-  if (!hasStderr) return Object.freeze({version: GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION, code});
+  const event = hasEvent ? governedCodexExecEvent(diagnostic.event) : null;
+  if (hasEvent && !event) return null;
+  if (!hasStderr) return Object.freeze({version: GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION, code, ...(event ? {event} : {})});
 
   const stderrValue = diagnostic.stderr;
   if (!stderrValue || typeof stderrValue !== 'object') return null;
@@ -273,6 +347,7 @@ function governedCodexExecDiagnostic(value: unknown): GovernedProbeFailureDiagno
       digest: stderr.digest as `sha256:${string}`,
       ...(safeMessage ? {safeMessage} : {}),
     }),
+    ...(event ? {event} : {}),
   });
 }
 

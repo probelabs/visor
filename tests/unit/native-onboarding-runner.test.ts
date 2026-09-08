@@ -3,10 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {execFileSync, spawnSync} from 'node:child_process';
+import {jest} from '@jest/globals';
 import yaml from 'js-yaml';
 import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
 import {loadConfig} from '../../src/sdk';
 import {canonicalJson, sha256Canonical} from '../../src/state-machine/graph/claim-kernel';
+import {ExecutionJournal} from '../../src/snapshot-store';
 import {
   assertPrivateCodexHome,
   assertCodexHomeAbsent,
@@ -27,6 +29,7 @@ import {
   buildChecklistOnboardingConfig,
   checklistProgressRefreshOptions,
   loadRetainedOnboardingConfig,
+  parseChecklistPrefixRetryArguments,
   parseRecoveryArguments,
   readRetainedReviewExport,
   readRecoveryReviewPackets,
@@ -34,6 +37,7 @@ import {
   stageRecoveryReviewPackets,
   summarizeNativePostflight,
   validateRetainedReviewExportAgainstCurrentProof,
+  validateChecklistPrefixRetrySelection,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
 
 function recoveryReviewPacketFixture(root: string): {
@@ -528,6 +532,99 @@ describe('native onboarding runner boundaries', () => {
       priorOutput: '/tmp/prior',
       retryGenerationIds: ['a'.repeat(64), 'b'.repeat(64)],
     });
+  });
+
+  it('requires the bounded checklist prefix retry arguments and absent side effects', () => {
+    expect(parseChecklistPrefixRetryArguments({})).toBeUndefined();
+    expect(() => parseChecklistPrefixRetryArguments({
+      'checklist-prefix-retry-checkpoint': '/tmp/checkpoint.partial.json',
+      'checklist-prefix-retry-prior-output': '/tmp/prior',
+      'checklist-prefix-retry-generation': 'a'.repeat(64),
+      'external-side-effects': 'safely_idempotent',
+    })).toThrow(/absent/);
+    expect(() => parseChecklistPrefixRetryArguments({
+      'checklist-prefix-retry-checkpoint': '/tmp/checkpoint.partial.json',
+      'checklist-prefix-retry-generation': 'a'.repeat(64),
+      'external-side-effects': 'absent',
+    })).toThrow(/required together/);
+    expect(parseChecklistPrefixRetryArguments({
+      'checklist-prefix-retry-checkpoint': '/tmp/checkpoint.partial.json',
+      'checklist-prefix-retry-prior-output': '/tmp/prior',
+      'checklist-prefix-retry-generation': 'a'.repeat(64),
+      'external-side-effects': 'absent',
+    })).toEqual({
+      checkpoint: '/tmp/checkpoint.partial.json',
+      priorOutput: '/tmp/prior',
+      retryGenerationId: 'a'.repeat(64),
+    });
+  });
+
+  it('rejects a checklist prefix retry before checkpoint restore on graph digest mismatch', () => {
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const checkpoint = {
+      kind: 'visor.graph-journal-checkpoint',
+      version: 1,
+      sessionId: 'retained-prefix',
+      graphSemanticDigest: 'f'.repeat(64),
+      frontier: {eventCount: 25, lastEventId: 25},
+      events: [],
+      integrity: {algorithm: 'sha256', digest: 'f'.repeat(64)},
+    } as any;
+    expect(() => validateChecklistPrefixRetrySelection(config, checkpoint, 'a'.repeat(64)))
+      .toThrow(/graph semantic digest/);
+  });
+
+  it('keeps the retained event prefix and selects only the failed inspect before component release', () => {
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const digest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+    const generationId = 'a'.repeat(64);
+    const generation = {
+      nodeGenerationId: generationId,
+      nodeInstanceId: 'inspect-node',
+      subgraphInstanceId: 'project-instance',
+      templateNodeKey: 'inspect',
+      checkId: 'inspect',
+      scope: [{kind: 'keyed', expansionOwnerCheck: 'project', key: 'project', subgraphInstanceId: 'project-instance'}],
+      incarnation: 0,
+      itemFingerprint: 'b'.repeat(64),
+      executionConfigDigest: 'c'.repeat(64),
+      activeInputClaimIds: [],
+      status: 'failed',
+      attemptId: 'd'.repeat(64),
+      fence: 7,
+      scheduled: true,
+      completedOutputClaimIds: [],
+      reason: 'provider failed',
+    };
+    const checkpoint = {
+      graphSemanticDigest: digest,
+      events: [
+        ...Array.from({length: 24}, () => ({})),
+        {type: 'AttemptFailed', nodeGenerationId: generationId, checkId: 'inspect', attemptId: generation.attemptId, fence: generation.fence, reason: generation.reason},
+      ],
+    } as any;
+    const validate = jest.spyOn(ExecutionJournal, 'validateGraphCheckpointIntegrity').mockReturnValue(checkpoint);
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockReturnValue({
+      getInstanceProjection: () => ({
+        generationsById: {[generationId]: generation},
+        activeGenerationIdByNode: {[generation.nodeInstanceId]: generationId},
+      }),
+    } as any);
+    try {
+      const selection = validateChecklistPrefixRetrySelection(config, checkpoint, generationId);
+      expect(selection.prefixEventCount).toBe(25);
+      expect(selection.generation.checkId).toBe('inspect');
+      const withComponentAttempt = {...checkpoint, events: [
+        ...checkpoint.events,
+        {type: 'AttemptStarted', scope: [{}, {}]},
+      ]};
+      validate.mockReturnValue(withComponentAttempt as any);
+      expect(() => validateChecklistPrefixRetrySelection(config, withComponentAttempt as any, generationId))
+        .toThrow(/component attempt release/);
+    } finally {
+      validate.mockRestore();
+      restore.mockRestore();
+    }
   });
 
   it('allows an initialized recovery subject but keeps checkpoint and output roots bounded', () => {

@@ -185,6 +185,73 @@ describe('private governed Probe runner', () => {
     }
   });
 
+  it('keeps only the closed structural rejected-item event metadata', () => {
+    const event = {
+      source: 'codex-exec-rejected-item/v1',
+      predicate: 'item_status',
+      eventType: 'item.completed',
+      itemType: 'mcp_tool_call',
+      eventFields: [
+        {name: 'item', type: 'object'},
+        {name: 'type', type: 'string', size: 15},
+      ],
+      itemFields: [
+        {name: '<unsafe>', type: 'string', size: 7},
+        {name: 'id', type: 'string', size: 4},
+      ],
+    };
+    const projection = sanitizeGovernedAnswerFailure(governedFailure({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_ITEM',
+        event,
+      },
+    }));
+    expect(projection).toEqual({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_ITEM',
+        event,
+      },
+    });
+    expect(Object.isFrozen((projection as any).providerEngineDiagnostic.event)).toBe(true);
+    for (const malformed of [
+      {...event, predicate: 'item_private'},
+      {...event, eventFields: [{name: '9starts-with-digit', type: 'string', size: 1}]},
+      {...event, itemFields: [{name: 'type', type: 'boolean', size: 1}]},
+      {...event, itemFields: [{name: 'type', type: 'string', size: -1}]},
+      {...event, extra: 'drop'},
+    ]) {
+      expect(sanitizeGovernedAnswerFailure(governedFailure({
+        answerFailureStage: 'provider_engine',
+        providerEngineFailureBoundary: 'query',
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_ITEM',
+          event: malformed,
+        },
+      }))).toEqual({answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query'});
+    }
+    const accessor = governedFailure({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_ITEM',
+        event,
+      },
+    });
+    Object.defineProperty((accessor as any).providerEngineDiagnostic, 'event', {enumerable: true, get: () => event});
+    expect(sanitizeGovernedAnswerFailure(accessor)).toEqual({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+    });
+  });
+
   it('drops malformed or accessor-backed exec diagnostics without widening the failure record', () => {
     const base = {
       answerFailureStage: 'provider_engine',

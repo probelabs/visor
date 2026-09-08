@@ -158,4 +158,42 @@ describe('failed generated checkpoint retry', () => {
       onRetryCheckpoint: () => { throw new Error('durable write failed'); },
     })).rejects.toThrow('durable write failed');
   });
+
+  it('threads a retry dispatch gate so downstream work remains ready until the durable frontier is handled', async () => {
+    const config = retryConfig();
+    const plan = compileClaimPlan(config);
+    const journal = new ExecutionJournal(plan);
+    const request = journal.requestCatalogReconciliation({sessionId: 'retry-gated-session', ownerCheck: OWNER});
+    const catalogAttempt = journal.startCatalogRequestAttempt(request.requestId);
+    journal.scheduleCatalogRequestAttempt(catalogAttempt);
+    journal.completeAttempt({...catalogAttempt, payload: {items: [{id: 'A', revision: 1}]}});
+    const inspect = journal.queryReadyWork().find(generation => generation.checkId === 'inspect')!;
+    const first = journal.startGeneratedAttempt(inspect.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(first);
+    journal.failGeneratedAttempt(first, 'MANAGED_START_FAILED');
+    const oldCheckpoint = journal.exportGraphCheckpoint('retry-gated-session');
+
+    const calls: string[] = [];
+    if (previous) registry.unregister('durable-fixture');
+    registry.register(new RetryFixtureProvider(calls));
+    let persistedRetry: any;
+    const engine = new StateMachineExecutionEngine(process.cwd());
+    const resumed = await engine.retryGraphCheckpoint({
+      checkpoint: JSON.parse(JSON.stringify(oldCheckpoint)),
+      config,
+      prInfo,
+      retryGenerationIds: [inspect.nodeGenerationId],
+      externalSideEffects: 'absent',
+      generatedDispatchGate: generation => generation.checkId === 'summarize' ? 'defer' : 'dispatch',
+      onRetryCheckpoint: checkpoint => { persistedRetry = checkpoint; },
+      maxParallelism: 1,
+    });
+
+    expect(persistedRetry.events.slice(0, oldCheckpoint.events.length)).toEqual(oldCheckpoint.events);
+    expect(calls.filter(call => call === 'inspect:A')).toHaveLength(1);
+    expect(calls.some(call => call === 'summarize:A')).toBe(false);
+    const projection = ExecutionJournal.restoreGraphCheckpoint(plan, resumed.checkpoint).getInstanceProjection();
+    const summarize = Object.values(projection.generationsById).find(generation => generation.checkId === 'summarize');
+    expect(summarize?.status).toBe('ready');
+  });
 });

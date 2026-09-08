@@ -932,7 +932,7 @@ export class StateMachineExecutionEngine {
       input.failFast,
       undefined,
       { kind: 'graph-resume', checkpoint: input.checkpoint } satisfies GraphCheckpointResumeBootstrap,
-      undefined,
+      input.generatedDispatchGate,
       input.retryGenerationIds,
       input.externalSideEffects,
       input.onRetryCheckpoint,
