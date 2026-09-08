@@ -315,6 +315,39 @@ describe('public governed raw-item failure warning', () => {
   let warningLog: jest.SpyInstance;
   let consoleError: jest.SpyInstance;
 
+  function typedGovernedFailure(): Error {
+    const failure = new Error('secret raw provider payload');
+    Object.defineProperty(failure, 'name', {
+      value: 'GovernedAnswerFailure',
+      enumerable: false,
+    });
+    Object.assign(failure, {
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_ITEM',
+        event: {
+          source: 'codex-exec-rejected-item/v1',
+          predicate: 'item_status',
+          eventType: 'item.completed',
+          itemType: 'command_execution',
+          itemStatus: 'failed',
+          eventFields: [
+            { name: 'item', type: 'object' },
+            { name: 'type', type: 'string', size: 17 },
+          ],
+          itemFields: [
+            { name: 'command', type: 'string', size: 19 },
+            { name: 'status', type: 'string', size: 6 },
+          ],
+        },
+      },
+      hostile: { token: 'must-not-cross-the-boundary' },
+    });
+    return failure;
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
     warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
@@ -473,5 +506,86 @@ describe('public governed raw-item failure warning', () => {
     ).rejects.toThrow('original governed failure');
     expect(warningLog).toHaveBeenCalledTimes(1);
     expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a closed typed governed failure and suppresses raw console output', async () => {
+    const failure = typedGovernedFailure();
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-typed'
+      )
+    ).rejects.toBe(failure);
+
+    expect(warningLog).toHaveBeenCalledWith(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName: 'spec_review',
+        nodeGenerationId: 'generation-typed',
+        failure: {
+          answerFailureStage: 'provider_engine',
+          providerEngineFailureBoundary: 'query',
+          providerEngineDiagnostic: {
+            version: 'probe.governed-codex-exec-failure/v1',
+            code: 'GOVERNED_CODEX_EXEC_ITEM',
+            event: {
+              source: 'codex-exec-rejected-item/v1',
+              predicate: 'item_status',
+              eventType: 'item.completed',
+              itemType: 'command_execution',
+              itemStatus: 'failed',
+              eventFields: [
+                { name: 'item', type: 'object' },
+                { name: 'type', type: 'string', size: 17 },
+              ],
+              itemFields: [
+                { name: 'command', type: 'string', size: 19 },
+                { name: 'status', type: 'string', size: 6 },
+              ],
+            },
+          },
+        },
+      })
+    );
+    const warning = warningLog.mock.calls[0]?.[0] as string;
+    expect(warning).not.toContain('secret raw provider payload');
+    expect(warning).not.toContain('must-not-cross-the-boundary');
+    expect(warning).not.toContain('[Object]');
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('preserves a typed governed failure when its warning sink throws', async () => {
+    const failure = typedGovernedFailure();
+    warningLog.mockImplementation(() => {
+      throw new Error('warning sink failed');
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-typed-sink'
+      )
+    ).rejects.toBe(failure);
+    expect(warningLog).toHaveBeenCalledTimes(1);
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

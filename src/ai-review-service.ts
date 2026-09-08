@@ -14,6 +14,7 @@ import { processDiffWithOutline } from './utils/diff-processor';
 import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
 import { formatUserFacingExecutionError } from './utils/user-facing-error';
 import { extractFileSections, replaceFileSections } from './slack/markdown';
+import { sanitizeGovernedAnswerFailure } from './providers/governed-probe-runner';
 
 /**
  * Grace period (ms) subtracted from Visor's hard timeout to derive Probe's
@@ -372,8 +373,32 @@ function warnGovernedRawItemFailure(
   error: unknown,
   checkName?: string,
   nodeGenerationId?: string
-): void {
+): boolean {
+  const typedGovernedFailure = (() => {
+    if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return false;
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(error, 'name');
+      return !!descriptor && 'value' in descriptor && descriptor.value === 'GovernedAnswerFailure';
+    } catch {
+      return false;
+    }
+  })();
   try {
+    if (typedGovernedFailure) {
+      const safeCheckName = typeof checkName === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(checkName)
+        ? checkName : 'unknown';
+      const safeNodeGenerationId = typeof nodeGenerationId === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
+        ? nodeGenerationId : 'unknown';
+      logger.warn(
+        JSON.stringify({
+          category: 'probe_governed_failure',
+          checkName: safeCheckName,
+          nodeGenerationId: safeNodeGenerationId,
+          failure: sanitizeGovernedAnswerFailure(error),
+        })
+      );
+      return true;
+    }
     if (
       error === null ||
       (typeof error !== 'object' && typeof error !== 'function') ||
@@ -413,7 +438,9 @@ function warnGovernedRawItemFailure(
     );
   } catch {
     // Failure diagnostics must never mask or alter the governed failure.
+    return typedGovernedFailure;
   }
+  return false;
 }
 
 /**
@@ -3574,7 +3601,8 @@ ${'='.repeat(60)}
 
       return { response, effectiveSchema, sessionId };
     } catch (error) {
-      warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
+      const handledGovernedFailure = warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
+      if (handledGovernedFailure) throw error;
       console.error('❌ ProbeAgent failed:', error);
       throw new Error(formatUserFacingExecutionError(error));
     } finally {
