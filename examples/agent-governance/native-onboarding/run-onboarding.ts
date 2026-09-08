@@ -221,6 +221,7 @@ const REPO_ROOT = path.resolve(__dirname, '../../../');
 // enforcement points for individual calls.
 const DEFAULT_TIMEOUT_MS = 7_200_000;
 let diagnosticOutput: string | undefined;
+let recoveryTerminalPersistence: ((error: unknown) => void) | undefined;
 
 const PR: PRInfo = {
   number: 0,
@@ -890,7 +891,7 @@ function checklistSkeletonResumeDeltaIsValid(
     !activeGenerations.some(generation => generation.status === 'failed' || generation.status === 'running');
 }
 
-async function loadChecklistMaterializedConfig(
+export async function loadChecklistMaterializedConfig(
   checkpointPath: string,
 ): Promise<{config: VisorConfig; checkpoint: GraphJournalCheckpointV1; materializedConfigPath: string}> {
   const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as GraphJournalCheckpointV1;
@@ -925,7 +926,7 @@ function persistChecklistMaterializedConfig(output: string, config: VisorConfig)
   };
 }
 
-function checklistBaselineCommitFromCheckpoint(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): string {
+export function checklistBaselineCommitFromCheckpoint(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): string {
   const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
   const baselineClaims = Object.values(projection.claimsById).filter(claim =>
     claim.active && claim.claim === 'native.initialized.baseline@1',
@@ -2535,6 +2536,22 @@ function hasPriorIsolatedDraftReplay(checkpoint: GraphJournalCheckpointV1, gener
   );
 }
 
+/**
+ * A retry must bind to the generation's current failed attempt. Historical
+ * retry events do not make a newly failed attempt ineligible, while a ready or
+ * running generation can never be reopened through recovery.
+ */
+export function isCurrentFailedRetryAttempt(checkpoint: GraphJournalCheckpointV1, generation: any): boolean {
+  if (!generation || generation.status !== 'failed' || generation.scheduled !== true ||
+      typeof generation.attemptId !== 'string' || typeof generation.fence !== 'number' ||
+      typeof generation.reason !== 'string') return false;
+  const latestFailedAttempt = [...(checkpoint.events as readonly Json[])]
+    .reverse()
+    .find(event => event.type === 'AttemptFailed' && event.nodeGenerationId === generation.nodeGenerationId);
+  return !!latestFailedAttempt && latestFailedAttempt.attemptId === generation.attemptId &&
+    latestFailedAttempt.fence === generation.fence && latestFailedAttempt.reason === generation.reason;
+}
+
 function assertRecoveryInputClaim(
   projection: any,
   generation: any,
@@ -2844,6 +2861,7 @@ export function validateRecoverySelection(
   inventory: Json,
   externalSideEffects: RecoverySideEffects,
   currentProofRequirements: readonly RecoveryProofRequirementHash[] = [],
+  options: Readonly<{allowEmptyAuthorDraft?: boolean; allowHistoricalAuthorRetry?: boolean}> = {},
 ): {journal: ExecutionJournal; bindings: readonly RecoveryBinding[]; reviewPackets: readonly RecoveryReviewPacket[]} {
   const plan = compileClaimPlan(config);
   if (checkpoint.graphSemanticDigest !== plan.expansionPlan.graphSemanticDigest) {
@@ -2914,7 +2932,10 @@ export function validateRecoverySelection(
         typeof generation.reason !== 'string' || generation.completedOutputClaimIds.length !== 0) {
       throw new Error(`Recovery generation ${generationId} is not an eligible failed ${authorReplay ? 'author' : nativeReviewReplay ? 'native review' : 'promotion'} leaf`);
     }
-    if (authorReplay && hasPriorIsolatedDraftReplay(checkpoint, generationId)) {
+    if (!isCurrentFailedRetryAttempt(checkpoint, {...generation, nodeGenerationId: generationId})) {
+      throw new Error(`Recovery generation ${generationId} is not bound to its current failed ${authorReplay ? 'author' : 'selected'} attempt`);
+    }
+    if (authorReplay && hasPriorIsolatedDraftReplay(checkpoint, generationId) && !options.allowHistoricalAuthorRetry) {
       throw new Error(`Recovery generation ${generationId} already has an isolated draft replay`);
     }
     if (!authorReplay && hasPriorIsolatedDraftReplay(checkpoint, generationId)) {
@@ -3030,9 +3051,9 @@ export function validateRecoverySelection(
     if (authorReplay) {
       if (!checkoutPath) throw new Error(`Recovery author generation ${generationId} has no retained checkout`);
       draftInventory = inventoryAuthorDraft(checkoutPath, baselineCommit, workItemPayload.component_id, ownedSourcePaths);
-    }
-    if (authorReplay && (!draftInventory || draftInventory.files.length === 0)) {
-      throw new Error(`Recovery author draft inventory is empty for ${workItemPayload.component_id}`);
+      if (!options.allowEmptyAuthorDraft && draftInventory.files.length === 0) {
+        throw new Error(`Recovery author draft inventory is empty for ${workItemPayload.component_id}`);
+      }
     }
     if (authorReplay) {
       const retainedNativePaths = draftInventory?.files
@@ -3559,6 +3580,10 @@ async function runRecovery(
   timeout: number,
   requestTimeout: number,
   recovery: RecoveryArguments,
+  checklistOnboarding = false,
+  governedCodexTransport?: string,
+  governedCodexBin?: string,
+  governedCodexSha256?: string,
 ): Promise<void> {
   const priorOutput = realDirectory(required(values, 'prior-output'), 'prior recovery output');
   if (inside(priorOutput, roots.subject) || inside(priorOutput, roots.original) || inside(priorOutput, roots.output)) {
@@ -3593,9 +3618,66 @@ async function runRecovery(
     throw new Error('isolated_draft_replay requires exactly one failed author generation');
   }
 
+  const checklistRecovery = checklistOnboarding && governedCodexTransport === 'exec-jsonl-default-auth-v1';
+  if (checklistOnboarding && !checklistRecovery) {
+    throw new Error('checklist recovery requires --governed-codex-transport exec-jsonl-default-auth-v1');
+  }
+  if (checklistRecovery && (!governedCodexBin || !governedCodexSha256)) {
+    throw new Error('checklist recovery requires verified --codex-bin and --codex-sha256');
+  }
+  let latestRecoveryCheckpoint = validatedInput;
+  let recoveryConfig: VisorConfig | undefined;
+  let recoveryMaterializedConfigPath: string | undefined;
+  const persistRecoveryTerminal = (stage: string, error: unknown): void => {
+    void error;
+    try { writeCheckpoint(path.join(roots.output, 'checkpoint.partial.json'), latestRecoveryCheckpoint); } catch { /* preserve primary error */ }
+    if (checklistRecovery && recoveryConfig && recoveryMaterializedConfigPath) {
+      try {
+        const configBytes = fs.readFileSync(recoveryMaterializedConfigPath, 'utf8');
+        const destination = path.join(roots.output, 'checklist-materialized-config.json');
+        writeText(destination, configBytes);
+        fs.chmodSync(destination, 0o600);
+      } catch { /* preserve primary error */ }
+      try { writeRestoredChecklistProgress(roots.output, recoveryConfig, latestRecoveryCheckpoint); } catch { /* observational */ }
+    }
+    try {
+      const failureCode = stage === 'retry'
+        ? 'RETRY_FAILED'
+        : stage === 'postflight'
+          ? 'POSTFLIGHT_FAILED'
+          : stage === 'incomplete'
+            ? 'RECOVERY_INCOMPLETE'
+            : 'RECOVERY_FAILED';
+      const evidence = stage === 'retry' || stage === 'terminal'
+        ? 'failure.stderr'
+        : stage === 'postflight'
+          ? 'postflight.json'
+          : 'summary.json';
+      writeJson(path.join(roots.output, 'recovery', 'closed-diagnostic.json'), {
+        version: 1,
+        kind: 'native-onboarding-recovery-failure',
+        stage,
+        failure_code: failureCode,
+        detail: stage === 'postflight'
+          ? 'Postflight failure evidence is retained in postflight.json and commands/postflight; this record contains no provider payload or raw stderr.'
+          : stage === 'incomplete'
+            ? 'Incomplete recovery evidence is retained in summary.json, checkpoint.partial.json, and progress.json; this record contains no provider payload or raw stderr.'
+            : 'Runner failure detail is retained in failure.stderr; this record contains no provider payload or raw stderr.',
+        evidence,
+        checkpoint: 'checkpoint.partial.json',
+        ...(checklistRecovery && recoveryConfig ? {
+          materialized_config: 'checklist-materialized-config.json',
+          progress: 'progress.json',
+        } : {}),
+      });
+    } catch { /* preserve primary error */ }
+  };
+  recoveryTerminalPersistence = error => persistRecoveryTerminal('terminal', error);
   const revision = assertRecoverySubject(roots.subject);
   const objectFormat = gitObjectFormat(roots.subject);
-  const codex = assertPrivateCodexHome(roots.subject, roots.original, roots.output);
+  const codex = checklistRecovery
+    ? assertCodexHomeAbsent(roots.subject, roots.original, roots.output)
+    : assertPrivateCodexHome(roots.subject, roots.original, roots.output);
   process.chdir(roots.subject);
   if (fs.realpathSync(process.cwd()) !== roots.subject) throw new Error('runner cwd did not resolve to the validated recovery subject root');
   const retainedWorktreeRoot = path.join(priorOutput, 'worktrees');
@@ -3636,8 +3718,19 @@ async function runRecovery(
     retry_generation_ids: generationIds,
     external_side_effects: externalSideEffects,
     object_format: objectFormat,
-    codex_home_is_private: true,
-    codex_home_config_present: codex.configPresent,
+    ...(checklistRecovery ? {
+      codex_home_is_private: false,
+      codex_home_absent: true,
+      codex_home_config_present: false,
+      codex_user_config_ignored: true,
+      codex_rules_ignored: true,
+      governed_codex_transport: governedCodexTransport,
+      codex_bin: governedCodexBin,
+      codex_sha256: governedCodexSha256,
+    } : {
+      codex_home_is_private: true,
+      codex_home_config_present: codex.configPresent,
+    }),
     no_native_init_or_discovery: true,
     note: externalSideEffects === 'isolated_draft_replay'
       ? 'Recovery restores one retained Graph-v2 prefix and explicitly retries one selected author leaf from an isolated retained draft; other failures remain visible.'
@@ -3658,6 +3751,24 @@ async function runRecovery(
 
   const registry = CheckProviderRegistry.getInstance();
   registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
+  let config: VisorConfig;
+  let retainedAuthority: Json | undefined;
+  if (checklistRecovery) {
+    const restored = await loadChecklistMaterializedConfig(checkpointPath);
+    config = restored.config;
+    recoveryConfig = config;
+    recoveryMaterializedConfigPath = restored.materializedConfigPath;
+    const exactConfigBytes = fs.readFileSync(recoveryMaterializedConfigPath, 'utf8');
+    writeText(path.join(roots.output, 'checklist-materialized-config.json'), exactConfigBytes);
+    fs.chmodSync(path.join(roots.output, 'checklist-materialized-config.json'), 0o600);
+  } else {
+    const retained = await loadRetainedOnboardingConfig(priorOutput, roots.output);
+    config = retained.config;
+    retainedAuthority = retained.authority.inventory;
+  }
+  if (checklistRecovery) {
+    try { writeRestoredChecklistProgress(roots.output, config, latestRecoveryCheckpoint); } catch { /* observational */ }
+  }
   // Refresh the current subject inventory as a separate freshness check, but
   // never bind the recovery graph to post-promotion role/schema bytes. Those
   // bytes are immutable authority retained by the earlier run.
@@ -3666,13 +3777,11 @@ async function runRecovery(
   const currentProofRequirements = await loadCurrentProofRequirementHashes(
     proof, roots.subject, roots.output, timeout, reviewRequirementIds,
   );
-  const retained = await loadRetainedOnboardingConfig(priorOutput, roots.output);
   const currentAuthority = assertAuthenticatedInventory(currentInventory, 'current Proof onboarding inventory');
-  const retainedAuthority = assertAuthenticatedInventory(
-    retained.authority.inventory,
+  if (retainedAuthority && currentAuthority.project_id !== assertAuthenticatedInventory(
+    retainedAuthority,
     'retained Proof onboarding inventory',
-  );
-  if (currentAuthority.project_id !== retainedAuthority.project_id) {
+  ).project_id) {
     throw new Error('current Proof project identity does not match retained recovery authority');
   }
   writeJson(path.join(roots.output, 'recovery', 'current-authority.json'), {
@@ -3680,10 +3789,15 @@ async function runRecovery(
     subject_fingerprint: currentAuthority.subject_fingerprint,
     source: 'current-read-only-proof-inventory',
   });
-  const config = retained.config;
   const configPlan = compileClaimPlan(config);
   if (configPlan.expansionPlan.graphSemanticDigest !== validatedInput.graphSemanticDigest) {
     throw new Error('recovery configuration graph digest does not match the checkpoint authority');
+  }
+  if (checklistRecovery) {
+    const baselineCommit = checklistBaselineCommitFromCheckpoint(config, validatedInput);
+    if (baselineCommit !== revision) {
+      throw new Error('checklist recovery subject HEAD does not match the journaled native baseline claim');
+    }
   }
   const authority = validateRecoverySelection(
     config,
@@ -3693,6 +3807,7 @@ async function runRecovery(
     currentInventory,
     externalSideEffects,
     currentProofRequirements,
+    checklistRecovery ? {allowEmptyAuthorDraft: true, allowHistoricalAuthorRetry: true} : {},
   );
   const draftInventories = authority.bindings
     .filter(binding => binding.draftInventory)
@@ -3712,9 +3827,41 @@ async function runRecovery(
   });
 
   const engine = new StateMachineExecutionEngine(roots.subject);
-  engine.setExecutionContext({hooks: {onPromptCaptured}});
+  const refreshRecoveryProgress = (): void => {
+    if (!checklistRecovery || !recoveryConfig) return;
+    let liveInstanceProjection: unknown;
+    try {
+      liveInstanceProjection = engine.getInstanceProjection();
+      latestRecoveryCheckpoint = engine.exportGraphCheckpoint();
+    } catch {
+      try { liveInstanceProjection = engine.getInstanceProjection(); } catch { /* observational */ }
+    }
+    try {
+      writeRestoredChecklistProgress(roots.output, recoveryConfig, latestRecoveryCheckpoint, {resumed: true}, liveInstanceProjection);
+    } catch { /* observational */ }
+  };
+  const recoveryPromptHook = (info: PublicPromptCaptureInfo): void => {
+    onPromptCaptured(info);
+    refreshRecoveryProgress();
+  };
+  engine.setExecutionContext({
+    ...(checklistRecovery ? {
+      governedCodexTransport: governedCodexTransport as 'exec-jsonl-default-auth-v1',
+      codexBin: governedCodexBin,
+      codexSha256: governedCodexSha256,
+    } : {}),
+    hooks: {
+      onPromptCaptured: checklistRecovery ? recoveryPromptHook : onPromptCaptured,
+      ...(checklistRecovery ? {onCheckComplete: refreshRecoveryProgress} : {}),
+    },
+  });
   let resumed: Awaited<ReturnType<StateMachineExecutionEngine['retryGraphCheckpoint']>>;
+  const retainedBaselineCommit = checklistRecovery
+    ? checklistBaselineCommitFromCheckpoint(config, validatedInput)
+    : undefined;
+  const previousBaselineCommit = process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
   try {
+    if (retainedBaselineCommit) process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = retainedBaselineCommit;
     resumed = await engine.retryGraphCheckpoint({
       checkpoint: validatedInput,
       config,
@@ -3722,6 +3869,7 @@ async function runRecovery(
       retryGenerationIds: generationIds,
       externalSideEffects,
       onRetryCheckpoint: retryCheckpoint => {
+        latestRecoveryCheckpoint = retryCheckpoint;
         for (const binding of authority.bindings) {
           if (binding.draftInventory) {
             assertDraftInventoryUnchanged(binding.draftInventory, binding.ownedSourcePaths || []);
@@ -3731,14 +3879,25 @@ async function runRecovery(
       },
       maxParallelism: config.max_parallelism,
       failFast: false,
+      ...(checklistRecovery ? {generatedDispatchGate: checklistSkeletonPauseGate} : {}),
     });
   } catch (error) {
     // The engine callback persists the retry prefix before dispatch. Keep the
     // source checkpoint and selection receipt available if later resume fails.
+    try { latestRecoveryCheckpoint = engine.exportGraphCheckpoint(); } catch { /* preserve last durable checkpoint */ }
+    persistRecoveryTerminal('retry', error);
+    recoveryTerminalPersistence = undefined;
     throw error;
+  } finally {
+    if (previousBaselineCommit === undefined) delete process.env.NATIVE_ONBOARDING_BASELINE_COMMIT;
+    else process.env.NATIVE_ONBOARDING_BASELINE_COMMIT = previousBaselineCommit;
   }
+  latestRecoveryCheckpoint = resumed.checkpoint;
   writeCheckpoint(path.join(roots.output, 'checkpoint.json'), resumed.checkpoint);
   writeJson(path.join(roots.output, 'visor-result.json'), resumed.result);
+  if (checklistRecovery) {
+    try { writeRestoredChecklistProgress(roots.output, config, resumed.checkpoint); } catch { /* observational */ }
+  }
   const unresolved = currentUnresolvedGenerations(config, resumed.checkpoint);
   const finalProjection: any = ExecutionJournal.restoreGraphCheckpoint(
     compileClaimPlan(config), resumed.checkpoint,
@@ -3750,13 +3909,20 @@ async function runRecovery(
   const selectedStillFailed = recoveredRetryGenerations
     .filter(generation => generation.status === 'failed')
     .map(generation => generation.generation_id);
+  const checklistFrontier = checklistRecovery
+    ? assessChecklistSkeletonFrontier(config, resumed.checkpoint)
+    : undefined;
+  if (checklistFrontier?.ready) {
+    writeCheckpoint(path.join(roots.output, 'checklist-skeleton-frontier-checkpoint.json'), resumed.checkpoint);
+    try { writeRestoredChecklistProgress(roots.output, config, resumed.checkpoint, {paused: true}); } catch { /* observational */ }
+  }
 
   const postflight: Json = {};
   for (const [name, args] of Object.entries({
     requirements: ['req', 'list', '--format', 'json'],
     validation: ['validate', '--variable-drift', '--format', 'json'],
     audit: ['audit', '--no-cache', '--check', 'validate_passes', '--check', 'annotation_validity', '--check', 'levels_connected', '--format', 'json'],
-    checklist: checklistOnboarding ? ['checklist', 'show', '--format', 'json'] : ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'],
+    checklist: checklistRecovery ? ['checklist', 'show', '--format', 'json'] : ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'],
     status: ['status', '--format', 'json'],
   })) {
     const run = runProof(proof, roots.subject, roots.output, 'postflight', args, timeout);
@@ -3769,9 +3935,13 @@ async function runRecovery(
       ? 'recovery-retry-failed-postflight'
       : selectedStillFailed.length > 0
         ? 'recovery-retry-failed'
-        : unresolved.length > 0
-          ? 'recovery-retry-complete-with-unresolved-generations'
-          : 'recovery-retry-complete-open-admission-boundary',
+        : checklistRecovery && checklistFrontier?.ready && unresolved.length === 0
+          ? 'checklist-skeleton-ready-paused'
+          : checklistRecovery
+            ? 'recovery-incomplete'
+            : unresolved.length > 0
+              ? 'recovery-retry-complete-with-unresolved-generations'
+              : 'recovery-retry-complete-open-admission-boundary',
     mode: 'explicit-failed-generation-retry',
     prior_checkpoint: {
       path: checkpointPath,
@@ -3788,18 +3958,34 @@ async function runRecovery(
     historical_failed_attempts: historicalFailedAttempts(validatedInput),
     final_checkpoint: summarizeCheckpoint(resumed.checkpoint),
     current_unresolved_failed_generations: unresolved,
+    ...(checklistFrontier ? {
+      checklist_skeleton_frontier: {
+        ready: checklistFrontier.ready,
+        expected_component_ids: checklistFrontier.expectedComponentIds,
+        promoted_component_ids: checklistFrontier.promotedComponentIds,
+        component_attempts_started: checklistFrontier.componentAttemptsStarted,
+        skeleton_generation_ids: checklistFrontier.skeletonGenerationIds,
+        ...(checklistFrontier.reason ? {reason: checklistFrontier.reason} : {}),
+      },
+    } : {}),
     recovered_retry_generations: recoveredRetryGenerations,
     open_native_checks: postflightSummary.open_native_checks,
     admitted: 'No component admission or full onboarding success is claimed by retry mode.',
     output: roots.output,
   };
   writeJson(path.join(roots.output, 'summary.json'), summary);
-  if (postflightSummary.hard_failures.length > 0 || selectedStillFailed.length > 0 || unresolved.length > 0) {
+  const hardPostflightFailure = postflightSummary.hard_failures.length > 0;
+  const incompleteRecovery = selectedStillFailed.length > 0 || unresolved.length > 0 ||
+    (checklistRecovery && !checklistFrontier?.ready);
+  if (hardPostflightFailure || incompleteRecovery) {
+    persistRecoveryTerminal(hardPostflightFailure ? 'postflight' : 'incomplete', new Error(`recovery terminal state: ${summary.status}`));
+    recoveryTerminalPersistence = undefined;
     console.error(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
     process.exitCode = 1;
     return;
   }
   console.log(JSON.stringify({status: summary.status, output: roots.output}, null, 2));
+  recoveryTerminalPersistence = undefined;
 }
 
 type FreshRunnerRoots = Readonly<{subject: string; original: string; output: string}>;
@@ -4076,8 +4262,11 @@ async function main(): Promise<void> {
   const governedCodexTransport = values['governed-codex-transport'];
   const codexBinArg = values['codex-bin'];
   const codexSha256Arg = values['codex-sha256'];
-  if (recovery && governedCodexTransport !== undefined) {
+  if (recovery && governedCodexTransport !== undefined && !checklistOnboarding) {
     throw new Error('--governed-codex-transport cannot be combined with checkpoint recovery');
+  }
+  if (recovery && checklistOnboarding && governedCodexTransport !== 'exec-jsonl-default-auth-v1') {
+    throw new Error('checklist recovery requires --checklist-onboarding with --governed-codex-transport exec-jsonl-default-auth-v1');
   }
   if (governedCodexTransport !== undefined && !checklistOnboarding) {
     throw new Error('--governed-codex-transport is only valid with --checklist-onboarding');
@@ -4110,7 +4299,18 @@ async function main(): Promise<void> {
     throw new Error('REQUEST_TIMEOUT must be an explicit positive inner budget smaller than --timeout');
   }
   if (recovery) {
-    await runRecovery(values, roots, proof, timeout, requestTimeout, recovery);
+    await runRecovery(
+      values,
+      roots,
+      proof,
+      timeout,
+      requestTimeout,
+      recovery,
+      checklistOnboarding,
+      governedCodexTransport,
+      governedCodexBin,
+      governedCodexSha256,
+    );
     return;
   }
   const revision = retainedExport !== undefined || checklistSkeletonResume !== undefined
@@ -4638,6 +4838,10 @@ async function main(): Promise<void> {
 if (require.main === module) {
   main().catch(error => {
     const message = error instanceof Error ? (error.stack || error.message) : String(error);
+    if (recoveryTerminalPersistence) {
+      try { recoveryTerminalPersistence(error); } catch { /* preserve stderr */ }
+      recoveryTerminalPersistence = undefined;
+    }
     if (!diagnosticOutput) {
       try { diagnosticOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR; } catch { diagnosticOutput = undefined; }
     }

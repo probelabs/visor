@@ -21,6 +21,7 @@ import {
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
   inventoryAuthorDraft,
+  isCurrentFailedRetryAttempt,
   buildRetainedReviewedAggregateMap,
   encodeRetainedReviewedAggregateMap,
   materializeRetainedContinuationConfig,
@@ -30,6 +31,7 @@ import {
   buildChecklistOnboardingConfig,
   checklistProgressRefreshOptions,
   loadRetainedOnboardingConfig,
+  loadChecklistMaterializedConfig,
   parseChecklistPrefixRetryArguments,
   parseRecoveryArguments,
   readRetainedReviewExport,
@@ -37,6 +39,7 @@ import {
   serializeRoleInvocation,
   stageRecoveryReviewPackets,
   summarizeNativePostflight,
+  validateRecoverySelection,
   validateRetainedReviewExportAgainstCurrentProof,
   validateChecklistPrefixRetrySelection,
   writeNativeChecklistProgress,
@@ -288,6 +291,29 @@ describe('native onboarding runner boundaries', () => {
     expect(Object.keys(profile.subgraphs)).toEqual(['discover-project-checklist', 'checklist-onboard-component']);
     expect(() => compileClaimPlan(profile as any)).not.toThrow();
     await expect(loadConfig(profile as any, {strict: true})).resolves.toBeDefined();
+  });
+
+  it('loads a retained checklist checkpoint from its sibling exact materialized config', async () => {
+    const checkpointRoot = path.join(root, 'retained-checklist-prefix');
+    fs.mkdirSync(checkpointRoot, {recursive: true});
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const configBytes = canonicalJson(config) + '\n';
+    const checkpoint = {
+      kind: 'visor.graph-journal-checkpoint',
+      version: 1,
+      sessionId: 'retained-checklist-prefix',
+      graphSemanticDigest: compileClaimPlan(config).expansionPlan.graphSemanticDigest,
+      frontier: {eventCount: 0, lastEventId: 0},
+      events: [],
+      integrity: {algorithm: 'sha256', digest: '0'.repeat(64)},
+    } as any;
+    const checkpointPath = path.join(checkpointRoot, 'checkpoint.json');
+    fs.writeFileSync(checkpointPath, JSON.stringify(checkpoint) + '\n', 'utf8');
+    fs.writeFileSync(path.join(checkpointRoot, 'checklist-materialized-config.json'), configBytes, 'utf8');
+    const loaded = await loadChecklistMaterializedConfig(checkpointPath);
+    expect(fs.readFileSync(loaded.materializedConfigPath, 'utf8')).toBe(configBytes);
+    expect(loaded.config).toBeDefined();
+    expect(loaded.checkpoint.sessionId).toBe(checkpoint.sessionId);
   });
 
   it('accepts a private minimal Codex home and rejects configured MCP before dispatch', () => {
@@ -592,6 +618,229 @@ describe('native onboarding runner boundaries', () => {
       priorOutput: '/tmp/prior',
       retryGenerationIds: ['a'.repeat(64), 'b'.repeat(64)],
     });
+  });
+
+  it('accepts a clean retained author checkout with an empty, hashed draft inventory', () => {
+    const subject = path.join(root, 'empty-draft-subject');
+    const worker = path.join(root, 'empty-draft-worktree');
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'empty draft baseline']);
+    const baseline = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    execFileSync('git', ['-C', subject, 'worktree', 'add', '--quiet', '--detach', worker, baseline]);
+    try {
+      const inventory = inventoryAuthorDraft(worker, baseline, 'component-a', ['owned.go']);
+      expect(inventory.files).toEqual([]);
+      expect(inventory.sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    } finally {
+      execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
+    }
+  });
+
+  it('accepts a clean historical author retry only for its current failed attempt', () => {
+    const subject = path.join(root, 'integrated-empty-author-subject');
+    const prior = path.join(root, 'integrated-empty-author-prior');
+    const checkout = path.join(prior, 'worktrees', 'benchmark-suite');
+    fs.mkdirSync(path.join(prior, 'worktrees'), {recursive: true});
+    fs.mkdirSync(subject, {recursive: true});
+    execFileSync('git', ['init', '--quiet', subject]);
+    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
+    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(subject, 'owned.go'), 'package fixture\n', 'utf8');
+    execFileSync('git', ['-C', subject, 'add', '--all']);
+    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'integrated empty author baseline']);
+    const baseline = execFileSync('git', ['-C', subject, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    execFileSync('git', ['-C', subject, 'worktree', 'add', '--quiet', '--detach', checkout, baseline]);
+
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const graphDigest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+    const generationId = 'a'.repeat(64);
+    const scope = [{
+      kind: 'keyed',
+      expansionOwnerCheck: 'onboard-component',
+      key: 'benchmark-suite',
+      subgraphInstanceId: 'b'.repeat(64),
+    }];
+    const workItemClaimId = 'c'.repeat(64);
+    const checkoutClaimId = 'd'.repeat(64);
+    const roleClaimId = 'e'.repeat(64);
+    const workItem = {
+      component_id: 'benchmark-suite',
+      baseline_commit: baseline,
+      project_id: 'retained-project',
+      proof_component_subject: {
+        component_id: 'benchmark-suite',
+        fingerprint: `sha256:${'f'.repeat(64)}`,
+      },
+      sorted_owned_paths: ['owned.go'],
+    };
+    const attempt = {attemptId: '1'.repeat(64), fence: 9, reason: 'PROVIDER_EXECUTION_FAILED'};
+    const generation = {
+      nodeGenerationId: generationId,
+      nodeInstanceId: 'author-node',
+      subgraphInstanceId: scope[0].subgraphInstanceId,
+      templateNodeKey: 'author-native-component',
+      checkId: 'author-native-component',
+      scope,
+      incarnation: 0,
+      itemFingerprint: '2'.repeat(64),
+      executionConfigDigest: '3'.repeat(64),
+      activeInputClaimIds: [workItemClaimId, checkoutClaimId, roleClaimId],
+      status: 'failed',
+      scheduled: true,
+      completedOutputClaimIds: [],
+      ...attempt,
+    };
+    const projection = {
+      generationsById: {[generationId]: generation},
+      activeGenerationIdByNode: {'author-node': generationId},
+      instancesById: {},
+      claimsById: {
+        [workItemClaimId]: {
+          claimId: workItemClaimId,
+          active: true,
+          claim: 'component.prepared_work_item@1',
+          producerCheckId: 'prepare-work-item',
+          scope,
+          parentClaimIds: [],
+          payload: workItem,
+        },
+        [checkoutClaimId]: {
+          claimId: checkoutClaimId,
+          active: true,
+          claim: 'component.checkout@1',
+          producerCheckId: 'checkout-worktree',
+          scope,
+          parentClaimIds: [],
+          payload: {
+            success: true,
+            is_worktree: true,
+            path: checkout,
+            commit: baseline,
+            ref: baseline,
+            repository: subject,
+            worktree_id: 'benchmark-suite-worktree',
+          },
+        },
+        [roleClaimId]: {
+          claimId: roleClaimId,
+          active: true,
+          claim: 'native.role.onboard@1',
+          producerCheckId: 'role-onboard-component',
+          scope,
+          parentClaimIds: [],
+          payload: 'retained onboard role',
+        },
+      },
+    };
+    const checkpoint = {
+      kind: 'visor.graph-journal-checkpoint',
+      version: 1,
+      sessionId: 'integrated-empty-author',
+      graphSemanticDigest: graphDigest,
+      frontier: {eventCount: 2, lastEventId: 2},
+      events: [
+        {
+          type: 'AttemptRetryRequested',
+          nodeGenerationId: generationId,
+          externalSideEffects: 'isolated_draft_replay',
+        },
+        {
+          type: 'AttemptFailed',
+          nodeGenerationId: generationId,
+          ...attempt,
+        },
+      ],
+      integrity: {algorithm: 'sha256', digest: '0'.repeat(64)},
+    } as any;
+    const fakeJournal = {
+      getInstanceProjection: () => projection,
+      retryFailedGeneratedAttempts: jest.fn(),
+    };
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockReturnValue(fakeJournal as any);
+    const roots = {
+      subject: fs.realpathSync(subject),
+      priorOutput: fs.realpathSync(prior),
+    };
+    const inventory = {
+      authority: {
+        project_id: 'retained-project',
+        subject_fingerprint: `sha256:${'a'.repeat(64)}`,
+      },
+    };
+    try {
+      expect(() => validateRecoverySelection(
+        config,
+        checkpoint,
+        [generationId],
+        roots,
+        inventory,
+        'isolated_draft_replay',
+      )).toThrow(/already has an isolated draft replay/);
+      const accepted = validateRecoverySelection(
+        config,
+        checkpoint,
+        [generationId],
+        roots,
+        inventory,
+        'isolated_draft_replay',
+        [],
+        {allowEmptyAuthorDraft: true, allowHistoricalAuthorRetry: true},
+      );
+      expect(accepted.bindings[0].draftInventory?.files).toEqual([]);
+      generation.status = 'ready';
+      expect(() => validateRecoverySelection(
+        config,
+        checkpoint,
+        [generationId],
+        roots,
+        inventory,
+        'isolated_draft_replay',
+        [],
+        {allowEmptyAuthorDraft: true, allowHistoricalAuthorRetry: true},
+      )).toThrow(/eligible failed author leaf/);
+      generation.status = 'running';
+      expect(() => validateRecoverySelection(
+        config,
+        checkpoint,
+        [generationId],
+        roots,
+        inventory,
+        'isolated_draft_replay',
+        [],
+        {allowEmptyAuthorDraft: true, allowHistoricalAuthorRetry: true},
+      )).toThrow(/eligible failed author leaf/);
+    } finally {
+      restore.mockRestore();
+      execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', checkout]);
+    }
+  });
+
+  it('accepts only the current failed attempt and rejects ready or running retry candidates', () => {
+    const generationId = 'a'.repeat(64);
+    const oldAttempt = {attemptId: 'b'.repeat(64), fence: 4, reason: 'old failure'};
+    const currentAttempt = {attemptId: 'c'.repeat(64), fence: 6, reason: 'current failure'};
+    const checkpoint = {
+      events: [
+        {type: 'AttemptFailed', nodeGenerationId: generationId, ...oldAttempt},
+        {type: 'AttemptRetryRequested', nodeGenerationId: generationId, priorAttemptId: oldAttempt.attemptId},
+        {type: 'AttemptFailed', nodeGenerationId: generationId, ...currentAttempt},
+      ],
+    } as any;
+    const generation = {
+      nodeGenerationId: generationId,
+      status: 'failed',
+      scheduled: true,
+      ...currentAttempt,
+    };
+    expect(isCurrentFailedRetryAttempt(checkpoint, generation)).toBe(true);
+    expect(isCurrentFailedRetryAttempt(checkpoint, {...generation, status: 'ready'})).toBe(false);
+    expect(isCurrentFailedRetryAttempt(checkpoint, {...generation, status: 'running'})).toBe(false);
+    expect(isCurrentFailedRetryAttempt(checkpoint, {...generation, attemptId: oldAttempt.attemptId})).toBe(false);
   });
 
   it('requires the bounded checklist prefix retry arguments and absent side effects', () => {
