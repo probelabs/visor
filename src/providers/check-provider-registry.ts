@@ -17,6 +17,42 @@ import { GitCheckoutProvider } from './git-checkout-provider';
 import { A2ACheckProvider } from './a2a-check-provider';
 import { UtcpCheckProvider } from './utcp-check-provider';
 import { CustomToolDefinition } from '../types/config';
+import {
+  ProofAdmitCheckProvider,
+  PROOF_ADMIT_PROVIDER_NAME,
+  createProofAdmitProviderFromCapability,
+} from './proof-admit-check-provider';
+import {
+  GovernedProofInspectCheckProvider,
+  GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
+  createGovernedProofInspectProviderFromCapability,
+} from './governed-proof-inspect-check-provider';
+import { ProofAdmittedCatalogCheckProvider, createProofAdmittedCatalogProviderFromCapability } from './proof-admitted-catalog-check-provider';
+import { PROOF_ADMITTED_CATALOG_PROVIDER_TYPE } from '../state-machine/graph/instance-plan';
+import {
+  ProofCatalogRevalidationCheckProvider,
+  ProofStructuralInventoryCheckProvider,
+  createProofCatalogRevalidationProviderFromCapability,
+  createProofStructuralInventoryProviderFromCapability,
+} from './proof-catalog-check-providers';
+import {
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE,
+} from '../state-machine/graph/instance-plan';
+import {
+  ProofProjectReconcileCheckProvider,
+  PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+  createProofProjectReconcileProviderFromCapability,
+} from './proof-project-reconcile-check-provider';
+
+const RESERVED_PROOF_PROVIDER_NAMES: ReadonlySet<string> = new Set([
+  PROOF_ADMIT_PROVIDER_NAME,
+  GOVERNED_PROOF_INSPECT_PROVIDER_NAME,
+  PROOF_ADMITTED_CATALOG_PROVIDER_TYPE,
+  PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE,
+  PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE,
+  PROOF_PROJECT_RECONCILE_PROVIDER_TYPE,
+]);
 
 /**
  * Registry for managing check providers
@@ -25,6 +61,8 @@ export class CheckProviderRegistry {
   private providers: Map<string, CheckProvider> = new Map();
   private static instance: CheckProviderRegistry;
   private customTools?: Record<string, CustomToolDefinition>;
+  private proofAdmissionBootstrapped = false;
+  private proofAdmissionAccessed = false;
 
   private constructor() {
     // Register default providers
@@ -60,6 +98,17 @@ export class CheckProviderRegistry {
     this.register(new WorkflowCheckProvider());
     this.register(new GitCheckoutProvider());
     this.register(new A2ACheckProvider());
+    // Reserved EXP-0205 provider. It is installed by the registry itself and
+    // cannot be replaced through the public register/unregister API.
+    this.registerBuiltIn(new ProofAdmitCheckProvider());
+    this.registerBuiltIn(new GovernedProofInspectCheckProvider());
+    // Discovery egress is a reserved deterministic provider. It may only run
+    // in the compiled admission suffix and cannot be replaced by a custom
+    // provider through the public registry.
+    this.registerBuiltIn(new ProofAdmittedCatalogCheckProvider());
+    this.registerBuiltIn(new ProofStructuralInventoryCheckProvider());
+    this.registerBuiltIn(new ProofCatalogRevalidationCheckProvider());
+    this.registerBuiltIn(new ProofProjectReconcileCheckProvider());
 
     // Try to register UtcpCheckProvider - it may fail if dependencies are missing
     try {
@@ -100,11 +149,37 @@ export class CheckProviderRegistry {
     }
   }
 
+  private registerBuiltIn(provider: CheckProvider): void {
+    const name = provider.getName();
+    if (this.providers.has(name)) {
+      throw new Error(`Provider '${name}' is already registered`);
+    }
+    this.providers.set(name, provider);
+  }
+
+  /** Install the reserved Proof provider once from a controller-owned opaque capability. */
+  bootstrapProofAdmission(capability: object): void {
+    if (this.proofAdmissionBootstrapped) throw new Error('Proof admission bootstrap already completed');
+    if (this.proofAdmissionAccessed) throw new Error('Proof admission bootstrap must precede provider access');
+    const current = this.providers.get(PROOF_ADMIT_PROVIDER_NAME);
+    if (!(current instanceof ProofAdmitCheckProvider)) throw new Error('Proof admission provider registry state is invalid');
+    this.providers.set(PROOF_ADMIT_PROVIDER_NAME, createProofAdmitProviderFromCapability(capability));
+    this.providers.set(PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE, createProofStructuralInventoryProviderFromCapability(capability));
+    this.providers.set(PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE, createProofCatalogRevalidationProviderFromCapability(capability));
+    this.providers.set(PROOF_ADMITTED_CATALOG_PROVIDER_TYPE, createProofAdmittedCatalogProviderFromCapability(capability));
+    this.providers.set(GOVERNED_PROOF_INSPECT_PROVIDER_NAME, createGovernedProofInspectProviderFromCapability(capability));
+    this.providers.set(PROOF_PROJECT_RECONCILE_PROVIDER_TYPE, createProofProjectReconcileProviderFromCapability(capability));
+    this.proofAdmissionBootstrapped = true;
+  }
+
   /**
    * Register a check provider
    */
   register(provider: CheckProvider): void {
     const name = provider.getName();
+    if (RESERVED_PROOF_PROVIDER_NAMES.has(name)) {
+      throw new Error(`Provider '${name}' is reserved and cannot be registered publicly`);
+    }
     if (this.providers.has(name)) {
       throw new Error(`Provider '${name}' is already registered`);
     }
@@ -119,6 +194,9 @@ export class CheckProviderRegistry {
    * Unregister a check provider
    */
   unregister(name: string): void {
+    if (RESERVED_PROOF_PROVIDER_NAMES.has(name)) {
+      throw new Error(`Provider '${name}' is reserved and cannot be unregistered`);
+    }
     if (!this.providers.has(name)) {
       throw new Error(`Provider '${name}' not found`);
     }
@@ -131,6 +209,7 @@ export class CheckProviderRegistry {
    * Get a provider by name
    */
   getProvider(name: string): CheckProvider | undefined {
+    if (RESERVED_PROOF_PROVIDER_NAMES.has(name)) this.proofAdmissionAccessed = true;
     return this.providers.get(name);
   }
 
@@ -138,6 +217,7 @@ export class CheckProviderRegistry {
    * Get provider or throw if not found
    */
   getProviderOrThrow(name: string): CheckProvider {
+    if (RESERVED_PROOF_PROVIDER_NAMES.has(name)) this.proofAdmissionAccessed = true;
     const provider = this.providers.get(name);
     if (!provider) {
       throw new Error(
@@ -151,6 +231,7 @@ export class CheckProviderRegistry {
    * Check if a provider exists
    */
   hasProvider(name: string): boolean {
+    if (RESERVED_PROOF_PROVIDER_NAMES.has(name)) this.proofAdmissionAccessed = true;
     return this.providers.has(name);
   }
 
@@ -158,6 +239,9 @@ export class CheckProviderRegistry {
    * Get all registered provider names
    */
   getAvailableProviders(): string[] {
+    // Enumerating provider names exposes whether a reserved Proof provider is
+    // available, so it is an acquisition boundary for one-shot bootstrap too.
+    if (Array.from(RESERVED_PROOF_PROVIDER_NAMES).some(name => this.providers.has(name))) this.proofAdmissionAccessed = true;
     return Array.from(this.providers.keys());
   }
 
@@ -165,6 +249,9 @@ export class CheckProviderRegistry {
    * Get all providers
    */
   getAllProviders(): CheckProvider[] {
+    // Returning the provider objects is an acquisition boundary, including
+    // callers such as getActiveProviders() and listProviders().
+    if (Array.from(RESERVED_PROOF_PROVIDER_NAMES).some(name => this.providers.has(name))) this.proofAdmissionAccessed = true;
     return Array.from(this.providers.values());
   }
 
@@ -228,6 +315,8 @@ export class CheckProviderRegistry {
    */
   reset(): void {
     this.providers.clear();
+    this.proofAdmissionBootstrapped = false;
+    this.proofAdmissionAccessed = false;
     this.registerDefaultProviders();
   }
 

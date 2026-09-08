@@ -1,0 +1,246 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { describe, expect, it } from '@jest/globals';
+import {
+  gitStatusWithoutProofCache,
+  validateLiveBaselineCheckpoint,
+  validateLiveResumeCheckpoint,
+  writeControllerResumeFailureIfMissing,
+} from '../../examples/agent-governance/exp-0209-discovery-egress/run-live-demo';
+import { proofCanonicalJson } from '../../src/providers/proof-wire';
+import { canonicalGraphCheckpointJson } from '../../src/snapshot-store';
+
+const REPO_ROOT = path.resolve(__dirname, '../..');
+const FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/proof-current-catalog-checkpoint-child.ts');
+
+function produceFixture(directory: string): void {
+  execFileSync(process.execPath, ['-r', 'ts-node/register/transpile-only', FIXTURE, 'produce', directory], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1' },
+    encoding: 'utf8',
+    timeout: 180_000,
+    stdio: 'pipe',
+  });
+}
+
+describe('EXP-0209 live baseline checkpoint validator', () => {
+  it('omits only regular Proof cache sidecars while preserving other porcelain entries', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-status-'));
+    try {
+      const git = (args: string[]) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' });
+      git(['init', '-q']);
+      git(['config', 'user.email', 'visor-exp0209@example.invalid']);
+      git(['config', 'user.name', 'EXP-0209 status fixture']);
+      fs.writeFileSync(path.join(directory, 'tracked.txt'), 'original\n');
+      git(['add', 'tracked.txt']);
+      git(['-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fixture']);
+      fs.writeFileSync(path.join(directory, 'tracked.txt'), 'changed\n');
+      fs.writeFileSync(path.join(directory, 'root-untracked.txt'), 'visible\n');
+      const absentProofStatus = gitStatusWithoutProofCache(directory);
+      expect(absentProofStatus).toContain('?? root-untracked.txt');
+      fs.mkdirSync(path.join(directory, '.proof'));
+      fs.writeFileSync(path.join(directory, '.proof', 'index.db'), 'cache\n');
+      fs.writeFileSync(path.join(directory, '.proof', 'unexpected'), 'visible\n');
+      const status = gitStatusWithoutProofCache(directory);
+      expect(status).toEqual(expect.arrayContaining(['M tracked.txt', '?? root-untracked.txt', '?? .proof/unexpected']));
+      for (const file of ['index.db', 'index.db-wal', 'index.db-shm']) expect(status).not.toContain(`?? .proof/${file}`);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['proof symlink', 'cache symlink', 'cache directory'])('rejects a %s before excluding cache paths', variant => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-status-invalid-'));
+    try {
+      const proof = path.join(directory, '.proof');
+      if (variant === 'proof symlink') {
+        const target = path.join(directory, 'proof-target');
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, proof, 'dir');
+      } else {
+        fs.mkdirSync(proof);
+        for (const file of ['index.db', 'index.db-wal', 'index.db-shm']) fs.writeFileSync(path.join(proof, file), 'cache\n');
+        const cache = path.join(proof, 'index.db');
+        if (variant === 'cache symlink') {
+          fs.unlinkSync(cache);
+          fs.symlinkSync(path.join(directory, 'cache-target'), cache);
+          fs.writeFileSync(path.join(directory, 'cache-target'), 'cache\n');
+        } else {
+          fs.unlinkSync(cache);
+          fs.mkdirSync(cache);
+        }
+      }
+      expect(() => gitStatusWithoutProofCache(directory)).toThrow(/workspace \.proof/);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts the deterministic baseline and rejects catalog tampering', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-validator-'));
+    try {
+      produceFixture(directory);
+      const artifact = JSON.parse(fs.readFileSync(path.join(directory, 'baseline.json'), 'utf8')) as Record<string, any>;
+      const checkpoint = JSON.parse(artifact.checkpoint) as Record<string, any>;
+      const accepted = validateLiveBaselineCheckpoint(checkpoint, artifact.config);
+      expect(accepted.gatePassed).toBe(true);
+      expect(accepted.componentIds).toEqual(['alpha', 'beta', 'gamma']);
+
+      const catalog = checkpoint.events.find((event: Record<string, any>) =>
+        event.type === 'ClaimPublished' && event.claim === 'component.catalog@1',
+      ) as Record<string, any> | undefined;
+      expect(catalog).toBeDefined();
+      expect(catalog?.payload.components).toHaveLength(3);
+      expect(catalog?.payload.components.map((component: Record<string, any>) => component.component_id).sort()).toEqual(['alpha', 'beta', 'gamma']);
+      expect(catalog?.payload.components.every((component: Record<string, any>) => !Object.prototype.hasOwnProperty.call(component, 'id'))).toBe(true);
+
+      const tampered = JSON.parse(artifact.checkpoint) as Record<string, any>;
+      const tamperedCatalog = tampered.events.find((event: Record<string, any>) =>
+        event.type === 'ClaimPublished' && event.claim === 'component.catalog@1',
+      ) as Record<string, any>;
+      tamperedCatalog.payload.components[0].component_id = 'forged';
+      expect(() => validateLiveBaselineCheckpoint(tampered, artifact.config)).toThrow();
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  it('does not overwrite prior baseline evidence when the child is replayed directly', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-replay-'));
+    fs.chmodSync(directory, 0o700);
+    const reportPath = path.join(directory, 'baseline-report.json');
+    const original = '{"status":"passed","receipt_id":"retained"}\n';
+    fs.writeFileSync(reportPath, original, { mode: 0o600 });
+    try {
+      const child = spawnSync(process.execPath, [
+        '-r', 'ts-node/register/transpile-only',
+        path.join(REPO_ROOT, 'examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts'),
+        '--baseline-child', '--output', directory, '--controller-pid', '999999',
+      ], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1' },
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      expect(child.status).not.toBe(0);
+      expect(fs.readFileSync(reportPath, 'utf8')).toBe(original);
+      expect(fs.existsSync(path.join(directory, 'baseline-failure.checkpoint.json'))).toBe(false);
+      expect(fs.existsSync(path.join(directory, 'baseline-report.md'))).toBe(false);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts the deterministic selective continuation and rejects receipt tampering', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-resume-validator-'));
+    try {
+      produceFixture(directory);
+      execFileSync(process.execPath, ['-r', 'ts-node/register/transpile-only', FIXTURE, 'continue', directory], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1' },
+        encoding: 'utf8',
+        timeout: 180_000,
+        stdio: 'pipe',
+      });
+      const artifact = JSON.parse(fs.readFileSync(path.join(directory, 'baseline.json'), 'utf8')) as Record<string, any>;
+      const continuation = JSON.parse(fs.readFileSync(path.join(directory, 'continuation.json'), 'utf8')) as Record<string, any>;
+      const baselineCheckpoint = JSON.parse(artifact.checkpoint) as Record<string, any>;
+      const rawCandidate = baselineCheckpoint.events.find((event: Record<string, any>) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope?.length === 1) as Record<string, any> | undefined;
+      const baselineRevalidation = Object.values(artifact.projection.claimsById).find((claim: any) => claim.active && claim.claim === 'proof.catalog_revalidation@1' && claim.scope?.length === 1) as Record<string, any> | undefined;
+      expect(rawCandidate).toBeDefined();
+      expect(baselineRevalidation).toBeDefined();
+      expect(proofCanonicalJson(rawCandidate!.payload)).not.toBe(proofCanonicalJson(baselineRevalidation!.payload.catalog));
+      const accepted = validateLiveResumeCheckpoint(
+        JSON.parse(continuation.checkpoint),
+        JSON.parse(artifact.checkpoint),
+        artifact.config,
+        { changedComponentId: 'alpha', changedPaths: ['alpha.go'] },
+      );
+      expect(accepted.gatePassed).toBe(true);
+      expect(accepted.changedComponentId).toBe('alpha');
+      expect(continuation.changedComponentId).toBe('alpha');
+      expect(accepted.counts.proofCandidates).toBe(5);
+      expect(accepted.suffix).toEqual(['alpha:inspect', 'alpha:proof_admit', 'alpha:verify', 'journalservice:project_reconcile']);
+      expect(accepted.receiptIds.replacement).not.toBe(accepted.receiptIds.baseline);
+      const baselineItems = new Map(Object.values(artifact.projection.claimsById).filter((claim: any) => claim.active && claim.claim === 'component.work_item@1' && claim.scope?.length === 2).map((claim: any) => [claim.payload.component_id, claim.payload]));
+      const resumedItems = new Map(Object.values(continuation.projection.claimsById).filter((claim: any) => claim.active && claim.claim === 'component.work_item@1' && claim.scope?.length === 2).map((claim: any) => [claim.payload.component_id, claim.payload]));
+      expect(['alpha', 'beta', 'gamma'].filter(id => canonicalGraphCheckpointJson(baselineItems.get(id)) !== canonicalGraphCheckpointJson(resumedItems.get(id)))).toEqual(['alpha']);
+      for (const id of ['beta', 'gamma']) expect(canonicalGraphCheckpointJson(resumedItems.get(id))).toBe(canonicalGraphCheckpointJson(baselineItems.get(id)));
+
+      const tampered = JSON.parse(continuation.checkpoint) as Record<string, any>;
+      const baselineEventCount = (JSON.parse(artifact.checkpoint) as Record<string, any>).events.length;
+      const receipt = tampered.events.find((event: Record<string, any>) =>
+        event.type === 'ClaimPublished' && event.eventId > baselineEventCount && event.claim === 'proof.admitted_receipt@1' && event.scope?.length === 2 && event.scope?.[1]?.key === 'alpha' && event.payload?.__proof_admission_wire,
+      ) as Record<string, any> | undefined;
+      expect(receipt).toBeDefined();
+      const decision = JSON.parse(receipt!.payload.__proof_admission_wire) as Record<string, any>;
+      delete decision.receipt.Termination;
+      receipt!.payload.__proof_admission_wire = JSON.stringify(decision);
+      // Rehash the checkpoint envelope so restore gets past the outer
+      // integrity check and the admission/termination gate sees the omitted
+      // receipt field as the actual failure.
+      const body = { ...tampered };
+      delete body.integrity;
+      tampered.integrity = {
+        algorithm: 'sha256',
+        digest: createHash('sha256').update(canonicalGraphCheckpointJson(body), 'utf8').digest('hex'),
+      };
+      expect(() => validateLiveResumeCheckpoint(tampered, JSON.parse(artifact.checkpoint), artifact.config, { changedComponentId: 'alpha', changedPaths: ['alpha.go'] })).toThrow();
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 300_000);
+
+  it('does not overwrite a prior resume marker when a child is replayed directly', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-resume-replay-'));
+    fs.chmodSync(directory, 0o700);
+    const markerPath = path.join(directory, 'resume.started.json');
+    const original = '{"status":"started","controller_pid":999999}\n';
+    fs.writeFileSync(markerPath, original, { mode: 0o600 });
+    try {
+      const child = spawnSync(process.execPath, [
+        '-r', 'ts-node/register/transpile-only',
+        path.join(REPO_ROOT, 'examples/agent-governance/exp-0209-discovery-egress/run-live-demo.ts'),
+        '--resume-child', '--output', directory, '--controller-pid', '999999',
+      ], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, TS_NODE_TRANSPILE_ONLY: '1' },
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      expect(child.status).not.toBe(0);
+      expect(fs.readFileSync(markerPath, 'utf8')).toBe(original);
+      expect(fs.existsSync(path.join(directory, 'resume-report.json'))).toBe(false);
+      expect(fs.existsSync(path.join(directory, 'continued.checkpoint.json'))).toBe(false);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('publishes a missing controller failure report without replacing child evidence', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0209-live-resume-controller-failure-'));
+    fs.chmodSync(directory, 0o700);
+    const checkpointPath = path.join(directory, 'resume-failure.checkpoint.json');
+    const checkpointOriginal = '{"partial":true}\n';
+    fs.writeFileSync(checkpointPath, checkpointOriginal, { mode: 0o600 });
+    try {
+      writeControllerResumeFailureIfMissing(directory, undefined, new Error('child exited without a report'));
+      const reportPath = path.join(directory, 'resume-report.json');
+      const reportOriginal = fs.readFileSync(reportPath, 'utf8');
+      const report = JSON.parse(reportOriginal) as Record<string, any>;
+      expect(report.mode).toBe('resume-only');
+      expect(report.status).toBe('failed');
+      expect(report.counts).toEqual({ status: 'unknown' });
+      expect(fs.readFileSync(checkpointPath, 'utf8')).toBe(checkpointOriginal);
+
+      writeControllerResumeFailureIfMissing(directory, undefined, new Error('different child error'));
+      expect(fs.readFileSync(reportPath, 'utf8')).toBe(reportOriginal);
+      expect(fs.readFileSync(checkpointPath, 'utf8')).toBe(checkpointOriginal);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

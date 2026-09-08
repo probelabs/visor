@@ -1,0 +1,1642 @@
+import { TextDecoder } from 'util';
+import type {
+  CheckConfig,
+  ClaimConsumptionConfig,
+  ClaimEmissionConfig,
+  ClaimTypeConfig,
+  ExpansionConfig,
+  SubgraphConfig,
+  VisorConfig,
+  WaitForExpansionConfig,
+} from '../../types/config';
+import {
+  immutableCanonicalValue,
+  sha256Canonical,
+  type ClaimSchemaValidator,
+} from './claim-kernel';
+import { PROOF_ROLE_AUTHORITY_CLAIM, isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector } from '../../providers/governed-proof-inspect-check-provider';
+
+const CLAIM_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*@[1-9][0-9]*$/;
+const BINDING_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+const CONTROLLER_TIMEOUT_MIN = 1;
+const CONTROLLER_TIMEOUT_MAX = 2147483647;
+const RESOURCE_GROUP_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const RETAINED_COMPONENT_TEMPLATE_NAME = 'onboard-component-retained';
+
+/** Reserved EXP-0205 admission profile identifiers. */
+export const PROOF_CANDIDATE_CLAIM = 'proof.candidate@1';
+export const PROOF_ADMITTED_RECEIPT_CLAIM = 'proof.admitted_receipt@1';
+/** Reserved only for the opt-in staged component spec-review profile. */
+export const PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM = 'proof.component_spec_review_candidate@1';
+export const PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM = 'proof.component_spec_review_admitted_receipt@1';
+/** Reserved only for the opt-in discovery-admission egress suffix. */
+export const PROOF_CATALOG_REVALIDATION_CLAIM = 'proof.catalog_revalidation@1';
+export const PROOF_STRUCTURAL_INVENTORY_CLAIM = 'proof.structural_inventory@1';
+export const PROOF_ADMITTED_CATALOG_PROVIDER_TYPE = 'proof-admitted-catalog';
+export const PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE = 'proof-catalog-revalidate';
+export const PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE = 'proof-structural-inventory';
+export const PROOF_ADMIT_PROVIDER_TYPE = 'proof-admit';
+export const GOVERNED_PROOF_INSPECT_PROVIDER_TYPE = 'governed-proof-inspect';
+export const PROOF_PROJECT_RECONCILE_PROVIDER_TYPE = 'proof-project-reconcile';
+export const PROOF_PROJECT_RECONCILE_NODE_KEY = 'project_reconcile';
+export const PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM = 'proof.project_reconciliation_receipt@1';
+export const PROOF_ADMIT_NODE_KEY = 'proof_admit';
+
+export class InstancePlanError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'InstancePlanError';
+    this.code = code;
+  }
+}
+
+export interface CompiledJsonPointer {
+  readonly source: string;
+  readonly tokens: readonly string[];
+}
+
+export interface CompiledTemplateNode {
+  readonly templateNodeKey: string;
+  readonly check: CheckConfig;
+  readonly emissions: readonly ClaimEmissionConfig[];
+  readonly consumptions: readonly Required<ClaimConsumptionConfig>[];
+  readonly dependencyNodeKeys: readonly string[];
+  readonly executionConfigDigest: string;
+  readonly waitForExpansion?: Readonly<WaitForExpansionConfig>;
+}
+
+export interface CompiledSubgraphTemplate {
+  readonly name: string;
+  readonly input: Readonly<{ name: string; claim: string }>;
+  readonly templateDigest: string;
+  readonly templateNodeKeys: readonly string[];
+  readonly topology: readonly string[];
+  readonly reverseTopology: readonly string[];
+  readonly sourceNodeKeys: readonly string[];
+  readonly nodesByKey: Readonly<Record<string, CompiledTemplateNode>>;
+  readonly emitterByClaim: Readonly<Record<string, string>>;
+  readonly dependentsByNode: Readonly<Record<string, readonly string[]>>;
+}
+
+export interface CompiledExpansion {
+  readonly expansionOwnerCheck: string;
+  /** Static nesting depth of the first reachable path to this declaration. */
+  readonly depth: number;
+  readonly parentTemplateName: string | null;
+  readonly parentTemplateNodeKey: string | null;
+  readonly catalogClaimRef: string;
+  readonly catalogValidator: ClaimSchemaValidator;
+  readonly templateName: string;
+  readonly templateDigest: string;
+  readonly expansionSpecDigest: string;
+  readonly itemsPointer: CompiledJsonPointer;
+  readonly keyPointer: CompiledJsonPointer;
+  readonly itemClaimRef: string;
+  readonly itemValidator: ClaimSchemaValidator;
+  readonly template: CompiledSubgraphTemplate;
+  readonly coverage?: Readonly<{
+    outcomeClaimRef: string;
+    classPointer: CompiledJsonPointer;
+    emitterNodeKey: string;
+  }>;
+  readonly graphSemanticDigest: string;
+}
+
+export interface ExpansionPlan {
+  readonly active: boolean;
+  readonly graphSemanticDigest: string;
+  readonly byOwner: Readonly<Record<string, CompiledExpansion>>;
+  readonly byNestedOwner: Readonly<Record<string, CompiledExpansion>>;
+  readonly templatesByName: Readonly<Record<string, CompiledSubgraphTemplate>>;
+}
+
+export interface ExpansionCompileAuthority {
+  readonly claimTypes: Readonly<Record<string, ClaimTypeConfig>>;
+  readonly validatorsByClaim: Readonly<Record<string, ClaimSchemaValidator>>;
+  readonly rootEmitterByClaim: Readonly<Record<string, string>>;
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function hasExactKeys(value: object, keys: readonly string[]): boolean { const actual = Reflect.ownKeys(value); return actual.length === keys.length && actual.every(key => typeof key === 'string' && keys.includes(key) && (() => { const descriptor = Object.getOwnPropertyDescriptor(value, key); return !!descriptor && 'value' in descriptor && descriptor.enumerable; })()); }
+
+function validUnicode(value: string): boolean { for (let index = 0; index < value.length; index++) { const code = value.charCodeAt(index); if (code >= 0xd800 && code <= 0xdbff) { const next = value.charCodeAt(index + 1); if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return false; index++; } else if (code >= 0xdc00 && code <= 0xdfff) return false; } return true; }
+
+function validText(value: unknown, max: number, nonempty = true): value is string { return typeof value === 'string' && validUnicode(value) && (!nonempty || value.length > 0) && Buffer.byteLength(value, 'utf8') <= max; }
+
+function validVisible(value: unknown, max: number): value is string { return typeof value === 'string' && validUnicode(value) && value.length > 0 && Buffer.byteLength(value, 'utf8') <= max && /^[\x21-\x7e]+$/.test(value); }
+
+function validDigest(value: unknown): value is string { return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value); }
+
+function decodeGovernedSchema(value: unknown): string { if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return ''; const bytes = Buffer.from(value, 'base64'); if (bytes.length < 1 || bytes.length > 131072 || bytes.toString('base64') !== value) return ''; try { const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes); return validUnicode(decoded) ? decoded : ''; } catch { return ''; } }
+
+function validateControllerAi(name: string, value: unknown): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) rejectReservedProfile(name, 'inspect ai must be a plain object');
+  const keys = Reflect.ownKeys(value); const descriptor = Object.getOwnPropertyDescriptor(value, 'timeout');
+  if (keys.length !== 1 || keys[0] !== 'timeout' || !descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'number' || !Number.isSafeInteger(descriptor.value) || descriptor.value < CONTROLLER_TIMEOUT_MIN || descriptor.value > CONTROLLER_TIMEOUT_MAX) rejectReservedProfile(name, 'inspect ai.timeout must be one finite integer from 1 through 2147483647');
+}
+
+function componentSelectorTemplateBindingAllowed(inputName: string | undefined, inputClaim: string | undefined, check: CheckConfig): boolean {
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1') return false;
+  const consumes = check.consumes;
+  if (!Array.isArray(consumes) || consumes.length !== 1) return false;
+  const consumption = consumes[0] as unknown as Record<string, unknown>;
+  const keys = Reflect.ownKeys(consumption);
+  return Object.getPrototypeOf(consumption) === Object.prototype &&
+    (keys.length === 2 || (keys.length === 3 && consumption.cardinality === 'one')) &&
+    keys.every(key => typeof key === 'string' && (key === 'claim' || key === 'as' || key === 'cardinality')) &&
+    consumption.claim === 'component.work_item@1' && consumption.as === 'component';
+}
+
+function reviewedComponentSelectorTemplateBindingAllowed(inputName: string | undefined, inputClaim: string | undefined, check: CheckConfig): boolean {
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1') return false;
+  const consumes = check.consumes;
+  if (!Array.isArray(consumes) || consumes.length !== 2) return false;
+  const exactConsume = (value: unknown, claim: string, as: string): boolean => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    const keys = Reflect.ownKeys(record);
+    if (!(keys.length === 2 || (keys.length === 3 && record.cardinality === 'one')) ||
+        keys.some(key => typeof key !== 'string' || (key !== 'claim' && key !== 'as' && key !== 'cardinality'))) return false;
+    return record.claim === claim && record.as === as;
+  };
+  return consumes.some(value => exactConsume(value, 'component.work_item@1', 'component')) &&
+    consumes.some(value => exactConsume(value, 'native.component.reviewed@1', 'reviewed'));
+}
+
+function validateGovernedInspectConfig(name: string, check: CheckConfig, componentSelectorAllowed = false, specReviewSelectorAllowed = false): void {
+  const record = check as Record<string, unknown>, allowed = ['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', 'ai', 'depends_on', 'emits', 'consumes', 'expand'], prototype = Object.getPrototypeOf(record);
+  if ((prototype !== Object.prototype && prototype !== null) || !hasExactKeys(record, Reflect.ownKeys(record).filter(key => typeof key === 'string') as string[])) rejectReservedProfile(name, 'inspect config must be a plain materialized object');
+  if (Reflect.ownKeys(record).some(key => typeof key !== 'string' || !allowed.includes(key as string))) rejectReservedProfile(name, 'inspect config contains unknown provider or topology keys');
+  validateControllerAi(name, record.ai);
+  if (record.profile !== 'luna-xhigh-readonly-v1') rejectReservedProfile(name, 'inspect governed config is invalid');
+  if (isGovernedProofComponentSelector(record.invocation)) {
+    if (!componentSelectorAllowed) rejectReservedProfile(name, 'component selector is only valid for a component.work_item@1 template input bound as component');
+    if (['message', 'instructions', 'invocation_digest', 'result_schema'].some(key => hasOwn(record, key))) rejectReservedProfile(name, 'component selector cannot author resolved Proof fields');
+    const selectorInvocation = record.invocation as Record<string, unknown>;
+    const decodedSelectorSchema = decodeGovernedSchema(selectorInvocation.output_schema);
+    let selectorSchema: unknown;
+    try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'component selector output schema is not JSON'); }
+    if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'component selector output schema is invalid');
+    return;
+  }
+  if (specReviewSelectorAllowed && isGovernedProofSpecReviewSelector(record.invocation)) {
+    if (['message', 'instructions', 'invocation_digest', 'result_schema'].some(key => hasOwn(record, key))) rejectReservedProfile(name, 'spec-review selector cannot author resolved Proof fields');
+    const selectorInvocation = record.invocation as Record<string, unknown>;
+    const decodedSelectorSchema = decodeGovernedSchema(selectorInvocation.output_schema);
+    let selectorSchema: unknown;
+    try { selectorSchema = JSON.parse(decodedSelectorSchema); } catch { rejectReservedProfile(name, 'spec-review selector output schema is not JSON'); }
+    if (!decodedSelectorSchema || !selectorSchema || typeof selectorSchema !== 'object' || Array.isArray(selectorSchema) || !validMaterialized(selectorSchema)) rejectReservedProfile(name, 'spec-review selector output schema is invalid');
+    return;
+  }
+  if (!validText(record.message, 32768) || !validText(record.instructions, 131072) || !validDigest(record.invocation_digest) || !validText(record.result_schema, 131072)) rejectReservedProfile(name, 'inspect governed config is invalid');
+  const invocation = record.invocation;
+  if (!invocation || typeof invocation !== 'object' || Array.isArray(invocation) || !hasExactKeys(invocation, ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema']) || !validMaterialized(invocation)) rejectReservedProfile(name, 'inspect invocation is not closed');
+  const invocationRecord = invocation as Record<string, unknown>, subject = invocationRecord.subject;
+  if (!validVisible(invocationRecord.role_id, 128) || (invocationRecord.stance !== 'owner' && invocationRecord.stance !== 'external-review') || !validVisible(invocationRecord.output_schema_id, 128) || !subject || typeof subject !== 'object' || Array.isArray(subject) || !hasExactKeys(subject, ['kind', 'id', 'fingerprint']) || !validMaterialized(subject)) rejectReservedProfile(name, 'inspect invocation fields are invalid');
+  const subjectRecord = subject as Record<string, unknown>;
+  if ((subjectRecord.kind !== 'project' && subjectRecord.kind !== 'requirement') || !validVisible(subjectRecord.id, 128) || !validDigest(subjectRecord.fingerprint)) rejectReservedProfile(name, 'inspect invocation subject is invalid');
+  const decoded = decodeGovernedSchema(invocationRecord.output_schema); if (!decoded || record.result_schema !== decoded) rejectReservedProfile(name, 'inspect result schema is not bound to invocation');
+  let parsed: unknown; try { parsed = JSON.parse(decoded); } catch { rejectReservedProfile(name, 'inspect output schema is not JSON'); }
+  if (!validMaterialized(parsed) || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) rejectReservedProfile(name, 'inspect output schema must be a JSON object');
+}
+
+function validMaterialized(value: unknown, seen = new Set<object>()): boolean {
+  if (value === null || typeof value === 'boolean') return true; if (typeof value === 'number') return Number.isFinite(value); if (typeof value === 'string') return validUnicode(value); if (!value || typeof value !== 'object' || seen.has(value)) return false; seen.add(value);
+  try {
+    if (Array.isArray(value)) { const keys = Reflect.ownKeys(value), length = Object.getOwnPropertyDescriptor(value, 'length'); if (keys.some(key => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(key))) || !length || !('value' in length) || length.enumerable) return false; for (const key of keys) { if (key === 'length') continue; const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !('value' in d) || !d.enumerable) return false; } for (let i = 0; i < value.length; i++) if (!hasOwn(value, String(i))) return false; return value.every(item => validMaterialized(item, seen)); }
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false; for (const key of Reflect.ownKeys(value)) { if (typeof key !== 'string') return false; const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !('value' in d) || !d.enumerable || !validMaterialized(d.value, seen)) return false; } return true;
+  } finally { seen.delete(value); }
+}
+
+/** Unambiguous static address for one generated expansion owner. */
+export function qualifiedNestedExpansionOwner(
+  parentTemplateName: string,
+  parentTemplateNodeKey: string
+): string {
+  return JSON.stringify([parentTemplateName, parentTemplateNodeKey]);
+}
+
+function frozenRecord<T>(record: Record<string, T>): Readonly<Record<string, T>> {
+  return Object.freeze(record);
+}
+
+function requireNonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new InstancePlanError('INVALID_EXPANSION_CONFIG', `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+/** Strict RFC 6901 syntax compilation; no executable selector language is accepted. */
+export function compileJsonPointer(pointer: unknown, field: string): CompiledJsonPointer {
+  if (typeof pointer !== 'string' || (pointer !== '' && !pointer.startsWith('/'))) {
+    throw new InstancePlanError(
+      'INVALID_JSON_POINTER',
+      `${field} must be an RFC 6901 JSON Pointer`
+    );
+  }
+  const tokens = pointer === '' ? [] : pointer.slice(1).split('/');
+  const decoded = tokens.map(token => {
+    if (/~(?:[^01]|$)/.test(token)) {
+      throw new InstancePlanError(
+        'INVALID_JSON_POINTER',
+        `${field} contains an invalid RFC 6901 escape`
+      );
+    }
+    return token.replace(/~1/g, '/').replace(/~0/g, '~');
+  });
+  return Object.freeze({ source: pointer, tokens: Object.freeze(decoded) });
+}
+
+/** Resolve a previously compiled pointer without coercion or fallback lookup. */
+export function resolveJsonPointer(value: unknown, pointer: CompiledJsonPointer): unknown {
+  let current = value;
+  for (const token of pointer.tokens) {
+    if (Array.isArray(current)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(token)) {
+        throw new InstancePlanError(
+          'JSON_POINTER_NOT_FOUND',
+          `Pointer ${pointer.source} does not resolve exactly`
+        );
+      }
+      const index = Number(token);
+      if (!Number.isSafeInteger(index) || index >= current.length) {
+        throw new InstancePlanError(
+          'JSON_POINTER_NOT_FOUND',
+          `Pointer ${pointer.source} does not resolve exactly`
+        );
+      }
+      current = current[index];
+      continue;
+    }
+    if (
+      !current ||
+      typeof current !== 'object' ||
+      !hasOwn(current as object, token)
+    ) {
+      throw new InstancePlanError(
+        'JSON_POINTER_NOT_FOUND',
+        `Pointer ${pointer.source} does not resolve exactly`
+      );
+    }
+    current = (current as Record<string, unknown>)[token];
+  }
+  return current;
+}
+
+function dependencyTokens(check: CheckConfig, checkId: string): string[] {
+  const raw = check.depends_on;
+  const tokens = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const orToken = tokens.find(token => token.includes('|'));
+  if (orToken) {
+    throw new InstancePlanError(
+      'UNSUPPORTED_TEMPLATE_OR_DEPENDENCY',
+      `Template check "${checkId}" uses unsupported OR dependency token "${orToken}"`
+    );
+  }
+  return tokens;
+}
+
+function hasRouting(check: CheckConfig): boolean {
+  return ['on_init', 'on_success', 'on_fail', 'on_finish'].some(field => {
+    if (!hasOwn(check, field)) return false;
+    const value = check[field as keyof CheckConfig];
+    return value !== undefined && value !== null;
+  });
+}
+
+function resolvedTemplateCheck(check: CheckConfig): CheckConfig {
+  const consumptions = (check.consumes || []).map(consumption => ({
+    ...consumption,
+    cardinality: 'one' as const,
+  }));
+  return immutableCanonicalValue<CheckConfig>({
+    ...check,
+    type: check.type || 'ai',
+    ...(check.consumes ? { consumes: consumptions } : {}),
+  });
+}
+
+function compileWaitForExpansion(
+  templateName: string,
+  nodeKey: string,
+  value: unknown,
+  siblingKeys: ReadonlySet<string>,
+): Readonly<WaitForExpansionConfig> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !hasExactKeys(value, ['owner', 'terminal_node'])) {
+    throw new InstancePlanError(
+      'INVALID_WAIT_FOR_EXPANSION',
+      `Template check "${templateName}.${nodeKey}" wait_for_expansion must contain only owner and terminal_node`
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const owner = requireNonEmptyString(record.owner, `subgraphs.${templateName}.checks.${nodeKey}.wait_for_expansion.owner`);
+  const terminalNode = requireNonEmptyString(record.terminal_node, `subgraphs.${templateName}.checks.${nodeKey}.wait_for_expansion.terminal_node`);
+  if (owner === nodeKey || !siblingKeys.has(owner)) {
+    throw new InstancePlanError(
+      'INVALID_WAIT_FOR_EXPANSION',
+      `Template check "${templateName}.${nodeKey}" wait_for_expansion.owner must name a sibling node`
+    );
+  }
+  return Object.freeze({ owner, terminal_node: terminalNode });
+}
+
+function claimList(check: CheckConfig, field: 'emits' | 'consumes'): string[] {
+  return (check[field] || []).map(declaration => declaration.claim).sort();
+}
+
+function claimBindings(check: CheckConfig): string[] {
+  return (check.consumes || []).map(declaration => JSON.stringify([declaration.claim, declaration.as])).sort();
+}
+
+function validateCatalogEgressConfig(
+  templateName: string,
+  nodeKey: string,
+  check: CheckConfig,
+  allowed: readonly string[],
+): void {
+  const record = check as Record<string, unknown>;
+  if (Reflect.ownKeys(record).some(key =>
+    typeof key !== 'string' || !allowed.includes(key) ||
+    !Object.getOwnPropertyDescriptor(record, key)?.enumerable ||
+    !('value' in (Object.getOwnPropertyDescriptor(record, key) || {}))
+  )) {
+    rejectReservedProfile(templateName, `${nodeKey} contains an unknown or non-materialized key`);
+  }
+}
+
+function rejectReservedProfile(templateName: string, detail: string): never {
+  throw new InstancePlanError(
+    'RESERVED_PROOF_ADMISSION_PROFILE',
+    `Subgraph template "${templateName}" violates the reserved proof admission profile: ${detail}`
+  );
+}
+
+/** Exact retained continuation prefix followed by the permanent admission suffix. */
+function validateNativeRetainedComponentAdmissionTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority,
+): void {
+  const reviewedClaim = 'native.component.reviewed@1';
+  const expectedTopology = ['component-reviewed', 'native-validation', 'inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit', 'verify'];
+  const expectedNodes = [...expectedTopology].sort();
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1' || !hasOwn(authority.claimTypes, reviewedClaim)) {
+    rejectReservedProfile(name, 'retained native component profile requires the component WorkItem input and reviewed claim declaration');
+  }
+  if (nodeKeys.length !== expectedNodes.length || nodeKeys.some((key, index) => key !== expectedNodes[index]) || topology.join('\0') !== expectedTopology.join('\0')) {
+    rejectReservedProfile(name, 'retained native component profile requires exactly the named retained prefix and admission suffix');
+  }
+  const dependenciesByNode: Readonly<Record<string, readonly string[]>> = {
+    'component-reviewed': [],
+    'native-validation': ['component-reviewed'],
+    inspect: ['component-reviewed', 'native-validation'],
+    [PROOF_ADMIT_NODE_KEY]: ['inspect'],
+    spec_review: ['inspect', PROOF_ADMIT_NODE_KEY],
+    spec_review_admit: ['spec_review'],
+    verify: ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit'],
+  };
+  for (const [nodeKey, expected] of Object.entries(dependenciesByNode)) {
+    if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) {
+      rejectReservedProfile(name, `retained native component profile has unexpected dependencies for ${nodeKey}`);
+    }
+  }
+  const reviewed = resolvedChecks['component-reviewed'];
+  const retainedMapLiteral = reviewed && reviewed.type === 'command' && typeof reviewed.exec === 'string'
+    ? [...reviewed.exec.matchAll(/const encoded = '([^']*)';/g)].map(match => match[1])
+    : [];
+  const retainedMapEncoding = retainedMapLiteral.length === 1 ? retainedMapLiteral[0] : undefined;
+  const retainedMapIsCanonical = retainedMapEncoding === '__NATIVE_RETAINED_AGGREGATE_MAP_BASE64__' || (() => {
+    if (!retainedMapEncoding || !/^[A-Za-z0-9+/]+={0,2}$/.test(retainedMapEncoding)) return false;
+    try {
+      return Buffer.from(retainedMapEncoding, 'base64').length > 0 &&
+        Buffer.from(retainedMapEncoding, 'base64').toString('base64') === retainedMapEncoding;
+    } catch {
+      return false;
+    }
+  })();
+  const reviewedTransportKeys = ['stdin', 'env', 'transform', 'transform_js', 'content', 'url', 'body', 'headers', 'tools', 'tools_js', 'mcp_servers', 'enable_fetch', 'enable_bash'];
+  const reviewedHasTransportOverride = reviewed && reviewedTransportKeys.some(key => Object.prototype.hasOwnProperty.call(reviewed, key));
+  if (!reviewed || reviewed.type !== 'command' || claimBindings(reviewed).join('\0') !== JSON.stringify(['component.work_item@1', 'component']) || claimList(reviewed, 'emits').join('\0') !== reviewedClaim || typeof reviewed.exec !== 'string' || retainedMapLiteral.length !== 1 || !retainedMapIsCanonical || reviewedHasTransportOverride) {
+    rejectReservedProfile(name, 'retained component-reviewed must consume the current WorkItem and one runner-bound aggregate map');
+  }
+  const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofComponentSelector(inspect.invocation)) {
+    rejectReservedProfile(name, 'retained native component inspect must use the builtin component selector');
+  }
+  validateGovernedInspectConfig(name, inspect, true);
+  if (claimBindings(inspect).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, 'retained native component inspect must consume exactly WorkItem and reviewed aggregate parents');
+  }
+  const nativeValidation = resolvedChecks['native-validation'];
+  if (nativeValidation.type !== 'command' || claimBindings(nativeValidation).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(nativeValidation, 'emits').join('\0') !== 'native.component.summary@1') {
+    rejectReservedProfile(name, 'retained native-validation must consume the exact WorkItem/reviewed parents and emit the component summary');
+  }
+  const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (proofAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(proofAdmit).join('\0') !== JSON.stringify([PROOF_CANDIDATE_CLAIM, 'candidate']) || claimList(proofAdmit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, 'retained native component proof_admit bindings are not exact');
+  }
+  const specReview = resolvedChecks.spec_review;
+  if (specReview.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofSpecReviewSelector(specReview.invocation)) rejectReservedProfile(name, 'retained native component spec_review must use the builtin spec-review selector');
+  validateGovernedInspectConfig(name, specReview, false, true);
+  if (claimBindings(specReview).join('\0') !== [
+    ['component.work_item@1', 'component'], [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'admission'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(specReview, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM) rejectReservedProfile(name, 'retained native component spec_review bindings are not exact');
+  const specReviewAdmit = resolvedChecks.spec_review_admit;
+  if (specReviewAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(specReviewAdmit).join('\0') !== JSON.stringify([PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'candidate']) || claimList(specReviewAdmit, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM) rejectReservedProfile(name, 'retained native component spec_review_admit bindings are not exact');
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE || claimList(verify, 'emits').length !== 0 || claimBindings(verify).join('\0') !== [
+    [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'receipt'],
+    [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'spec_candidate'], [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, 'spec_receipt'],
+  ].map(value => JSON.stringify(value)).sort().join('\0')) rejectReservedProfile(name, 'retained native component verify bindings are not exact');
+  if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1 || consumptionsByNode.spec_review_admit.length !== 1) rejectReservedProfile(name, 'retained native component admission consumers are not singular');
+}
+
+/** Exact native component admission suffix.  The operational prefix is
+ * intentionally explicit: this profile may follow only the shipped
+ * native-validation barrier, while the older three/five-node profiles below
+ * retain their original one-WorkItem semantics. */
+function validateNativeReviewedComponentAdmissionTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority,
+): void {
+  const reviewedClaim = 'native.component.reviewed@1';
+  const suffix = ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit', 'verify'];
+  const liveTopology = [
+    'prepare-work-item',
+    'role-onboard-component',
+    'role-spec-review-component',
+    'checkout-target',
+    'checkout-worktree',
+    'author-native-component',
+    'promote-native-component',
+    'enumerate-native-requirements',
+    'wait-for-native-items',
+    'component-reviewed',
+    'native-validation',
+    ...suffix,
+  ];
+  const liveDependencies: Readonly<Record<string, readonly string[]>> = {
+    'prepare-work-item': [],
+    'role-onboard-component': [],
+    'role-spec-review-component': [],
+    'checkout-target': ['prepare-work-item'],
+    'checkout-worktree': ['checkout-target'],
+    'author-native-component': ['checkout-worktree', 'prepare-work-item', 'role-onboard-component'],
+    'promote-native-component': ['author-native-component', 'checkout-worktree', 'prepare-work-item'],
+    'enumerate-native-requirements': ['author-native-component', 'prepare-work-item', 'promote-native-component', 'role-spec-review-component'],
+    'wait-for-native-items': ['enumerate-native-requirements'],
+    'component-reviewed': ['enumerate-native-requirements', 'prepare-work-item', 'wait-for-native-items'],
+    'native-validation': ['component-reviewed'],
+  };
+  if (inputName !== 'component' || inputClaim !== 'component.work_item@1' || !hasOwn(authority.claimTypes, reviewedClaim)) {
+    rejectReservedProfile(name, 'native reviewed component profile requires the component WorkItem input and reviewed claim declaration');
+  }
+  if (nodeKeys.join('\0') !== [...liveTopology].sort().join('\0') || topology.join('\0') !== liveTopology.join('\0')) {
+    rejectReservedProfile(name, 'native reviewed component profile requires the complete named live onboarding topology');
+  }
+  for (const nodeKey of suffix) if (!hasOwn(resolvedChecks, nodeKey)) rejectReservedProfile(name, `native reviewed component profile is missing ${nodeKey}`);
+  for (const [nodeKey, expected] of Object.entries(liveDependencies)) {
+    if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) rejectReservedProfile(name, `native reviewed component profile has unexpected dependencies for ${nodeKey}`);
+  }
+  const prefixExpectations: Readonly<Record<string, { type: string; consumes: readonly string[]; emits: readonly string[] }>> = {
+    'prepare-work-item': { type: 'command', consumes: ['component.work_item@1'], emits: ['component.prepared_work_item@1'] },
+    'checkout-target': { type: 'command', consumes: ['component.prepared_work_item@1'], emits: ['component.checkout_target@1'] },
+    'checkout-worktree': { type: 'git-checkout', consumes: ['component.checkout_target@1'], emits: ['component.checkout@1'] },
+    'role-onboard-component': { type: 'command', consumes: ['component.work_item@1'], emits: ['native.role.onboard@1'] },
+    'author-native-component': { type: 'ai', consumes: ['component.checkout@1', 'component.prepared_work_item@1', 'native.role.onboard@1'], emits: ['native.author.evidence@1'] },
+    'promote-native-component': { type: 'command', consumes: ['component.checkout@1', 'component.prepared_work_item@1', 'native.author.evidence@1'], emits: ['native.promotion@1'] },
+    'role-spec-review-component': { type: 'command', consumes: ['component.work_item@1'], emits: ['native.role.spec_review@1'] },
+    'enumerate-native-requirements': { type: 'command', consumes: ['component.prepared_work_item@1', 'native.author.evidence@1', 'native.promotion@1', 'native.role.spec_review@1'], emits: ['native.requirement.catalog@1'] },
+    'wait-for-native-items': { type: 'noop', consumes: [], emits: [] },
+    'component-reviewed': { type: 'command', consumes: ['component.prepared_work_item@1', 'native.requirement.catalog@1'], emits: [reviewedClaim] },
+    'native-validation': { type: 'command', consumes: ['component.work_item@1', reviewedClaim], emits: ['native.component.summary@1'] },
+  };
+  for (const [nodeKey, expected] of Object.entries(prefixExpectations)) {
+    const check = resolvedChecks[nodeKey];
+    if (!check || check.type !== expected.type || claimList(check, 'consumes').join('\0') !== [...expected.consumes].sort().join('\0') || claimList(check, 'emits').join('\0') !== [...expected.emits].sort().join('\0')) {
+      rejectReservedProfile(name, `${nodeKey} is not the exact native onboarding prefix node`);
+    }
+  }
+  const wait = resolvedChecks['wait-for-native-items'];
+  if (!wait || !wait.wait_for_expansion || !hasExactKeys(wait.wait_for_expansion, ['owner', 'terminal_node']) || wait.wait_for_expansion.owner !== 'enumerate-native-requirements' || wait.wait_for_expansion.terminal_node !== 'collect-proof-evidence') {
+    rejectReservedProfile(name, 'wait-for-native-items must be the sole native requirement expansion barrier');
+  }
+  const requirementExpansion = resolvedChecks['enumerate-native-requirements'].expand;
+  if (!requirementExpansion || typeof requirementExpansion !== 'object' || Array.isArray(requirementExpansion) || !hasExactKeys(requirementExpansion, ['claim', 'template', 'items_pointer', 'key_pointer', 'item_claim']) ||
+      requirementExpansion.claim !== 'native.requirement.catalog@1' || requirementExpansion.template !== 'native-requirement-review' ||
+      requirementExpansion.items_pointer !== '/items' || requirementExpansion.key_pointer !== '/id' || requirementExpansion.item_claim !== 'native.requirement.item@1') {
+    rejectReservedProfile(name, 'enumerate-native-requirements must own the exact native requirement expansion');
+  }
+  const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofComponentSelector(inspect.invocation)) {
+    rejectReservedProfile(name, 'native reviewed component inspect must use the builtin component selector');
+  }
+  validateGovernedInspectConfig(name, inspect, true);
+  if (claimBindings(inspect).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, 'native reviewed component inspect must consume exactly WorkItem and reviewed aggregate parents');
+  }
+  const nativeValidation = resolvedChecks['native-validation'];
+  if (!nativeValidation || claimBindings(nativeValidation).join('\0') !== [
+    ['component.work_item@1', 'component'], [reviewedClaim, 'reviewed'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(nativeValidation, 'emits').join('\0') !== 'native.component.summary@1') {
+    rejectReservedProfile(name, 'native-validation must consume the exact WorkItem/reviewed parents and emit the component summary');
+  }
+  const reviewedProducer = resolvedChecks['component-reviewed'];
+  if (!reviewedProducer || claimList(reviewedProducer, 'emits').join('\0') !== reviewedClaim) {
+    rejectReservedProfile(name, 'component-reviewed must be the sole reviewed aggregate producer');
+  }
+  const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (proofAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(proofAdmit).join('\0') !== JSON.stringify([PROOF_CANDIDATE_CLAIM, 'candidate']) || claimList(proofAdmit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, 'native reviewed component proof_admit bindings are not exact');
+  }
+  const expectedDependencies: Readonly<Record<string, readonly string[]>> = {
+    inspect: ['component-reviewed', 'native-validation'], [PROOF_ADMIT_NODE_KEY]: ['inspect'], spec_review: ['inspect', PROOF_ADMIT_NODE_KEY],
+    spec_review_admit: ['spec_review'], verify: ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit'],
+  };
+  for (const [nodeKey, expected] of Object.entries(expectedDependencies)) {
+    if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) rejectReservedProfile(name, `native reviewed component profile has unexpected dependencies for ${nodeKey}`);
+  }
+  const specReview = resolvedChecks.spec_review;
+  if (specReview.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE || !isGovernedProofSpecReviewSelector(specReview.invocation)) rejectReservedProfile(name, 'native reviewed component spec_review must use the builtin spec-review selector');
+  validateGovernedInspectConfig(name, specReview, false, true);
+  if (claimBindings(specReview).join('\0') !== [
+    ['component.work_item@1', 'component'], [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'admission'],
+  ].map(value => JSON.stringify(value)).sort().join('\0') || claimList(specReview, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM) rejectReservedProfile(name, 'native reviewed component spec_review bindings are not exact');
+  const specReviewAdmit = resolvedChecks.spec_review_admit;
+  if (specReviewAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE || claimBindings(specReviewAdmit).join('\0') !== JSON.stringify([PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'candidate']) || claimList(specReviewAdmit, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM) rejectReservedProfile(name, 'native reviewed component spec_review_admit bindings are not exact');
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE || claimList(verify, 'emits').length !== 0 || claimBindings(verify).join('\0') !== [
+    [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'receipt'],
+    [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'spec_candidate'], [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, 'spec_receipt'],
+  ].map(value => JSON.stringify(value)).sort().join('\0')) rejectReservedProfile(name, 'native reviewed component verify bindings are not exact');
+  if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1 || consumptionsByNode.spec_review_admit.length !== 1) rejectReservedProfile(name, 'native reviewed component admission consumers are not singular');
+}
+
+/**
+ * The proof admission node is deliberately a fixed, tiny profile. It is
+ * validated after all ordinary declaration, emitter, dependency, and topology
+ * checks so no alternate claim path can be smuggled through a template.
+ */
+function validateReservedProofAdmissionTemplate(
+  name: string,
+  inputName: string,
+  inputClaim: string,
+  nodeKeys: readonly string[],
+  resolvedChecks: Readonly<Record<string, CheckConfig>>,
+  consumptionsByNode: Readonly<Record<string, readonly Required<ClaimConsumptionConfig>[]>>,
+  dependencies: Readonly<Record<string, readonly string[]>>,
+  topology: readonly string[],
+  authority: ExpansionCompileAuthority
+): void {
+  const stagedClaims = [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM];
+  const reservedClaims = [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM, PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM, ...stagedClaims];
+  const staged = nodeKeys.includes('spec_review') || nodeKeys.includes('spec_review_admit') || stagedClaims.some(claim => nodeKeys.some(nodeKey => claimList(resolvedChecks[nodeKey], 'emits').includes(claim) || claimList(resolvedChecks[nodeKey], 'consumes').includes(claim)));
+  const triggered = staged || nodeKeys.some(nodeKey => {
+    const check = resolvedChecks[nodeKey];
+    return (
+      check.type === PROOF_ADMIT_PROVIDER_TYPE || check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE ||
+      check.type === PROOF_ADMITTED_CATALOG_PROVIDER_TYPE ||
+      check.type === PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE ||
+      check.type === PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE ||
+      check.type === PROOF_PROJECT_RECONCILE_PROVIDER_TYPE ||
+      claimList(check, 'emits').some(
+        claim => reservedClaims.includes(claim)
+      ) ||
+      claimList(check, 'consumes').some(
+        claim => reservedClaims.includes(claim)
+      )
+    );
+  });
+  const nativeRetainedName = name === RETAINED_COMPONENT_TEMPLATE_NAME;
+  const nativeLiveName = name === 'onboard-component' && inputClaim === 'component.work_item@1' && nodeKeys.includes('prepare-work-item');
+  if ((nativeRetainedName || nativeLiveName) && !triggered) {
+    rejectReservedProfile(name, 'reserved native component profile is missing its governed admission suffix');
+  }
+  if (!triggered) return;
+
+  const nativeReviewed = resolvedChecks.inspect !== undefined && reviewedComponentSelectorTemplateBindingAllowed(
+    inputName,
+    inputClaim,
+    resolvedChecks.inspect,
+  );
+  if ((nativeRetainedName || nativeLiveName) && !nativeReviewed) {
+    rejectReservedProfile(name, 'reserved native component profile must use the exact reviewed component selector');
+  }
+  if (nativeReviewed) {
+    if (nativeRetainedName) {
+      validateNativeRetainedComponentAdmissionTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    } else {
+      validateNativeReviewedComponentAdmissionTemplate(name, inputName, inputClaim, nodeKeys, resolvedChecks, consumptionsByNode, dependencies, topology, authority);
+    }
+    return;
+  }
+
+  if (!hasOwn(authority.claimTypes, PROOF_CANDIDATE_CLAIM)) {
+    rejectReservedProfile(name, `missing ${PROOF_CANDIDATE_CLAIM} declaration`);
+  }
+  if (!hasOwn(authority.claimTypes, PROOF_ADMITTED_RECEIPT_CLAIM)) {
+    rejectReservedProfile(name, `missing ${PROOF_ADMITTED_RECEIPT_CLAIM} declaration`);
+  }
+  if (staged) for (const claim of stagedClaims) if (!hasOwn(authority.claimTypes, claim)) rejectReservedProfile(name, `missing ${claim} declaration`);
+  if (
+    reservedClaims.includes(inputClaim)
+  ) {
+    rejectReservedProfile(name, 'a reserved claim cannot be the template input');
+  }
+
+  const hasCatalogEgress = nodeKeys.includes('revalidate_catalog') || nodeKeys.includes('materialize_catalog');
+  if (staged && hasCatalogEgress) rejectReservedProfile(name, 'staged component profile cannot use catalog egress');
+  if (staged && (inputName !== 'component' || inputClaim !== 'component.work_item@1')) rejectReservedProfile(name, 'staged component profile requires the component work item input');
+  const hasProjectReconciliation = nodeKeys.includes(PROOF_PROJECT_RECONCILE_NODE_KEY);
+  const expectedNodes = hasCatalogEgress
+    ? [
+        'structural_inventory',
+        'inspect',
+        PROOF_ADMIT_NODE_KEY,
+        'verify',
+        'revalidate_catalog',
+        'materialize_catalog',
+        ...(hasProjectReconciliation ? [PROOF_PROJECT_RECONCILE_NODE_KEY] : []),
+      ]
+    : staged ? ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit', 'verify'] : ['inspect', PROOF_ADMIT_NODE_KEY, 'verify'];
+  const expectedNodeKeys = [...expectedNodes].sort();
+  if (nodeKeys.length !== expectedNodeKeys.length || nodeKeys.some((key, index) => key !== expectedNodeKeys[index])) {
+    rejectReservedProfile(name, `expected exactly the nodes ${expectedNodes.join(', ')}`);
+  }
+  if (topology.join('\0') !== expectedNodes.join('\0')) {
+    rejectReservedProfile(name, `expected topology ${expectedNodes.join(' -> ')}`);
+  }
+
+  for (const nodeKey of nodeKeys) {
+    const check = resolvedChecks[nodeKey];
+    if (hasOwn(check, 'expand') && nodeKey !== 'materialize_catalog') rejectReservedProfile(name, `${nodeKey} cannot use check.expand`);
+    const admissionNode = nodeKey === PROOF_ADMIT_NODE_KEY || (staged && nodeKey === 'spec_review_admit');
+    if (!admissionNode && check.type === PROOF_ADMIT_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `provider type ${PROOF_ADMIT_PROVIDER_TYPE} is only valid at ${PROOF_ADMIT_NODE_KEY}`);
+    }
+  }
+
+  const inspect = resolvedChecks.inspect;
+  if (inspect.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
+    rejectReservedProfile(name, `inspect must have type ${GOVERNED_PROOF_INSPECT_PROVIDER_TYPE}`);
+  }
+  validateGovernedInspectConfig(name, inspect, componentSelectorTemplateBindingAllowed(inputName, inputClaim, inspect));
+  if (claimList(inspect, 'emits').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, `inspect must emit only ${PROOF_CANDIDATE_CLAIM}`);
+  }
+  const inspectInputs = claimList(inspect, 'consumes');
+  const expectedInspectInputs = hasCatalogEgress
+    ? [inputClaim, PROOF_STRUCTURAL_INVENTORY_CLAIM].sort()
+    : inspectInputs.includes(PROOF_ROLE_AUTHORITY_CLAIM)
+    ? [inputClaim, PROOF_ROLE_AUTHORITY_CLAIM].sort()
+    : [inputClaim];
+  if (
+    inspectInputs.length !== expectedInspectInputs.length ||
+    inspectInputs.some((claim, index) => claim !== expectedInspectInputs[index])
+  ) {
+    rejectReservedProfile(name, `inspect must consume the template input claim and, when present, ${PROOF_ROLE_AUTHORITY_CLAIM}`);
+  }
+
+  const proofAdmit = resolvedChecks[PROOF_ADMIT_NODE_KEY];
+  if (proofAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must have type ${PROOF_ADMIT_PROVIDER_TYPE}`);
+  }
+  if (claimList(proofAdmit, 'emits').join('\0') !== PROOF_ADMITTED_RECEIPT_CLAIM) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must emit only ${PROOF_ADMITTED_RECEIPT_CLAIM}`);
+  }
+  if (claimList(proofAdmit, 'consumes').join('\0') !== PROOF_CANDIDATE_CLAIM) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must consume only ${PROOF_CANDIDATE_CLAIM}`);
+  }
+
+  if (staged) {
+    const expectedDependencies: Readonly<Record<string, readonly string[]>> = {
+      inspect: [], [PROOF_ADMIT_NODE_KEY]: ['inspect'], spec_review: ['inspect', PROOF_ADMIT_NODE_KEY],
+      spec_review_admit: ['spec_review'], verify: ['inspect', PROOF_ADMIT_NODE_KEY, 'spec_review', 'spec_review_admit'],
+    };
+    for (const [nodeKey, expected] of Object.entries(expectedDependencies)) {
+      if (dependencies[nodeKey]?.join('\0') !== expected.join('\0')) rejectReservedProfile(name, `staged profile has unexpected dependencies for ${nodeKey}`);
+    }
+    const specReview = resolvedChecks.spec_review;
+    if (specReview.type !== GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) rejectReservedProfile(name, 'spec_review must use the governed Proof inspect provider');
+    if (!isGovernedProofSpecReviewSelector(specReview.invocation)) rejectReservedProfile(name, 'spec_review must use the builtin spec-review component invocation selector');
+    validateGovernedInspectConfig(name, specReview, false, true);
+    if (claimList(specReview, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM) rejectReservedProfile(name, `spec_review must emit only ${PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM}`);
+    if (claimBindings(specReview).join('\0') !== [
+      ['component.work_item@1', 'component'], [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'admission'],
+    ].map(value => JSON.stringify(value)).sort().join('\0')) rejectReservedProfile(name, 'spec_review must consume the component work item, original candidate, and admission with exact bindings');
+    const specReviewAdmit = resolvedChecks.spec_review_admit;
+    if (specReviewAdmit.type !== PROOF_ADMIT_PROVIDER_TYPE) rejectReservedProfile(name, `spec_review_admit must have type ${PROOF_ADMIT_PROVIDER_TYPE}`);
+    if (claimList(specReviewAdmit, 'emits').join('\0') !== PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM) rejectReservedProfile(name, `spec_review_admit must emit only ${PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM}`);
+    if (claimBindings(specReviewAdmit).join('\0') !== JSON.stringify([PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'candidate'])) rejectReservedProfile(name, `spec_review_admit must consume only ${PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM} as candidate`);
+  }
+
+  const verify = resolvedChecks.verify;
+  if (verify.type === PROOF_ADMIT_PROVIDER_TYPE) {
+    rejectReservedProfile(name, 'verify cannot use the proof admission provider');
+  }
+  if (
+    claimList(verify, 'emits').length !== 0 ||
+    (staged
+      ? claimBindings(verify).join('\0') !== [
+          [PROOF_CANDIDATE_CLAIM, 'candidate'], [PROOF_ADMITTED_RECEIPT_CLAIM, 'receipt'],
+          [PROOF_COMPONENT_SPEC_REVIEW_CANDIDATE_CLAIM, 'spec_candidate'], [PROOF_COMPONENT_SPEC_REVIEW_ADMITTED_RECEIPT_CLAIM, 'spec_receipt'],
+        ].map(value => JSON.stringify(value)).sort().join('\0')
+      : claimList(verify, 'consumes').join('\0') !== [PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0'))
+  ) {
+    rejectReservedProfile(name, staged ? 'verify must consume both candidate/admission pairs and emit none' : 'verify must consume both reserved claims and emit none');
+  }
+
+  // Keep this assertion close to the profile so future changes cannot make
+  // the candidate-consumer exemption implicit or broaden it accidentally.
+  if (consumptionsByNode[PROOF_ADMIT_NODE_KEY].length !== 1) {
+    rejectReservedProfile(name, `${PROOF_ADMIT_NODE_KEY} must have exactly one candidate consumer`);
+  }
+
+  if (hasCatalogEgress) {
+    if (!hasOwn(authority.claimTypes, PROOF_STRUCTURAL_INVENTORY_CLAIM)) {
+      rejectReservedProfile(name, `missing ${PROOF_STRUCTURAL_INVENTORY_CLAIM} declaration`);
+    }
+    if (
+      !hasOwn(resolvedChecks, 'revalidate_catalog') ||
+      !hasOwn(resolvedChecks, 'materialize_catalog')
+    ) {
+      rejectReservedProfile(name, 'catalog egress requires both revalidate_catalog and materialize_catalog');
+    }
+    const structuralInventory = resolvedChecks.structural_inventory;
+    if (structuralInventory.type !== PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `structural_inventory must have type ${PROOF_STRUCTURAL_INVENTORY_PROVIDER_TYPE}`);
+    }
+    validateCatalogEgressConfig(name, 'structural_inventory', structuralInventory, ['type', 'consumes', 'emits']);
+    if (claimList(structuralInventory, 'consumes').join('\0') !== inputClaim ||
+        claimList(structuralInventory, 'emits').join('\0') !== PROOF_STRUCTURAL_INVENTORY_CLAIM) {
+      rejectReservedProfile(name, 'structural_inventory must consume the template input and emit only the current Proof inventory');
+    }
+    if (resolvedChecks.revalidate_catalog.type !== PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `revalidate_catalog must have type ${PROOF_CATALOG_REVALIDATION_PROVIDER_TYPE}`);
+    }
+    validateCatalogEgressConfig(name, 'revalidate_catalog', resolvedChecks.revalidate_catalog, [
+      'type', 'depends_on', 'consumes', 'emits',
+    ]);
+    if (claimList(resolvedChecks.revalidate_catalog, 'emits').join('\0') !== PROOF_CATALOG_REVALIDATION_CLAIM) {
+      rejectReservedProfile(name, `revalidate_catalog must emit only ${PROOF_CATALOG_REVALIDATION_CLAIM}`);
+    }
+    if (
+      claimList(resolvedChecks.revalidate_catalog, 'consumes').join('\0') !==
+      [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM].sort().join('\0')
+    ) {
+      rejectReservedProfile(name, 'revalidate_catalog must consume the template input, candidate, and admission receipt');
+    }
+    const materialize = resolvedChecks.materialize_catalog;
+    if (materialize.type !== PROOF_ADMITTED_CATALOG_PROVIDER_TYPE) {
+      rejectReservedProfile(name, `materialize_catalog must have type ${PROOF_ADMITTED_CATALOG_PROVIDER_TYPE}`);
+    }
+    validateCatalogEgressConfig(name, 'materialize_catalog', materialize, [
+      'type', 'consumes', 'emits', 'expand',
+    ]);
+    if (!materialize.expand || typeof materialize.expand !== 'object' || Array.isArray(materialize.expand)) {
+      rejectReservedProfile(name, 'materialize_catalog must own a downstream expansion');
+    }
+    if (claimList(materialize, 'emits').length !== 1 || claimList(materialize, 'emits')[0] === PROOF_CANDIDATE_CLAIM || claimList(materialize, 'emits')[0] === PROOF_ADMITTED_RECEIPT_CLAIM || claimList(materialize, 'emits')[0] === PROOF_CATALOG_REVALIDATION_CLAIM) {
+      rejectReservedProfile(name, 'materialize_catalog must emit exactly one non-reserved catalog claim');
+    }
+    if (
+      claimList(materialize, 'consumes').join('\0') !==
+      [PROOF_STRUCTURAL_INVENTORY_CLAIM, PROOF_CANDIDATE_CLAIM, PROOF_ADMITTED_RECEIPT_CLAIM, PROOF_CATALOG_REVALIDATION_CLAIM].sort().join('\0')
+    ) {
+      rejectReservedProfile(name, 'materialize_catalog must consume the template input, candidate, admission receipt, and current revalidation');
+    }
+
+    if (hasProjectReconciliation) {
+      const reconciliation = resolvedChecks[PROOF_PROJECT_RECONCILE_NODE_KEY];
+      if (reconciliation.type !== PROOF_PROJECT_RECONCILE_PROVIDER_TYPE) {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must have type ${PROOF_PROJECT_RECONCILE_PROVIDER_TYPE}`
+        );
+      }
+      validateCatalogEgressConfig(name, PROOF_PROJECT_RECONCILE_NODE_KEY, reconciliation, [
+        'type',
+        'depends_on',
+        'wait_for_expansion',
+        'emits',
+      ]);
+      const dependencies = dependencyTokens(
+        reconciliation,
+        `${name}.${PROOF_PROJECT_RECONCILE_NODE_KEY}`
+      );
+      if (dependencies.length !== 1 || dependencies[0] !== 'materialize_catalog') {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must depend only on materialize_catalog`
+        );
+      }
+      if (claimList(reconciliation, 'emits').join('\0') !== PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM) {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must emit only ${PROOF_PROJECT_RECONCILIATION_RECEIPT_CLAIM}`
+        );
+      }
+      const wait = reconciliation.wait_for_expansion;
+      if (
+        !wait ||
+        typeof wait !== 'object' ||
+        Array.isArray(wait) ||
+        !hasExactKeys(wait, ['owner', 'terminal_node']) ||
+        (wait as Record<string, unknown>).owner !== 'materialize_catalog' ||
+        (wait as Record<string, unknown>).terminal_node !== 'verify'
+      ) {
+        rejectReservedProfile(
+          name,
+          `${PROOF_PROJECT_RECONCILE_NODE_KEY} must wait for materialize_catalog terminal verify`
+        );
+      }
+    }
+  }
+}
+
+function topologicalOrder(
+  templateName: string,
+  dependencies: Readonly<Record<string, readonly string[]>>
+): readonly string[] {
+  const remaining = new Map(
+    Object.entries(dependencies).map(([node, values]) => [node, new Set(values)])
+  );
+  const order: string[] = [];
+  while (remaining.size > 0) {
+    const ready = [...remaining.entries()]
+      .filter(([, values]) => values.size === 0)
+      .map(([node]) => node)
+      .sort();
+    if (ready.length === 0) {
+      throw new InstancePlanError(
+        'TEMPLATE_CYCLE',
+        `Subgraph template "${templateName}" contains a dependency cycle`
+      );
+    }
+    for (const node of ready) {
+      remaining.delete(node);
+      order.push(node);
+    }
+    for (const values of remaining.values()) {
+      for (const node of ready) values.delete(node);
+    }
+  }
+  return Object.freeze(order);
+}
+
+function compileTemplate(
+  name: string,
+  authored: SubgraphConfig,
+  authority: ExpansionCompileAuthority
+): CompiledSubgraphTemplate {
+  if (!authored || typeof authored !== 'object' || Array.isArray(authored)) {
+    throw new InstancePlanError('INVALID_SUBGRAPH_TEMPLATE', `Subgraph "${name}" must be an object`);
+  }
+  const inputName = requireNonEmptyString(authored.input?.name, `subgraphs.${name}.input.name`);
+  if (!BINDING_NAME_PATTERN.test(inputName)) {
+    throw new InstancePlanError(
+      'INVALID_TEMPLATE_BINDING',
+      `Subgraph "${name}" input name "${inputName}" is not a canonical binding name`
+    );
+  }
+  const inputClaim = requireNonEmptyString(
+    authored.input?.claim,
+    `subgraphs.${name}.input.claim`
+  );
+  if (!CLAIM_REF_PATTERN.test(inputClaim) || !hasOwn(authority.claimTypes, inputClaim)) {
+    throw new InstancePlanError(
+      'UNKNOWN_TEMPLATE_CLAIM',
+      `Subgraph "${name}" references undeclared input claim "${inputClaim}"`
+    );
+  }
+  if (!authored.checks || typeof authored.checks !== 'object' || Array.isArray(authored.checks)) {
+    throw new InstancePlanError(
+      'INVALID_SUBGRAPH_TEMPLATE',
+      `Subgraph "${name}" requires a checks map`
+    );
+  }
+  const nodeKeys = Object.keys(authored.checks).sort();
+  if (nodeKeys.length === 0 || nodeKeys.some(node => node.length === 0)) {
+    throw new InstancePlanError(
+      'INVALID_SUBGRAPH_TEMPLATE',
+      `Subgraph "${name}" requires at least one named check`
+    );
+  }
+
+  const resolvedChecks: Record<string, CheckConfig> = {};
+  const emitterByClaim: Record<string, string> = {};
+  const consumptionsByNode: Record<string, readonly Required<ClaimConsumptionConfig>[]> = {};
+  let consumesTemplateInput = false;
+
+  for (const nodeKey of nodeKeys) {
+    const check = authored.checks[nodeKey];
+    if (!check || typeof check !== 'object' || Array.isArray(check)) {
+      throw new InstancePlanError(
+        'INVALID_TEMPLATE_CHECK',
+        `Template check "${name}.${nodeKey}" must be an object`
+      );
+    }
+    if (check.forEach || check.type === 'workflow' || hasRouting(check)) {
+      throw new InstancePlanError(
+        'UNSUPPORTED_TEMPLATE_EXECUTION',
+        `Template check "${name}.${nodeKey}" cannot use forEach, workflow, or lifecycle routing`
+      );
+    }
+    if (check.resource_group !== undefined &&
+        (typeof check.resource_group !== 'string' || !RESOURCE_GROUP_PATTERN.test(check.resource_group))) {
+      throw new InstancePlanError(
+        'INVALID_RESOURCE_GROUP',
+        `Template check "${name}.${nodeKey}" resource_group must be a non-empty safe token of at most 64 characters`
+      );
+    }
+    if (check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE) {
+      validateGovernedInspectConfig(name, check,
+        componentSelectorTemplateBindingAllowed(inputName, inputClaim, check) ||
+        reviewedComponentSelectorTemplateBindingAllowed(inputName, inputClaim, check),
+        nodeKey === 'spec_review');
+    }
+    for (const field of ['emits', 'consumes'] as const) {
+      if (hasOwn(check, field) && (!Array.isArray(check[field]) || check[field]!.length === 0)) {
+        throw new InstancePlanError(
+          'EMPTY_TEMPLATE_CLAIM_DECLARATION',
+          `Template check "${name}.${nodeKey}" declares ${field}, which must be a non-empty array`
+        );
+      }
+    }
+
+    const resolved = resolvedTemplateCheck(check);
+    const seenClaims = new Set<string>();
+    const seenBindings = new Set<string>();
+    const consumptions = (resolved.consumes || []).map(consumption => {
+      if (
+        !CLAIM_REF_PATTERN.test(consumption.claim) ||
+        !hasOwn(authority.claimTypes, consumption.claim)
+      ) {
+        throw new InstancePlanError(
+          'UNKNOWN_TEMPLATE_CLAIM',
+          `Template check "${name}.${nodeKey}" consumes undeclared claim "${consumption.claim}"`
+        );
+      }
+      if (consumption.cardinality !== 'one') {
+        throw new InstancePlanError(
+          'UNSUPPORTED_TEMPLATE_CARDINALITY',
+          `Template check "${name}.${nodeKey}" supports cardinality one only`
+        );
+      }
+      const binding = requireNonEmptyString(
+        consumption.as,
+        `subgraphs.${name}.checks.${nodeKey}.consumes.as`
+      );
+      if (!BINDING_NAME_PATTERN.test(binding)) {
+        throw new InstancePlanError(
+          'INVALID_TEMPLATE_BINDING',
+          `Template check "${name}.${nodeKey}" has invalid binding "${binding}"`
+        );
+      }
+      if (seenClaims.has(consumption.claim) || seenBindings.has(binding)) {
+        throw new InstancePlanError(
+          'DUPLICATE_TEMPLATE_CONSUMPTION',
+          `Template check "${name}.${nodeKey}" has a duplicate claim or binding`
+        );
+      }
+      if (consumption.claim === inputClaim) {
+        consumesTemplateInput = true;
+        if (binding !== inputName) {
+          throw new InstancePlanError(
+            'INVALID_TEMPLATE_BINDING',
+            `Template input claim "${inputClaim}" must bind as "${inputName}"`
+          );
+        }
+      }
+      seenClaims.add(consumption.claim);
+      seenBindings.add(binding);
+      return Object.freeze({
+        claim: consumption.claim,
+        cardinality: 'one' as const,
+        as: binding,
+      });
+    });
+    consumptionsByNode[nodeKey] = Object.freeze(consumptions);
+
+    for (const emission of resolved.emits || []) {
+      if (!CLAIM_REF_PATTERN.test(emission.claim) || !hasOwn(authority.claimTypes, emission.claim)) {
+        throw new InstancePlanError(
+          'UNKNOWN_TEMPLATE_CLAIM',
+          `Template check "${name}.${nodeKey}" emits undeclared claim "${emission.claim}"`
+        );
+      }
+      if (emission.from !== 'output') {
+        throw new InstancePlanError(
+          'UNSUPPORTED_TEMPLATE_CLAIM_SOURCE',
+          `Template check "${name}.${nodeKey}" uses an unsupported claim source`
+        );
+      }
+      if (emission.claim === inputClaim) {
+        throw new InstancePlanError(
+          'FORGED_CONTROLLER_ITEM_CLAIM',
+          `Template check "${name}.${nodeKey}" cannot emit controller input claim "${inputClaim}"`
+        );
+      }
+      const existing = emitterByClaim[emission.claim];
+      if (existing) {
+        throw new InstancePlanError(
+          'DUPLICATE_TEMPLATE_EMITTER',
+          `Template claim "${emission.claim}" has duplicate emitters "${existing}" and "${nodeKey}"`
+        );
+      }
+      emitterByClaim[emission.claim] = nodeKey;
+    }
+    resolvedChecks[nodeKey] = resolved;
+  }
+  if (!consumesTemplateInput) {
+    throw new InstancePlanError(
+      'UNUSED_TEMPLATE_INPUT',
+      `Subgraph "${name}" has no check consuming its input claim "${inputClaim}"`
+    );
+  }
+
+  const dependencies: Record<string, readonly string[]> = {};
+  for (const nodeKey of nodeKeys) {
+    const effective = new Set(dependencyTokens(resolvedChecks[nodeKey], `${name}.${nodeKey}`));
+    for (const dependency of effective) {
+      if (!hasOwn(resolvedChecks, dependency)) {
+        throw new InstancePlanError(
+          'UNKNOWN_TEMPLATE_CHECK',
+          `Template check "${name}.${nodeKey}" depends on unknown check "${dependency}"`
+        );
+      }
+    }
+    for (const consumption of consumptionsByNode[nodeKey]) {
+      if (consumption.claim === inputClaim) continue;
+      const emitter = emitterByClaim[consumption.claim];
+      if (!emitter) {
+        throw new InstancePlanError(
+          'MISSING_TEMPLATE_EMITTER',
+          `Template claim "${consumption.claim}" consumed by "${name}.${nodeKey}" has no template emitter`
+        );
+      }
+      effective.add(emitter);
+    }
+    dependencies[nodeKey] = Object.freeze([...effective].sort());
+  }
+  const topology = topologicalOrder(name, dependencies);
+  validateReservedProofAdmissionTemplate(
+    name,
+    inputName,
+    inputClaim,
+    nodeKeys,
+    resolvedChecks,
+    consumptionsByNode,
+    dependencies,
+    topology,
+    authority
+  );
+  const dependentsByNode: Record<string, readonly string[]> = {};
+  for (const nodeKey of nodeKeys) {
+    dependentsByNode[nodeKey] = Object.freeze(
+      nodeKeys.filter(candidate => dependencies[candidate].includes(nodeKey)).sort()
+    );
+  }
+
+  const input = Object.freeze({ name: inputName, claim: inputClaim });
+  const resolvedTemplate = immutableCanonicalValue({
+    name,
+    input,
+    checks: resolvedChecks,
+  });
+  const templateDigest = sha256Canonical({ v: 1, template: resolvedTemplate });
+  const nodesByKey: Record<string, CompiledTemplateNode> = {};
+  for (const nodeKey of nodeKeys) {
+    const check = resolvedChecks[nodeKey];
+    const waitForExpansion = compileWaitForExpansion(
+      name,
+      nodeKey,
+      check.wait_for_expansion,
+      new Set(nodeKeys),
+    );
+    if (waitForExpansion &&
+        (dependencies[nodeKey].length !== 1 || dependencies[nodeKey][0] !== waitForExpansion.owner ||
+          (check.consumes?.length || 0) !== 0)) {
+      throw new InstancePlanError(
+        'INVALID_WAIT_FOR_EXPANSION',
+        `Template check "${name}.${nodeKey}" wait_for_expansion must depend only on its owner and declare no consumes`,
+      );
+    }
+    const executionConfigDigest = sha256Canonical({
+      v: 1,
+      templateDigest,
+      templateNodeKey: nodeKey,
+      ...(check.type === GOVERNED_PROOF_INSPECT_PROVIDER_TYPE
+        ? { authoredProviderConfig: Object.fromEntries(['type', 'message', 'instructions', 'invocation', 'invocation_digest', 'result_schema', 'profile', ...(check.ai ? ['ai'] : [])].filter(key => (check as Record<string, unknown>)[key] !== undefined).map(key => [key, (check as Record<string, unknown>)[key]])) }
+        : { resolvedCheck: check }),
+    });
+    nodesByKey[nodeKey] = Object.freeze({
+      templateNodeKey: nodeKey,
+      check,
+      emissions: Object.freeze([...(check.emits || [])]),
+      consumptions: consumptionsByNode[nodeKey],
+      dependencyNodeKeys: dependencies[nodeKey],
+      executionConfigDigest,
+      ...(waitForExpansion ? { waitForExpansion } : {}),
+    });
+  }
+
+  return Object.freeze({
+    name,
+    input,
+    templateDigest,
+    templateNodeKeys: Object.freeze(nodeKeys),
+    topology,
+    reverseTopology: Object.freeze([...topology].reverse()),
+    sourceNodeKeys: Object.freeze(nodeKeys.filter(node => dependencies[node].length === 0)),
+    nodesByKey: frozenRecord(nodesByKey),
+    emitterByClaim: frozenRecord(emitterByClaim),
+    dependentsByNode: frozenRecord(dependentsByNode),
+  });
+}
+
+function resolvedRootChecks(checks: Record<string, CheckConfig>): Readonly<Record<string, CheckConfig>> {
+  const resolved: Record<string, CheckConfig> = {};
+  for (const checkId of Object.keys(checks).sort()) {
+    resolved[checkId] = immutableCanonicalValue({
+      ...checks[checkId],
+      type: checks[checkId].type || 'ai',
+    });
+  }
+  return frozenRecord(resolved);
+}
+
+/** Compile all dynamic-instance authority once, before any provider can launch. */
+export function compileExpansionPlan(
+  config: Partial<VisorConfig>,
+  authority: ExpansionCompileAuthority
+): ExpansionPlan {
+  const checks = config.checks || config.steps || {};
+  for (const [checkId, check] of Object.entries(checks)) {
+    if (check.resource_group !== undefined) {
+      throw new InstancePlanError(
+        'UNSUPPORTED_RESOURCE_GROUP_PLACEMENT',
+        `Check "${checkId}" declares resource_group outside a Graph-v2 subgraph template`
+      );
+    }
+  }
+  const subgraphs = config.subgraphs;
+  const owners = Object.entries(checks).filter(([, check]) => hasOwn(check, 'expand'));
+  const hasSubgraphs = hasOwn(config, 'subgraphs');
+  const rootWaiter = Object.entries(checks).find(([, check]) => hasOwn(check, 'wait_for_expansion'));
+  if (rootWaiter) {
+    throw new InstancePlanError(
+      'INVALID_WAIT_FOR_EXPANSION',
+      `Root check "${rootWaiter[0]}" cannot declare wait_for_expansion; barriers belong to subgraph templates`,
+    );
+  }
+  if (!hasSubgraphs && owners.length === 0) {
+    return Object.freeze({
+      active: false,
+      graphSemanticDigest: sha256Canonical({ v: 1, active: false }),
+      byOwner: frozenRecord<CompiledExpansion>({}),
+      byNestedOwner: frozenRecord<CompiledExpansion>({}),
+      templatesByName: frozenRecord<CompiledSubgraphTemplate>({}),
+    });
+  }
+  if (
+    !subgraphs ||
+    typeof subgraphs !== 'object' ||
+    Array.isArray(subgraphs) ||
+    Object.keys(subgraphs).length === 0 ||
+    owners.length === 0
+  ) {
+    throw new InstancePlanError(
+      'INCOMPLETE_EXPANSION_CONFIG',
+      'Graph v2 C2 requires both a non-empty subgraphs map and a check-local expand block'
+    );
+  }
+
+  const templatesByName: Record<string, CompiledSubgraphTemplate> = {};
+  for (const name of Object.keys(subgraphs).sort()) {
+    requireNonEmptyString(name, 'subgraph name');
+    templatesByName[name] = compileTemplate(name, subgraphs[name], authority);
+  }
+
+  const precompiled: Array<{
+    owner: string;
+    expansion: ExpansionConfig;
+    template: CompiledSubgraphTemplate;
+    itemsPointer: CompiledJsonPointer;
+    keyPointer: CompiledJsonPointer;
+    coverage?: CompiledExpansion['coverage'];
+    expansionSpecDigest: string;
+  }> = [];
+  for (const [owner, check] of owners.sort(([a], [b]) => a.localeCompare(b))) {
+    const expansion = check.expand;
+    if (!expansion || typeof expansion !== 'object' || Array.isArray(expansion)) {
+      throw new InstancePlanError(
+        'INVALID_EXPANSION_CONFIG',
+        `Check "${owner}" expand must be an object`
+      );
+    }
+    const catalogClaim = requireNonEmptyString(expansion.claim, `checks.${owner}.expand.claim`);
+    if (!CLAIM_REF_PATTERN.test(catalogClaim) || !authority.validatorsByClaim[catalogClaim]) {
+      throw new InstancePlanError(
+        'UNKNOWN_EXPANSION_CLAIM',
+        `Check "${owner}" expands undeclared catalog claim "${catalogClaim}"`
+      );
+    }
+    const matchingEmissions = (check.emits || []).filter(emission => emission.claim === catalogClaim);
+    if (matchingEmissions.length !== 1 || authority.rootEmitterByClaim[catalogClaim] !== owner) {
+      throw new InstancePlanError(
+        'INVALID_EXPANSION_OWNER',
+        `Check "${owner}" must be the sole emitter of expanded claim "${catalogClaim}"`
+      );
+    }
+    const itemClaim = requireNonEmptyString(
+      expansion.item_claim,
+      `checks.${owner}.expand.item_claim`
+    );
+    if (!CLAIM_REF_PATTERN.test(itemClaim) || !authority.validatorsByClaim[itemClaim]) {
+      throw new InstancePlanError(
+        'UNKNOWN_ITEM_CLAIM',
+        `Check "${owner}" references undeclared item claim "${itemClaim}"`
+      );
+    }
+    if (authority.rootEmitterByClaim[itemClaim]) {
+      throw new InstancePlanError(
+        'FORGED_CONTROLLER_ITEM_CLAIM',
+        `Item claim "${itemClaim}" is controller-owned and cannot have a root emitter`
+      );
+    }
+    const templateName = requireNonEmptyString(
+      expansion.template,
+      `checks.${owner}.expand.template`
+    );
+    const template = templatesByName[templateName];
+    if (!template) {
+      throw new InstancePlanError(
+        'UNKNOWN_SUBGRAPH_TEMPLATE',
+        `Check "${owner}" references unknown subgraph template "${templateName}"`
+      );
+    }
+    if (template.input.claim !== itemClaim) {
+      throw new InstancePlanError(
+        'ITEM_CLAIM_MISMATCH',
+        `Check "${owner}" item claim "${itemClaim}" does not match template input "${template.input.claim}"`
+      );
+    }
+    const itemsPointer = compileJsonPointer(
+      expansion.items_pointer,
+      `checks.${owner}.expand.items_pointer`
+    );
+    const keyPointer = compileJsonPointer(
+      expansion.key_pointer,
+      `checks.${owner}.expand.key_pointer`
+    );
+    let coverage: CompiledExpansion['coverage'];
+    if (expansion.coverage !== undefined) {
+      if (!expansion.coverage || typeof expansion.coverage !== 'object' || Array.isArray(expansion.coverage)) {
+        throw new InstancePlanError('INVALID_COVERAGE_CONFIG', `Check "${owner}" coverage must be an object`);
+      }
+      const outcomeClaimRef = requireNonEmptyString(
+        expansion.coverage.outcome_claim,
+        `checks.${owner}.expand.coverage.outcome_claim`
+      );
+      if (
+        !CLAIM_REF_PATTERN.test(outcomeClaimRef) ||
+        !authority.validatorsByClaim[outcomeClaimRef] ||
+        outcomeClaimRef === catalogClaim ||
+        outcomeClaimRef === itemClaim ||
+        outcomeClaimRef === template.input.claim
+      ) {
+        throw new InstancePlanError(
+          'INVALID_COVERAGE_OUTCOME_CLAIM',
+          `Check "${owner}" coverage outcome must be a distinct declared template claim`
+        );
+      }
+      const emitterNodeKey = template.emitterByClaim[outcomeClaimRef];
+      if (!emitterNodeKey || template.dependentsByNode[emitterNodeKey].length !== 0) {
+        throw new InstancePlanError(
+          'INVALID_COVERAGE_OUTCOME_EMITTER',
+          `Check "${owner}" coverage outcome must have exactly one sink emitter`
+        );
+      }
+      coverage = Object.freeze({
+        outcomeClaimRef,
+        emitterNodeKey,
+        classPointer: compileJsonPointer(
+          expansion.coverage.class_pointer,
+          `checks.${owner}.expand.coverage.class_pointer`
+        ),
+      });
+    }
+    const expansionSpecDigest = sha256Canonical({
+      v: 1,
+      expansionOwnerCheck: owner,
+      catalogClaimRef: catalogClaim,
+      templateName,
+      templateDigest: template.templateDigest,
+      itemsPointer: itemsPointer.source,
+      keyPointer: keyPointer.source,
+      itemClaimRef: itemClaim,
+      ...(coverage
+        ? {
+            coverage: {
+              outcomeClaimRef: coverage.outcomeClaimRef,
+              classPointer: coverage.classPointer.source,
+              emitterNodeKey: coverage.emitterNodeKey,
+            },
+          }
+        : {}),
+    });
+    precompiled.push({
+      owner,
+      expansion,
+      template,
+      itemsPointer,
+      keyPointer,
+      coverage,
+      expansionSpecDigest,
+    });
+  }
+
+  const graphSemanticDigest = sha256Canonical({
+    v: 1,
+    claimTypes: authority.claimTypes,
+    checks: resolvedRootChecks(checks),
+    subgraphs: Object.fromEntries(
+      Object.entries(templatesByName).map(([name, template]) => [
+        name,
+        {
+          input: template.input,
+          checks: Object.fromEntries(
+            template.templateNodeKeys.map(node => [node, template.nodesByKey[node].check])
+          ),
+        },
+      ])
+    ),
+  });
+  const byOwner: Record<string, CompiledExpansion> = {};
+  for (const compiled of precompiled) {
+    const expansion = compiled.expansion;
+    byOwner[compiled.owner] = Object.freeze({
+      expansionOwnerCheck: compiled.owner,
+      depth: 1,
+      parentTemplateName: null,
+      parentTemplateNodeKey: null,
+      catalogClaimRef: expansion.claim,
+      catalogValidator: authority.validatorsByClaim[expansion.claim],
+      templateName: expansion.template,
+      templateDigest: compiled.template.templateDigest,
+      expansionSpecDigest: compiled.expansionSpecDigest,
+      itemsPointer: compiled.itemsPointer,
+      keyPointer: compiled.keyPointer,
+      itemClaimRef: expansion.item_claim,
+      itemValidator: authority.validatorsByClaim[expansion.item_claim],
+      template: compiled.template,
+      ...(compiled.coverage ? { coverage: compiled.coverage } : {}),
+      graphSemanticDigest,
+    });
+  }
+
+  const byNestedOwner: Record<string, CompiledExpansion> = {};
+  const reachableTemplates = new Set<string>();
+  const visitingTemplates = new Set<string>();
+
+  /**
+   * Compile every expansion declaration reachable from a root expansion.
+   * The declaration address is local to its parent template, so the same
+   * template may safely be reused by several parents while its static owner
+   * identity remains unambiguous. A DFS supplies the finite acyclic bound.
+   */
+  const compileReachableTemplate = (parentTemplate: CompiledSubgraphTemplate, depth: number): void => {
+    if (visitingTemplates.has(parentTemplate.name)) {
+      throw new InstancePlanError(
+        'NESTED_EXPANSION_DEPTH_EXCEEDED',
+        `Graph v2 expansion templates contain a recursive cycle at "${parentTemplate.name}"`
+      );
+    }
+    if (reachableTemplates.has(parentTemplate.name)) return;
+    visitingTemplates.add(parentTemplate.name);
+    reachableTemplates.add(parentTemplate.name);
+
+    for (const nodeKey of parentTemplate.templateNodeKeys) {
+      const check = parentTemplate.nodesByKey[nodeKey].check;
+      if (!hasOwn(check, 'expand')) continue;
+      const expansion = check.expand;
+      const ownerAddress = qualifiedNestedExpansionOwner(parentTemplate.name, nodeKey);
+      if (!expansion || typeof expansion !== 'object' || Array.isArray(expansion)) {
+        throw new InstancePlanError(
+          'INVALID_EXPANSION_CONFIG',
+          `Template check "${parentTemplate.name}.${nodeKey}" expand must be an object`
+        );
+      }
+      const fieldPrefix = `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand`;
+      const catalogClaim = requireNonEmptyString(expansion.claim, `${fieldPrefix}.claim`);
+      if (!CLAIM_REF_PATTERN.test(catalogClaim) || !authority.validatorsByClaim[catalogClaim]) {
+        throw new InstancePlanError(
+          'UNKNOWN_EXPANSION_CLAIM',
+          `Template check "${parentTemplate.name}.${nodeKey}" expands undeclared catalog claim "${catalogClaim}"`
+        );
+      }
+      const matchingEmissions = (check.emits || []).filter(emission => emission.claim === catalogClaim);
+      if (matchingEmissions.length !== 1 || parentTemplate.emitterByClaim[catalogClaim] !== nodeKey) {
+        throw new InstancePlanError(
+          'INVALID_EXPANSION_OWNER',
+          `Template check "${parentTemplate.name}.${nodeKey}" must be the sole template emitter of expanded claim "${catalogClaim}"`
+        );
+      }
+      const itemClaim = requireNonEmptyString(expansion.item_claim, `${fieldPrefix}.item_claim`);
+      if (!CLAIM_REF_PATTERN.test(itemClaim) || !authority.validatorsByClaim[itemClaim]) {
+        throw new InstancePlanError(
+          'UNKNOWN_ITEM_CLAIM',
+          `Template check "${parentTemplate.name}.${nodeKey}" references undeclared item claim "${itemClaim}"`
+        );
+      }
+      if (
+        authority.rootEmitterByClaim[itemClaim] ||
+        Object.values(templatesByName).some(candidate => candidate.emitterByClaim[itemClaim])
+      ) {
+        throw new InstancePlanError(
+          'FORGED_CONTROLLER_ITEM_CLAIM',
+          `Nested item claim "${itemClaim}" is controller-owned and cannot have an emitter`
+        );
+      }
+      const templateName = requireNonEmptyString(expansion.template, `${fieldPrefix}.template`);
+      const childTemplate = templatesByName[templateName];
+      if (!childTemplate) {
+        throw new InstancePlanError(
+          'UNKNOWN_SUBGRAPH_TEMPLATE',
+          `Template check "${parentTemplate.name}.${nodeKey}" references unknown subgraph template "${templateName}"`
+        );
+      }
+      if (childTemplate.input.claim !== itemClaim) {
+        throw new InstancePlanError(
+          'ITEM_CLAIM_MISMATCH',
+          `Nested item claim "${itemClaim}" does not match template input "${childTemplate.input.claim}"`
+        );
+      }
+      const itemsPointer = compileJsonPointer(expansion.items_pointer, `${fieldPrefix}.items_pointer`);
+      const keyPointer = compileJsonPointer(expansion.key_pointer, `${fieldPrefix}.key_pointer`);
+      let coverage: CompiledExpansion['coverage'];
+      if (expansion.coverage !== undefined) {
+        if (!expansion.coverage || typeof expansion.coverage !== 'object' || Array.isArray(expansion.coverage)) {
+          throw new InstancePlanError('INVALID_COVERAGE_CONFIG', `Template check "${parentTemplate.name}.${nodeKey}" coverage must be an object`);
+        }
+        const outcomeClaimRef = requireNonEmptyString(
+          expansion.coverage.outcome_claim,
+          `${fieldPrefix}.coverage.outcome_claim`
+        );
+        if (!CLAIM_REF_PATTERN.test(outcomeClaimRef) || !authority.validatorsByClaim[outcomeClaimRef] ||
+            outcomeClaimRef === catalogClaim || outcomeClaimRef === itemClaim || outcomeClaimRef === childTemplate.input.claim) {
+          throw new InstancePlanError(
+            'INVALID_COVERAGE_OUTCOME_CLAIM',
+            `Template check "${parentTemplate.name}.${nodeKey}" coverage outcome must be a distinct declared template claim`
+          );
+        }
+        const emitterNodeKey = childTemplate.emitterByClaim[outcomeClaimRef];
+        if (!emitterNodeKey || childTemplate.dependentsByNode[emitterNodeKey].length !== 0) {
+          throw new InstancePlanError(
+            'INVALID_COVERAGE_OUTCOME_EMITTER',
+            `Template check "${parentTemplate.name}.${nodeKey}" coverage outcome must have exactly one sink emitter`
+          );
+        }
+        coverage = Object.freeze({
+          outcomeClaimRef,
+          emitterNodeKey,
+          classPointer: compileJsonPointer(expansion.coverage.class_pointer, `${fieldPrefix}.coverage.class_pointer`),
+        });
+      }
+      const expansionSpecDigest = sha256Canonical({
+        v: 1,
+        expansionOwnerCheck: ownerAddress,
+        parentTemplateName: parentTemplate.name,
+        parentTemplateNodeKey: nodeKey,
+        catalogClaimRef: catalogClaim,
+        templateName,
+        templateDigest: childTemplate.templateDigest,
+        itemsPointer: itemsPointer.source,
+        keyPointer: keyPointer.source,
+        itemClaimRef: itemClaim,
+        ...(coverage
+          ? {
+              coverage: {
+                outcomeClaimRef: coverage.outcomeClaimRef,
+                classPointer: coverage.classPointer.source,
+                emitterNodeKey: coverage.emitterNodeKey,
+              },
+            }
+          : {}),
+      });
+      byNestedOwner[ownerAddress] = Object.freeze({
+        expansionOwnerCheck: ownerAddress,
+        depth,
+        parentTemplateName: parentTemplate.name,
+        parentTemplateNodeKey: nodeKey,
+        catalogClaimRef: catalogClaim,
+        catalogValidator: authority.validatorsByClaim[catalogClaim],
+        templateName,
+        templateDigest: childTemplate.templateDigest,
+        expansionSpecDigest,
+        itemsPointer,
+        keyPointer,
+        itemClaimRef: itemClaim,
+        itemValidator: authority.validatorsByClaim[itemClaim],
+        template: childTemplate,
+        ...(coverage ? { coverage } : {}),
+        graphSemanticDigest,
+      });
+      compileReachableTemplate(childTemplate, depth + 1);
+    }
+    visitingTemplates.delete(parentTemplate.name);
+  };
+
+  for (const compiled of precompiled) compileReachableTemplate(compiled.template, 2);
+  for (const templateName of Object.keys(templatesByName)) {
+    // The retained profile is a shipped, runner-selected continuation
+    // template. It is intentionally dormant in the live project expansion;
+    // its exact topology is still compiled and validated above, then the
+    // runner selects it in a fresh config before dispatch.
+    const dormantNativeProfile = (templateName === RETAINED_COMPONENT_TEMPLATE_NAME ||
+      (templateName === 'onboard-component' && templatesByName[templateName].input.claim === 'component.work_item@1' &&
+        Object.prototype.hasOwnProperty.call(templatesByName[templateName].nodesByKey, 'prepare-work-item')));
+    if (!reachableTemplates.has(templateName) && !dormantNativeProfile) {
+      throw new InstancePlanError(
+        'UNREACHABLE_SUBGRAPH_TEMPLATE',
+        `Subgraph template "${templateName}" is not reachable from a root expansion`
+      );
+    }
+  }
+
+  // A wait barrier is intentionally a narrow binding: it can only observe an
+  // already-compiled expansion owned by a sibling in this exact parent
+  // template, and its terminal node must be a child-template sink. This keeps
+  // readiness in the existing graph authority rather than introducing a
+  // second fan-in topology.
+  const waitOwnerByTemplate = new Set<string>();
+  for (const template of Object.values(templatesByName)) {
+    for (const nodeKey of template.templateNodeKeys) {
+      const wait = template.nodesByKey[nodeKey].waitForExpansion;
+      if (!wait) continue;
+      const nested = byNestedOwner[qualifiedNestedExpansionOwner(template.name, wait.owner)];
+      if (!nested) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.owner must own a compiled expansion`
+        );
+      }
+      if (!nested.template.nodesByKey[wait.terminal_node]) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.terminal_node must exist in child template "${nested.template.name}"`
+        );
+      }
+      if (nested.template.dependentsByNode[wait.terminal_node].length !== 0) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template check "${template.name}.${nodeKey}" wait_for_expansion.terminal_node must be a child-template sink`
+        );
+      }
+      const ownerKey = qualifiedNestedExpansionOwner(template.name, wait.owner);
+      if (waitOwnerByTemplate.has(ownerKey)) {
+        throw new InstancePlanError(
+          'INVALID_WAIT_FOR_EXPANSION',
+          `Template "${template.name}" may define only one wait_for_expansion node for owner "${wait.owner}"`
+        );
+      }
+      waitOwnerByTemplate.add(ownerKey);
+    }
+  }
+
+  return Object.freeze({
+    active: true,
+    graphSemanticDigest,
+    byOwner: frozenRecord(byOwner),
+    byNestedOwner: frozenRecord(byNestedOwner),
+    templatesByName: frozenRecord(templatesByName),
+  });
+}

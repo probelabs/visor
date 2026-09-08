@@ -200,6 +200,7 @@ interface RoutingContext {
   result: ReviewSummary;
   checkConfig: CheckConfig;
   success: boolean; // true if no fatal issues
+  exactPreviousResults?: ReadonlyMap<string, ReviewSummary>;
 }
 
 /**
@@ -247,6 +248,74 @@ type RoutingTrigger = 'on_success' | 'on_fail' | 'on_finish';
 type RoutingAction = 'run' | 'goto' | 'retry';
 type RoutingSource = 'run' | 'run_js' | 'goto' | 'goto_js' | 'transitions' | 'retry';
 
+/**
+ * The generated managed-run path separates semantic routing evaluation from
+ * effects. This keeps fail_if/failure_conditions in the controller decision,
+ * while Shutdown and the Error transition remain invisible until the journal
+ * has atomically committed the managed terminal batch.
+ */
+export interface ManagedRoutingDecision {
+  readonly failed: boolean;
+  readonly haltExecution: boolean;
+  readonly haltMessage?: string;
+}
+
+export async function evaluateManagedRouting(
+  context: EngineContext,
+  state: RunState,
+  routingContext: RoutingContext
+): Promise<ManagedRoutingDecision> {
+  const { checkId, result, checkConfig } = routingContext;
+  const decision = await evaluateFailIf(
+    checkId,
+    result,
+    checkConfig,
+    context,
+    state,
+    routingContext.exactPreviousResults
+  );
+
+  if (decision.haltExecution) {
+    const haltIssue: ReviewIssue = {
+      file: 'system',
+      line: 0,
+      ruleId: `${checkId}_halt_execution`,
+      message: `Execution halted: ${decision.haltMessage || 'Critical failure condition met'}`,
+      severity: 'error',
+      category: 'logic',
+    };
+    result.issues = [...(result.issues || []), haltIssue];
+  }
+
+  return Object.freeze({
+    failed: decision.failed,
+    haltExecution: decision.haltExecution,
+    ...(decision.haltMessage ? { haltMessage: decision.haltMessage } : {}),
+  });
+}
+
+export function applyManagedRoutingEffects(
+  checkId: string,
+  decision: ManagedRoutingDecision,
+  transition: (newState: EngineState) => void,
+  emitEvent: (event: EngineEvent) => void
+): boolean {
+  if (!decision.haltExecution) return false;
+
+  logger.error(
+    `[Routing] HALTING EXECUTION due to critical failure in ${checkId}: ${decision.haltMessage}`
+  );
+  emitEvent({
+    type: 'Shutdown',
+    error: {
+      message: decision.haltMessage || `Execution halted by check ${checkId}`,
+      name: 'HaltExecution',
+    },
+  });
+  transition('Error');
+  return true;
+}
+
 function formatScopeLabel(scope: Array<{ check: string; index: number }> | undefined): string {
   if (!scope || scope.length === 0) return '';
   return scope.map(item => `${item.check}:${item.index}`).join('|');
@@ -291,7 +360,14 @@ export async function handleRouting(
   logger.info(`[Routing] Evaluating routing for check: ${checkId}, success: ${success}`);
 
   // Step 1: Evaluate fail_if and failure_conditions
-  const failureResult = await evaluateFailIf(checkId, result, checkConfig, context, state);
+  const failureResult = await evaluateFailIf(
+    checkId,
+    result,
+    checkConfig,
+    context,
+    state,
+    routingContext.exactPreviousResults
+  );
 
   // Step 1.5: Check if we need to halt execution immediately
   if (failureResult.haltExecution) {
@@ -654,7 +730,8 @@ async function evaluateFailIf(
   result: ReviewSummary,
   checkConfig: CheckConfig,
   context: EngineContext,
-  state: RunState
+  state: RunState,
+  exactPreviousResults?: ReadonlyMap<string, ReviewSummary>
 ): Promise<FailureEvaluationResult> {
   const config = context.config;
 
@@ -672,24 +749,28 @@ async function evaluateFailIf(
 
   // Build outputs record from state
   const outputsRecord: Record<string, ReviewSummary> = {};
-  for (const [key] of state.stats.entries()) {
-    // Try to get the actual result from context.journal if available
-    try {
-      const snapshotId = context.journal.beginSnapshot();
-      const contextView = new (require('../../snapshot-store').ContextView)(
-        context.journal,
-        context.sessionId,
-        snapshotId,
-        [],
-        context.event
-      );
-      const journalResult = contextView.get(key);
-      if (journalResult) {
-        outputsRecord[key] = journalResult as ReviewSummary;
+  if (exactPreviousResults) {
+    for (const [key, value] of exactPreviousResults) outputsRecord[key] = value;
+  } else {
+    for (const [key] of state.stats.entries()) {
+      // Try to get the actual result from context.journal if available
+      try {
+        const snapshotId = context.journal.beginSnapshot();
+        const contextView = new (require('../../snapshot-store').ContextView)(
+          context.journal,
+          context.sessionId,
+          snapshotId,
+          [],
+          context.event
+        );
+        const journalResult = contextView.get(key);
+        if (journalResult) {
+          outputsRecord[key] = journalResult as ReviewSummary;
+        }
+      } catch {
+        // Fallback to empty result
+        outputsRecord[key] = { issues: [] };
       }
-    } catch {
-      // Fallback to empty result
-      outputsRecord[key] = { issues: [] };
     }
   }
 

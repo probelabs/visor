@@ -1,0 +1,686 @@
+import { describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'crypto';
+import { EventEmitter } from 'events';
+import { chmodSync, mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+jest.unmock('child_process');
+import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
+import {
+  goCompatibleProofJson,
+  PROOF_ADMISSION_UNAVAILABLE,
+  PROOF_C0_LEGACY_REQUEST_MAX_BYTES,
+  PROOF_C0_REQUEST_MAX_BYTES,
+  PROOF_ONBOARDING_STAGE_MAX_BYTES,
+  proofOnboardingStageContextJson,
+  proofCandidateAdmissionRequestJson,
+  proofComponentCandidateEnvelopeJson,
+  createProofAdmissionCliChildForFocusedTest,
+  extractProofAdmissionCandidate,
+  proofExecutableAvailable,
+  startProofAdmissionCliChild,
+  validateOnboardingStageContext,
+  validateProofComponentAdmissionOutcome,
+} from '../../../src/providers/proof-admission-cli-child';
+import { createProofAdmitProviderForFocusedTest } from '../../../src/providers/proof-admit-check-provider';
+import { snapshotManagedRunStartRequest } from '../../../src/state-machine/dispatch/managed-run';
+
+type ChildModule = typeof import('../../../src/providers/proof-admission-cli-child');
+type ProviderModule = typeof import('../../../src/providers/proof-admit-check-provider');
+type FakeChild = EventEmitter & {
+  pid: number;
+  stdin: EventEmitter & { end: jest.Mock };
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+};
+
+async function withExecutable<T>(fn: (path: string) => Promise<T>): Promise<T> {
+  const directory = mkdtempSync(join(tmpdir(), 'visor-proof-child-test-'));
+  const path = join(directory, 'proof');
+  try {
+    writeFileSync(path, '#!/bin/sh\nexit 0\n');
+    chmodSync(path, 0o755);
+    return await fn(path);
+  } finally {
+    try { unlinkSync(path); } catch {}
+    try { rmdirSync(directory); } catch {}
+  }
+}
+
+async function withIsolatedChild<T>(
+  fn: (module: ChildModule, spawn: jest.Mock) => Promise<T>
+): Promise<T> {
+  let result: Promise<T> | undefined;
+  try {
+    jest.isolateModules(() => {
+      const spawn = jest.fn();
+      jest.doMock('child_process', () => ({
+        ...jest.requireActual<typeof import('child_process')>('child_process'),
+        spawn,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const module = require('../../../src/providers/proof-admission-cli-child') as ChildModule;
+      result = fn(module, spawn);
+    });
+    return await result!;
+  } finally {
+    jest.dontMock('child_process');
+    jest.resetModules();
+  }
+}
+
+async function withFreshIsolatedChild<T>(
+  fn: (module: ChildModule, spawn: jest.Mock) => Promise<T>
+): Promise<T> {
+  let result: Promise<T> | undefined;
+  try {
+    jest.resetModules();
+    jest.isolateModules(() => {
+      const spawn = jest.fn();
+      jest.doMock('child_process', () => ({
+        ...jest.requireActual<typeof import('child_process')>('child_process'),
+        spawn,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const module = require('../../../src/providers/proof-admission-cli-child') as ChildModule;
+      result = fn(module, spawn);
+    });
+    return await result!;
+  } finally {
+    jest.dontMock('child_process');
+    jest.resetModules();
+  }
+}
+
+async function withIsolatedProvider<T>(
+  fn: (module: ProviderModule, spawn: jest.Mock) => Promise<T>
+): Promise<T> {
+  let result: Promise<T> | undefined;
+  try {
+    jest.isolateModules(() => {
+      const spawn = jest.fn();
+      jest.doMock('child_process', () => ({
+        ...jest.requireActual<typeof import('child_process')>('child_process'),
+        spawn,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const module = require('../../../src/providers/proof-admit-check-provider') as ProviderModule;
+      result = fn(module, spawn);
+    });
+    return await result!;
+  } finally {
+    jest.dontMock('child_process');
+    jest.resetModules();
+  }
+}
+
+function fakeChild(pid: number): FakeChild {
+  const child = new EventEmitter() as FakeChild;
+  child.pid = pid;
+  child.stdin = Object.assign(new EventEmitter(), { end: jest.fn() });
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  return child;
+}
+
+function completeFakeChild(child: FakeChild, code: number | null = 0, signal: NodeJS.Signals | null = null): void {
+  child.stdout.emit('end');
+  child.stderr.emit('end');
+  child.emit('exit', code, signal);
+  child.emit('close');
+}
+
+function mockProcessGroup(child: FakeChild, onSignal?: (signal: NodeJS.Signals) => void) {
+  let alive = true;
+  const signals: NodeJS.Signals[] = [];
+  const nativeKill = process.kill.bind(process);
+  const kill = jest.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: number | NodeJS.Signals) => {
+    if (pid !== -child.pid) return nativeKill(pid, signal);
+    if (signal === 0) {
+      if (alive) return true;
+      const error = Object.assign(new Error('group absent'), { code: 'ESRCH' });
+      throw error;
+    }
+    if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+      signals.push(signal);
+      if (signal === 'SIGKILL') alive = false;
+      onSignal?.(signal);
+      return true;
+    }
+    return true;
+  }) as typeof process.kill);
+  return { kill, signals, setAlive: (value: boolean) => { alive = value; } };
+}
+
+const binary = process.env.VISOR_PROOF_ADMISSION_BIN;
+const capability = binary && proofExecutableAvailable(binary) ? createProofAdmissionCliChildForFocusedTest(binary) : undefined;
+const binding: any = {
+  managedRunId: '2'.repeat(64), sessionId: 'session', checkId: 'proof_admit',
+  scope: [{ kind: 'keyed', expansionOwnerCheck: 'discover', key: 'A', subgraphInstanceId: '1'.repeat(64) }],
+  nodeInstanceId: '3'.repeat(64), nodeGenerationId: '4'.repeat(64), attemptId: '5'.repeat(64), fence: 1,
+};
+function request(candidate: Record<string, unknown>) {
+  return {
+    binding, workingDirectory: '/tmp',
+    proofAdmissionRequest: goCompatibleProofJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate }),
+  };
+}
+
+function managedRequest(candidateClaim: Record<string, unknown> = {
+  claimId: '6'.repeat(64), claim: 'proof.candidate@1', payload: { a: 1 },
+  payloadFingerprint: '7'.repeat(64), producerCheckId: 'inspect', scope: binding.scope, wireMode: 'generic',
+  parentClaimIds: ['8'.repeat(64)], provenance: 'attempt', attemptId: binding.attemptId, fence: binding.fence,
+}): any {
+  return {
+    prInfo: {}, checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.admitted_receipt@1', from: 'output' }] },
+    dependencyResults: new Map([['inspect', { output: { a: 1 } }]]),
+    executionContext: { claims: { candidate: candidateClaim } }, binding,
+    executionConfigDigest: '6'.repeat(64), workingDirectory: '/tmp',
+    proofAdmissionRequest: request(candidate()).proofAdmissionRequest,
+  };
+}
+function candidate(): Record<string, unknown> {
+  const payload = Buffer.from('{"a":1}', 'utf8').toString('base64');
+  const scope = [{ Kind: 'keyed', ExpansionOwnerCheck: 'discover', Key: 'A', SubgraphInstanceID: '1'.repeat(64) }];
+  const b = { ManagedRunID: binding.managedRunId, SessionID: 'session', CheckID: 'inspect', Scope: scope, NodeInstanceID: binding.nodeInstanceId, NodeGenerationID: binding.nodeGenerationId, AttemptID: binding.attemptId, Fence: 1 };
+  return {
+    Version: 'proof.role-result-candidate-envelope/v1',
+    Invocation: { role_id: 'spec-review', stance: 'owner', subject: { kind: 'requirement', id: 'SYS-REQ-048', fingerprint: `sha256:${'a'.repeat(64)}` }, output_schema_id: 'result', output_schema: Buffer.from('{"type":"object"}').toString('base64') },
+    InvocationDigest: `sha256:${'b'.repeat(64)}`, RoleID: 'spec-review', Stance: 'owner', Subject: { kind: 'requirement', id: 'SYS-REQ-048', fingerprint: `sha256:${'a'.repeat(64)}` },
+    AttestationVersion: 'probe.governed-codex-attestation/v2', ExecutionSource: 'caller', ProbeInvocationDigest: `sha256:${'b'.repeat(64)}`, IdentityVersion: 'probe.governed-result-identity/v1', IdentitySource: 'probe-host-schema-valid-json', ResultDigest: `sha256:${'c'.repeat(64)}`, CanonicalBytes: 7, ProbeResultBytes: payload, VisorPayloadBytes: payload,
+    Publication: { Version: 1, Type: 'ClaimPublished', SessionID: 'session', CheckID: 'inspect', Scope: scope, NodeInstanceID: binding.nodeInstanceId, NodeGenerationID: binding.nodeGenerationId, AttemptID: binding.attemptId, Fence: 1, ClaimID: '6'.repeat(64), Claim: 'proof.candidate@1', PayloadFingerprint: '7'.repeat(64), ProducerCheckID: 'inspect', Payload: payload, ParentClaimIDs: ['8'.repeat(64)] },
+    Binding: b,
+    Termination: { Version: 1, Type: 'ManagedRunTerminated', SessionID: 'session', Scope: scope, Binding: b, CleanupStatus: 'clean', ControllerDecision: 'completed', FailureCode: null },
+  };
+}
+
+function wireDigest(domain: string, value: string): string {
+  const bytes = Buffer.from(value, 'utf8'); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(bytes.length));
+  return `sha256:${createHash('sha256').update(domain).update(Buffer.from([0])).update(length).update(bytes).digest('hex')}`;
+}
+
+function admissionDecision(order: 'legacy' | 'canonical' | 'permuted', value = candidate()): string {
+  const publication = value.Publication as Record<string, unknown>;
+  const candidateBytes = Object.prototype.hasOwnProperty.call(value.Invocation, 'component_authority')
+    ? proofComponentCandidateEnvelopeJson(value)
+    : goCompatibleProofJson(value);
+  const subject = value.Subject as Record<string, unknown>;
+  const bindingValue = value.Binding as Record<string, unknown>;
+  const terminationValue = value.Termination as Record<string, unknown>;
+  const binding = {
+    ManagedRunID: bindingValue.ManagedRunID, SessionID: bindingValue.SessionID, CheckID: bindingValue.CheckID,
+    Scope: bindingValue.Scope, NodeInstanceID: bindingValue.NodeInstanceID, NodeGenerationID: bindingValue.NodeGenerationID,
+    AttemptID: bindingValue.AttemptID, Fence: bindingValue.Fence,
+  };
+  const termination = {
+    Version: terminationValue.Version, Type: terminationValue.Type, SessionID: terminationValue.SessionID,
+    Scope: terminationValue.Scope, Binding: terminationValue.Binding, CleanupStatus: terminationValue.CleanupStatus,
+    ControllerDecision: terminationValue.ControllerDecision, FailureCode: terminationValue.FailureCode,
+  };
+  const unsigned = {
+    Version: 'proof.role-result-candidate-admission/v1', Status: 'ADMITTED',
+    CandidateID: wireDigest('proof.role-result-candidate-envelope/id/v1', candidateBytes), ProbeResultDigest: value.ResultDigest,
+    ProbeCanonicalBytes: value.CanonicalBytes, ClaimID: publication.ClaimID, Claim: publication.Claim,
+    PayloadFingerprint: publication.PayloadFingerprint, InvocationDigest: value.InvocationDigest, RoleID: value.RoleID,
+    Stance: value.Stance, Subject: { kind: subject.kind, id: subject.id, fingerprint: subject.fingerprint },
+    ProducerCheckID: publication.ProducerCheckID, ParentClaimIDs: publication.ParentClaimIDs, Binding: binding, Termination: termination,
+  };
+  const receipt = { ...unsigned, receipt_id: wireDigest('proof.role-result-candidate-receipt/id/v1', JSON.stringify(unsigned)) };
+  const decision = { version: 'proof.role-result-candidate-cli-decision/v1', status: 'ADMITTED', receipt, reject_code: null };
+  if (order === 'canonical') return canonicalJson(decision);
+  if (order === 'legacy') return JSON.stringify(decision);
+  const permutedReceipt = { ...receipt } as Record<string, unknown>;
+  const first = permutedReceipt.Version; permutedReceipt.Version = permutedReceipt.Status; permutedReceipt.Status = first;
+  return JSON.stringify({ version: decision.version, status: decision.status, receipt: permutedReceipt, reject_code: decision.reject_code });
+}
+
+function onboardingStage(priorCandidate = '{}', priorAdmission = '{}'): Record<string, unknown> {
+  return {
+    version: 'proof.onboarding-stage-context/v1', stage_id: 'spec_review', prior_candidate: priorCandidate,
+    prior_admission: priorAdmission, prior_admission_claim_id: 'a'.repeat(64), prior_admission_payload_fingerprint: 'b'.repeat(64),
+  };
+}
+
+function componentAuthority(): Record<string, unknown> {
+  const subject = { version: 'proof.component-subject/v1', project_id: 'project', component_id: 'alpha', sorted_owned_paths: ['alpha.go'], sorted_dependency_closure: ['alpha.go'], fingerprint: `sha256:${'1'.repeat(64)}` };
+  const workItem = { version: 'reqforge.onboarding-component-work-item/v1', project_id: 'project', component_id: 'alpha', sorted_owned_paths: ['alpha.go'], sorted_dependency_closure: ['alpha.go'], proof_path_mapping: { paths: ['alpha.go'], risk_tier: 'low', enforcement: 'soft' }, proof_input_state: [], proof_component_subject: subject };
+  const receipt = { version: 'proof.catalog-revalidation-receipt/v1', decision: 'accepted', project_id: 'project', project_fingerprint: `sha256:${'2'.repeat(64)}`, boundary_fingerprint: `sha256:${'3'.repeat(64)}`, inventory_claim_id: `sha256:${'4'.repeat(64)}`, catalog_claim_id: `sha256:${'5'.repeat(64)}`, admission_candidate_id: `sha256:${'6'.repeat(64)}`, admission_result_digest: `sha256:${'7'.repeat(64)}`, admission_receipt_id: `sha256:${'8'.repeat(64)}`, component_authorities: [], receipt_id: '' };
+  return { work_item_digest: `sha256:${'9'.repeat(64)}`, subject, candidate: {}, admission: {}, work_item: workItem, catalog_revalidation_receipt: receipt };
+}
+
+function stagedRequest(stage = onboardingStage()): Record<string, unknown> {
+  return { role_id: 'spec-review', stance: 'owner', subject: { kind: 'component', id: 'alpha', fingerprint: `sha256:${'1'.repeat(64)}` }, component_authority: componentAuthority(), onboarding_stage: stage, output_schema_id: 'result', output_schema: Buffer.from('{"type":"object"}').toString('base64') };
+}
+
+function stagedResponse(requestValue: Record<string, unknown>, stage: unknown = requestValue.onboarding_stage): Record<string, unknown> {
+  return { version: 'proof.role-invocation/v1', role_id: requestValue.role_id, role_source: 'fixture', stance: requestValue.stance, subject: requestValue.subject, component_authority: requestValue.component_authority, onboarding_stage: stage, authority: {}, output_schema_id: requestValue.output_schema_id, output_schema: requestValue.output_schema, output_schema_digest: `sha256:${'a'.repeat(64)}`, instructions: 'fixture instructions', role_text_digest: `sha256:${'b'.repeat(64)}`, invocation_digest: `sha256:${'c'.repeat(64)}` };
+}
+
+function stagedCandidate(): Record<string, unknown> {
+  const prior = candidate();
+  const authority = componentAuthority();
+  const subject = authority.subject;
+  const componentInvocation = { role_id: 'onboard', stance: 'owner', subject: { kind: 'component', id: 'alpha', fingerprint: (subject as Record<string, unknown>).fingerprint }, component_authority: authority, output_schema_id: 'reqproof.component-onboarding/v1', output_schema: Buffer.from('{"type":"object"}').toString('base64') };
+  Object.assign(prior, { Invocation: componentInvocation, Subject: componentInvocation.subject });
+  const priorWire = proofComponentCandidateEnvelopeJson(prior);
+  const priorAdmission = admissionDecision('legacy', prior);
+  const stage = onboardingStage(priorWire, priorAdmission);
+  const value = JSON.parse(JSON.stringify(prior)) as Record<string, unknown>;
+  const binding = value.Binding as Record<string, unknown>;
+  const publication = value.Publication as Record<string, unknown>;
+  const termination = value.Termination as Record<string, unknown>;
+  const invocation = { ...componentInvocation, role_id: 'spec-review', onboarding_stage: stage };
+  Object.assign(value, { Invocation: invocation, RoleID: 'spec-review', Subject: invocation.subject });
+  Object.assign(binding, { ManagedRunID: 'c'.repeat(64), CheckID: 'spec_review', NodeInstanceID: 'd'.repeat(64), NodeGenerationID: 'e'.repeat(64), AttemptID: 'f'.repeat(64) });
+  Object.assign(publication, { ClaimID: 'b'.repeat(64), Claim: 'proof.component_spec_review_candidate@1', CheckID: 'spec_review', ProducerCheckID: 'spec_review', NodeInstanceID: binding.NodeInstanceID, NodeGenerationID: binding.NodeGenerationID, AttemptID: binding.AttemptID, ParentClaimIDs: ['6'.repeat(64), 'a'.repeat(64)] });
+  Object.assign(termination, { Scope: binding.Scope, Binding: { ...binding, Scope: binding.Scope } });
+  return value;
+}
+
+function stagedManagedRequest(): any {
+  const value = stagedCandidate();
+  return {
+    ...managedRequest({
+      claimId: 'b'.repeat(64), claim: 'proof.component_spec_review_candidate@1', payload: { a: 1 },
+      payloadFingerprint: '7'.repeat(64), producerCheckId: 'spec_review', scope: binding.scope, wireMode: 'generic',
+      parentClaimIds: ['6'.repeat(64), 'a'.repeat(64)], provenance: 'attempt', attemptId: 'f'.repeat(64), fence: 1,
+    }),
+    binding: { ...binding, checkId: 'spec_review_admit' },
+    checkConfig: { type: 'proof-admit', consumes: [{ claim: 'proof.component_spec_review_candidate@1', as: 'candidate' }], emits: [{ claim: 'proof.component_spec_review_admitted_receipt@1', from: 'output' }] },
+    dependencyResults: new Map([['spec_review', { output: { stage: true } }]]),
+    proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: value }),
+  };
+}
+
+async function c0RequestLimitCase(staged: boolean, plusOne: boolean): Promise<void> {
+  await withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+    const limit = staged ? PROOF_C0_REQUEST_MAX_BYTES : PROOF_C0_LEGACY_REQUEST_MAX_BYTES;
+    const base = staged ? stagedRequest(onboardingStage({}, {})) : { role_id: 'onboard', stance: 'owner', subject: { kind: 'project', id: 'project', fingerprint: `sha256:${'1'.repeat(64)}` }, output_schema_id: 'result', output_schema: '' };
+    const baseLength = Buffer.byteLength(module.goCompatibleProofJson(base), 'utf8');
+    const requestValue = staged ? (() => {
+      const stageCandidate = { x: 'x'.repeat(PROOF_ONBOARDING_STAGE_MAX_BYTES - 2 - 8) };
+      const candidateRequest = stagedRequest(onboardingStage(stageCandidate, {}));
+      const candidateLength = Buffer.byteLength(module.goCompatibleProofJson(candidateRequest), 'utf8');
+      return { ...candidateRequest, output_schema: `${candidateRequest.output_schema}${'x'.repeat(limit - candidateLength + (plusOne ? 1 : 0))}` };
+    })() : { ...base, output_schema: 'x'.repeat(limit - baseLength + (plusOne ? 1 : 0)) };
+    const child = fakeChild(staged ? (plusOne ? 42105 : 42104) : (plusOne ? 42103 : 42102));
+    const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+    (child.stdin.end as jest.Mock).mockImplementation((input: string, _encoding: string, callback: () => void) => {
+      if (!plusOne) expect(Buffer.byteLength(input, 'utf8')).toBe(limit);
+      const parsed = JSON.parse(input) as Record<string, unknown>;
+      const output = staged ? stagedResponse(parsed) : {
+        version: 'proof.role-invocation/v1', role_id: parsed.role_id, role_source: 'fixture', stance: parsed.stance, subject: parsed.subject,
+        authority: 'read-only', output_schema_id: parsed.output_schema_id, output_schema: parsed.output_schema, output_schema_digest: '',
+        instructions: 'fixture instructions', role_text_digest: '', invocation_digest: '',
+      };
+      child.stdout.emit('data', Buffer.from(`${module.goCompatibleProofJson(output)}\n`, 'utf8'));
+      callback(); group.setAlive(false); completeFakeChild(child);
+    });
+    try {
+      const result = module.resolveProofRoleInvocation(module.createProofAdmissionCliChildForFocusedTest(path), requestValue, '/tmp');
+      if (plusOne) {
+        await expect(result).rejects.toThrow(PROOF_ADMISSION_UNAVAILABLE);
+        expect(spawn).not.toHaveBeenCalled();
+      } else {
+        child.emit('spawn');
+        try { await result; } catch (error) { throw new Error(`limit case ${staged}/${plusOne}: ${(error as Error).message}`); }
+        expect(spawn).toHaveBeenCalledTimes(1);
+      }
+    } finally { group.kill.mockRestore(); }
+  }));
+}
+
+describe('Proof admission CLI child', () => {
+  it('round-trips the closed Go stage wire and enforces its evidence bound', () => {
+    const stage = onboardingStage();
+    const wire = proofOnboardingStageContextJson(stage);
+    expect(wire).toBe('{"version":"proof.onboarding-stage-context/v1","stage_id":"spec_review","prior_candidate":{},"prior_admission":{},"prior_admission_claim_id":"' + 'a'.repeat(64) + '","prior_admission_payload_fingerprint":"' + 'b'.repeat(64) + '"}');
+    expect(validateOnboardingStageContext(JSON.parse(wire))).toEqual({ ...stage, prior_candidate: {}, prior_admission: {} });
+    expect(() => validateOnboardingStageContext({ ...stage, prior_candidate: undefined })).toThrow('PROOF_ADMISSION_INVALID');
+    expect(() => validateOnboardingStageContext({ ...stage, extra: true })).toThrow('PROOF_ADMISSION_INVALID');
+    expect(() => validateOnboardingStageContext({ ...stage, prior_admission: '{bad' })).toThrow('PROOF_ADMISSION_INVALID');
+    expect(PROOF_C0_REQUEST_MAX_BYTES).toBe(PROOF_C0_LEGACY_REQUEST_MAX_BYTES + PROOF_ONBOARDING_STAGE_MAX_BYTES);
+    const candidateBytes = PROOF_ONBOARDING_STAGE_MAX_BYTES - Buffer.byteLength('{}');
+    const exact = '{"x":"' + 'x'.repeat(candidateBytes - 8) + '"}';
+    expect(Buffer.byteLength(exact) + Buffer.byteLength('{}')).toBe(PROOF_ONBOARDING_STAGE_MAX_BYTES);
+    expect(() => validateOnboardingStageContext({ ...stage, prior_candidate: exact })).not.toThrow();
+    expect(() => validateOnboardingStageContext({ ...stage, prior_candidate: `${exact} ` })).toThrow('PROOF_ADMISSION_INVALID');
+  });
+
+  it('uses the legacy C0 limit unless the staged wire is present', async () => {
+    await c0RequestLimitCase(false, false);
+    await c0RequestLimitCase(false, true);
+    await c0RequestLimitCase(true, false);
+    await c0RequestLimitCase(true, true);
+  });
+
+  it('dispatches staged C0 with exact response stage identity', async () => {
+    async function runCase(mismatch: boolean): Promise<unknown> {
+      return withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+        const child = fakeChild(mismatch ? 42101 : 42100); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+        const requestValue = stagedRequest();
+        (child.stdin.end as jest.Mock).mockImplementation((input: string, _encoding: string, callback: () => void) => {
+          const parsed = JSON.parse(input) as Record<string, unknown>;
+          const altered = mismatch ? { ...(parsed.onboarding_stage as Record<string, unknown>), prior_admission_claim_id: 'c'.repeat(64) } : parsed.onboarding_stage;
+          child.stdout.emit('data', Buffer.from(`${module.goCompatibleProofJson(stagedResponse(parsed, altered))}\n`, 'utf8'));
+          callback(); group.setAlive(false); completeFakeChild(child);
+        });
+        try {
+          const result = module.resolveProofRoleInvocation(module.createProofAdmissionCliChildForFocusedTest(path), requestValue, '/tmp');
+          child.emit('spawn');
+          return mismatch ? expect(result).rejects.toThrow(PROOF_ADMISSION_UNAVAILABLE) : expect(result).resolves.toMatchObject({ onboarding_stage: { prior_candidate: {}, prior_admission: {} } });
+        } finally { group.kill.mockRestore(); }
+      }));
+    }
+    await runCase(false);
+    await runCase(true);
+  });
+
+  it('cancels a staged C0 child and reaps its process group', async () => {
+    await withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+      jest.useFakeTimers();
+      const child = fakeChild(42102); const group = mockProcessGroup(child, signal => { if (signal === 'SIGKILL') completeFakeChild(child, null, 'SIGKILL'); }); spawn.mockReturnValue(child);
+      try {
+        const controller = new AbortController();
+        const result = module.resolveProofRoleInvocation(module.createProofAdmissionCliChildForFocusedTest(path), stagedRequest(), '/tmp', controller.signal);
+        child.emit('spawn'); controller.abort(); jest.advanceTimersByTime(250);
+        await expect(result).rejects.toThrow(PROOF_ADMISSION_UNAVAILABLE);
+        expect(group.signals).toEqual(['SIGTERM', 'SIGKILL']);
+      } finally { group.kill.mockRestore(); jest.useRealTimers(); }
+    }));
+  });
+
+  it('does not expose a product executable when bootstrap is absent', () => {
+    expect(proofExecutableAvailable(undefined)).toBe(false);
+  });
+
+  it('rejects the real Proof decision without publishing a receipt', async () => {
+    if (!binary || !proofExecutableAvailable(binary)) return;
+    const run = startProofAdmissionCliChild(request(candidate()), capability);
+    await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+    const outcome: any = await run.outcome;
+    expect(outcome).toMatchObject({ version: 1, kind: 'failed', binding });
+    await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean', activeChildren: 0, activeResources: 0 });
+  });
+
+  it('accepts the exact historical Go-ordered v1 decision and retains its wire', async () => {
+    await withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+      const child = fakeChild(42004); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+      try {
+        const run = module.startProofAdmissionCliChild(request(candidate()), module.createProofAdmissionCliChildForFocusedTest(path));
+        child.emit('spawn'); await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        (child.stdin.end.mock.calls[0][2] as () => void)();
+        const output = admissionDecision('legacy'); child.stdout.emit('data', Buffer.from(`${output}\n`, 'utf8')); group.setAlive(false); completeFakeChild(child);
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded', summary: { output: expect.objectContaining({ __proof_admission_wire: output }) } });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
+      } finally { group.kill.mockRestore(); }
+    }));
+  });
+
+  it('preserves exact UTF-8 candidate RawMessage bytes through component admission validation', () => {
+    const value = candidate();
+    const componentID = 'café-component';
+    const roleID = 'spéc-review';
+    const subject = { kind: 'component', id: componentID, fingerprint: `sha256:${'a'.repeat(64)}` };
+    const scope = [{ Kind: 'keyed', ExpansionOwnerCheck: 'discover', Key: componentID, SubgraphInstanceID: '1'.repeat(64) }];
+    value.Invocation = { ...(value.Invocation as Record<string, unknown>), role_id: roleID, subject };
+    value.RoleID = roleID;
+    value.Subject = subject;
+    (value.Publication as Record<string, unknown>).Scope = scope;
+    (value.Binding as Record<string, unknown>).Scope = scope;
+    (value.Termination as Record<string, unknown>).Scope = scope;
+    ((value.Termination as Record<string, unknown>).Binding as Record<string, unknown>).Scope = scope;
+
+    const candidateWire = goCompatibleProofJson(value);
+    const requestWire = goCompatibleProofJson({
+      version: 'proof.role-result-candidate-cli-request/v1',
+      candidate: value,
+    });
+    const extraction = extractProofAdmissionCandidate(requestWire);
+    expect(extraction.candidateRaw).toEqual(Buffer.from(candidateWire, 'utf8'));
+
+    expect(validateProofComponentAdmissionOutcome(candidateWire, admissionDecision('legacy', value))).toMatchObject({
+      subject,
+      scope: [{ kind: 'keyed', expansion_owner_check: 'discover', key: componentID }],
+    });
+  });
+
+  it('rejects a semantically valid v1 decision with a permuted legacy field order', async () => {
+    await withExecutable(async path => withFreshIsolatedChild(async (module, spawn) => {
+      const child = fakeChild(42005); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+      try {
+        const run = module.startProofAdmissionCliChild(request(candidate()), module.createProofAdmissionCliChildForFocusedTest(path));
+        child.emit('spawn'); await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        (child.stdin.end.mock.calls[0][2] as () => void)();
+        child.stdout.emit('data', Buffer.from(`${admissionDecision('permuted')}\n`, 'utf8')); group.setAlive(false); completeFakeChild(child);
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'failed', binding });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
+      } finally { group.kill.mockRestore(); }
+    }));
+  });
+
+  it('fails malformed wire before acquiring a child', () => {
+    if (!binary || !proofExecutableAvailable(binary)) return;
+    expect(() => startProofAdmissionCliChild({ ...request(candidate()), proofAdmissionRequest: '{"version":"proof.role-result-candidate-cli-request/v1","candidate":{}}' }, capability)).toThrow('PROOF_ADMISSION_INVALID');
+  });
+
+  it('reports unavailable on unsupported/invalid executable', () => {
+    expect(() => startProofAdmissionCliChild(request(candidate()), undefined)).toThrow(PROOF_ADMISSION_UNAVAILABLE);
+  });
+
+  it('binds the executable at construction and rejects replacement before spawn', async () => {
+    await withExecutable(async path => withIsolatedChild(async (module, spawn) => {
+      const capability = module.createProofAdmissionCliChildForFocusedTest(path);
+      writeFileSync(path, '#!/bin/sh\nchanged\n');
+      chmodSync(path, 0o755);
+      expect(() => module.startProofAdmissionCliChild(request(candidate()), capability)).toThrow(PROOF_ADMISSION_UNAVAILABLE);
+      expect(spawn).not.toHaveBeenCalled();
+    }));
+  });
+
+  async function streamBoundaryCase(channel: 'stdout' | 'stderr', chunks: Buffer[], expectedSignals: NodeJS.Signals[]): Promise<void> {
+    await withExecutable(async path => withIsolatedChild(async (module, spawn) => {
+      const child = fakeChild(42001);
+      const group = mockProcessGroup(child);
+      spawn.mockReturnValue(child);
+      try {
+        const capability = module.createProofAdmissionCliChildForFocusedTest(path);
+        const run = module.startProofAdmissionCliChild(request(candidate()), capability);
+        child.emit('spawn');
+        await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        for (const chunk of chunks) child[channel].emit('data', chunk);
+        group.setAlive(false);
+        completeFakeChild(child);
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'failed', binding });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean', activeChildren: 0, activeResources: 0 });
+        expect(group.signals).toEqual(expectedSignals);
+      } finally {
+        group.kill.mockRestore();
+      }
+    }));
+  }
+
+  it('accounts stdout exact, plus-one, and split-chunk boundaries before overflow', async () => {
+    const limit = 2097152;
+    await streamBoundaryCase('stdout', [Buffer.alloc(limit, 97)], []);
+    await streamBoundaryCase('stdout', [Buffer.alloc(limit + 1, 97)], ['SIGTERM']);
+    await streamBoundaryCase('stdout', [Buffer.alloc(limit - 1, 97), Buffer.from('ab')], ['SIGTERM']);
+  });
+
+  it('accounts stderr exact, plus-one, and split-chunk boundaries before overflow', async () => {
+    const limit = 65536;
+    await streamBoundaryCase('stderr', [Buffer.alloc(limit, 97)], []);
+    await streamBoundaryCase('stderr', [Buffer.alloc(limit + 1, 97)], ['SIGTERM']);
+    await streamBoundaryCase('stderr', [Buffer.alloc(limit - 1, 97), Buffer.from('ab')], ['SIGTERM']);
+  });
+
+  async function delayedTerminationCase(method: 'cancel' | 'close'): Promise<void> {
+    await withExecutable(async path => withIsolatedChild(async (module, spawn) => {
+      jest.useFakeTimers();
+      const child = fakeChild(42002);
+      const group = mockProcessGroup(child, signal => {
+        if (signal === 'SIGKILL') completeFakeChild(child, null, 'SIGKILL');
+      });
+      spawn.mockReturnValue(child);
+      try {
+        const capability = module.createProofAdmissionCliChildForFocusedTest(path);
+        const run = module.startProofAdmissionCliChild(request(candidate()), capability);
+        const primary = method === 'cancel' ? run.cancel('deadline', binding.fence) : run.close();
+        const secondary = method === 'cancel' ? run.close() : run.cancel('deadline', binding.fence);
+        expect(child.stdin.end).not.toHaveBeenCalled();
+        child.emit('spawn');
+        await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        jest.advanceTimersByTime(250);
+        const receipts = await Promise.all([primary, secondary]);
+        expect(receipts).toEqual(expect.arrayContaining([
+          expect.objectContaining({ kind: 'cancelled', binding, reason: 'deadline' }),
+          expect.objectContaining({ kind: 'cleanup', binding, status: 'clean', activeChildren: 0, activeResources: 0 }),
+        ]));
+        expect(child.stdin.end).not.toHaveBeenCalled();
+        expect(group.signals).toEqual(['SIGTERM', 'SIGKILL']);
+      } finally {
+        group.kill.mockRestore();
+        jest.useRealTimers();
+      }
+    }));
+  }
+
+  it('latches cancel before delayed spawn and awaits one clean process-group reap', async () => {
+    await delayedTerminationCase('cancel');
+  });
+
+  it('latches close before delayed spawn and awaits one clean process-group reap', async () => {
+    await delayedTerminationCase('close');
+  });
+
+  it('rejects non-exact proof-admit dependencies, aliases, and authority before spawn', async () => {
+    await withExecutable(async path => {
+      const cases: Array<[string, any]> = [
+        ['missing dependency', { dependencyResults: new Map() }],
+        ['extra dependency', { dependencyResults: new Map([['inspect', {}], ['other', {}]]) }],
+        ['wrong dependency', { dependencyResults: new Map([['wrong', {}]]) }],
+        ['missing alias', { executionContext: { claims: {} } }],
+        ['extra alias', { executionContext: { claims: { candidate: managedRequest().executionContext.claims.candidate, other: {} } } }],
+        ['wrong claim', { executionContext: { claims: { candidate: { ...managedRequest().executionContext.claims.candidate, claim: 'other' } } } }],
+        ['wrong producer', { executionContext: { claims: { candidate: { ...managedRequest().executionContext.claims.candidate, producerCheckId: 'other' } } } }],
+        ['wrong type', { checkConfig: { type: 'managed' } }],
+      ];
+      for (const [label, change] of cases) {
+        const input = { ...managedRequest(), ...change };
+        expect(() => createProofAdmitProviderForFocusedTest(path).startManaged(input)).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+        expect(label).toBeTruthy();
+      }
+    });
+  });
+
+  it('accepts compiled admission bindings and rejects their closed-shape drift before spawn', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const compiledLegacy = { ...managedRequest(), checkConfig: { type: 'proof-admit', consumes: [{ as: 'candidate', claim: 'proof.candidate@1', cardinality: 'one' }], emits: [{ from: 'output', claim: 'proof.admitted_receipt@1' }] } };
+      const compiledStaged = { ...stagedManagedRequest(), checkConfig: { type: 'proof-admit', consumes: [{ cardinality: 'one', as: 'candidate', claim: 'proof.component_spec_review_candidate@1' }], emits: [{ claim: 'proof.component_spec_review_admitted_receipt@1', from: 'output' }] } };
+      for (const [input, decision] of [[compiledLegacy, admissionDecision('legacy')], [compiledStaged, admissionDecision('legacy', stagedCandidate())]] as const) {
+        const child = fakeChild(42200 + spawn.mock.calls.length); const group = mockProcessGroup(child); spawn.mockReturnValueOnce(child);
+        (child.stdin.end as jest.Mock).mockImplementation((_wire: string, _encoding: string, callback: () => void) => { child.stdout.emit('data', Buffer.from(`${decision}\n`, 'utf8')); callback(); group.setAlive(false); completeFakeChild(child); });
+        const run = module.createProofAdmitProviderForFocusedTest(path).startManaged(input);
+        child.emit('spawn'); await expect(run.started).resolves.toMatchObject({ kind: 'started' }); await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded' }); await expect(run.close()).resolves.toMatchObject({ status: 'clean' }); group.kill.mockRestore();
+      }
+      expect(spawn).toHaveBeenCalledTimes(2);
+      const invalids = [
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, consumes: [{ claim: 'proof.candidate@1', as: 'candidate', cardinality: undefined }] } },
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, consumes: [{ claim: 'proof.candidate@1', as: 'candidate', extra: true }] } },
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, consumes: [...compiledLegacy.checkConfig.consumes, { claim: 'proof.candidate@1', as: 'other' }] } },
+        { ...compiledLegacy, checkConfig: { ...compiledLegacy.checkConfig, emits: [...compiledLegacy.checkConfig.emits, { claim: 'other@1', from: 'output' }] } },
+        { ...compiledLegacy, proofAdmissionRequest: compiledStaged.proofAdmissionRequest },
+      ];
+      for (const input of invalids) expect(() => module.createProofAdmitProviderForFocusedTest(path).startManaged(input)).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+      expect(spawn).toHaveBeenCalledTimes(2);
+    }));
+  });
+
+  it('admits only the sealed spec-review candidate protocol', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const child = fakeChild(42006); const group = mockProcessGroup(child); spawn.mockReturnValue(child);
+      const input = stagedManagedRequest();
+      const decision = admissionDecision('legacy', stagedCandidate());
+      (child.stdin.end as jest.Mock).mockImplementation((_wire: string, _encoding: string, callback: () => void) => {
+        child.stdout.emit('data', Buffer.from(`${decision}\n`, 'utf8')); callback(); group.setAlive(false); completeFakeChild(child);
+      });
+      try {
+        const run = module.createProofAdmitProviderForFocusedTest(path).startManaged(input);
+        child.emit('spawn');
+        await expect(run.started).resolves.toMatchObject({ kind: 'started', binding: input.binding });
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'succeeded', summary: { output: expect.objectContaining({ Claim: 'proof.component_spec_review_candidate@1' }) } });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean' });
+      } finally { group.kill.mockRestore(); }
+    }));
+  });
+
+  it('rejects sealed spec-review protocol drift before child spawn', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const cases: Array<[string, any]> = [
+        ['dependency', { dependencyResults: new Map([['inspect', {}]]) }],
+        ['alias', { executionContext: { claims: { candidate: stagedManagedRequest().executionContext.claims.candidate, other: {} } } }],
+        ['producer', { executionContext: { claims: { candidate: { ...stagedManagedRequest().executionContext.claims.candidate, producerCheckId: 'inspect' } } } }],
+        ['type', { checkConfig: { type: 'managed' } }],
+      ];
+      const malformed = stagedCandidate();
+      (malformed.Publication as Record<string, unknown>).ParentClaimIDs = ['a'.repeat(64), '6'.repeat(64)];
+      cases.push(['parents', { proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: malformed }) }]);
+      const substitution = stagedCandidate();
+      (substitution.Publication as Record<string, unknown>).ClaimID = 'c'.repeat(64);
+      cases.push(['same-protocol substitution', { proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: substitution }) }]);
+      const detached = stagedCandidate();
+      (detached.Invocation as Record<string, unknown>).onboarding_stage = { ...(detached.Invocation as Record<string, unknown>).onboarding_stage as Record<string, unknown>, prior_admission_claim_id: 'c'.repeat(64) };
+      cases.push(['predecessor evidence', { proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: detached }) }]);
+      for (const [label, change] of cases) {
+        expect(() => module.createProofAdmitProviderForFocusedTest(path).startManaged({ ...stagedManagedRequest(), ...change })).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+        expect(label).toBeTruthy();
+      }
+      expect(spawn).not.toHaveBeenCalled();
+    }));
+  });
+
+  it('rejects legacy signed-zero payload substitution before child spawn', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const wireValue = stagedCandidate();
+      const invocation = wireValue.Invocation as Record<string, unknown>;
+      delete invocation.onboarding_stage;
+      Object.assign(invocation, { role_id: 'onboard', output_schema_id: 'proof.component-catalog-candidate@1' });
+      wireValue.RoleID = 'onboard';
+      const bindingValue = wireValue.Binding as Record<string, unknown>;
+      Object.assign(bindingValue, { CheckID: 'inspect' });
+      const publication = wireValue.Publication as Record<string, unknown>;
+      Object.assign(publication, { CheckID: 'inspect', Claim: 'proof.candidate@1', ProducerCheckID: 'inspect' });
+      const termination = wireValue.Termination as Record<string, unknown>;
+      Object.assign(termination, { Binding: { ...bindingValue, Scope: bindingValue.Scope } });
+      const payload = Buffer.from('{"a":-0}', 'utf8').toString('base64');
+      Object.assign(wireValue, { ProbeResultBytes: payload, VisorPayloadBytes: payload, CanonicalBytes: Buffer.from('{"a":-0}', 'utf8').length });
+      const claim = { ...managedRequest().executionContext.claims.candidate, claimId: publication.ClaimID, payload: { a: 0 }, wireMode: 'proof' };
+      const input = { ...managedRequest(claim), proofAdmissionRequest: proofCandidateAdmissionRequestJson({ version: 'proof.role-result-candidate-cli-request/v1', candidate: wireValue }) };
+      expect(() => module.createProofAdmitProviderForFocusedTest(path).startManaged(input)).toThrow('PROOF_ADMISSION_INVALID_CONFIG');
+      expect(spawn).not.toHaveBeenCalled();
+    }));
+  });
+
+  it('accepts the controller map shell and reaches the child without serializing dependencies', async () => {
+    await withExecutable(async path => withIsolatedProvider(async (module, spawn) => {
+      const child = fakeChild(42003);
+      const group = mockProcessGroup(child);
+      spawn.mockReturnValue(child);
+      const dependencies = new Map([['inspect', { output: { a: 1 } }]]);
+      Object.defineProperty(dependencies, 'hostileEnumerableMethod', { enumerable: true, value: () => { throw new Error('dependency was serialized'); } });
+      const snapshot = snapshotManagedRunStartRequest({ ...managedRequest(), dependencyResults: dependencies });
+      try {
+        const run = module.createProofAdmitProviderForFocusedTest(path).startManaged(snapshot);
+        expect(spawn).toHaveBeenCalledTimes(1);
+        child.emit('spawn');
+        await expect(run.started).resolves.toMatchObject({ kind: 'started', binding });
+        group.setAlive(false);
+        completeFakeChild(child);
+        await expect(run.outcome).resolves.toMatchObject({ kind: 'failed', binding });
+        await expect(run.close()).resolves.toMatchObject({ kind: 'cleanup', status: 'clean', activeChildren: 0, activeResources: 0 });
+      } finally {
+        group.kill.mockRestore();
+      }
+    }));
+  });
+});

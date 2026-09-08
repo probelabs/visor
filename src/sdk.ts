@@ -9,8 +9,55 @@ import { ConfigManager } from './config';
 import type { AnalysisResult } from './output-formatters';
 import type { VisorConfig, TagFilter, HumanInputRequest } from './types/config';
 import type { ExecutionContext } from './providers/check-provider.interface';
+import type {
+  GeneratedDispatchGate,
+  GeneratedDispatchGateDecision,
+} from './types/engine';
+import type {
+  GraphCheckpointContinuationInput,
+  GraphCheckpointContinuationResult,
+  GraphCheckpointResumeInput,
+  GraphCheckpointResumeResult,
+  ProofCurrentCatalogCheckpointInput,
+  ProofCurrentCatalogCheckpointResult,
+} from './state-machine-execution-engine';
+import type { GraphJournalCheckpointV1 } from './snapshot-store';
+import type {
+  GovernedGraphAnyTerminalReceipt,
+  GovernedGraphAnyTerminalReceiptDraft,
+  GovernedGraphComponentTerminalReceiptEntry,
+  GovernedGraphDiscoveryTerminalReceiptEntry,
+  GovernedGraphMultiTerminalReceipt,
+  GovernedGraphMultiTerminalReceiptDraft,
+  GovernedGraphTerminalReceipt,
+  GovernedGraphTerminalReceiptDraft,
+} from './governed-graph-terminal-receipt';
 
+export { StateMachineExecutionEngine };
 export type { VisorConfig, TagFilter, HumanInputRequest, ExecutionContext };
+export type { GeneratedDispatchGate, GeneratedDispatchGateDecision };
+export type {
+  GraphCheckpointContinuationInput,
+  GraphCheckpointContinuationResult,
+  GraphCheckpointResumeInput,
+  GraphCheckpointResumeResult,
+  ProofCurrentCatalogCheckpointInput,
+  ProofCurrentCatalogCheckpointResult,
+  GraphJournalCheckpointV1,
+  GovernedGraphAnyTerminalReceipt,
+  GovernedGraphAnyTerminalReceiptDraft,
+  GovernedGraphComponentTerminalReceiptEntry,
+  GovernedGraphDiscoveryTerminalReceiptEntry,
+  GovernedGraphMultiTerminalReceipt,
+  GovernedGraphMultiTerminalReceiptDraft,
+  GovernedGraphTerminalReceipt,
+  GovernedGraphTerminalReceiptDraft,
+};
+export type {
+  ExpansionCoverageProjection,
+  InstanceClaimProjection,
+  InstanceProjection,
+} from './state-machine/graph/instance-kernel';
 
 export interface VisorOptions {
   cwd?: string;

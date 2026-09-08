@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-/* eslint-disable @typescript-eslint/no-var-requires */
 // Generate JSON Schema from TypeScript types (src/types/config.ts → VisorConfig)
 // and emit a TypeScript module exporting the schema so it can be bundled.
 
@@ -63,6 +62,85 @@ async function generate() {
   }
 
   decorate(schema);
+
+  // CheckConfig intentionally keeps these fields structurally broad in
+  // TypeScript because runtime resolution supports both a complete project
+  // invocation and a component selector.  The authored YAML boundary is
+  // narrower: preserve the closed governed-inspect contract every time this
+  // generated artifact is rebuilt.
+  function hardenGovernedProofInspectFields(root) {
+    const properties = root?.definitions?.CheckConfig?.properties;
+    if (!properties) {
+      throw new Error('generated schema is missing definitions.CheckConfig.properties');
+    }
+    properties.instructions = { type: 'string' };
+    properties.invocation = {
+      type: 'object',
+      additionalProperties: false,
+      required: ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'],
+      properties: {
+        role_id: { type: 'string' },
+        stance: { type: 'string', enum: ['owner', 'external-review'] },
+        subject: {
+          anyOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['kind', 'id', 'fingerprint'],
+              properties: {
+                kind: { type: 'string', enum: ['project', 'requirement'] },
+                id: { type: 'string' },
+                fingerprint: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' },
+              },
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['kind'],
+              properties: { kind: { const: 'component' } },
+            },
+          ],
+        },
+        output_schema_id: { type: 'string' },
+        output_schema: { type: 'string' },
+      },
+    };
+    properties.invocation_digest = {
+      type: 'string',
+      pattern: '^sha256:[0-9a-f]{64}$',
+    };
+    properties.result_schema = { type: 'string' };
+    properties.profile = { type: 'string', const: 'luna-xhigh-readonly-v1' };
+  }
+
+  hardenGovernedProofInspectFields(schema);
+
+  const checkProperties = schema?.definitions?.CheckConfig?.properties;
+  if (!checkProperties) {
+    throw new Error('generated schema is missing definitions.CheckConfig.properties');
+  }
+  checkProperties.resource_group = {
+    type: 'string',
+    minLength: 1,
+    maxLength: 64,
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
+    description: 'Static Graph-v2 generated-attempt resource group; at most one runs at a time.',
+  };
+  const aiProperties = schema?.definitions?.AIProviderConfig?.properties;
+  if (!aiProperties) {
+    throw new Error('generated schema is missing definitions.AIProviderConfig.properties');
+  }
+  aiProperties.codex_execution_profile = {
+    type: 'string',
+    enum: ['luna-xhigh-readonly-v1', 'luna-xhigh-isolated-writer-v1'],
+    description: 'Closed execution profile for ordinary governed Luna workers.',
+  };
+  aiProperties.codex_working_directory_from = {
+    type: 'string',
+    minLength: 1,
+    description:
+      'Exact dependency check id whose successful git-checkout output supplies the isolated writer worktree.',
+  };
 
   const outDir = path.resolve(__dirname, '..', 'src', 'generated');
   const outFile = path.join(outDir, 'config-schema.ts');

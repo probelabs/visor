@@ -1,0 +1,105 @@
+version: '1.0'
+max_parallelism: 3
+workspace: {enabled: false}
+
+claim_types:
+  project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id]
+            properties:
+              id: {type: string, minLength: 1}
+  project.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: {type: string, minLength: 1}
+  child.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [children]
+      properties:
+        children:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id]
+            properties:
+              id: {type: string, minLength: 1}
+  child.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: {type: string, minLength: 1}
+  child.result@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, stage]
+      properties:
+        id: {type: string, minLength: 1}
+        stage: {type: string, minLength: 1}
+
+subgraphs:
+  project:
+    input: {name: project, claim: project.item@1}
+    checks:
+      materialize:
+        type: noop
+        consumes:
+          - {claim: project.item@1, as: project}
+        emits:
+          - {claim: child.catalog@1, from: output}
+        expand:
+          claim: child.catalog@1
+          template: child
+          items_pointer: /children
+          key_pointer: /id
+          item_claim: child.item@1
+      join:
+        type: noop
+        depends_on: materialize
+        wait_for_expansion:
+          owner: materialize
+          terminal_node: verify
+
+  child:
+    input: {name: child, claim: child.item@1}
+    checks:
+      inspect:
+        type: noop
+        consumes:
+          - {claim: child.item@1, as: child}
+        emits:
+          - {claim: child.result@1, from: output}
+      verify:
+        type: noop
+        depends_on: inspect
+        consumes:
+          - {claim: child.result@1, as: result}
+
+checks:
+  discover:
+    type: noop
+    emits:
+      - {claim: project.catalog@1, from: output}
+    expand:
+      claim: project.catalog@1
+      template: project
+      items_pointer: /projects
+      key_pointer: /id
+      item_claim: project.item@1

@@ -1,0 +1,373 @@
+# Milestone A: product-native Proof onboarding for one component slice.
+#
+# This is intentionally a normal command -> ai graph.  The AI checks use the
+# built-in Proof role text and native Proof CLI, so they can author the files
+# that Proof owns.  No governed-proof-inspect node is used here: that provider
+# is read-only by design and is not an authoring path.
+version: "1.0"
+max_parallelism: 1
+fail_fast: false
+
+# The launcher prepares one isolated subject checkout and invokes Visor from
+# that checkout.  Keeping this false is deliberate: native Codex and command
+# checks then share exactly the same already-authorized root.
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+
+limits:
+  max_runs_per_check: 1
+
+steps:
+  # This must remain the first mutating command.  It fails closed when the
+  # caller did not establish the subject/original boundary.  The launcher
+  # exports both VISOR_* names for the guard and SUBJECT_ROOT/PROTECTED_ORIGINAL
+  # for humans inspecting a captured run.
+  preflight-init:
+    type: command
+    timeout: 300000
+    criticality: internal
+    assume: "true"
+    schema: plain
+    exec: |
+      set -eu
+      : "${VISOR_WORKSPACE_MAIN_PROJECT:?VISOR_WORKSPACE_MAIN_PROJECT is required}"
+      : "${VISOR_ORIGINAL_WORKDIR:?VISOR_ORIGINAL_WORKDIR is required}"
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      actual="$(pwd -P)"
+      subject="$(cd "$VISOR_WORKSPACE_MAIN_PROJECT" && pwd -P)"
+      original="$(cd "$VISOR_ORIGINAL_WORKDIR" && pwd -P)"
+      test "$actual" = "$subject" || { echo "preflight: cwd is not VISOR_WORKSPACE_MAIN_PROJECT" >&2; exit 41; }
+      test "$actual" != "$original" || { echo "preflight: subject and protected original are identical" >&2; exit 42; }
+      test -d "$subject/.git" -o -f "$subject/.git" || { echo "preflight: subject is not a git checkout" >&2; exit 43; }
+      dirty="$(git status --porcelain --untracked-files=all)"
+      test -z "$dirty" || { echo "preflight: subject checkout must be clean and pinned" >&2; exit 44; }
+      revision="$(git rev-parse --verify HEAD^{commit})" || {
+        echo "preflight: subject HEAD is not a pinned commit" >&2
+        exit 45
+      }
+      if [ -n "${SUBJECT_BASELINE_REVISION:-}" ] && [ "$revision" != "$SUBJECT_BASELINE_REVISION" ]; then
+        echo "preflight: subject HEAD does not match SUBJECT_BASELINE_REVISION" >&2
+        exit 46
+      fi
+      existing_requirements="$(find specs -type f -name '*.req.yaml' -print 2>/dev/null || true)"
+      test -z "$existing_requirements" || {
+        echo "preflight: subject already contains native requirements" >&2
+        exit 47
+      }
+      test ! -e proof.yaml || { echo "preflight: subject already contains proof.yaml" >&2; exit 48; }
+      test ! -e .proof || { echo "preflight: subject already contains .proof state" >&2; exit 49; }
+      printf 'preflight cwd=%s subject=%s original=%s revision=%s\n' "$actual" "$subject" "$original" "$revision"
+      "$PROOF_BIN" init --name jsonparser --template go-package --scope . --strict
+      out="${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+      mkdir -p "$out"
+      "$PROOF_BIN" req list --format json >"$out/requirements-baseline.json"
+      printf 'preflight-init-complete\n' >"$out/preflight-complete"
+    on: [manual]
+    tags: [native-onboarding, preflight]
+
+  role-onboard:
+    type: command
+    depends_on: [preflight-init]
+    timeout: 120000
+    criticality: policy
+    schema: plain
+    # Preserve raw stdout: role docs contain JSON examples that the command
+    # provider otherwise extracts instead of forwarding the full instructions.
+    transform_js: |
+      return String(output);
+    exec: |
+      set -eu
+      printf 'PROOF_EXECUTABLE=%s\n' "$PROOF_BIN"
+      "$PROOF_BIN" role show onboard --format agent
+    on: [manual]
+    tags: [native-onboarding, role]
+
+  native-onboard:
+    type: ai
+    depends_on: [role-onboard]
+    timeout: 1800000
+    criticality: internal
+    assume: "outputs['role-onboard']"
+    schema: plain
+    prompt: |
+      You are the native Proof onboarding worker for one deliberately bounded
+      milestone.  You are in the authorized subject checkout.  Use the normal
+      file tools and the Proof CLI through Bash.  Invoke it with the exact
+      runtime path shown by the role output's `PROOF_EXECUTABLE=<absolute path>`
+      line (never a bare `proof` command).  Every file operation must stay
+      under the current checkout root.  Do not use paths beginning with .. and
+      do not inspect or modify the protected original checkout.
+
+      The built-in role output below is authoritative operating guidance.  It
+      is supplied by Proof at runtime; do not copy role doctrine into this YAML
+      and do not treat a prose proposal or JSON answer as materialized work.
+
+      --- built-in role output (onboard) ---
+      {{ outputs['role-onboard'] }}
+      --- end built-in role output ---
+
+      Milestone cutoff: onboard one meaningful parser iteration/extraction
+      component slice in the Go jsonparser checkout.  Inspect the actual
+      source and tests and choose the slice from what is present; do not invent
+      a component or requirement quota.  Use the native authoring commands,
+      including `<PROOF_EXECUTABLE> req new`/`<PROOF_EXECUTABLE> req set`,
+      `<PROOF_EXECUTABLE> var add`/`<PROOF_EXECUTABLE> var set`, and
+      `<PROOF_EXECUTABLE> trace autolink`, as applicable.  Create a real hierarchy and
+      real FRETish only where the source supports it.  Add Implements/Verifies/
+      Documents annotations to the checkout when they are justified.  Run the
+      relevant Proof audits and confirm only eligible built-in checklist steps.
+
+      Implementation behavior must not change.  Source comments and Proof
+      artifacts are allowed.  This is a parser, not a DeFi protocol: inspect
+      applicability, skip irrelevant DeFi checks honestly, and record why they
+      are deferred or not applicable.  Explicitly acknowledge that hazard
+      analysis, broad coverage, history mining, full-repository onboarding,
+      interruption recovery, and admission of a complete campaign remain
+      deferred.  Stop at the milestone cutoff even if the role text describes
+      later campaign stages.
+
+      The output is secondary evidence.  The required result is materialized
+      native files and trace links in the current checkout, with unresolved
+      audit findings allowed and reported.  Do not impose an arbitrary output
+      schema that prevents native file authoring.
+    ai:
+      model: gpt-5.6-luna
+      prompt_type: engineer
+      allowEdit: true
+      allowBash: true
+      allowedTools: [search, extract, listFiles, edit, create, bash]
+      max_iterations: 80
+      timeout: 1500000
+      retry:
+        maxRetries: 0
+      bashConfig:
+        # The launcher sets the working directory to the subject checkout.
+        # The Proof executable allow-list is extended dynamically below so an
+        # absolute --proof-bin path is matched literally at runtime.
+        workingDirectory: .
+        disableDefaultAllow: true
+        deny: ["rm:*", "sudo:*", "git:push", "git:reset", "git:clean"]
+    ai_bash_config_js: |
+      if (!env.PROOF_BIN) return { allow: [] };
+      const proof = env.PROOF_BIN;
+      return {
+        allow: [
+          `${proof}:*`,
+          'git:status',
+          'git:diff',
+          'git:diff:*',
+          'go:test',
+          'go:test:*',
+          'go:vet',
+          'go:vet:*',
+        ],
+      };
+    on: [manual]
+    tags: [native-onboarding, authoring]
+
+  onboard-evidence:
+    type: command
+    depends_on: [native-onboard]
+    timeout: 900000
+    criticality: policy
+    # Evidence capture is best effort.  Each child command keeps its own
+    # status and stream in the launcher-owned run directory; this node must
+    # not hide a useful native diff just because an audit has warnings.
+    continue_on_failure: true
+    exec: |
+      set -u
+      out="${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+      mkdir -p "$out"
+      run() {
+        name="$1"
+        shift
+        "$PROOF_BIN" "$@" >"$out/$name.stdout" 2>"$out/$name.stderr"
+        code=$?
+        printf '%s\t%s\n' "$name" "$code" >>"$out/command-status.tsv"
+        return 0
+      }
+      run req-list req list --format json
+      run trace-autolink trace autolink --format json
+      run audit-onboard audit --no-cache --check validate_passes --check role_prompt_hygiene --check levels_connected --check annotation_validity --check orphan_code_clean --check orphan_tests_clean --check variables_declared --check variable_drift --check spec_lint_formalization_quality --format json
+      run checklist-onboard checklist show --checklist onboard_v1 --format json
+      run status-onboard status --format json
+      git diff --stat >"$out/onboard-git-diff-stat.stdout" 2>"$out/onboard-git-diff-stat.stderr"
+      printf 'git-diff-stat\t%s\n' "$?" >>"$out/command-status.tsv"
+      exit 0
+    on: [manual]
+    tags: [native-onboarding, evidence]
+
+  role-spec-review:
+    type: command
+    depends_on: [onboard-evidence]
+    timeout: 120000
+    criticality: policy
+    schema: plain
+    # Keep this role document intact for the independent review worker too.
+    transform_js: |
+      return String(output);
+    exec: |
+      set -eu
+      printf 'PROOF_EXECUTABLE=%s\n' "$PROOF_BIN"
+      "$PROOF_BIN" role show spec-review --format agent
+    on: [manual]
+    tags: [native-onboarding, role]
+
+  native-spec-review:
+    type: ai
+    depends_on: [role-spec-review]
+    timeout: 1800000
+    criticality: internal
+    assume: "outputs['role-spec-review']"
+    schema: plain
+    prompt: |
+      Perform an independent native Proof spec review of the materialized
+      parser iteration/extraction slice in the current checkout.  The previous
+      worker's prose is not evidence: inspect the actual Proof files, source,
+      tests, annotations, variables, and trace state.  Invoke Proof with the
+      exact literal path shown by the role output's
+      `PROOF_EXECUTABLE=<absolute path>` line (never a bare `proof` command).
+      Use the built-in role
+      output below as the operating guide, then use native Proof commands to
+      amend requirements, declarations, links, or comments when the code
+      supports the change.
+
+      --- built-in role output (spec-review) ---
+      {{ outputs['role-spec-review'] }}
+      --- end built-in role output ---
+
+      Keep implementation behavior unchanged.  Keep all file and Bash work in
+      the current checkout.  Do not fabricate requirements, variables, audit
+      results, or model output.  Review applicability for this Go parser and
+      leave irrelevant DeFi catalog classes explicitly deferred or not
+      applicable.  Run `<PROOF_EXECUTABLE> trace autolink` and relevant audits/checklist
+      inspection after any justified edits.  Confirm only eligible checklist
+      steps.  Report unresolved findings and distinguish candidate prose,
+      materialized artifacts, validated state, and reviewed state.
+
+      This is still milestone A.  Do not expand into hazard-analysis,
+      repository-wide coverage, history mining, interruption/resume,
+      selective reruns, or a full-campaign admission decision.  Those stages
+      are deferred and must remain visible in the final evidence.
+    ai:
+      model: gpt-5.6-luna
+      prompt_type: engineer
+      allowEdit: true
+      allowBash: true
+      allowedTools: [search, extract, listFiles, edit, create, bash]
+      max_iterations: 80
+      timeout: 1500000
+      retry:
+        maxRetries: 0
+      bashConfig:
+        workingDirectory: .
+        disableDefaultAllow: true
+        deny: ["rm:*", "sudo:*", "git:push", "git:reset", "git:clean"]
+    ai_bash_config_js: |
+      if (!env.PROOF_BIN) return { allow: [] };
+      const proof = env.PROOF_BIN;
+      return {
+        allow: [
+          `${proof}:*`,
+          'git:status',
+          'git:diff',
+          'git:diff:*',
+          'go:test',
+          'go:test:*',
+          'go:vet',
+          'go:vet:*',
+        ],
+      };
+    on: [manual]
+    tags: [native-onboarding, review]
+
+  native-gate:
+    type: command
+    depends_on: [native-spec-review]
+    timeout: 120000
+    criticality: policy
+    # This is deliberately independent of the AI exit code.  A successful
+    # model call with zero native requirements is not an onboarding result.
+    exec: |
+      set -u
+      out="${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+      mkdir -p "$out"
+      "$PROOF_BIN" req list --format json >"$out/requirements-final.json" 2>"$out/requirements-final.stderr"
+      req_status=$?
+      if [ "$req_status" -ne 0 ]; then
+        echo "native-gate: proof req list failed" >&2
+        exit "$req_status"
+      fi
+      node - "$out/requirements-final.json" <<'NODE'
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const file = process.argv[2];
+      let rows;
+      try { rows = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) {
+        console.error(`native-gate: requirements output is not JSON: ${error.message}`);
+        process.exit(44);
+      }
+      if (!Array.isArray(rows) || rows.length === 0) {
+        console.error('native-gate: no native requirements were materialized');
+        process.exit(45);
+      }
+      let baseline;
+      try {
+        baseline = JSON.parse(fs.readFileSync(path.join(process.env.NATIVE_ONBOARDING_OUTPUT_DIR, 'requirements-baseline.json'), 'utf8'));
+      } catch (error) {
+        console.error(`native-gate: baseline requirements are unavailable: ${error.message}`);
+        process.exit(46);
+      }
+      const key = row => String(row.file_path || row.path || row.id || row.slug || '');
+      const before = new Set(Array.isArray(baseline) ? baseline.map(key) : []);
+      const changed = rows.filter(row => !before.has(key(row)));
+      if (changed.length === 0) {
+        console.error('native-gate: requirements are unchanged from Proof init baseline');
+        process.exit(47);
+      }
+      console.log(`native-gate: ${changed.length} native requirement(s) changed or added after init`);
+      NODE
+    on: [manual]
+    tags: [native-onboarding, gate]
+
+  final-evidence:
+    type: command
+    depends_on: [native-gate]
+    timeout: 1200000
+    criticality: policy
+    exec: |
+      set -u
+      out="${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+      mkdir -p "$out"
+      overall=0
+      run() {
+        name="$1"
+        shift
+        required="$1"
+        shift
+        "$PROOF_BIN" "$@" >"$out/$name.stdout" 2>"$out/$name.stderr"
+        code=$?
+        printf '%s\t%s\n' "$name" "$code" >>"$out/command-status.tsv"
+        if [ "$required" = required ] && [ "$code" -ne 0 ]; then overall=1; fi
+      }
+      run req-list-final required req list --format json
+      # Audit findings and incomplete milestone checklists are evidence, not
+      # collection failures: this slice deliberately does not claim full A.
+      run audit-final observed audit --no-cache --check validate_passes --check role_prompt_hygiene --check levels_connected --check annotation_validity --check orphan_code_clean --check orphan_tests_clean --check variables_declared --check variable_drift --check spec_lint_formalization_quality --format json
+      run checklist-final observed checklist check --checklist onboard_v1
+      run status-final required status --format json
+      git diff --stat >"$out/final-git-diff-stat.stdout" 2>"$out/final-git-diff-stat.stderr"
+      code=$?
+      printf 'git-diff-stat-final\t%s\n' "$code" >>"$out/command-status.tsv"
+      if [ "$code" -ne 0 ]; then overall=1; fi
+      git diff -- . ':(exclude).native-onboarding-output' >"$out/final-git-diff.patch" 2>"$out/final-git-diff.stderr"
+      code=$?
+      printf 'git-diff-final\t%s\n' "$code" >>"$out/command-status.tsv"
+      if [ "$code" -ne 0 ]; then overall=1; fi
+      if [ "$overall" -eq 0 ]; then
+        printf 'final-evidence-complete\n' >"$out/final-evidence-complete"
+      fi
+      exit "$overall"
+    on: [manual]
+    tags: [native-onboarding, evidence]

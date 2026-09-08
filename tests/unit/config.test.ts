@@ -3,6 +3,9 @@ import { ConfigManager } from '../../src/config';
 import { VisorConfig } from '../../src/types/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as yaml from 'js-yaml';
+import Ajv from 'ajv';
+import { configSchema } from '../../src/generated/config-schema';
 
 // Mock fs module
 jest.mock('fs');
@@ -124,6 +127,327 @@ checks:
   });
 
   describe('Schema Validation', () => {
+    it('recognizes proof-admit as a type but rejects it at the root policy boundary', () => {
+      const config: any = {
+        version: '1.0',
+        checks: { proof: { type: 'proof-admit' } },
+      };
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(config)).toBe(true);
+      expect(() => configManager.validateConfig(config)).toThrow('RESERVED_PROOF_ADMISSION_ROOT');
+    });
+
+    it('recognizes governed proof inspection but rejects it at the root policy boundary', () => {
+      const config: any = { version: '1.0', checks: { inspect: { type: 'governed-proof-inspect' } } };
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(configSchema);
+      expect(validate(config)).toBe(true);
+      expect(() => configManager.validateConfig(config)).toThrow('RESERVED_PROOF_ADMISSION_ROOT');
+    });
+
+    it('keeps generated governed-inspect invocation, digest, and profile fields closed', () => {
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      const governed = {
+        version: '1.0',
+        checks: {
+          inspect: {
+            type: 'governed-proof-inspect',
+            instructions: 'Inspect the current Proof subject',
+            invocation: {
+              role_id: 'onboard',
+              stance: 'owner',
+              subject: {
+                kind: 'project',
+                id: 'fixture',
+                fingerprint: `sha256:${'a'.repeat(64)}`,
+              },
+              output_schema_id: 'fixture.result@1',
+              output_schema: 'e30=',
+            },
+            invocation_digest: `sha256:${'b'.repeat(64)}`,
+            result_schema: '{}',
+            profile: 'luna-xhigh-readonly-v1',
+          },
+        },
+      };
+      expect(validate(governed)).toBe(true);
+
+      const malformed = [
+        { ...governed.checks.inspect, invocation: { ...governed.checks.inspect.invocation, extra: true } },
+        { ...governed.checks.inspect, invocation_digest: 'b'.repeat(64) },
+        { ...governed.checks.inspect, profile: 'unbounded' },
+      ];
+      for (const inspect of malformed) {
+        expect(validate({ version: '1.0', checks: { inspect } })).toBe(false);
+      }
+
+      const selector = {
+        ...governed.checks.inspect,
+        invocation: { ...governed.checks.inspect.invocation, subject: { kind: 'component' } },
+      };
+      expect(validate({ version: '1.0', checks: { inspect: selector } })).toBe(true);
+      expect(validate({
+        version: '1.0',
+        checks: {
+          inspect: {
+            ...selector,
+            invocation: { ...selector.invocation, subject: { kind: 'component', id: 'forged' } },
+          },
+        },
+      })).toBe(false);
+    });
+
+    it('accepts the human-readable Graph v2 C1 fixture through generated schema and semantics', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../fixtures/graph-v2/terminal-typed-claim.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as VisorConfig;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(parsed)).toBe(true);
+      expect(validate.errors).toBeNull();
+      expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('accepts the human-readable Graph v2 C2 dynamic-instance fixture', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../fixtures/graph-v2/dynamic-component-instances.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as VisorConfig;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(parsed)).toBe(true);
+      expect(validate.errors).toBeNull();
+      expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('accepts the human-readable seven-node Proof onboarding graph', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as VisorConfig;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(parsed)).toBe(true);
+      expect(validate.errors).toBeNull();
+      expect(() => configManager.validateConfig(parsed)).not.toThrow();
+    });
+
+    it('keeps the project reconciliation receipt nested Proof authorities closed and v2-only', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../../examples/agent-governance/exp-0209-discovery-egress/visor.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as any;
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        parsed.claim_types['proof.project_reconciliation_receipt@1'].schema
+      );
+      const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
+      const subject = (componentId: string, pathValue: string, digit: string) => ({
+        version: 'proof.component-subject/v1',
+        project_id: 'journalservice',
+        component_id: componentId,
+        sorted_owned_paths: [pathValue],
+        sorted_dependency_closure: [pathValue],
+        fingerprint: digest(digit),
+      });
+      const receipt = {
+        version: 'proof.project-reconciliation-receipt/v1',
+        project_authority: {
+          version: 'proof.project-authority/v1', project_id: 'journalservice',
+          subject_fingerprint: digest('1'), code_fingerprint: digest('2'), tests_fingerprint: digest('3'),
+        },
+        catalog_revalidation_receipt: {
+          version: 'proof.catalog-revalidation-receipt/v2', decision: 'accepted', project_id: 'journalservice',
+          project_fingerprint: digest('1'), boundary_fingerprint: digest('4'), inventory_claim_id: digest('5'),
+          catalog_claim_id: digest('6'), admission_candidate_id: digest('7'), admission_result_digest: digest('8'),
+          admission_receipt_id: digest('9'),
+          component_authorities: [
+            { component_id: 'api', work_item_digest: digest('a'), subject: subject('api', 'http.go', 'b') },
+            { component_id: 'store', work_item_digest: digest('c'), subject: subject('store', 'store.go', 'd') },
+          ],
+          project_lineage: {
+            version: 'proof.git-project-lineage-binding/v1', fingerprint: digest('e'),
+            object_format: 'sha256', baseline_revision: digest('f'),
+          },
+          receipt_id: digest('a'),
+        },
+        component_admissions: [
+          { component_id: 'api', work_item_digest: digest('a'), candidate_id: digest('b'), result_digest: digest('c'), operational_scope_digest: digest('d') },
+          { component_id: 'store', work_item_digest: digest('e'), candidate_id: digest('f'), result_digest: digest('1'), operational_scope_digest: digest('2') },
+        ],
+        covered_work_item_digests: [digest('a'), digest('e')],
+        receipt_id: digest('3'),
+      };
+      expect(validate(receipt)).toBe(true);
+
+      const v1WithLineage = JSON.parse(JSON.stringify(receipt));
+      v1WithLineage.catalog_revalidation_receipt.version = 'proof.catalog-revalidation-receipt/v1';
+      expect(validate(v1WithLineage)).toBe(false);
+
+      const subjectWithExtra = JSON.parse(JSON.stringify(receipt));
+      subjectWithExtra.catalog_revalidation_receipt.component_authorities[0].subject.extra = true;
+      expect(validate(subjectWithExtra)).toBe(false);
+
+      const lineageWithExtra = JSON.parse(JSON.stringify(receipt));
+      lineageWithExtra.catalog_revalidation_receipt.project_lineage.extra = true;
+      expect(validate(lineageWithExtra)).toBe(false);
+    });
+
+    it('rejects malformed C2 references and executable template control flow prelaunch', () => {
+      const realFs = jest.requireActual<typeof fs>('fs');
+      const fixturePath = path.resolve(
+        __dirname,
+        '../fixtures/graph-v2/dynamic-component-instances.yaml'
+      );
+      const parsed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as any;
+      parsed.checks['discover-components'].expand.template = 'missing-template';
+      expect(() => configManager.validateConfig(parsed)).toThrow('UNKNOWN_SUBGRAPH_TEMPLATE');
+
+      const routed = yaml.load(realFs.readFileSync(fixturePath, 'utf8')) as any;
+      routed.subgraphs['onboard-component'].checks.inspect.on_success = {
+        run: ['summarize'],
+      };
+      expect(() => configManager.validateConfig(routed)).toThrow(
+        'UNSUPPORTED_TEMPLATE_EXECUTION'
+      );
+    });
+
+    it.each(['emits', 'consumes'])('rejects property-present empty %s before launch', field => {
+      const config: any = {
+        version: '1.0',
+        checks: { check: { type: 'noop', [field]: [] } },
+      };
+      const validate = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false }).compile(
+        configSchema
+      );
+      expect(validate(config)).toBe(false);
+      expect(validate.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ keyword: 'minItems', params: { limit: 1 } }),
+        ])
+      );
+      expect(() => configManager.validateConfig(config)).toThrow('non-empty array');
+    });
+
+    it('rejects misspelled claim-schema keywords with a stable code', () => {
+      const config: any = {
+        version: '1.0',
+        claim_types: {
+          'fixture.ready@1': { schema: { type: 'object', propertiez: { value: {} } } },
+        },
+        checks: { producer: { type: 'noop' } },
+      };
+      expect(() => configManager.validateConfig(config)).toThrow('INVALID_CLAIM_SCHEMA');
+    });
+
+    it('rejects claim-mode OR tokens while preserving legacy OR validation', () => {
+      const config: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          a: { type: 'noop' },
+          b: { type: 'noop' },
+          c: { type: 'noop', depends_on: 'a|b' },
+        },
+      };
+      expect(() => configManager.validateConfig(config)).toThrow(
+        'UNSUPPORTED_CLAIM_OR_DEPENDENCY'
+      );
+      delete config.claim_types;
+      expect(() => configManager.validateConfig(config)).not.toThrow();
+    });
+
+    it('rejects wrong or undeclared claim versions at ConfigManager boundary', () => {
+      const config: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          producer: {
+            type: 'noop',
+            emits: [{ claim: 'fixture.ready@1', from: 'output' }],
+          },
+          consumer: {
+            type: 'noop',
+            consumes: [{ claim: 'fixture.ready@2', cardinality: 'one' }],
+          },
+        },
+      };
+      expect(() => configManager.validateConfig(config)).toThrow('undeclared claim');
+    });
+
+    it('rejects duplicate claim emitters and claim-consumption cycles at ConfigManager boundary', () => {
+      const duplicate: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          a: { type: 'noop', emits: [{ claim: 'fixture.ready@1', from: 'output' }] },
+          b: { type: 'noop', emits: [{ claim: 'fixture.ready@1', from: 'output' }] },
+        },
+      };
+      expect(() => configManager.validateConfig(duplicate)).toThrow('duplicate emitters');
+
+      const cycle: any = {
+        version: '1.0',
+        claim_types: {
+          'fixture.a@1': { schema: { type: 'object' } },
+          'fixture.b@1': { schema: { type: 'object' } },
+        },
+        checks: {
+          a: {
+            type: 'noop',
+            emits: [{ claim: 'fixture.a@1', from: 'output' }],
+            consumes: [{ claim: 'fixture.b@1', cardinality: 'one' }],
+          },
+          b: {
+            type: 'noop',
+            emits: [{ claim: 'fixture.b@1', from: 'output' }],
+            consumes: [{ claim: 'fixture.a@1', cardinality: 'one' }],
+          },
+        },
+      };
+      expect(() => configManager.validateConfig(cycle)).toThrow(
+        'Claim dependency cycle detected'
+      );
+    });
+
+    it('rejects non-root claim declarations and preserves legacy configs', () => {
+      const nonRoot: any = {
+        version: '1.0',
+        claim_types: { 'fixture.ready@1': { schema: { type: 'object' } } },
+        checks: {
+          producer: {
+            type: 'noop',
+            forEach: true,
+            emits: [{ claim: 'fixture.ready@1', from: 'output' }],
+          },
+        },
+      };
+      expect(() => configManager.validateConfig(nonRoot)).toThrow('root-scope only');
+      expect(() =>
+        configManager.validateConfig({
+          version: '1.0',
+          checks: {
+            first: { type: 'noop' },
+            second: { type: 'noop', depends_on: 'first' },
+          },
+        })
+      ).not.toThrow();
+    });
+
     it('should validate required version field', async () => {
       const configWithoutVersion = `
 checks:

@@ -5,6 +5,11 @@ import {
 } from '../../../src/providers/check-provider.interface';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
+import { ProofAdmitCheckProvider } from '../../../src/providers/proof-admit-check-provider';
+import {
+  GOVERNED_PROBE_UNAVAILABLE,
+  GovernedProofInspectCheckProvider,
+} from '../../../src/providers/governed-proof-inspect-check-provider';
 
 // Mock provider for testing
 class MockCheckProvider extends CheckProvider {
@@ -71,6 +76,9 @@ describe('CheckProviderRegistry', () => {
       expect(providers).toContain('http_input');
       expect(providers).toContain('http_client');
       expect(providers).toContain('noop');
+      expect(providers).toContain('proof-admit');
+      expect(providers).toContain('governed-proof-inspect');
+      expect(registry.getProvider('governed-proof-inspect')).toBeInstanceOf(GovernedProofInspectCheckProvider);
     });
   });
 
@@ -88,6 +96,16 @@ describe('CheckProviderRegistry', () => {
       registry.register(provider1);
       expect(() => registry.register(provider2)).toThrow("Provider 'custom' is already registered");
     });
+
+    it('seals the reserved proof-admit name from public replacement', () => {
+      expect(() => registry.register(new MockCheckProvider('proof-admit'))).toThrow(
+        "Provider 'proof-admit' is reserved"
+      );
+      expect(() => registry.register(new MockCheckProvider('governed-proof-inspect'))).toThrow(
+        "Provider 'governed-proof-inspect' is reserved"
+      );
+      expect(registry.getProvider('proof-admit')).toBeInstanceOf(ProofAdmitCheckProvider);
+    });
   });
 
   describe('unregister', () => {
@@ -100,6 +118,16 @@ describe('CheckProviderRegistry', () => {
 
     it('should throw error for non-existent provider', () => {
       expect(() => registry.unregister('nonexistent')).toThrow("Provider 'nonexistent' not found");
+    });
+
+    it('seals the reserved proof-admit name from removal', () => {
+      expect(() => registry.unregister('proof-admit')).toThrow(
+        "Provider 'proof-admit' is reserved"
+      );
+      expect(() => registry.unregister('governed-proof-inspect')).toThrow(
+        "Provider 'governed-proof-inspect' is reserved"
+      );
+      expect(registry.hasProvider('proof-admit')).toBe(true);
     });
   });
 
@@ -163,6 +191,7 @@ describe('CheckProviderRegistry', () => {
   describe('getAllProviders', () => {
     it('should return all provider instances', () => {
       registry.reset();
+      const baselineCount = registry.getAllProviders().length;
 
       const provider1 = new MockCheckProvider('provider1');
       const provider2 = new MockCheckProvider('provider2');
@@ -173,8 +202,7 @@ describe('CheckProviderRegistry', () => {
       const providers = registry.getAllProviders();
       expect(providers).toContain(provider1);
       expect(providers).toContain(provider2);
-      // Reset adds 17 default providers (ai, command, script, http, http_input, http_client, noop, log, memory, github, claude-code, mcp, human-input, workflow, git-checkout, a2a, utcp) + 2 custom = 19 total
-      expect(providers.length).toBe(19);
+      expect(providers.length).toBe(baselineCount + 2);
     });
   });
 
@@ -225,6 +253,21 @@ describe('CheckProviderRegistry', () => {
       expect(registry.hasProvider('http_input')).toBe(true);
       expect(registry.hasProvider('http_client')).toBe(true);
       expect(registry.hasProvider('noop')).toBe(true);
+      expect(registry.getProvider('proof-admit')).toBeInstanceOf(ProofAdmitCheckProvider);
     });
+  });
+
+  it('keeps the reserved admission provider unavailable without package bootstrap', async () => {
+    const provider = registry.getProvider('proof-admit');
+    expect(provider).toBeInstanceOf(ProofAdmitCheckProvider);
+    await expect(provider?.isAvailable()).resolves.toBe(false);
+    await expect(provider?.execute({} as PRInfo, { type: 'proof-admit' } as any)).rejects.toThrow('PROOF_ADMISSION_UNAVAILABLE');
+  });
+
+  it('keeps the governed inspect provider sealed and unavailable until managed bootstrap', async () => {
+    const provider = registry.getProvider('governed-proof-inspect');
+    expect(provider).toBeInstanceOf(GovernedProofInspectCheckProvider);
+    await expect(provider?.isAvailable()).resolves.toBe(false);
+    expect(provider?.getRequirements()).toEqual([GOVERNED_PROBE_UNAVAILABLE]);
   });
 });

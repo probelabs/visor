@@ -1,0 +1,963 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { describe, expect, it } from '@jest/globals';
+import { createHash } from 'node:crypto';
+import * as yaml from 'js-yaml';
+import {
+  aggregateFailureDiagnostics,
+  changedHunkContextDigest,
+  deriveChangedHunkContext,
+  installProbeFailureDiagnostics,
+  installReplacementChangeHunkPrompt,
+  childProcess,
+  failureReceipt,
+  projectChildFailure,
+  promoteChildFailure,
+  resumeDispatchDecision,
+  runPreflight,
+  sanitizeProbeFailureTaxonomy,
+  selectPrimaryFailure,
+  serializeFailureDiagnostics,
+  validateChangedHunkContext,
+  validateActiveComponentCandidateCoordinates,
+  validateReplacementCandidate,
+  validateReplacementSemanticCoverage,
+  validateSourceCoordinates,
+  validateChildFailureProjection,
+} from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo';
+import { runJsonparserStagedDemo } from '../../examples/agent-governance/exp-0210-jsonparser-staged/run-demo';
+import { governedProofComponentReinspectionContextDigest, GovernedProofInspectCheckProvider, validateProofCandidateEvidence } from '../../src/providers/governed-proof-inspect-check-provider';
+import { ExecutionJournal } from '../../src/snapshot-store';
+import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
+import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
+
+type AnyRecord = Record<string, any>;
+const ROOT = path.resolve(__dirname, '../..');
+const LIVE = path.join(ROOT, 'examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo.ts');
+const PROFILE = path.join(ROOT, 'examples/agent-governance/exp-0210-jsonparser-staged/visor.yaml');
+const PINS = {
+  visor: '025f53ce', baseline: 'cb835d480ac58e1b4be76afeac49e89ed651c3b5',
+  fix: '3980c9c9b9919e643bd095fa4469bfa19e29f20c', proof: '543994bd68f2b6d6217749c4c19be737021b993a',
+  probe: '0.6.0-rc337', codex: '0.150.1', profile: 'luna-xhigh-readonly-v1',
+};
+const RETAINED_PROBE_VERSION = '0.6.0-rc334';
+const STAGES = ['inspect', 'proof_admit', 'spec_review', 'spec_review_admit', 'verify'];
+const DIAGNOSTICS_SCHEMA = 'urn:reqproof:agent-governance:exp-0210-failure-diagnostics:v1';
+const PROVIDER_ENGINE_FAILURE_BOUNDARIES = ['acquire', 'query', 'close'];
+const FAILURE_PREDICATES = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape', 'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer', 'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type', 'network', 'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract', 'invocation_attestation', 'native_capability_aggregate'];
+const SCHEMA_SUBREASONS = ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity'];
+const SCHEMA_KEYWORDS = ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems', 'multiple', 'unknown'];
+const RETAINED_CHECKPOINT = '/tmp/visor-exp0210-live-luna.fom5fO/output/failure.checkpoint.json';
+const RETAINED_PREFLIGHT = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
+const RETAINED_PARSER_CANDIDATE = path.join(ROOT, 'tests/fixtures/exp-0210-retained-parser-spec-candidate.json');
+
+function git(cwd: string, args: string[]): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return String(result.stdout || '').trim();
+}
+
+function reinspectionContext(): AnyRecord {
+  const payload = { finding: 'prior' };
+  return {
+    version: 'visor.proof-component-reinspection-context/v1', component_id: 'parser-core', changed_paths: ['parser.go', 'parser_test.go'],
+    historical_work_item: { claim_id: '1'.repeat(64), payload_fingerprint: '2'.repeat(64) }, current_work_item: { claim_id: '3'.repeat(64), payload_fingerprint: '4'.repeat(64) },
+    prior_candidate: { claim_id: '5'.repeat(64), payload_fingerprint: createHash('sha256').update(JSON.stringify(payload)).digest('hex'), result_digest: `sha256:${'6'.repeat(64)}`, payload },
+    prior_admission: { claim_id: '7'.repeat(64), payload_fingerprint: '8'.repeat(64) },
+  };
+}
+
+function changeHunkFixture(): { root: string; baseline: string; fixed: string; lineage: AnyRecord; context: AnyRecord } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-hunks-'));
+  const baseline = path.join(root, 'baseline'); const fixed = path.join(root, 'fixed');
+  fs.mkdirSync(baseline); git(baseline, ['init', '-q']); git(baseline, ['config', 'user.email', 'test@example.invalid']); git(baseline, ['config', 'user.name', 'test']);
+  fs.writeFileSync(path.join(baseline, 'parser.go'), 'package p\nfunc Parse() int { return 1 }\n');
+  fs.writeFileSync(path.join(baseline, 'parser_test.go'), 'package p\nfunc TestParse(t *T) {}\n');
+  fs.writeFileSync(path.join(baseline, 'go.sum'), '');
+  git(baseline, ['add', '.']); git(baseline, ['commit', '-qm', 'baseline']);
+  fs.cpSync(baseline, fixed, { recursive: true });
+  fs.writeFileSync(path.join(fixed, 'parser.go'), 'package p\nfunc Parse() int { return 2 }\n');
+  fs.writeFileSync(path.join(fixed, 'parser_test.go'), 'package p\nfunc TestParse(t *T) { _ = Parse() }\n');
+  git(fixed, ['add', '.']); git(fixed, ['commit', '-qm', 'fixed']);
+  const lineage = { baseline_head: git(baseline, ['rev-parse', 'HEAD']), fixed_head: git(fixed, ['rev-parse', 'HEAD']), baseline_root: git(baseline, ['rev-list', '--max-parents=0', 'HEAD']), fixed_root: git(fixed, ['rev-list', '--max-parents=0', 'HEAD']), fixed_descends_from_baseline: true };
+  return { root, baseline, fixed, lineage, context: reinspectionContext() };
+}
+
+function genericReplacementCandidate(): AnyRecord {
+  const coordinate = (pathName: string, line: number) => ({ path: pathName, line });
+  return {
+    reviewedFiles: [{ path: 'parser.go', coordinates: [coordinate('parser.go', 2)] }, { path: 'parser_test.go', coordinates: [coordinate('parser_test.go', 2)] }],
+    requirements: [{ coordinates: [coordinate('parser.go', 2)] }, { coordinates: [coordinate('parser_test.go', 2)] }],
+    interfaces: [{ coordinates: [coordinate('parser.go', 2)] }, { coordinates: [coordinate('parser_test.go', 2)] }],
+    findings: [{ coordinates: [coordinate('parser.go', 2)] }, { coordinates: [coordinate('parser_test.go', 2)] }],
+  };
+}
+
+function fixtureInput(fixture: ReturnType<typeof changeHunkFixture>): AnyRecord {
+  return { baselineWorkspace: fixture.baseline, fixedWorkspace: fixture.fixed, lineage: fixture.lineage };
+}
+
+function retainedReplacementCandidate(): { candidate: AnyRecord; coordinatePaths: string[] } {
+  const fixture = JSON.parse(fs.readFileSync(RETAINED_PARSER_CANDIDATE, 'utf8')) as AnyRecord;
+  if (!fixture?.candidate || !Array.isArray(fixture.coordinate_paths)) throw new Error('retained replacement candidate fixture is incomplete');
+  return { candidate: fixture.candidate, coordinatePaths: fixture.coordinate_paths.map(String) };
+}
+
+function realChangedHunkFixture(paths: readonly string[]): ReturnType<typeof changeHunkFixture> {
+  const source = '/Users/buger/go/src/jsonparser';
+  if (!fs.existsSync(source)) throw new Error('pinned jsonparser source repository is unavailable');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-real-hunks-'));
+  const baseline = path.join(root, 'baseline'); const fixed = path.join(root, 'fixed');
+  const archive = (revision: string, destination: string): void => {
+    fs.mkdirSync(destination, { recursive: true });
+    const result = spawnSync('git', ['archive', revision, '--', ...paths], { cwd: source, encoding: null });
+    if (result.status !== 0 || !result.stdout || spawnSync('tar', ['-xf', '-', '-C', destination], { input: result.stdout }).status !== 0) throw new Error('unable to archive pinned changed sources');
+  };
+  archive(PINS.baseline, baseline); git(baseline, ['init', '-q']); git(baseline, ['config', 'user.email', 'test@example.invalid']); git(baseline, ['config', 'user.name', 'test']); git(baseline, ['add', '.']); git(baseline, ['commit', '-qm', 'baseline']);
+  fs.cpSync(baseline, fixed, { recursive: true }); archive(PINS.fix, fixed); git(fixed, ['add', '.']); git(fixed, ['commit', '-qm', 'fixed']);
+  const lineage = { baseline_head: git(baseline, ['rev-parse', 'HEAD']), fixed_head: git(fixed, ['rev-parse', 'HEAD']), baseline_root: git(baseline, ['rev-list', '--max-parents=0', 'HEAD']), fixed_root: git(fixed, ['rev-list', '--max-parents=0', 'HEAD']), fixed_descends_from_baseline: true };
+  return { root, baseline, fixed, lineage, context: {} };
+}
+
+function genericReplacementCandidateForHunks(context: AnyRecord, addedOnly = true): AnyRecord {
+  const coordinate = (hunk: AnyRecord) => {
+    let line = hunk.new_start;
+    if (addedOnly) {
+      for (const text of hunk.lines) {
+        if (text.startsWith('+')) return { path: hunk.path, line };
+        if (text.startsWith(' ')) line += 1;
+      }
+      throw new Error('fixture hunk has no added line');
+    }
+    return { path: hunk.path, line };
+  };
+  const coordinates = context.hunks.map(coordinate);
+  return {
+    reviewedFiles: context.changed_paths.map((pathName: string) => ({ path: pathName, coordinates: [coordinates.find((entry: AnyRecord) => entry.path === pathName)] })),
+    requirements: coordinates.map((entry: AnyRecord) => ({ coordinates: [entry] })),
+    interfaces: [{ coordinates }],
+    findings: [{ coordinates }],
+  };
+}
+
+function lineCounts(sourceRoot: string, paths: readonly string[]): Record<string, number> {
+  return Object.fromEntries(paths.map(pathName => {
+    const text = fs.readFileSync(path.join(sourceRoot, pathName), 'utf8');
+    return [pathName, text.length === 0 ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)];
+  }));
+}
+
+function focusedSubprocess(kind: 'valid' | 'checkpoint' | 'preflight' | 'boundary'): { root: string; output: string; runner: string; result: ReturnType<typeof spawnSync> } {
+  const shadow = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-focused-shadow-'));
+  const output = kind === 'boundary' ? fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-boundary-output-')) : path.join(shadow, 'focused-output');
+  if (kind === 'boundary') fs.rmdirSync(output);
+  const runnerRelative = 'examples/agent-governance/exp-0210-jsonparser-staged/run-live-demo.ts';
+  const archive = spawnSync('git', ['archive', 'HEAD', '--', 'src', 'package.json', 'package-lock.json', 'tsconfig.json', 'examples/agent-governance/exp-0210-jsonparser-staged'], { cwd: ROOT, encoding: null, maxBuffer: 64 * 1024 * 1024 });
+  if (archive.status !== 0 || !archive.stdout) throw new Error('unable to archive the Visor test shadow');
+  const unpack = spawnSync('tar', ['-xf', '-', '-C', shadow], { input: archive.stdout });
+  if (unpack.status !== 0) throw new Error('unable to unpack the Visor test shadow');
+  const preflight = path.join(shadow, 'retained-preflight.json');
+  const checkpoint = path.join(shadow, 'retained-checkpoint.json');
+  fs.copyFileSync(RETAINED_PREFLIGHT, preflight); fs.copyFileSync(RETAINED_CHECKPOINT, checkpoint);
+  if (kind === 'preflight') { const value = JSON.parse(fs.readFileSync(preflight, 'utf8')); value.graph.semantic_digest = '0'.repeat(64); fs.writeFileSync(preflight, `${JSON.stringify(value)}\n`); }
+  if (kind === 'checkpoint') { const value = JSON.parse(fs.readFileSync(checkpoint, 'utf8')); value.graphSemanticDigest = '0'.repeat(64); fs.writeFileSync(checkpoint, `${JSON.stringify(value)}\n`); }
+  const runner = path.join(shadow, runnerRelative);
+  let source = fs.readFileSync(LIVE, 'utf8');
+  if (kind !== 'valid') {
+    source = source.replace(/const FOCUSED_PREFLIGHT = '[^']+';/, `const FOCUSED_PREFLIGHT = ${JSON.stringify(preflight)};`);
+    source = source.replace(/const FOCUSED_CHECKPOINT = '[^']+';/, `const FOCUSED_CHECKPOINT = ${JSON.stringify(checkpoint)};`);
+  }
+  fs.writeFileSync(runner, source, { encoding: 'utf8', mode: 0o600 });
+  fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(shadow, 'node_modules'), 'dir');
+  for (const args of [['init', '-q'], ['config', 'user.email', 'visor-exp0210@example.invalid'], ['config', 'user.name', 'Visor EXP-0210'], ['add', '-A'], ['commit', '-qm', 'focused-preflight']]) {
+    const git = spawnSync('git', args, { cwd: shadow, encoding: 'utf8' });
+    if (git.status !== 0) throw new Error('unable to commit the Visor test shadow');
+  }
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: shadow, encoding: 'utf8' }).stdout.trim();
+  const digest = (file: string): string => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const env = { ...process.env, VISOR_EXP0210_EXPECTED_VISOR_HEAD: head, VISOR_EXP0210_EXPECTED_YAML_SHA256: digest(path.join(shadow, 'examples/agent-governance/exp-0210-jsonparser-staged/visor.yaml')), VISOR_EXP0210_EXPECTED_RUNNER_SHA256: digest(runner) };
+  delete env.GIT_DIR; delete env.GIT_WORK_TREE;
+  let boundaryAuth: string | undefined;
+  if (kind === 'boundary') {
+    const authOutput = path.join(shadow, '.git', 'focused-auth');
+    const auth = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner, '--focused-diagnostic-preflight', '--output', authOutput], { cwd: shadow, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+    boundaryAuth = path.join(authOutput, 'focused-diagnostic-preflight.json');
+    if (auth.status !== 0 || !fs.existsSync(boundaryAuth)) throw new Error('unable to produce focused boundary authorization');
+    env.VISOR_EXP0210_FOCUSED_PREFLIGHT_PATH = boundaryAuth;
+    env.VISOR_EXP0210_FOCUSED_PREFLIGHT_SHA256 = digest(boundaryAuth);
+  }
+  const mode = kind === 'boundary' ? '--focused-diagnostic-boundary' : '--focused-diagnostic-preflight';
+  const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner, mode, '--output', output], { cwd: shadow, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+  return { root: shadow, output, runner, result };
+}
+
+function diagnosticEntry(phase: string, component: string, index: number): AnyRecord {
+  return {
+    phase,
+    check_id: 'spec_review',
+    component_id: component,
+    binding_digest: `sha256:${index.toString(16).padStart(64, '0')}`,
+    taxonomy: sanitizeProbeFailureTaxonomy({ answerFailureStage: 'provider_engine' }),
+  };
+}
+
+function diagnosticEntryWithTaxonomy(taxonomy: AnyRecord, index: number): AnyRecord {
+  return {
+    phase: 'pause',
+    check_id: 'spec_review',
+    component_id: `taxonomy-${index}`,
+    binding_digest: `sha256:${index.toString(16).padStart(64, '0')}`,
+    taxonomy,
+  };
+}
+
+function request(component: string, error: Error): AnyRecord {
+  return { binding: { checkId: 'spec_review', attemptId: component, scope: [{ key: 'jsonparser' }, { key: component }] }, error };
+}
+
+function projection(checkpoint: AnyRecord, config: AnyRecord): AnyRecord {
+  return ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection() as AnyRecord;
+}
+
+function componentId(value: AnyRecord): string {
+  return String(value.scope?.at(-1)?.key ?? value.payload?.component_id ?? '');
+}
+
+function activeClaims(view: AnyRecord, claim: string, scopeLength?: number): AnyRecord[] {
+  return Object.values(view.claimsById).filter((value: any) => value.claim === claim && value.active === true && (scopeLength === undefined || value.scope.length === scopeLength)) as AnyRecord[];
+}
+
+function attemptStages(checkpoint: AnyRecord, view: AnyRecord, id: string): string[] {
+  const instance = Object.values(view.instancesById).find((value: any) => value.itemKey === id) as AnyRecord | undefined;
+  if (!instance) return [];
+  return checkpoint.events.filter((event: any) => event.type === 'AttemptStarted' && event.scope?.some((scope: any) => scope.subgraphInstanceId === instance.subgraphInstanceId)).map((event: any) => String(event.checkId));
+}
+
+describe('EXP-0210 live preflight', () => {
+  it('exposes dependency-only preflight with zero governed/model calls', () => {
+    expect(typeof runPreflight).toBe('function');
+    const source = fs.readFileSync(LIVE, 'utf8');
+    const report = source.slice(source.indexOf('function preflightReport'), source.indexOf('function prepare'));
+    const preflight = source.slice(source.indexOf('export function runPreflight'), source.indexOf('export function runJsonparserStagedLive'));
+    expect(report).toContain("mode: 'preflight-only'");
+    expect(report).toMatch(/governed_calls: 0, model_calls: 0, network_dispatches_requested: 0/);
+    expect(report).toContain('preflight performs no Probe-agent initialization or governed/model/network dispatch');
+    expect(preflight).not.toContain('childProcess(');
+    expect(preflight).not.toContain('answerGoverned');
+    for (const pin of ['VISOR_EXP0210_EXPECTED_VISOR_HEAD', 'VISOR_EXP0210_EXPECTED_YAML_SHA256', 'VISOR_EXP0210_EXPECTED_RUNNER_SHA256']) {
+      expect(source).toContain(`process.env.${pin}`);
+    }
+  });
+
+  it('builds an independent fixed descendant with exact source lineage before any governed work', () => {
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-lineage-preflight-'));
+    try {
+      const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+      const yamlSha = createHash('sha256').update(fs.readFileSync(PROFILE)).digest('hex');
+      const runnerSha = createHash('sha256').update(fs.readFileSync(LIVE)).digest('hex');
+      const child = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', LIVE, '--preflight-only', '--output', output], {
+        cwd: ROOT,
+        env: {
+          ...process.env,
+          PATH: '/tmp/codex-0.150.1-exp0210.n6IrWC/node_modules/.bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
+          VISOR_EXP0210_EXPECTED_VISOR_HEAD: head,
+          VISOR_EXP0210_EXPECTED_YAML_SHA256: yamlSha,
+          VISOR_EXP0210_EXPECTED_RUNNER_SHA256: runnerSha,
+        },
+        encoding: 'utf8', timeout: 120_000,
+      });
+      expect(child.status).toBe(0);
+      const report = JSON.parse(fs.readFileSync(path.join(output, 'preflight.json'), 'utf8')) as AnyRecord;
+      expect(report).toEqual(expect.objectContaining({ status: 'passed', mode: 'preflight-only', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0 }));
+      expect(report.pins.probe_version).toBe(PINS.probe);
+      expect(report.source.file_count).toBe(13);
+      expect(report.source.baseline_manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(report.source.fix_manifest_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(report.source.baseline_manifest_sha256).not.toBe(report.source.fix_manifest_sha256);
+      expect(report.source.lineage).toEqual(expect.objectContaining({
+        baseline_head: expect.stringMatching(/^[0-9a-f]{40}$/),
+        fixed_head: expect.stringMatching(/^[0-9a-f]{40}$/),
+        baseline_root: expect.stringMatching(/^[0-9a-f]{40}$/),
+        fixed_root: expect.stringMatching(/^[0-9a-f]{40}$/),
+        fixed_descends_from_baseline: true,
+      }));
+      expect(report.source.lineage.baseline_root).toBe(report.source.lineage.fixed_root);
+      expect(report.source.lineage.fixed_head).not.toBe(report.source.lineage.baseline_head);
+      expect(fs.statSync(path.join(output, 'preflight.json')).mode & 0o777).toBe(0o600);
+    } finally { fs.rmSync(output, { recursive: true, force: true }); }
+  }, 30_000);
+
+  it('rejects mixed/unknown CLI modes before claiming an absent output', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-cli-'));
+    try {
+      const cases = [
+        ['--preflight-only', '--run-once'],
+        ['--preflight-only', '--child', 'pause', '--controller-pid', '1'],
+        ['--preflight-only', '--unsupported'],
+      ];
+      for (const flags of cases) {
+        const output = path.join(parent, `out-${cases.indexOf(flags)}`);
+        const child = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', LIVE, ...flags, '--output', output], {
+          cwd: ROOT, env: { ...process.env }, encoding: 'utf8', timeout: 30_000,
+        });
+        expect(child.status).toBe(1);
+        expect(child.stderr).toBe('EXP-0210 live runner failed\n');
+        expect(fs.existsSync(output)).toBe(false);
+      }
+    } finally { fs.rmSync(parent, { recursive: true, force: true }); }
+  });
+
+  it('dispatches root and held scopes, and fails closed for sibling or malformed scopes', () => {
+    const held = 'component-held';
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }] }, held)).toBe('dispatch');
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }, { key: held }] }, held)).toBe('dispatch');
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }, { key: 'component-sibling' }] }, held)).toBe('defer');
+    expect(resumeDispatchDecision({ scope: [] }, held)).toBe('defer');
+    expect(resumeDispatchDecision({}, held)).toBe('defer');
+    expect(resumeDispatchDecision({ scope: [{ key: 'jsonparser' }, { key: held }, { key: 'deeper' }] }, held)).toBe('defer');
+  });
+
+  it('replays the paused/resumed zero-model graph with one held reconciliation and selective continuation', async () => {
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-zero-model-'));
+    try {
+      const result = await runJsonparserStagedDemo(output);
+      expect(result.report).toEqual(expect.objectContaining({ model_calls: 0, network_calls: 0, current_reconciliation: true }));
+      expect(result.report.proof_commit).toBe(PINS.proof);
+      const config = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'effective-config.json'), 'utf8')) as AnyRecord;
+      const candidate = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'candidate.json'), 'utf8')) as AnyRecord;
+      const admission = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'admission.json'), 'utf8')) as AnyRecord;
+      const revalidation = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'revalidation.json'), 'utf8')) as AnyRecord;
+      const workItems = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'work-items.json'), 'utf8')) as AnyRecord;
+      const baselineManifest = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'baseline-source-manifest.json'), 'utf8')) as AnyRecord;
+      const fixManifest = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'fix-source-manifest.json'), 'utf8')) as AnyRecord;
+      expect(candidate.version).toBe('proof.component-catalog-candidate/v1');
+      expect(admission.Version).toBe('proof.role-result-candidate-admission/v2');
+      expect(admission.Status).toBe('ADMITTED');
+      expect(revalidation.version).toBe('proof.catalog-revalidation/v2');
+      expect(revalidation.receipt.decision).toBe('accepted');
+      expect(workItems.version).toBe('proof.onboarding-work-item-projection/v1');
+      expect(workItems.work_items).toHaveLength(result.report.component_count);
+      const parserEngineItems = workItems.work_items.filter((item: AnyRecord) => item.sorted_owned_paths.includes('parser.go') && item.sorted_owned_paths.includes('parser_test.go'));
+      expect(parserEngineItems).toHaveLength(1);
+      expect(parserEngineItems[0].authority).toEqual(expect.objectContaining({ component_id: parserEngineItems[0].component_id, work_item_digest: expect.stringMatching(/^sha256:/), subject: expect.any(Object) }));
+      expect(baselineManifest.file_count).toBe(13);
+      expect(fixManifest.file_count).toBe(13);
+      expect(baselineManifest.revision).toBe(PINS.baseline);
+      expect(fixManifest.revision).toBe(PINS.fix);
+      expect(Object.keys(baselineManifest.file_sha256)).toEqual(Object.keys(fixManifest.file_sha256));
+      expect(Object.keys(baselineManifest.file_sha256).filter(file => baselineManifest.file_sha256[file] !== fixManifest.file_sha256[file]).sort()).toEqual(['parser.go', 'parser_test.go']);
+      const pause = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'pause.checkpoint.json'), 'utf8')) as AnyRecord;
+      const resumed = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'continued.checkpoint.json'), 'utf8')) as AnyRecord;
+      const final = JSON.parse(fs.readFileSync(path.join(result.outputDirectory, 'replacement.checkpoint.json'), 'utf8')) as AnyRecord;
+      const resumedView = projection(resumed, config);
+      const finalView = projection(final, config);
+      const held = String(result.report.unaffected_component_id);
+      const changed = String(result.report.changed_component_id);
+      expect(attemptStages(resumed, resumedView, held).slice(-STAGES.length)).toEqual(STAGES);
+      expect(resumed.events.slice(0, pause.events.length)).toEqual(pause.events);
+      expect(resumed.events.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'project_reconcile' && event.scope?.length === 1)).toHaveLength(1);
+      expect(resumed.events.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'project_reconcile' && event.scope?.length === 1)).toHaveLength(1);
+      expect(Object.values(resumedView.generationsById).filter((value: any) => value.checkId === 'project_reconcile' && value.status === 'completed')).toHaveLength(1);
+      expect(activeClaims(resumedView, 'proof.project_reconciliation_receipt@1', 1)).toHaveLength(1);
+      expect(attemptStages(final, finalView, changed).slice(-STAGES.length)).toEqual(STAGES);
+      const continuationSuffix = final.events.slice(resumed.events.length).filter((event: any) => event.type === 'AttemptStarted');
+      expect(continuationSuffix).toHaveLength(STAGES.length + 1);
+      expect(continuationSuffix.every((event: any) => event.checkId === 'project_reconcile' || event.scope?.at(-1)?.key === changed)).toBe(true);
+      expect(final.events.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'project_reconcile' && event.scope?.length === 1)).toHaveLength(2);
+      expect(Object.values(finalView.generationsById).filter((value: any) => value.checkId === 'project_reconcile' && value.status === 'completed' && finalView.activeGenerationIdByNode[value.nodeInstanceId] === value.nodeGenerationId)).toHaveLength(1);
+      expect(activeClaims(finalView, 'proof.project_reconciliation_receipt@1', 1)).toHaveLength(1);
+      const componentIds = new Set((result.report.component_ids || []).map(String));
+      const resumedSiblingClaims = Object.values(resumedView.claimsById).filter((value: any) => componentIds.has(componentId(value)) && componentId(value) !== changed).sort((left: any, right: any) => left.claimId.localeCompare(right.claimId));
+      const finalSiblingClaims = Object.values(finalView.claimsById).filter((value: any) => componentIds.has(componentId(value)) && componentId(value) !== changed).sort((left: any, right: any) => left.claimId.localeCompare(right.claimId));
+      expect(finalSiblingClaims).toEqual(resumedSiblingClaims);
+    } finally { fs.rmSync(output, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it('projects only bounded child-failure fields and rejects malformed replacement boundaries', () => {
+    const error = Object.assign(new Error('raw secret message'), { code: 'INVALID_PROOF_CURRENT_APPLICATION', path: '/private/secret', prompt: 'secret prompt' });
+    const projected = projectChildFailure('replacement', 'continue_current_catalog', error);
+    expect(projected).toEqual({ schema: 'urn:reqproof:agent-governance:exp-0210-child-failure:v1', phase: 'replacement', boundary: 'continue_current_catalog', code: 'INVALID_PROOF_CURRENT_APPLICATION' });
+    expect(projectChildFailure('replacement', 'continue_current_catalog', new Error('managed execution failure')).boundary).toBe('continue_current_catalog');
+    expect(JSON.stringify(projected)).not.toMatch(/raw|secret|message|path|prompt/i);
+    expect(validateChildFailureProjection(projected)).toBe(true);
+    expect(validateChildFailureProjection({ ...projected, boundary: 'provider_engine' })).toBe(false);
+    expect(validateChildFailureProjection({ ...projected, code: 'provider_engine_failure' })).toBe(false);
+    expect(validateChildFailureProjection({ ...projected, message: 'secret' })).toBe(false);
+    expect(() => projectChildFailure('replacement', 'provider_engine', error)).toThrow('child failure boundary is invalid');
+    expect(projectChildFailure('replacement', 'owner_binding', Object.assign(new Error('opaque'), { code: 'not-allowlisted' })).code).toBe('UNCLASSIFIED_CHILD_FAILURE');
+  });
+
+  it('preserves a falsy primary through cleanup failure selection', () => {
+    const cleanupFailure = new Error('cleanup failure');
+    expect(selectPrimaryFailure(true, 0, 'continue_current_catalog', cleanupFailure, 'cleanup')).toEqual({ error: 0, boundary: 'continue_current_catalog' });
+    expect(selectPrimaryFailure(false, undefined, 'restore', cleanupFailure, 'cleanup')).toEqual({ error: cleanupFailure, boundary: 'cleanup' });
+  });
+
+  it('promotes an actual zero-model child failure into a mode-0600 terminal receipt', () => {
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-child-failure-'));
+    const privateDir = path.join(stage, '.private');
+    fs.mkdirSync(privateDir, { mode: 0o700 });
+    fs.writeFileSync(path.join(privateDir, 'run-input.json'), `${JSON.stringify({
+      configPath: path.join(stage, 'missing-config.json'),
+      proofBinary: path.join(stage, 'missing-proof'),
+      baselineWorkspace: stage,
+      fixedWorkspace: stage,
+    })}\n`, { encoding: 'utf8', mode: 0o600 });
+    try {
+      expect(() => childProcess('replacement', stage)).toThrow('live child replacement failed');
+      const privateFile = path.join(privateDir, 'child-failure.replacement.json');
+      const publicFile = path.join(stage, 'child-failure.json');
+      const privateProjection = JSON.parse(fs.readFileSync(privateFile, 'utf8')) as AnyRecord;
+      const publicProjection = JSON.parse(fs.readFileSync(publicFile, 'utf8')) as AnyRecord;
+      expect(privateProjection).toEqual({ schema: 'urn:reqproof:agent-governance:exp-0210-child-failure:v1', phase: 'replacement', boundary: 'restore', code: 'UNCLASSIFIED_CHILD_FAILURE' });
+      expect(publicProjection).toEqual(privateProjection);
+      expect(validateChildFailureProjection(privateProjection)).toBe(true);
+      expect(fs.statSync(privateFile).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(publicFile).mode & 0o777).toBe(0o600);
+      expect(JSON.stringify(publicProjection)).not.toMatch(/message|stderr|path|payload|prompt|raw|secret/i);
+
+      const publicBytes = fs.readFileSync(publicFile);
+      fs.writeFileSync(privateFile, `${JSON.stringify({ ...privateProjection, phase: 'pause' })}\n`, { encoding: 'utf8', mode: 0o600 });
+      expect(promoteChildFailure(stage, 'replacement')).toBeUndefined();
+      expect(fs.readFileSync(publicFile)).toEqual(publicBytes);
+      fs.writeFileSync(privateFile, `${JSON.stringify({ ...privateProjection, boundary: 'not-a-boundary', raw_output: 'secret' })}\n`, { encoding: 'utf8', mode: 0o600 });
+      expect(promoteChildFailure(stage, 'replacement')).toBeUndefined();
+      expect(fs.readFileSync(publicFile)).toEqual(publicBytes);
+
+      failureReceipt(stage, 'RUN_ONCE_FAILED');
+      const terminalFile = path.join(stage, 'run-once.failure.json');
+      const terminal = JSON.parse(fs.readFileSync(terminalFile, 'utf8')) as AnyRecord;
+      expect(terminal.child_failure).toEqual(publicProjection);
+      expect(fs.statSync(terminalFile).mode & 0o777).toBe(0o600);
+      expect(JSON.stringify(terminal)).not.toMatch(/message|stderr|path|payload|prompt|raw|secret/i);
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  }, 30_000);
+
+  it('keeps the graph/pins bounded and isolates live-child/private receipt paths', () => {
+    const source = fs.readFileSync(LIVE, 'utf8');
+    const config = yaml.load(fs.readFileSync(PROFILE, 'utf8')) as AnyRecord;
+    const project = config.subgraphs['discover-project'].checks;
+    const component = config.subgraphs['onboard-component'].checks;
+    expect(project.inspect.profile).toBe(PINS.profile);
+    expect(project.inspect.invocation.role_id).toBe('onboard');
+    expect(project.inspect.invocation.output_schema_id).toBe('proof.component-catalog-candidate@1');
+    expect(component.inspect.invocation.role_id).toBe('onboard');
+    expect(component.spec_review.invocation.role_id).toBe('spec-review');
+    expect(Object.keys(component)).toEqual(STAGES);
+    expect(component.spec_review.consumes.map((value: AnyRecord) => value.claim)).toEqual([
+      'component.work_item@1', 'proof.candidate@1', 'proof.admitted_receipt@1',
+    ]);
+    expect(component.verify.consumes.map((value: AnyRecord) => value.claim)).toEqual([
+      'proof.candidate@1', 'proof.admitted_receipt@1', 'proof.component_spec_review_candidate@1', 'proof.component_spec_review_admitted_receipt@1',
+    ]);
+    const catalogSchema = config.claim_types['proof.candidate@1'].schema.oneOf[0];
+    expect(catalogSchema.properties.components.minItems).toBe(2);
+    expect(catalogSchema.properties.components.maxItems).toBe(32);
+    expect(source).toContain(`const MAX_COMPONENTS = 4;`);
+    expect(source).toContain(`const MAX_CALLS = 11;`);
+    expect(source).toContain(`changed.length !== 1`);
+    expect(source).toContain(`ids.length > MAX_COMPONENTS`);
+    expect(source).toMatch(/function childEnvironment\(\).*API_KEY\|ACCESS_TOKEN\|SECRET\|PASSWORD\|EVALUATOR\|SUBJECT/);
+    expect(source).toMatch(/spawnSync\(process\.execPath,[\s\S]*--child[\s\S]*childEnvironment\(\)/);
+    expect(source).toContain("fs.openSync(file, 'wx', 0o600)");
+    expect(source).toContain('output directory already contains terminal evidence');
+    expect(source).toContain("'preflight.json'");
+    expect(source).toContain("'run-once.started.json'");
+    expect(source).toContain("'run-once.completed.json'");
+    expect(source).toContain("'run-once.failure.json'");
+    expect(source).not.toMatch(/createGovernedProofInspectProviderForFocusedTest|synthetic-fixture|deterministic-fake-probe/);
+  });
+
+  it('binds phase labels/budgets and fails truthfully before live work', () => {
+    const source = fs.readFileSync(LIVE, 'utf8');
+    for (const [name, value] of Object.entries({
+      VISOR_COMMIT: PINS.visor, BASELINE_COMMIT: PINS.baseline, FIX_COMMIT: PINS.fix,
+      PROOF_COMMIT: PINS.proof, PROBE_VERSION: PINS.probe, CODEX_VERSION: PINS.codex,
+    })) expect(source).toContain(`const ${name} = '${value}';`);
+    expect(source).toContain(`const FOCUSED_RETAINED_PROBE_VERSION = '${RETAINED_PROBE_VERSION}';`);
+    const upstream = source.slice(source.indexOf('function focusedUpstreamPreflightReceipt'), source.indexOf('function focusedAuthorizationReceipt'));
+    expect(upstream).toContain('receipt.pins?.probe_version !== FOCUSED_RETAINED_PROBE_VERSION');
+    expect(upstream).not.toContain('receipt.pins?.probe_version !== PROBE_VERSION');
+    expect(source).toContain('VISOR_EXP0210_EXPECTED_VISOR_HEAD');
+    expect(source).toContain('VISOR_EXP0210_EXPECTED_YAML_SHA256');
+    expect(source).toContain('VISOR_EXP0210_EXPECTED_RUNNER_SHA256');
+    expect(source).toMatch(/function frozenPins\(requireFrozen = false\)/);
+    expect(source).toContain("if (requireFrozen && (!expectedHead || !expectedYaml || !expectedRunner))");
+    expect(source).toContain("if (requireFrozen && !visorClean)");
+    expect(source).toContain("const repoStatus = command('git', ['status', '--porcelain=v1', '--untracked-files=all']);");
+    expect(source).toContain('const prepared = prepare(stage, true);');
+    expect(source).toContain("if (before.git_status.length !== 0) throw new Error('subject checkout is not clean for the frozen run');");
+    expect(source).toContain('login_verified: login.status === 0');
+    expect(source).not.toContain('login_status:');
+
+    const claim = source.slice(source.indexOf('function claimRunOutput'), source.indexOf('function publish'));
+    expect(claim).toContain('fs.mkdirSync(target, { mode: 0o700 });');
+    expect(claim).not.toContain('recursive: true');
+    expect(claim).toContain('run-once output is already claimed');
+    const runOnce = source.slice(source.indexOf('export function runJsonparserStagedLive'), source.indexOf('async function runChildMode'));
+    expect(runOnce.indexOf('const stage = claimRunOutput(outputDirectory);')).toBeLessThan(runOnce.indexOf('try {'));
+
+    const labels = ["childProcess('discovery'", "childProcess('pause'", "childProcess('resume'", "childProcess('replacement'"];
+    const positions = labels.map(label => runOnce.indexOf(label));
+    expect(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]))).toBe(true);
+    expect(source).toMatch(/const PAUSE_CALLS = 7;/);
+    expect(source).toMatch(/const RESUME_CALLS = 2;/);
+    expect(source).toMatch(/const REPLACEMENT_CALLS = 2;/);
+    expect(source).toContain('const DISCOVERY_TIMEOUT_MS = MANAGED_DEADLINE_MS + SUPERVISOR_CLEANUP_MS;');
+    expect(source).toContain('const COMPONENT_TIMEOUT_MS = 61 * 60 * 1000 + SUPERVISOR_CLEANUP_MS;');
+    expect(source).toContain('const timeout = mode === \'discovery\' ? DISCOVERY_TIMEOUT_MS : COMPONENT_TIMEOUT_MS;');
+    expect(source).toContain('withGovernedProbeRunnerBudget(pauseBudget');
+    expect(source).toContain('withGovernedProbeRunnerBudget(RESUME_CALLS');
+    expect(source).toContain('withGovernedProbeRunnerBudget(REPLACEMENT_CALLS');
+    expect(source).toContain("fs.cpSync(path.join(reuseGitFrom, '.git'), path.join(destination, '.git'), { recursive: true })");
+    expect(source).toContain("['merge-base', '--is-ancestor', baselineHead, fixedHead]");
+    expect(source).toContain("run('git', ['rev-parse', `${fixedHead}^`], fixedWorkspace)");
+    expect(source).toContain("canonicalJson(changed) !== canonicalJson(['parser.go', 'parser_test.go'])");
+
+    const failure = source.slice(source.indexOf('function failureReceipt'), source.indexOf('export function runPreflight'));
+    expect(failure).toContain("status: 'failed'");
+    expect(failure).toContain('terminal: true');
+    expect(failure).toContain('failure_code: code');
+    expect(failure).toContain('retries: 0, fallback: false');
+    expect(failure).not.toContain("status: 'passed'");
+    expect(source).toContain("let value: number | 'unknown' = 'unknown';");
+    expect(source).toContain("failureReceipt(stage, 'PREFLIGHT_FAILED', { governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, completed_phases: [], checkpoint_evidence: [] }, 'preflight-only');");
+    expect(source).toContain("const file = path.join(stage, 'failure.checkpoint.json');");
+    expect(source).toContain("latest_checkpoint: latestCheckpoint");
+    expect(source).toContain("replacementSuffix.length !== STAGES.length + 1");
+    expect(source).toContain("reconcileAttempts.length !== 1");
+    expect(source).toContain('resumeDispatchDecision(generation, selection.heldComponentId)');
+    expect(source).toContain("const CHILD_FAILURE_BOUNDARIES = new Set([");
+    expect(source).toContain("'continue_current_catalog', 'graph_dispatch', 'cleanup'");
+    expect(source).toContain("'result_write', 'result_read', 'child_process'");
+    expect(source).toContain('let hasPrimaryError = false;');
+    expect(source).toContain('if (!hasPrimaryError) throw error;');
+    expect(source).toContain('selectPrimaryFailure(hasPrimaryError, primaryError, failureBoundary, error, childBoundary)');
+    expect(source).toContain('promoteChildFailure(stage, mode)');
+    expect(source).toContain('projection.phase !== phase');
+    expect(source).toContain("child_failure: childFailure");
+  });
+
+  it('aggregates pause and resume fragments without losing either rejection', () => {
+    const pause = diagnosticEntry('pause', 'parser-core', 1);
+    const resume = diagnosticEntry('resume', 'byte-conversion-backend', 2);
+    const result = aggregateFailureDiagnostics([
+      { schema: DIAGNOSTICS_SCHEMA, failures: [pause] },
+      { schema: DIAGNOSTICS_SCHEMA, failures: [resume, pause, { ...resume, raw_output: 'secret' }] },
+      { schema: 'wrong-schema', failures: [diagnosticEntry('replacement', 'ignored', 3)] },
+    ]);
+    expect(result).toHaveLength(2);
+    expect(result.map(entry => [entry.phase, entry.component_id])).toEqual([
+      ['pause', 'parser-core'], ['resume', 'byte-conversion-backend'],
+    ]);
+  });
+
+  it('caps 33 concurrent rejections at 32 and writes bounded mode-0600 JSON', async () => {
+    class RejectingProbe {
+      answer(input: AnyRecord): Promise<never> { return Promise.reject(input.error); }
+    }
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-diagnostics-'));
+    fs.mkdirSync(path.join(stage, '.private'), { mode: 0o700 });
+    try {
+      const restore = installProbeFailureDiagnostics('pause', stage, RejectingProbe);
+      try {
+        const calls = Array.from({ length: 33 }, (_, index) => request(`component-${index}`, Object.assign(new Error('raw secret output'), { answerFailureStage: 'provider_engine', path: '/private/secret' })));
+        await Promise.all(calls.map(async input => expect(RejectingProbe.prototype.answer.call(new RejectingProbe(), input)).rejects.toBe(input.error)));
+      } finally { restore(); }
+      const file = path.join(stage, '.private', 'failure-diagnostics.pause.json');
+      const bytes = fs.readFileSync(file);
+      const body = JSON.parse(bytes.toString());
+      expect(body.failures).toHaveLength(32);
+      expect(new Set(body.failures.map((entry: AnyRecord) => entry.component_id))).toEqual(new Set(Array.from({ length: 32 }, (_, index) => `component-${index}`)));
+      expect(new Set(body.failures.map((entry: AnyRecord) => entry.binding_digest)).size).toBe(32);
+      expect(bytes.length).toBeLessThanOrEqual(32 * 1024);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+      expect(serializeFailureDiagnostics(body.failures)).toBe(bytes.toString());
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  });
+
+  it('keeps hostile paths, prompts, messages, and raw output outside the closed taxonomy', () => {
+    const taxonomyCases = [
+      ...['native_event_grammar', 'provider_engine', 'schema_result_validation', 'internal_contract', 'unknown'].map(answerFailureStage => ({ answerFailureStage })),
+      ...PROVIDER_ENGINE_FAILURE_BOUNDARIES.map(providerEngineFailureBoundary => ({ answerFailureStage: 'provider_engine', providerEngineFailureBoundary })),
+      ...['raw_item_predicate', 'live_envelope_session'].map(nativeEventFailureBoundary => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary })),
+      ...['session_sequence', 'envelope_shape', 'correlation', 'attestation'].map(nativeEventFailureSubreason => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason })),
+      ...['thread_id', 'response_id'].map(nativeEventFailureCorrelationOperand => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'correlation', nativeEventFailureCorrelationOperand })),
+      ...FAILURE_PREDICATES.map(nativeEventFailureAttestationPredicate => ({ answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate })),
+      ...SCHEMA_SUBREASONS.map(schemaResultValidationSubreason => ({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason })),
+      ...SCHEMA_KEYWORDS.map(schemaResultValidationKeyword => ({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword })),
+    ];
+    for (const input of taxonomyCases) {
+      const taxonomy = sanitizeProbeFailureTaxonomy(input);
+      expect(Object.isFrozen(taxonomy)).toBe(true);
+      expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
+    }
+    const hostile = Object.assign(new Error('secret raw answer'), {
+      answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword: 'type',
+      path: '/private/secret/path', prompt: 'secret prompt', raw_output: 'secret model output', token: 'secret token',
+    });
+    const taxonomy = sanitizeProbeFailureTaxonomy(hostile);
+    expect(taxonomy).toEqual({ answerFailureStage: 'schema_result_validation', schemaResultValidationSubreason: 'schema_mismatch', schemaResultValidationKeyword: 'type' });
+    expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
+    const invalid = { ...diagnosticEntry('pause', 'parser-core', 1), raw_output: 'secret model output' };
+    expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [invalid] }])).toEqual([]);
+  });
+
+  it('accepts every additive Probe taxonomy value and validates the deterministic closed projection', () => {
+    const accepted: Array<[string, AnyRecord, AnyRecord]> = [
+      ['internal_contract stage', { answerFailureStage: 'internal_contract' }, { answerFailureStage: 'internal_contract' }],
+      ...PROVIDER_ENGINE_FAILURE_BOUNDARIES.map(boundary => [
+        `provider_engine ${boundary} boundary`,
+        { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: boundary },
+        { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: boundary },
+      ] as [string, AnyRecord, AnyRecord]),
+      ...['invocation_attestation', 'native_capability_aggregate'].map(predicate => [
+        `native attestation ${predicate} predicate`,
+        { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: predicate },
+        { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: predicate },
+      ] as [string, AnyRecord, AnyRecord]),
+    ];
+    for (const [index, [, input, expected]] of accepted.entries()) {
+      const first = sanitizeProbeFailureTaxonomy(input);
+      const second = sanitizeProbeFailureTaxonomy({ ...input });
+      expect(first).toEqual(expected);
+      expect(second).toEqual(first);
+      expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+      expect(Object.isFrozen(first)).toBe(true);
+      expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [diagnosticEntryWithTaxonomy(first, index)] }])).toEqual([
+        expect.objectContaining({ taxonomy: expected }),
+      ]);
+    }
+  });
+
+  it('projects invalid and compound additive taxonomy values to bounded nulls without raw leakage', () => {
+    const cases: Array<[string, AnyRecord, AnyRecord]> = [
+      ['missing provider boundary', { answerFailureStage: 'provider_engine' }, { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null }],
+      ['unknown provider boundary', { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'dispatch_secret', raw_output: 'secret provider output' }, { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null }],
+      ['non-string provider boundary', { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: ['query'], prompt: 'secret prompt' }, { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null }],
+      ['internal contract ignores provider key', { answerFailureStage: 'internal_contract', providerEngineFailureBoundary: 'close', path: '/private/secret/path' }, { answerFailureStage: 'internal_contract' }],
+      ['native attestation rejects wrong predicate', { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'secret_predicate', token: 'secret token' }, { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: null }],
+      ['native attestation ignores provider key', { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'native_capability_aggregate', providerEngineFailureBoundary: 'query', raw_output: 'secret model output' }, { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'native_capability_aggregate' }],
+    ];
+    for (const [label, input, expected] of cases) {
+      const error = Object.assign(new Error(`raw ${label} secret`), input);
+      const taxonomy = sanitizeProbeFailureTaxonomy(error);
+      expect(taxonomy).toEqual(expected);
+      expect(JSON.stringify(taxonomy)).not.toMatch(/secret|private|prompt|output|token/i);
+    }
+  });
+
+  it('enforces stage/key coupling and rejects forged or compound diagnostic taxonomies', () => {
+    const valid = [
+      { answerFailureStage: 'internal_contract' },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: null },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'acquire' },
+      { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'invocation_attestation' },
+    ];
+    for (const [index, taxonomy] of valid.entries()) {
+      expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [diagnosticEntryWithTaxonomy(taxonomy, index)] }])).toHaveLength(1);
+    }
+    const rejected = [
+      { answerFailureStage: 'provider_engine' },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'dispatch' },
+      { answerFailureStage: 'provider_engine', providerEngineFailureBoundary: 'query', raw_output: 'secret' },
+      { answerFailureStage: 'internal_contract', providerEngineFailureBoundary: null },
+      { answerFailureStage: 'unknown', providerEngineFailureBoundary: 'close' },
+      { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'live_envelope_session', nativeEventFailureSubreason: 'attestation', nativeEventFailureAttestationPredicate: 'native_capability_aggregate', providerEngineFailureBoundary: 'query' },
+      { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'raw_item_predicate', nativeEventFailureAttestationPredicate: 'invocation_attestation' },
+    ];
+    for (const [index, taxonomy] of rejected.entries()) {
+      expect(aggregateFailureDiagnostics([{ schema: DIAGNOSTICS_SCHEMA, failures: [diagnosticEntryWithTaxonomy(taxonomy, index + valid.length)] }])).toEqual([]);
+    }
+  });
+
+  it('restores the original wrapper and preserves rejected error identity', async () => {
+    class RejectingProbe {
+      answer(input: AnyRecord): Promise<never> { return Promise.reject(input.error); }
+    }
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-restore-'));
+    fs.mkdirSync(path.join(stage, '.private'), { mode: 0o700 });
+    const original = Object.getOwnPropertyDescriptor(RejectingProbe.prototype, 'answer');
+    const error = Object.assign(new Error('opaque secret'), { answerFailureStage: 'native_event_grammar', nativeEventFailureBoundary: 'raw_item_predicate' });
+    const input = request('parser-core', error);
+    try {
+      const restore = installProbeFailureDiagnostics('resume', stage, RejectingProbe);
+      await expect(new RejectingProbe().answer(input)).rejects.toBe(error);
+      restore(); restore();
+      expect(Object.getOwnPropertyDescriptor(RejectingProbe.prototype, 'answer')).toEqual(original);
+      await expect(new RejectingProbe().answer(input)).rejects.toBe(error);
+      const fragment = JSON.parse(fs.readFileSync(path.join(stage, '.private', 'failure-diagnostics.resume.json'), 'utf8'));
+      expect(fragment.failures).toHaveLength(1);
+      expect(fragment.failures[0]).toEqual(expect.objectContaining({ phase: 'resume', check_id: 'spec_review', component_id: 'parser-core' }));
+    } finally { fs.rmSync(stage, { recursive: true, force: true }); }
+  });
+
+  it('rechecks the retained checkpoint oracle when the private artifact is available', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT)) return;
+    const bytes = fs.readFileSync(RETAINED_CHECKPOINT);
+    const checkpoint = JSON.parse(bytes.toString()) as AnyRecord;
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe('1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249');
+    expect(checkpoint.graphSemanticDigest).toBe('306b074949f3975a5396dfffe74fc335790f7c6247f9b6c0ea90a5555d8fb212');
+    expect(checkpoint.events).toHaveLength(125);
+    const componentEvents = checkpoint.events.filter((event: AnyRecord) => event.scope?.length === 2 && event.scope.at(-1)?.key);
+    expect(new Set(componentEvents.map((event: AnyRecord) => event.scope.at(-1).key))).toEqual(new Set(['parser-core', 'unicode-escape-codec', 'byte-conversion-backend']));
+    const governedStarts = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptStarted' && ['inspect', 'spec_review'].includes(event.checkId));
+    expect(governedStarts).toHaveLength(7);
+    expect(governedStarts.reduce((counts: AnyRecord, event: AnyRecord) => { counts[event.checkId] = (counts[event.checkId] || 0) + 1; return counts; }, {})).toEqual({ inspect: 4, spec_review: 3 });
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'ClaimPublished' && event.proofCandidateEvidence)).toHaveLength(4);
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review')).toHaveLength(3);
+    const parserFailure = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope.at(-1)?.key === 'parser-core');
+    expect(parserFailure).toHaveLength(1);
+    expect(checkpoint.events.some((event: AnyRecord) => ['spec_review_admit', 'project_reconcile', 'reconcile'].includes(event.checkId))).toBe(false);
+    expect(checkpoint.events.some((event: AnyRecord) => String(event.claim || '').startsWith('proof.component_spec_review_'))).toBe(false);
+    for (const event of checkpoint.events.filter((value: AnyRecord) => value.type === 'ClaimPublished')) {
+      expect(event.payloadFingerprint).toBe(sha256Canonical(event.payload));
+      if (event.proofCandidateEvidence) expect(event.proofCandidateEvidenceFingerprint).toBe(sha256Canonical(event.proofCandidateEvidence));
+    }
+    const parserCandidate = checkpoint.events.find((event: AnyRecord) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope.at(-1)?.key === 'parser-core');
+    const parserAdmission = checkpoint.events.find((event: AnyRecord) => event.type === 'ClaimPublished' && event.claim === 'proof.admitted_receipt@1' && event.scope.at(-1)?.key === 'parser-core');
+    expect(parserCandidate).toEqual(expect.objectContaining({ producerCheckId: 'inspect', wireMode: 'generic' }));
+    expect(parserAdmission).toEqual(expect.objectContaining({ producerCheckId: 'proof_admit', parentClaimIds: [parserCandidate.claimId] }));
+    expect(parserCandidate.sessionId).toBe(parserAdmission.sessionId);
+    expect(parserCandidate.scope).toEqual(parserAdmission.scope);
+    expect(parserCandidate.proofCandidateEvidence.probe.attestation.evidence.eventCount).toBe(1);
+    expect(parserCandidate.proofCandidateEvidence.probe.resultIdentity.resultDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('hydrates the retained role and rejects forged target/digest before provider construction', () => {
+    const source = fs.readFileSync(LIVE, 'utf8');
+    const config = yaml.load(fs.readFileSync(PROFILE, 'utf8')) as AnyRecord;
+    expect(compileClaimPlan(config).expansionPlan.graphSemanticDigest).toBe('c7730a647d15ad36c3378990041d7c4641da1782b05f026f0c4d3c18d78d10b1');
+    expect(source).toContain('function resolveHistoricalProjectRole');
+    expect(source).toContain('const historical = evidence.role.invocation;');
+    expect(source).toContain('if (resolved.invocation_digest !== evidence.role.invocationDigest)');
+    expect(source).toContain('check.invocation = JSON.parse(JSON.stringify(historical));');
+    const derive = source.slice(source.indexOf('function deriveFocusedSpecReview'), source.indexOf('function safeFocusedError'));
+    expect(derive).toContain("value.scope?.at(-1)?.key === 'parser-core'");
+    expect(derive).toContain('if (failed.length !== 1)');
+    const child = source.slice(source.indexOf('async function runFocusedSpecReviewChild'), source.indexOf('async function runChildMode'));
+    expect(child.indexOf('const derivation = deriveFocusedSpecReview')).toBeLessThan(child.indexOf('createProofAdmissionCapability'));
+    if (!fs.existsSync(RETAINED_CHECKPOINT)) return;
+    const checkpoint = JSON.parse(fs.readFileSync(RETAINED_CHECKPOINT, 'utf8')) as AnyRecord;
+    const failed = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core');
+    expect(failed).toHaveLength(1);
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key !== 'parser-core')).toHaveLength(2);
+    const duplicate = [...checkpoint.events, failed[0]];
+    expect(duplicate.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core')).toHaveLength(2);
+    const forged = checkpoint.events.map((event: AnyRecord) => event === failed[0] ? { ...event, scope: [{ ...event.scope.at(-1), key: 'forged-target' }] } : event);
+    expect(forged.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core')).toHaveLength(0);
+    const candidate = checkpoint.events.find((event: AnyRecord) => event.type === 'ClaimPublished' && event.claim === 'proof.candidate@1' && event.scope?.at(-1)?.key === 'parser-core') as AnyRecord;
+    const altered = JSON.parse(JSON.stringify(candidate.proofCandidateEvidence));
+    altered.role.invocationDigest = `sha256:${'0'.repeat(64)}`;
+    expect(() => validateProofCandidateEvidence(altered)).toThrow();
+  });
+
+  it('keeps retained preflight, lifecycle, ledger, and stdio evidence zero-call and inspectable', () => {
+    const source = fs.readFileSync(LIVE, 'utf8');
+    const focused = source.slice(source.indexOf('function focusedDiagnosticPreflightReport'), source.indexOf('function runFocusedDiagnosticPreflight'));
+    expect(focused).toContain("schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1'");
+    expect(focused).toContain('governed_calls: 0, model_calls: 0');
+    expect(focused).toContain('derivation: focusedDerivationSummary(derivation)');
+    const summary = source.slice(source.indexOf('function focusedDerivationSummary'), source.indexOf('function focusedDiagnosticPreflightReport'));
+    expect(summary).toContain('historical_binding');
+    expect(summary).toContain('historical_termination');
+    const child = source.slice(source.indexOf('async function runFocusedSpecReviewChild'), source.indexOf('async function runChildMode'));
+    expect(child).toContain('timeline');
+    expect(child).toContain('call_ledger');
+    expect(child).toContain('checkpoint_sha256_before');
+    expect(child).toContain('checkpoint_sha256_after');
+    expect(source).toContain('function focusedChildStream');
+    if (!fs.existsSync(RETAINED_CHECKPOINT)) return;
+    const checkpoint = JSON.parse(fs.readFileSync(RETAINED_CHECKPOINT, 'utf8')) as AnyRecord;
+    const preflightPath = '/tmp/visor-exp0210-live-luna.fom5fO/output/preflight.json';
+    if (fs.existsSync(preflightPath)) {
+      const preflight = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as AnyRecord;
+      expect(preflight).toEqual(expect.objectContaining({ status: 'passed', mode: 'preflight-only', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+      expect(preflight.graph).toEqual(expect.objectContaining({ semantic_digest: checkpoint.graphSemanticDigest, compiled: true, dynamic_expansion: true, staged_profile: true }));
+      expect(preflight.contract.stages).toEqual(STAGES);
+      expect(preflight.evidence).toContain('no Probe-agent initialization');
+    }
+    const parser = checkpoint.events.filter((event: AnyRecord) => event.type === 'AttemptFailed' && event.checkId === 'spec_review' && event.scope?.at(-1)?.key === 'parser-core');
+    const binding = parser[0]?.nodeGenerationId;
+    expect(binding).toBeTruthy();
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'ManagedRunAcquired' && event.binding?.nodeGenerationId === binding)).toHaveLength(1);
+    expect(checkpoint.events.filter((event: AnyRecord) => event.type === 'ManagedRunTerminated' && event.binding?.nodeGenerationId === binding)).toHaveLength(1);
+  });
+
+  it('runs focused preflight in a clean subprocess and binds the generated report to retained history', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
+    const run = focusedSubprocess('valid');
+    try {
+      expect(run.result.status).toBe(0);
+      expect(run.result.stderr).toBe('');
+      const retained = JSON.parse(fs.readFileSync(RETAINED_PREFLIGHT, 'utf8')) as AnyRecord;
+      expect(retained.pins?.probe_version).toBe(RETAINED_PROBE_VERSION);
+      const report = JSON.parse(fs.readFileSync(path.join(run.output, 'focused-diagnostic-preflight.json'), 'utf8')) as AnyRecord;
+      expect(report.pins?.probe_version).toBe(PINS.probe);
+      expect(report).toEqual(expect.objectContaining({ schema: 'urn:reqproof:agent-governance:exp-0210-focused-diagnostic-preflight:v1', status: 'passed', mode: 'focused-diagnostic-preflight', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+      expect(report.derivation).toEqual(expect.objectContaining({ checkpoint_sha256: 'sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249', graph_semantic_digest: '306b074949f3975a5396dfffe74fc335790f7c6247f9b6c0ea90a5555d8fb212', component_id: 'parser-core', aliases: ['admission', 'candidate', 'component'] }));
+      expect(report.derivation.historical_termination).toEqual({ controller_decision: 'failed', cleanup_status: 'clean', failure_code: 'MANAGED_OUTCOME_FAILED' });
+      expect(report.preflight_receipt).toEqual(expect.objectContaining({ sha256: 'sha256:d46cd19eb7b7cc64165288caee36498591860da1d636a6f9bd2393ca07bb6507', graph_semantic_digest: report.derivation.graph_semantic_digest }));
+      const source = fs.readFileSync(run.runner, 'utf8');
+      const child = source.slice(source.indexOf('async function runFocusedSpecReviewChild'), source.indexOf('async function runChildMode'));
+      expect(child.indexOf('consumeFocusedCapability')).toBeLessThan(child.indexOf('createProofAdmissionCapability'));
+      const directDir = path.join(run.root, 'direct-child'); fs.mkdirSync(path.join(directDir, '.private'), { recursive: true, mode: 0o700 });
+      const direct = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', run.runner, '--child', 'focused-spec-review', '--output', directDir, '--controller-pid', String(process.pid)], { cwd: run.root, encoding: 'utf8', timeout: 30_000 });
+      expect(direct.status).toBe(1); expect(direct.stderr).toBe('EXP-0210 focused child failed\n');
+      expect(fs.existsSync(path.join(directDir, '.private', 'focused-spec-review.result.json'))).toBe(false);
+    } finally { fs.rmSync(run.root, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it('rejects mutated retained checkpoint and preflight digests before any provider path', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
+    for (const kind of ['checkpoint', 'preflight'] as const) {
+      const run = focusedSubprocess(kind);
+      try {
+        expect(run.result.status).toBe(1); expect(run.result.stderr).toBe('EXP-0210 live runner failed\n');
+        const failure = JSON.parse(fs.readFileSync(path.join(run.output, 'run-once.failure.json'), 'utf8')) as AnyRecord;
+        expect(failure).toEqual(expect.objectContaining({ status: 'failed', terminal: true, mode: 'preflight-only', failure_code: 'FOCUSED_PREFLIGHT_FAILED', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+        expect(fs.existsSync(path.join(run.output, 'focused-diagnostic-preflight.json'))).toBe(false);
+      } finally { fs.rmSync(run.root, { recursive: true, force: true }); }
+    }
+  }, 120_000);
+
+  it('localizes prompt size with one preview and no model boundary', () => {
+    if (!fs.existsSync(RETAINED_CHECKPOINT) || !fs.existsSync(RETAINED_PREFLIGHT)) return;
+    const run = focusedSubprocess('boundary');
+    try {
+      expect(run.result.status).toBe(0);
+      expect(run.result.stderr).toBe('');
+      const report = JSON.parse(fs.readFileSync(path.join(run.output, 'focused-boundary-report.json'), 'utf8')) as AnyRecord;
+      expect(report).toEqual(expect.objectContaining({ schema: 'urn:reqproof:agent-governance:exp-0210-focused-boundary:v1', status: 'passed', mode: 'focused-diagnostic-boundary', governed_calls: 0, model_calls: 0, network_dispatches_requested: 0, retries: 0, fallback: false }));
+      expect(report.outcome).toEqual(expect.objectContaining({ status: 'preview_captured', preview: expect.objectContaining({ source: 'probe-host-tools-call', tool: 'codex', promptBytes: expect.any(Number), promptDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) }), prompt_size: expect.objectContaining({ thresholdBytes: 131072, comparison: expect.stringMatching(/^(within|exceeds)$/), exceeds: expect.any(Boolean) }) }));
+      expect(report.lifecycle).toEqual(expect.objectContaining({ close_status: 'clean', preview_calls: 1, initialize_hits: 0, answer_guard_hits: 0, forbidden_process_hits: 0, forbidden_network_hits: 0, checkpoint_sha256_before: `sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249`, checkpoint_sha256_after: `sha256:1c7a3a8ac34ad7059f2ff6343bd7f3038edf201c6936ee0177766a84c07fd249`, checkpoint_unchanged: true }));
+      expect(report.counters).toEqual({ preview: 1, initialize: 0, answer: 0, forbidden_process: 0, forbidden_network: 0 });
+      const events = report.timeline.map((event: AnyRecord) => `${event.event}:${event.status}`);
+      expect(events).toEqual([
+        'derivation:validated', 'proof_resolution:started', 'provider_acquisition:started',
+        'provider_acquisition:handle_created', 'managed_run:started', 'runner_construction:observed',
+        'proof_resolution:completed', 'provider_acquisition:completed', 'runner_preview:entered',
+        'probe_preview:entered', 'probe_preview:completed', 'runner_preview:completed', 'provider_outcome:failed', 'runner_close:entered',
+        'runner_close:completed', 'provider_close:clean',
+      ]);
+      expect(events.filter(value => value === 'proof_resolution:started')).toHaveLength(1);
+      expect(events).not.toContain('probe_answer_governed:entered');
+      expect(events).not.toContain('probe_answer_governed:completed');
+      expect(events).not.toContain('runner_answer:entered');
+      expect(events).not.toContain('runner_answer:completed');
+      expect(events).not.toContain('probe_initialize:entered');
+      expect(events).not.toContain('probe_initialize:completed');
+      expect(events).not.toContain('fetch_guard:blocked');
+      expect(events).not.toContain('network_guard:blocked');
+      expect(events).not.toContain('process_guard:blocked');
+      expect(fs.existsSync(path.join(run.output, '.private'))).toBe(false);
+      for (const file of fs.readdirSync(run.output)) expect(fs.statSync(path.join(run.output, file)).mode & 0o777).toBe(0o600);
+      expect(JSON.stringify(report)).not.toMatch(/secret|private|raw output|output_schema|instructions/i);
+    } finally { fs.rmSync(run.output, { recursive: true, force: true }); fs.rmSync(run.root, { recursive: true, force: true }); }
+  }, 120_000);
+
+  it('derives deterministic bounded replacement hunks and rejects tamper/oversize', () => {
+    const fixture = changeHunkFixture();
+    try {
+      const first = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, fixture.context);
+      const second = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, fixture.context);
+      expect(first).toEqual(second);
+      expect(first.changed_paths).toEqual(['parser.go', 'parser_test.go']);
+      expect(first.hunks.length).toBeGreaterThanOrEqual(2);
+      const { context_digest: digest, ...body } = first;
+      expect(digest).toBe(changedHunkContextDigest(body));
+      expect(first.reinspection_context_digest).toBe(governedProofComponentReinspectionContextDigest(fixture.context));
+      expect(() => validateChangedHunkContext({ ...first, hunks: first.hunks.map(hunk => ({ ...hunk, lines: ['+tampered'] })) })).toThrow(/digest/i);
+      expect(() => validateChangedHunkContext({ ...first, reinspection_context_digest: `sha256:${'9'.repeat(64)}` })).toThrow(/digest/i);
+      expect(() => validateChangedHunkContext({ ...first, changed_paths: ['parser.go', 'wrong.go'] })).toThrow(/digest|path/i);
+      expect(() => validateChangedHunkContext({ ...first, fixed_revision: 'a'.repeat(40) })).toThrow(/digest|revision/i);
+      const oversized = { ...first, hunks: Array.from({ length: 65 }, () => first.hunks[0]), context_digest: '' } as any;
+      oversized.context_digest = changedHunkContextDigest(oversized);
+      expect(() => validateChangedHunkContext(oversized)).toThrow(/bound/i);
+      const deletionOnly = { ...first, hunks: [{ ...first.hunks[0], old_count: 1, new_count: 0, lines: ['-deleted'] }], context_digest: '' } as any;
+      deletionOnly.context_digest = changedHunkContextDigest(deletionOnly);
+      expect(() => validateChangedHunkContext(deletionOnly)).toThrow(/deletion-only/i);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('gates generic replacement coordinates and requires every implementation/test hunk citation', () => {
+    const fixture = changeHunkFixture();
+    try {
+      const context = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, fixture.context);
+      const candidate = genericReplacementCandidate();
+      validateReplacementCandidate(candidate, context, fixture.fixed, ['parser.go', 'parser_test.go', 'go.sum']);
+      validateActiveComponentCandidateCoordinates({ claimsById: {
+        workItem: { claim: 'component.work_item@1', active: true, scope: [{ key: 'jsonparser' }, { key: 'parser-core' }], payload: { sorted_dependency_closure: ['parser.go', 'parser_test.go'] } },
+        inspect: { claim: 'proof.candidate@1', active: true, scope: [{ key: 'jsonparser' }, { key: 'parser-core' }], payload: candidate },
+        specReview: { claim: 'proof.component_spec_review_candidate@1', active: true, scope: [{ key: 'jsonparser' }, { key: 'parser-core' }], payload: candidate },
+      } }, fixture.fixed);
+      expect(() => validateReplacementSemanticCoverage({ ...candidate, requirements: [{ coordinates: [{ path: 'parser.go', line: 2 }] }], interfaces: [], findings: [] }, context)).toThrow(/hunk/i);
+      expect(() => validateSourceCoordinates({ ...candidate, reviewedFiles: [...candidate.reviewedFiles, { path: 'go.sum', coordinates: [{ path: 'go.sum', line: 1 }] }] }, ['parser.go', 'parser_test.go', 'go.sum'], { 'parser.go': 2, 'parser_test.go': 2, 'go.sum': 0 })).toThrow(/range|empty|unauthorized/i);
+      expect(() => validateSourceCoordinates({ ...candidate, requirements: [{ coordinates: [{ path: 'parser.go', line: 99 }] }] }, ['parser.go', 'parser_test.go'], { 'parser.go': 2, 'parser_test.go': 2 })).toThrow(/range|out/i);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('rejects changed paths without one bounded text modification hunk', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-exp0210-mode-only-'));
+    const baseline = path.join(root, 'baseline'); const fixed = path.join(root, 'fixed');
+    try {
+      fs.mkdirSync(baseline); git(baseline, ['init', '-q']); git(baseline, ['config', 'user.email', 'test@example.invalid']); git(baseline, ['config', 'user.name', 'test']);
+      fs.writeFileSync(path.join(baseline, 'parser.go'), 'package p\n'); git(baseline, ['add', '.']); git(baseline, ['commit', '-qm', 'baseline']);
+      fs.cpSync(baseline, fixed, { recursive: true }); fs.writeFileSync(path.join(fixed, 'added.go'), 'package p\n'); git(fixed, ['add', '.']); git(fixed, ['commit', '-qm', 'added']);
+      const lineage = { baseline_head: git(baseline, ['rev-parse', 'HEAD']), fixed_head: git(fixed, ['rev-parse', 'HEAD']), baseline_root: git(baseline, ['rev-list', '--max-parents=0', 'HEAD']), fixed_root: git(fixed, ['rev-list', '--max-parents=0', 'HEAD']), fixed_descends_from_baseline: true };
+      expect(() => deriveChangedHunkContext(baseline, fixed, lineage, { ...reinspectionContext(), changed_paths: ['added.go'] })).toThrow(/not one text modification/i);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('injects hunk context only for replacement requests at the demo runner boundary', () => {
+    const fixture = changeHunkFixture();
+    const original = (request: AnyRecord) => request;
+    const captured: AnyRecord[] = [];
+    const stub = (request: AnyRecord) => { captured.push(request); return request; };
+    const runnerModule = { createGovernedProbeRunner: stub };
+    try {
+      const restore = installReplacementChangeHunkPrompt(fixtureInput(fixture), runnerModule);
+      const wrapped = runnerModule.createGovernedProbeRunner({ message: 'review', reinspectionContext: fixture.context });
+      const component = runnerModule.createGovernedProbeRunner({ message: 'review', invocation: { subject: { kind: 'component' } } });
+      const plain = runnerModule.createGovernedProbeRunner({ message: 'review', invocation: { subject: { kind: 'project' } } });
+      restore();
+      expect((wrapped as AnyRecord).message).toContain('Bound changed-hunk context');
+      expect((wrapped as AnyRecord).message).toContain('Changed-hunk context digest');
+      expect((component as AnyRecord).message).toContain('authorized non-empty file');
+      expect((plain as AnyRecord).message).toBe('review');
+      expect(captured).toHaveLength(3);
+      expect(captured[0].message).toContain('Bound changed-hunk context');
+      expect(captured[1].message).toContain('authorized non-empty file');
+      expect(captured[2].message).toBe('review');
+    } finally { runnerModule.createGovernedProbeRunner = original; fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('routes replacement hunks through the real bootstrapped provider factory', () => {
+    const fixture = changeHunkFixture();
+    let restore: (() => void) | undefined;
+    try {
+      const provider = new GovernedProofInspectCheckProvider();
+      restore = installReplacementChangeHunkPrompt(fixtureInput(fixture), provider as AnyRecord);
+      const factory = (provider as AnyRecord).factory as (request: AnyRecord) => AnyRecord;
+      const worker = factory({ message: 'review', instructions: 'review', invocation: {}, invocationDigest: 'a'.repeat(64), resultSchema: '{}', executionConfigDigest: 'b'.repeat(64), binding: {}, workingDirectory: fixture.fixed, reinspectionContext: fixture.context });
+      expect(worker.constructor.name).toBe('GovernedProbeAgentRunner');
+      expect((worker as AnyRecord).userMessage).toContain('Bound changed-hunk context');
+      const componentWorker = factory({ message: 'review', instructions: 'review', invocation: { subject: { kind: 'component' } }, invocationDigest: 'a'.repeat(64), resultSchema: '{}', executionConfigDigest: 'b'.repeat(64), binding: {}, workingDirectory: fixture.fixed });
+      expect((componentWorker as AnyRecord).userMessage).toContain('authorized non-empty file');
+    } finally { restore?.(); fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('rejects the retained replacement candidate offline while a generic hunk-complete candidate passes', () => {
+    const retained = retainedReplacementCandidate();
+    const fixture = realChangedHunkFixture(retained.coordinatePaths);
+    try {
+      const context = deriveChangedHunkContext(fixture.baseline, fixture.fixed, fixture.lineage, reinspectionContext());
+      validateSourceCoordinates(retained.candidate, retained.coordinatePaths, lineCounts(fixture.fixed, retained.coordinatePaths));
+      expect(() => validateReplacementSemanticCoverage(retained.candidate, context)).toThrow(/changed hunk is not cited/);
+      expect(() => validateReplacementCandidate(genericReplacementCandidateForHunks(context, false), context, fixture.fixed, retained.coordinatePaths)).toThrow(/changed hunk is not cited/);
+      validateReplacementCandidate(genericReplacementCandidateForHunks(context), context, fixture.fixed, retained.coordinatePaths);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+});

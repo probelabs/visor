@@ -1,0 +1,90 @@
+# Small product-native Proof graph. Keep this file readable and commented.
+version: "1.0"
+max_parallelism: 1
+workspace:
+  # The demo graph runs against the checked-out component; no workspace copy.
+  enabled: false
+memory:
+  storage: memory
+  # CLI assigns a fresh namespace; authored values are never reused.
+checks:
+  discover:
+    type: memory
+    operation: set
+    key: catalog
+    value:
+      components:
+        - id: A
+          path: component-a
+    emits:
+      - claim: component.catalog@1
+        from: output
+    expand:
+      claim: component.catalog@1
+      template: one-component
+      items_pointer: /components
+      key_pointer: /id
+      item_claim: component.item@1
+claim_types:
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, path]
+            properties:
+              id: { type: string }
+              path: { type: string }
+  component.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, path]
+      properties:
+        id: { type: string }
+        path: { type: string }
+  proof.candidate@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [accept] }
+  proof.admitted_receipt@1:
+    schema: { type: object }
+subgraphs:
+  one-component:
+    input: { name: component, claim: component.item@1 }
+    checks:
+      inspect:
+        type: governed-proof-inspect
+        message: "Execute the bound Proof role and return only the required JSON."
+        profile: luna-xhigh-readonly-v1
+        ai:
+          timeout: 600000
+        invocation:
+          role_id: spec-review
+          stance: owner
+          subject:
+            kind: requirement
+            id: SYS-REQ-001
+            fingerprint: sha256:2d734abe14567b9dc1ebc65b47ccb01493c31f14bdf97ca1a336d66cda0f1170
+          output_schema_id: proof.findings/v1
+          output_schema: eyJ0eXBlIjoib2JqZWN0IiwiYWRkaXRpb25hbFByb3BlcnRpZXMiOmZhbHNlLCJyZXF1aXJlZCI6WyJkZWNpc2lvbiJdLCJwcm9wZXJ0aWVzIjp7ImRlY2lzaW9uIjp7InR5cGUiOiJzdHJpbmciLCJlbnVtIjpbImFjY2VwdCJdfX19
+        consumes: [{ claim: component.item@1, as: component }]
+        emits: [{ claim: proof.candidate@1, from: output }]
+      proof_admit:
+        type: proof-admit
+        consumes: [{ claim: proof.candidate@1, as: candidate }]
+        emits: [{ claim: proof.admitted_receipt@1, from: output }]
+      verify:
+        type: noop
+        consumes:
+          - { claim: proof.candidate@1, as: candidate }
+          - { claim: proof.admitted_receipt@1, as: receipt }

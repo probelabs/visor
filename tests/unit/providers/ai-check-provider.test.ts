@@ -3,8 +3,19 @@ import { AICheckProvider } from '../../../src/providers/ai-check-provider';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { CheckProviderConfig } from '../../../src/providers/check-provider.interface';
 import * as AIReviewService from '../../../src/ai-review-service';
+import { logger } from '../../../src/logger';
 
 jest.mock('../../../src/ai-review-service');
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(child);
+    }
+  }
+  return value;
+}
 
 describe('AICheckProvider', () => {
   let provider: AICheckProvider;
@@ -133,6 +144,39 @@ describe('AICheckProvider', () => {
         undefined,
         undefined,
         undefined
+      );
+    });
+
+    it('passes journal generation identity only for generated diagnostic artifacts', async () => {
+      const mockReview = {
+        overallScore: 85,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+        issues: [],
+      };
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(() => mockService);
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'inspect generated output',
+        checkName: 'same-check',
+      };
+
+      await provider.execute(mockPRInfo, config, undefined, {
+        nodeGenerationId: 'generation-a',
+      } as any);
+
+      expect(mockService.executeReview).toHaveBeenCalledWith(
+        mockPRInfo,
+        'inspect generated output',
+        undefined,
+        'same-check',
+        undefined,
+        'generation-a'
       );
     });
 
@@ -436,6 +480,92 @@ describe('AICheckProvider', () => {
           timeout: 30000,
         },
       });
+    });
+
+    it('clones frozen static bash policy before merging dynamic allow and deny entries', async () => {
+      const mockReview = { overallScore: 90, totalIssues: 0, criticalIssues: 0, comments: [] };
+      const mockService = { executeReview: jest.fn().mockResolvedValue(mockReview) };
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const previousProofBin = process.env.PROOF_BIN;
+      process.env.PROOF_BIN = '/tmp/proof-binary';
+      const config = deepFreeze({
+        type: 'ai',
+        prompt: 'inspect native output',
+        ai: {
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+          allowBash: true,
+          bashConfig: {
+            allow: ['static:command'],
+            deny: ['static:deny'],
+            timeout: 30000,
+          },
+        },
+        ai_bash_config_js: "({ allow: [env.PROOF_BIN + ':*'], deny: ['dynamic:deny'] })",
+      }) as CheckProviderConfig;
+      const dependencyResults = new Map<string, any>([
+        ['discover', { output: { ready: true } }],
+      ]);
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+      try {
+        await provider.execute(mockPRInfo, config, dependencyResults);
+      } finally {
+        if (previousProofBin === undefined) delete process.env.PROOF_BIN;
+        else process.env.PROOF_BIN = previousProofBin;
+        errorSpy.mockRestore();
+      }
+
+      expect(capturedConfig.bashConfig).toEqual({
+        allow: ['static:command', '/tmp/proof-binary:*'],
+        deny: ['static:deny', 'dynamic:deny'],
+        timeout: 30000,
+      });
+      expect((config as any).ai.bashConfig).toEqual({
+        allow: ['static:command'],
+        deny: ['static:deny'],
+        timeout: 30000,
+      });
+      expect(Object.isFrozen((config as any).ai.bashConfig)).toBe(true);
+      expect(Object.isFrozen((config as any).ai.bashConfig.allow)).toBe(true);
+      expect(Object.isFrozen((config as any).ai.bashConfig.deny)).toBe(true);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(mockService.executeReview).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['runtime failure', 'const value = null; return value.missing;'],
+      ['non-object result', '"invalid"'],
+      ['invalid allow field', '({ allow: ["valid", 42] })'],
+    ])('rejects dynamic bash policy %s before constructing the review service', async (_label, expression) => {
+      const serviceConstructor = jest.fn();
+      (AIReviewService as any).AIReviewService = serviceConstructor;
+      const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => {});
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'inspect native output',
+        ai: {
+          provider: 'codex',
+          model: 'gpt-5.6-luna',
+        },
+        ai_bash_config_js: expression,
+      };
+
+      try {
+        await expect(
+          provider.execute(mockPRInfo, config, new Map([['discover', { output: {} }]]))
+        ).rejects.toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
+      } finally {
+        errorSpy.mockRestore();
+      }
+
+      expect(serviceConstructor).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     it('derives allowedFolders and path from workspace when present on parent context', async () => {
@@ -829,31 +959,34 @@ describe('AICheckProvider', () => {
   describe('evaluateBashConfigJs', () => {
     const getEvaluator = (p: AICheckProvider) => (p as any).evaluateBashConfigJs.bind(p);
 
-    it('should return empty object when expression returns non-object', () => {
+    it('should reject when expression returns non-object', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator('"not an object"', mockPRInfo, new Map(), {
-        type: 'ai',
-        prompt: 'test',
-      });
-      expect(result).toEqual({});
+      expect(() =>
+        evaluator('"not an object"', mockPRInfo, new Map(), {
+          type: 'ai',
+          prompt: 'test',
+        })
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
     });
 
-    it('should return empty object when expression returns array', () => {
+    it('should reject when expression returns array', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator('["git:*"]', mockPRInfo, new Map(), {
-        type: 'ai',
-        prompt: 'test',
-      });
-      expect(result).toEqual({});
+      expect(() =>
+        evaluator('["git:*"]', mockPRInfo, new Map(), {
+          type: 'ai',
+          prompt: 'test',
+        })
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
     });
 
-    it('should return empty object when expression returns null', () => {
+    it('should reject when expression returns null', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator('null', mockPRInfo, new Map(), {
-        type: 'ai',
-        prompt: 'test',
-      });
-      expect(result).toEqual({});
+      expect(() =>
+        evaluator('null', mockPRInfo, new Map(), {
+          type: 'ai',
+          prompt: 'test',
+        })
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
     });
 
     it('should return allow array from expression', () => {
@@ -890,28 +1023,28 @@ describe('AICheckProvider', () => {
       });
     });
 
-    it('should ignore allow if not a string array', () => {
+    it('should reject allow if not a string array', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator(
-        '({ allow: [1, 2, 3], deny: ["valid:cmd"] })',
-        mockPRInfo,
-        new Map(),
-        { type: 'ai', prompt: 'test' }
-      );
-      expect(result).toEqual({ deny: ['valid:cmd'] });
-      expect(result.allow).toBeUndefined();
+      expect(() =>
+        evaluator(
+          '({ allow: [1, 2, 3], deny: ["valid:cmd"] })',
+          mockPRInfo,
+          new Map(),
+          { type: 'ai', prompt: 'test' }
+        )
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
     });
 
-    it('should ignore deny if not a string array', () => {
+    it('should reject deny if not a string array', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator(
-        '({ allow: ["valid:cmd"], deny: "not-an-array" })',
-        mockPRInfo,
-        new Map(),
-        { type: 'ai', prompt: 'test' }
-      );
-      expect(result).toEqual({ allow: ['valid:cmd'] });
-      expect(result.deny).toBeUndefined();
+      expect(() =>
+        evaluator(
+          '({ allow: ["valid:cmd"], deny: "not-an-array" })',
+          mockPRInfo,
+          new Map(),
+          { type: 'ai', prompt: 'test' }
+        )
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
     });
 
     it('should access outputs from dependency results', () => {
@@ -986,22 +1119,24 @@ describe('AICheckProvider', () => {
       expect(result).toEqual({ allow: ['npm:test'] });
     });
 
-    it('should return empty object on syntax error', () => {
+    it('should reject on syntax error', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator('this is not valid javascript {{}}', mockPRInfo, new Map(), {
-        type: 'ai',
-        prompt: 'test',
-      });
-      expect(result).toEqual({});
+      expect(() =>
+        evaluator('this is not valid javascript {{}}', mockPRInfo, new Map(), {
+          type: 'ai',
+          prompt: 'test',
+        })
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js');
     });
 
-    it('should return empty object on runtime error', () => {
+    it('should reject on runtime error', () => {
       const evaluator = getEvaluator(provider);
-      const result = evaluator('throw new Error("runtime error")', mockPRInfo, new Map(), {
-        type: 'ai',
-        prompt: 'test',
-      });
-      expect(result).toEqual({});
+      expect(() =>
+        evaluator('const value = null; return value.missing;', mockPRInfo, new Map(), {
+          type: 'ai',
+          prompt: 'test',
+        })
+      ).toThrow('[AICheckProvider] Failed to evaluate ai_bash_config_js:');
     });
 
     it('should return empty object for empty allow/deny', () => {
