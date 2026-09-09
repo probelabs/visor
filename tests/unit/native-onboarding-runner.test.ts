@@ -477,14 +477,14 @@ describe('native onboarding runner boundaries', () => {
     fs.writeFileSync(proof, [
       '#!/bin/sh',
       'if [ "$1" = req ] && [ "$2" = list ]; then',
-      '  printf \'%s\\n\' \'[{"id":"SW-REQ-A","component":"component-a","file_path":"specs/software/requirements/A.req.yaml"},{"id":"INT-REQ-B","component":"component-b","file_path":"specs/integration/requirements/B.req.yaml"}]\'',
+      '  printf \'%s\\n\' \'[{"id":"SW-REQ-260909-31QD","component":"component-a","file_path":"specs/software/requirements/A.req.yaml"},{"id":"INT-REQ-B","component":"component-b","file_path":"specs/integration/requirements/B.req.yaml"}]\'',
       '  exit 0',
       'fi',
       'if [ "$1" = req ] && [ "$2" = show ]; then',
-      '  if [ "$3" = SW-REQ-A ]; then printf \'%s\\n\' \'{"requirement":{"id":"SW-REQ-A","component":"component-a","_computed":{"file_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"file_path":"specs/software/requirements/A.req.yaml"}\'; else printf \'%s\\n\' \'{"requirement":{"id":"INT-REQ-B","component":"component-b","_computed":{"file_hash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},"file_path":"specs/integration/requirements/B.req.yaml"}\'; fi',
+      '  if [ "$3" = SW-REQ-260909-31QD ]; then printf \'%s\\n\' \'{"requirement":{"id":"SW-REQ-260909-31QD","component":"component-a","_computed":{"file_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"file_path":"specs/software/requirements/A.req.yaml"}\'; else printf \'%s\\n\' \'{"requirement":{"id":"INT-REQ-B","component":"component-b","_computed":{"file_hash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},"file_path":"specs/integration/requirements/B.req.yaml"}\'; fi',
       '  exit 0',
       'fi',
-      'printf \'%s\\n\' \'{"event":"check_done","stage":"spec","check":"l2_software_complete","status":"error","details":["SW-REQ-A has no satisfies link","INT-REQ-B has no satisfies link"]}\'',
+      'printf \'%s\\n\' \'{"event":"check_done","stage":"spec","check":"l2_software_complete","status":"error","details":["SW-REQ-260909-31QD has no satisfies link to SYS-REQ; link it to the system requirement it implements: proof req link add SW-REQ-260909-31QD satisfies <SYS-REQ-ID>","INT-REQ-B has no satisfies link"]}\'',
       'exit 1',
       '',
     ].join('\n'), {encoding: 'utf8', mode: 0o700});
@@ -501,7 +501,7 @@ describe('native onboarding runner boundaries', () => {
       ],
     });
     expect(result.requirementIdsByComponent).toEqual({
-      'component-a': ['SW-REQ-A'],
+      'component-a': ['SW-REQ-260909-31QD'],
       'component-b': ['INT-REQ-B'],
     });
   });
@@ -527,6 +527,7 @@ describe('native onboarding runner boundaries', () => {
 
   it.each([
     ['malformed detail', ['l2 finding has no native requirement identity'], /exactly one SW\/INT requirement ID/],
+    ['multiple requirement identities in one detail', ['SW-REQ-A and INT-REQ-B are both named in this malformed detail'], /exactly one SW\/INT requirement ID/],
     ['duplicate requirement identity', ['SW-REQ-A is missing a link', 'SW-REQ-A is missing another link'], /duplicate requirement IDs/],
     ['unresolved requirement identity', ['SW-REQ-MISSING is missing a link'], /exact current row/],
   ])('rejects a skeleton audit with a %s', async (_label, details, expected) => {

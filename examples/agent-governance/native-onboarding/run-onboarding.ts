@@ -2737,7 +2737,13 @@ export async function deriveCurrentChecklistSkeletonAffectedBatches(
     throw new Error('current Proof l2_software_complete did not return exactly one matching spec check_done receipt');
   }
   const details = (done[0].details === undefined ? [] : done[0].details) as string[];
-  const requirementMatches = details.map(detail => detail.match(/\b(?:SW|INT)-REQ-[A-Z0-9-]+\b/g) ?? []);
+  // Proof's native diagnostics may mention the same requirement in both the
+  // human-readable explanation and the proposed CLI repair.  Treat those
+  // repeated mentions as one identity for this detail; cross-detail repeats
+  // remain invalid below so each native finding still maps to one row.
+  const requirementMatches = details.map(detail => [
+    ...new Set(detail.match(/\b(?:SW|INT)-REQ-[A-Z0-9-]+\b/g) ?? []),
+  ]);
   if (requirementMatches.some(matches => matches.length !== 1)) {
     throw new Error('current Proof l2_software_complete detail must contain exactly one SW/INT requirement ID');
   }
