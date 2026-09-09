@@ -181,28 +181,114 @@ function shippedPreparedConfig(): any {
   return materializeResultSchemas(raw);
 }
 
-function checklistReadbackProofFixture(root: string, step: any): {proof: string; output: string; calls: string} {
+function checklistReadbackProofFixture(
+  root: string,
+  step: any,
+  options: {packageKey?: string; readbackPackageKey?: string} = {},
+): {proof: string; output: string; calls: string} {
   const proof = path.join(root, 'checklist-proof');
   const output = path.join(root, 'checklist-output');
   const calls = path.join(root, 'checklist-calls.log');
-  const snapshot = path.join(root, 'checklist-show.json');
   fs.mkdirSync(output, {recursive: true});
-  fs.writeFileSync(snapshot, JSON.stringify({
+  const before = {
     schema_version: 'proof.checklist.show.v1',
     checklist: 'onboard_v1',
     active: true,
     new_project: true,
     steps: [step],
-  }), 'utf8');
-  const shellQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
-  fs.writeFileSync(proof, [
-    '#!/bin/sh',
-    `printf '%s\\n' "$*" >> ${shellQuote(calls)}`,
-    `cat ${shellQuote(snapshot)}`,
-    '',
-  ].join('\n'), {encoding: 'utf8', mode: 0o700});
+  };
+  const afterStep = options.packageKey === undefined ? step : {
+    ...step,
+    eligible: false,
+    stored_status: 'confirmed',
+    effective_status: 'confirmed',
+    stamp: 'confirm+verify',
+    verify_result: {passed: true, exit_code: 0, at: '2026-09-09T00:00:02Z'},
+    scope: 'package',
+    scope_key: options.readbackPackageKey ?? options.packageKey,
+    check_results: (Array.isArray(step.required_checks) ? step.required_checks : []).map((id: string) => ({
+      id, status: 'pass', at: '2026-09-09T00:00:02Z',
+    })),
+  };
+  const after = {...before, steps: [afterStep]};
+  const beforePath = path.join(root, 'checklist-before.json');
+  const afterPath = path.join(root, 'checklist-after.json');
+  const state = path.join(root, 'checklist-state.json');
+  fs.writeFileSync(beforePath, JSON.stringify(before), 'utf8');
+  fs.writeFileSync(afterPath, JSON.stringify(after), 'utf8');
+  const packageKey = JSON.stringify(options.packageKey ?? null);
+  fs.writeFileSync(proof, `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, args.join(' ') + '\\n');
+if (args[0] === 'checklist' && args[1] === 'confirm') {
+  const expectedPackageKey = ${packageKey};
+  if (expectedPackageKey !== null) {
+    const index = args.indexOf('--package');
+    if (index < 0 || args[index + 1] !== expectedPackageKey) {
+      process.stderr.write('step "traces-light" is package-scoped; pass package key\\n');
+      process.exit(1);
+    }
+  }
+  fs.writeFileSync(${JSON.stringify(state)}, JSON.stringify({status: 'confirmed'}));
+}
+process.stdout.write(fs.readFileSync(fs.existsSync(${JSON.stringify(state)}) ? ${JSON.stringify(afterPath)} : ${JSON.stringify(beforePath)}, 'utf8'));
+`, {encoding: 'utf8', mode: 0o700});
   fs.chmodSync(proof, 0o700);
   return {proof, output, calls};
+}
+
+function continuationPackageScopeCatalog(projectId = 'fixture-project'): Record<string, unknown> {
+  const subjectFingerprint = `sha256:${'c'.repeat(64)}`;
+  const workItem = {
+    version: 'reqproof.onboarding-component-work-item/v1',
+    project_id: projectId,
+    component_id: 'component-a',
+    sorted_owned_paths: ['source.go'],
+    sorted_dependency_closure: ['source.go'],
+    proof_path_mapping: {},
+    proof_input_state: [],
+    proof_component_subject: {component_id: 'component-a', fingerprint: `sha256:${'a'.repeat(64)}`},
+    baseline_commit: 'a'.repeat(40),
+  };
+  const receipt = {
+    inventory_claim_id: `sha256:${'1'.repeat(64)}`,
+    catalog_claim_id: `sha256:${'2'.repeat(64)}`,
+    receipt_id: `sha256:${'3'.repeat(64)}`,
+    admission_candidate_id: `sha256:${'4'.repeat(64)}`,
+    admission_receipt_id: `sha256:${'5'.repeat(64)}`,
+    component_authorities: [{
+      component_id: 'component-a',
+      work_item_digest: `sha256:${'6'.repeat(64)}`,
+      subject: workItem.proof_component_subject,
+    }],
+  };
+  const inventory = {
+    authority: {project_id: projectId, subject_fingerprint: subjectFingerprint},
+  };
+  return {
+    authority: {
+      version: 'native.checklist-continuation-authority/v1',
+      project_id: projectId,
+      subject_fingerprint: subjectFingerprint,
+      current_inventory: inventory,
+      current_revalidation: {receipt},
+      current_work_items: [workItem],
+      current_receipt_identities: receipt,
+      retained: {
+        checkpoint_sha256: `sha256:${'7'.repeat(64)}`,
+        prefix_checkpoint_sha256: `sha256:${'8'.repeat(64)}`,
+        checkpoint_session_id: 'fixture-checkpoint',
+        prefix_session_id: 'fixture-prefix',
+        checkpoint_graph_semantic_digest: 'fixture-checkpoint-graph',
+        prefix_graph_semantic_digest: 'fixture-prefix-graph',
+        checkpoint_path: '/__visor_test__/retained/checkpoint.json',
+        prefix_checkpoint_path: '/__visor_test__/retained/prefix-checkpoint.json',
+      },
+      affected_component_ids: ['component-a'],
+      reused_component_ids: [],
+    },
+  };
 }
 
 describe('native onboarding runner boundaries', () => {
@@ -408,12 +494,248 @@ describe('native onboarding runner boundaries', () => {
       const calls = fs.readFileSync(fixture.calls, 'utf8');
       expect(calls).toContain('checklist show');
       expect(calls).not.toContain('checklist confirm');
+      expect(calls).not.toContain('--package');
       expect(calls.trim().split('\n')).toHaveLength(1);
     } finally {
       if (priorProof === undefined) delete process.env.PROOF_BIN;
       else process.env.PROOF_BIN = priorProof;
       if (priorOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
       else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = priorOutput;
+    }
+  });
+
+  it('refuses a package confirmation without the validated opaque project key and preserves it on readback', () => {
+    const fixture = checklistReadbackProofFixture(root, {
+      step_id: 'traces-light',
+      scope: 'package',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      stamp: 'confirm+verify',
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+      check_results: [],
+    }, {packageKey: 'fixture-project'});
+    const previousProof = process.env.PROOF_BIN;
+    const previousOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+    const previousCatalog = process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+    process.env.PROOF_BIN = fixture.proof;
+    process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+    process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify(continuationPackageScopeCatalog());
+    try {
+      expect(() => execFileSync(fixture.proof, ['checklist', 'confirm'], {encoding: 'utf8'}))
+        .toThrow(/package-scoped; pass package key/);
+      fs.writeFileSync(fixture.calls, '', 'utf8');
+      const readback = executeJournaledChecklistStep('traces-light', 'resume package', true);
+      expect(readback.steps).toEqual([expect.objectContaining({
+        scope: 'package',
+        scope_key: 'fixture-project',
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+      })]);
+      const calls = fs.readFileSync(fixture.calls, 'utf8').trim().split('\n');
+      expect(calls).toHaveLength(3);
+      expect(calls[0]).toBe('checklist show --format json');
+      expect(calls[1]).toContain('--package fixture-project');
+      expect(calls[2]).toBe('checklist show --checklist onboard_v1 --format json');
+      fs.writeFileSync(fixture.calls, '', 'utf8');
+      const replay = executeJournaledChecklistStep('traces-light', 'resume package', true);
+      expect(replay.steps).toEqual([expect.objectContaining({
+        scope: 'package',
+        scope_key: 'fixture-project',
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+      })]);
+      expect(fs.readFileSync(fixture.calls, 'utf8').trim().split('\n')).toEqual([
+        'checklist show --format json',
+      ]);
+    } finally {
+      if (previousProof === undefined) delete process.env.PROOF_BIN;
+      else process.env.PROOF_BIN = previousProof;
+      if (previousOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+      else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = previousOutput;
+      if (previousCatalog === undefined) delete process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+      else process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = previousCatalog;
+    }
+  });
+
+  it('rejects a tampered package scope key after native confirmation', () => {
+    const fixture = checklistReadbackProofFixture(root, {
+      step_id: 'traces-light',
+      scope: 'package',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      stamp: 'confirm+verify',
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+      check_results: [],
+    }, {packageKey: 'fixture-project', readbackPackageKey: 'tampered-project'});
+    const previousProof = process.env.PROOF_BIN;
+    const previousOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+    const previousCatalog = process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+    process.env.PROOF_BIN = fixture.proof;
+    process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+    process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify(continuationPackageScopeCatalog());
+    try {
+      expect(() => executeJournaledChecklistStep('traces-light', 'resume package', true))
+        .toThrow(/omitted package scope key/);
+      expect(fs.readFileSync(fixture.calls, 'utf8')).toContain('--package fixture-project');
+    } finally {
+      if (previousProof === undefined) delete process.env.PROOF_BIN;
+      else process.env.PROOF_BIN = previousProof;
+      if (previousOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+      else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = previousOutput;
+      if (previousCatalog === undefined) delete process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+      else process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = previousCatalog;
+    }
+  });
+
+  it('surfaces native package-boundary stderr and exit status from a failed confirmation', () => {
+    const fixture = checklistReadbackProofFixture(root, {
+      step_id: 'traces-light',
+      scope: 'package',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      stamp: 'confirm+verify',
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+      check_results: [],
+    }, {packageKey: 'proof-project'});
+    const previousProof = process.env.PROOF_BIN;
+    const previousOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+    const previousCatalog = process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+    process.env.PROOF_BIN = fixture.proof;
+    process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+    process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify(continuationPackageScopeCatalog());
+    try {
+      expect(() => executeJournaledChecklistStep('traces-light', 'resume package', true))
+        .toThrow(/\(exit 1\): step "traces-light" is package-scoped; pass package key/);
+    } finally {
+      if (previousProof === undefined) delete process.env.PROOF_BIN;
+      else process.env.PROOF_BIN = previousProof;
+      if (previousOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+      else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = previousOutput;
+      if (previousCatalog === undefined) delete process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+      else process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = previousCatalog;
+    }
+  });
+
+  it('surfaces a native traces-light confirmation failure after an exact resume dispatch', async () => {
+    const config = await loadConfig(buildChecklistContinuationConfig() as any, {strict: true});
+    const before = {
+      sessionId: 'continuation-session',
+      graphSemanticDigest: 'continuation-graph',
+      events: [{type: 'NodeGenerationActivated', nodeGenerationId: 'promote-generation'}],
+    } as any;
+    const after = {
+      ...before,
+      events: [
+        ...before.events,
+        {type: 'AttemptStarted', checkId: 'checklist-traces-light', attemptId: 'traces-attempt'},
+        {type: 'CheckScheduled', checkId: 'checklist-traces-light'},
+        {type: 'AttemptFailed', checkId: 'checklist-traces-light', attemptId: 'traces-attempt'},
+      ],
+    } as any;
+    const validate = jest.spyOn(ExecutionJournal, 'validateGraphCheckpointIntegrity')
+      .mockImplementation(value => value as any);
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockImplementation((_plan, checkpoint: any) => {
+      const failed = checkpoint.events.some((event: any) => event.type === 'AttemptFailed');
+      return {
+        getInstanceProjection: () => ({
+          activeGenerationIdByNode: {promote: 'promote-generation', traces: 'traces-generation'},
+          generationsById: {
+            promote: {
+              nodeGenerationId: 'promote-generation', checkId: 'promote-native-component',
+              status: 'completed', scope: [{kind: 'keyed', key: 'component-a'}],
+            },
+            traces: {
+              nodeGenerationId: 'traces-generation', checkId: 'checklist-traces-light',
+              status: failed ? 'failed' : 'ready', scope: [],
+            },
+          },
+        }),
+      } as any;
+    });
+    const resumeGraphCheckpoint = jest.fn().mockResolvedValue({
+      checkpoint: after,
+      result: {
+        statistics: {
+          failedExecutions: 1,
+          checks: [{
+            checkName: 'checklist-traces-light',
+            failedRuns: 1,
+            errorMessage: 'Proof checklist confirmation failed for traces-light',
+          }],
+        },
+      },
+    });
+    try {
+      await expect(executeChecklistContinuationEngine(
+        {resumeGraphCheckpoint} as any,
+        config,
+        2_000,
+        ['component-a'],
+        before,
+      )).rejects.toThrow('Proof checklist confirmation failed for traces-light');
+      expect(resumeGraphCheckpoint).toHaveBeenCalledTimes(1);
+    } finally {
+      validate.mockRestore();
+      restore.mockRestore();
+    }
+  });
+
+  it('keeps the foreign-work resume error for an additional non-traces attempt', async () => {
+    const config = await loadConfig(buildChecklistContinuationConfig() as any, {strict: true});
+    const before = {
+      sessionId: 'continuation-session',
+      graphSemanticDigest: 'continuation-graph',
+      events: [{type: 'NodeGenerationActivated', nodeGenerationId: 'promote-generation'}],
+    } as any;
+    const after = {
+      ...before,
+      events: [
+        ...before.events,
+        {type: 'AttemptStarted', checkId: 'checklist-traces-light', attemptId: 'traces-attempt'},
+        {type: 'AttemptStarted', checkId: 'author-native-component', attemptId: 'author-attempt'},
+        {type: 'CheckScheduled', checkId: 'checklist-traces-light'},
+        {type: 'AttemptFailed', checkId: 'checklist-traces-light', attemptId: 'traces-attempt'},
+      ],
+    } as any;
+    const validate = jest.spyOn(ExecutionJournal, 'validateGraphCheckpointIntegrity')
+      .mockImplementation(value => value as any);
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockImplementation((_plan, checkpoint: any) => ({
+      getInstanceProjection: () => ({
+        activeGenerationIdByNode: {promote: 'promote-generation', traces: 'traces-generation'},
+        generationsById: {
+          promote: {
+            nodeGenerationId: 'promote-generation', checkId: 'promote-native-component',
+            status: 'completed', scope: [{kind: 'keyed', key: 'component-a'}],
+          },
+          traces: {
+            nodeGenerationId: 'traces-generation', checkId: 'checklist-traces-light',
+            status: checkpoint.events.some((event: any) => event.type === 'AttemptFailed') ? 'failed' : 'ready', scope: [],
+          },
+        },
+      }),
+    } as any));
+    const resumeGraphCheckpoint = jest.fn().mockResolvedValue({
+      checkpoint: after,
+      result: {statistics: {failedExecutions: 1, checks: [{checkName: 'checklist-traces-light', errorMessage: 'native failure'}]}},
+    });
+    try {
+      await expect(executeChecklistContinuationEngine(
+        {resumeGraphCheckpoint} as any,
+        config,
+        2_000,
+        ['component-a'],
+        before,
+      )).rejects.toThrow('checklist continuation resume dispatched work other than traces-light confirmation');
+      expect(resumeGraphCheckpoint).toHaveBeenCalledTimes(1);
+    } finally {
+      validate.mockRestore();
+      restore.mockRestore();
     }
   });
 

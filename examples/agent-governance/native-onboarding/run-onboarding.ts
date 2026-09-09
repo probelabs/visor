@@ -1231,6 +1231,31 @@ function validateContinuationAuthority(value: unknown, label = 'continuation aut
   return value;
 }
 
+/**
+ * Resolve the opaque Proof package key selected by Visor's whole-project
+ * continuation policy.  The environment is only a transport for an already
+ * materialized native catalog; its authority envelope must be validated before
+ * any scope key is accepted.
+ */
+function checklistContinuationPackageKey(): string {
+  const rawCatalog = process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG;
+  if (typeof rawCatalog !== 'string' || rawCatalog.trim().length === 0) {
+    throw new Error('checklist continuation package scope requires the native catalog authority');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawCatalog);
+  } catch {
+    throw new Error('checklist continuation package scope catalog is not valid JSON');
+  }
+  if (!isRecord(parsed)) throw new Error('checklist continuation package scope catalog is not an object');
+  const authority = validateContinuationAuthority(
+    parsed.authority,
+    'checklist continuation package scope authority',
+  );
+  return authority.project_id as string;
+}
+
 function retainedProofClaimView(
   claim: InstanceClaimProjection,
   label: string,
@@ -2190,8 +2215,7 @@ function checklistContinuationPauseIsValid(
   }
 }
 
-export function checklistContinuationResumeDeltaIsValid(
-  config: VisorConfig,
+export function checklistContinuationResumeDispatchIsValid(
   before: GraphJournalCheckpointV1,
   after: GraphJournalCheckpointV1,
 ): boolean {
@@ -2207,11 +2231,19 @@ export function checklistContinuationResumeDeltaIsValid(
     const started = suffix.filter(event => event.type === 'AttemptStarted');
     return started.length === 1 && started[0].checkId === 'checklist-traces-light' &&
       !suffix.some(event => event.type === 'AttemptStarted' &&
-        (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component')) &&
-      checklistContinuationResumeCompleted(config, validatedAfter);
+        (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component'));
   } catch {
     return false;
   }
+}
+
+export function checklistContinuationResumeDeltaIsValid(
+  config: VisorConfig,
+  before: GraphJournalCheckpointV1,
+  after: GraphJournalCheckpointV1,
+): boolean {
+  return checklistContinuationResumeDispatchIsValid(before, after) &&
+    checklistContinuationResumeCompleted(config, after);
 }
 
 /** Accept an already-completed frontier as an idempotent readback. */
@@ -2247,6 +2279,16 @@ function checklistContinuationResumeCompleted(config: VisorConfig, checkpoint: G
   }
 }
 
+function checklistContinuationResumeFailureMessage(result: unknown): string {
+  const statistics = isRecord(result) && isRecord(result.statistics) ? result.statistics : undefined;
+  const checks = statistics && Array.isArray(statistics.checks) ? statistics.checks : [];
+  const traces = checks.find(value => isRecord(value) && value.checkName === 'checklist-traces-light');
+  if (isRecord(traces) && typeof traces.errorMessage === 'string' && traces.errorMessage.trim().length > 0) {
+    return traces.errorMessage;
+  }
+  return 'checklist continuation traces-light confirmation failed';
+}
+
 /** Execute the fresh continuation graph, pausing before traces-light, or
  * resume that graph with confirmation/readback only. */
 export async function executeChecklistContinuationEngine(
@@ -2280,8 +2322,11 @@ export async function executeChecklistContinuationEngine(
       maxParallelism: config.max_parallelism,
       failFast: false,
     });
-    if (!checklistContinuationResumeDeltaIsValid(config, checkpoint, resumed.checkpoint)) {
+    if (!checklistContinuationResumeDispatchIsValid(checkpoint, resumed.checkpoint)) {
       throw new Error('checklist continuation resume dispatched work other than traces-light confirmation');
+    }
+    if (!checklistContinuationResumeCompleted(config, resumed.checkpoint)) {
+      throw new Error(checklistContinuationResumeFailureMessage(resumed.result));
     }
     return {result: resumed.result, checkpoint: resumed.checkpoint, paused: false};
   }
@@ -2707,7 +2752,13 @@ export function executeJournaledChecklistStep(stepId: string, note: string, veri
     return value as Json;
   };
   const mutation = (args: string[]): void => {
-    if (run('confirm', args).status !== 0) throw new Error(`Proof checklist confirmation failed for ${stepId}`);
+    const result = run('confirm', args);
+    if (result.status !== 0) {
+      const detail = [result.stderr, result.stdout].filter(value => value.trim().length > 0).join('\n').trim();
+      throw new Error(detail.length > 0
+        ? `Proof checklist confirmation failed for ${stepId} (exit ${result.status}): ${detail}`
+        : `Proof checklist confirmation failed for ${stepId} (exit ${result.status})`);
+    }
   };
   if (stepId === 'init') {
     if (run('init', ['init', '--name', 'jsonparser', '--template', 'go-package', '--scope', '.', '--strict']).status !== 0) {
@@ -2720,13 +2771,29 @@ export function executeJournaledChecklistStep(stepId: string, note: string, veri
     throw new Error('Proof checklist is not the active new-project campaign');
   }
   const row = Array.isArray(before.steps) ? before.steps.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value as Json).step_id === stepId) as Json | undefined : undefined;
-  if (stepId === 'skeleton' && row && hasExactChecklistConfirmationEvidence(row)) return before;
+  if (row && hasExactChecklistConfirmationEvidence(row)) {
+    if (stepId === 'skeleton') return before;
+    if (row.scope === 'package') {
+      const packageKey = checklistContinuationPackageKey();
+      if (row.scope_key !== packageKey) {
+        throw new Error(`Proof checklist confirmation readback omitted package scope key for ${stepId}`);
+      }
+      return before;
+    }
+  }
   if (!row || row.applicable !== true || row.eligible !== true || row.effective_status !== 'pending') {
     throw new Error(`Proof checklist step ${stepId} is not currently eligible`);
   }
-  mutation(['checklist', 'confirm', '--checklist', checklist, '--id', stepId, '--by', 'visor-checklist-driven-run', '--note', note, ...(verify ? ['--verify'] : [])]);
+  const packageKey = row.scope === 'package' ? checklistContinuationPackageKey() : undefined;
+  mutation(['checklist', 'confirm', '--checklist', checklist, '--id', stepId, '--by', 'visor-checklist-driven-run', '--note', note, ...(verify ? ['--verify'] : []), ...(packageKey ? ['--package', packageKey] : [])]);
   const after = json('after-show', ['checklist', 'show', '--checklist', checklist, '--format', 'json']);
   const confirmed = Array.isArray(after.steps) ? after.steps.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value as Json).step_id === stepId) as Json | undefined : undefined;
+  if (row.scope !== undefined && (!confirmed || confirmed.scope !== row.scope)) {
+    throw new Error(`Proof checklist confirmation readback changed scope for ${stepId}`);
+  }
+  if (packageKey !== undefined && (!confirmed || confirmed.scope_key !== packageKey)) {
+    throw new Error(`Proof checklist confirmation readback omitted package scope key for ${stepId}`);
+  }
   const required = confirmed && Array.isArray(confirmed.required_checks) ? confirmed.required_checks : [];
   const results = confirmed && Array.isArray(confirmed.check_results) ? confirmed.check_results : [];
   const ids = new Set<string>();

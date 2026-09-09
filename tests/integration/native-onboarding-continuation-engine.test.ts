@@ -85,7 +85,7 @@ function continuationAuthority(
       component_id: workItem.component_id,
       work_item_digest: `sha256:${String(index + 6).repeat(64)}`,
       subject: workItem.proof_component_subject,
-    })),
+    })).sort((left, right) => left.component_id.localeCompare(right.component_id)),
   };
   return {
     version: 'native.checklist-continuation-authority/v1',
@@ -154,7 +154,7 @@ const checklistSnapshot = () => {
   const confirmed = process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE && fs.existsSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE) && JSON.parse(fs.readFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, 'utf8')).status === 'confirmed';
   if (!confirmed) return snapshot;
   const steps = Array.isArray(snapshot.steps) ? snapshot.steps.map(step => step && step.step_id === 'traces-light'
-    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', check_results: [{id: 'annotation_validity', status: 'pass', at: '2026-09-09T06:02:00Z'}, {id: 'orphan_code_clean', status: 'pass', at: '2026-09-09T06:02:00Z'}], verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}}
+    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', scope_key: 'project-a', check_results: [{id: 'annotation_validity', status: 'pass', at: '2026-09-09T06:02:00Z'}, {id: 'orphan_code_clean', status: 'pass', at: '2026-09-09T06:02:00Z'}], verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}}
     : step) : [];
   return {
     ...snapshot,
@@ -168,7 +168,14 @@ const checklistSnapshot = () => {
   };
 };
 if (args[0] === 'checklist' && args[1] === 'show') process.stdout.write(JSON.stringify(checklistSnapshot()));
-else if (args[0] === 'checklist' && args[1] === 'confirm') { fs.writeFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, JSON.stringify({status: 'confirmed'})); }
+else if (args[0] === 'checklist' && args[1] === 'confirm') {
+  const packageIndex = args.indexOf('--package');
+  if (packageIndex < 0 || args[packageIndex + 1] !== 'project-a') {
+    process.stderr.write('step "traces-light" is package-scoped; pass package key\\n');
+    process.exit(1);
+  }
+  fs.writeFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, JSON.stringify({status: 'confirmed'}));
+}
 else if (args[0] === 'role' && args[1] === 'show') process.stdout.write('onboard role\\n');
 else if (args[0] === 'req' && args[1] === 'list') {
   const component = args[args.indexOf('--component') + 1];
@@ -499,6 +506,9 @@ describe('production traces-light continuation graph', () => {
         ['checklist', 'confirm'],
         ['checklist', 'show'],
       ]);
+      expect(resumeCalls[1]).toContain('--package');
+      expect(resumeCalls[1].slice(resumeCalls[1].indexOf('--package'), resumeCalls[1].indexOf('--package') + 2))
+        .toEqual(['--package', 'project-a']);
       expect(resumeCalls.some(args => args[0] === 'role' || args[0] === 'audit')).toBe(false);
 
       const tampered = JSON.parse(JSON.stringify(restoredCheckpoint)) as any;
