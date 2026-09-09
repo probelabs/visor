@@ -1362,4 +1362,123 @@ describe('AICheckProvider', () => {
       expect(capturedConfig.timeout).toBe(60000);
     });
   });
+
+  describe('isolated writer exact-step mocks', () => {
+    const writerConfig = (allowEdit?: boolean): CheckProviderConfig => ({
+      type: 'ai',
+      checkName: 'author-native-component',
+      prompt: 'Implement the requested change.',
+      ai: {
+        codex_execution_profile: 'luna-xhigh-isolated-writer-v1',
+        codex_working_directory_from: 'checkout-worktree',
+        ...(allowEdit === undefined ? {} : { allowEdit }),
+      },
+    });
+
+    const syntheticCheckout = (): Map<string, any> =>
+      new Map([
+        [
+          'checkout-worktree',
+          {
+            issues: [],
+            output: {
+              success: true,
+              path: '/__visor_test__/continuation-writer/json-string-escaping',
+              is_worktree: true,
+              commit: 'a'.repeat(40),
+              worktree_id: 'synthetic-writer-worktree',
+            },
+          },
+        ],
+      ]);
+
+    function installMockService(): {
+      constructor: jest.Mock;
+      executeReview: jest.Mock;
+      buildCustomPrompt: jest.Mock;
+    } {
+      const executeReview = jest.fn();
+      const buildCustomPrompt = jest.fn(
+        async (_pr: PRInfo, prompt: string) => `<prompt>${prompt}</prompt>`
+      );
+      const service = { executeReview, buildCustomPrompt };
+      const constructor = jest.fn().mockImplementation(() => service);
+      (AIReviewService as any).AIReviewService = constructor;
+      return { constructor, executeReview, buildCustomPrompt };
+    }
+
+    it('returns an exact author mock and captures the prompt without provider dispatch', async () => {
+      const service = installMockService();
+      const providerWithMockService = new AICheckProvider();
+      const onPromptCaptured = jest.fn();
+      const mockForStep = jest.fn((step: string) =>
+        step === 'author-native-component' ? { text: 'synthetic author result' } : undefined
+      );
+
+      const result = await providerWithMockService.execute(
+        mockPRInfo,
+        writerConfig(),
+        syntheticCheckout(),
+        {
+          _parentContext: { workingDirectory: '/__visor_test__/canonical-root' },
+          hooks: { mockForStep, onPromptCaptured },
+        } as any
+      );
+
+      expect(result).toEqual({ issues: [], output: { text: 'synthetic author result' } });
+      expect(mockForStep).toHaveBeenCalledTimes(1);
+      expect(mockForStep).toHaveBeenCalledWith('author-native-component');
+      expect(onPromptCaptured).toHaveBeenCalledWith(
+        expect.objectContaining({
+          step: 'author-native-component',
+          provider: 'ai',
+          prompt: expect.stringContaining('Implement the requested change.'),
+        })
+      );
+      expect(service.constructor).toHaveBeenCalledTimes(1);
+      expect(service.executeReview).not.toHaveBeenCalled();
+    });
+
+    it('keeps rejecting an unresolved checkout when there is no exact or unrelated mock', async () => {
+      const service = installMockService();
+      const providerWithMockService = new AICheckProvider();
+      const mockForStep = jest.fn((step: string) =>
+        step === 'a-different-step' ? { text: 'must not be consumed' } : undefined
+      );
+
+      await expect(
+        providerWithMockService.execute(mockPRInfo, writerConfig(), syntheticCheckout(), {
+          _parentContext: { workingDirectory: '/__visor_test__/canonical-root' },
+          hooks: { mockForStep },
+        } as any)
+      ).rejects.toThrow(/rejects an unresolved checkout worktree/);
+
+      expect(mockForStep).toHaveBeenCalledTimes(1);
+      expect(mockForStep).toHaveBeenCalledWith('author-native-component');
+      expect(service.constructor).toHaveBeenCalledTimes(1);
+      expect(service.executeReview).not.toHaveBeenCalled();
+    });
+
+    it('keeps rejecting static writer-profile conflicts even when an exact mock exists', async () => {
+      const service = installMockService();
+      const providerWithMockService = new AICheckProvider();
+      const mockForStep = jest.fn().mockReturnValue({ text: 'must not bypass policy' });
+      const invalidWriterConfig = writerConfig();
+      invalidWriterConfig.ai = {
+        ...invalidWriterConfig.ai,
+        provider: 'openai',
+      } as any;
+
+      await expect(
+        providerWithMockService.execute(mockPRInfo, invalidWriterConfig, syntheticCheckout(), {
+          _parentContext: { workingDirectory: '/__visor_test__/canonical-root' },
+          hooks: { mockForStep },
+        } as any)
+      ).rejects.toThrow(/Invalid AI check configuration for exact-step mock/);
+
+      expect(mockForStep).toHaveBeenCalledTimes(1);
+      expect(service.constructor).toHaveBeenCalledTimes(1);
+      expect(service.executeReview).not.toHaveBeenCalled();
+    });
+  });
 });

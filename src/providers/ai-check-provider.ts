@@ -1051,6 +1051,19 @@ export class AICheckProvider extends CheckProvider {
     // Extract AI configuration - only set properties that are explicitly provided.
     // Workspace / allowedFolders will be derived below from the execution context.
     const aiConfig: AIReviewConfig = {};
+    // Native graph tests may provide an exact-step result for this check. Read
+    // it once, before resolving an isolated writer dependency, so a fixture can
+    // exercise the provider boundary without requiring a host Git worktree.
+    // A missing result keeps the production filesystem/Git path unchanged.
+    const exactStepName = String((config as any).checkName || 'unknown');
+    let exactStepMock: unknown;
+    try {
+      exactStepMock = sessionInfo?.hooks?.mockForStep?.(exactStepName);
+    } catch {
+      // Preserve the existing hook behavior: a hook failure does not short-circuit
+      // the real provider execution.
+    }
+    const hasExactStepMock = exactStepMock !== undefined;
     const governedCodexTransport = sessionInfo?.governedCodexTransport;
     const codexBin = sessionInfo?.codexBin;
     const codexSha256 = sessionInfo?.codexSha256;
@@ -1237,6 +1250,8 @@ export class AICheckProvider extends CheckProvider {
     }
 
     const writerSelector = (config.ai as any)?.codex_working_directory_from;
+    const mockedIsolatedWriter =
+      hasExactStepMock && aiConfig.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE;
     if (writerSelector !== undefined) {
       if (aiConfig.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE) {
         throw new Error(
@@ -1255,17 +1270,31 @@ export class AICheckProvider extends CheckProvider {
           );
         }
       }
-      resolveIsolatedWriterWorktree(
-        writerSelector,
-        _dependencyResults,
-        sessionInfo as { parentSessionId?: string; reuseSession?: boolean } &
-          import('./check-provider.interface').ExecutionContext,
-        aiConfig
-      );
-      if (aiConfig.allowEdit === false) {
-        throw new Error(
-          `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects disabled edit capability`
+      if (mockedIsolatedWriter) {
+        // AIReviewService normally performs these static profile checks in its
+        // constructor. Exact mocks return before that constructor, so retain
+        // the same configuration gate without touching the synthetic worktree.
+        if (!(await this.validateConfig(config))) {
+          throw new Error(`Invalid AI check configuration for exact-step mock '${exactStepName}'`);
+        }
+        if (aiConfig.allowEdit === false) {
+          throw new Error(
+            `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects disabled edit capability`
+          );
+        }
+      } else {
+        resolveIsolatedWriterWorktree(
+          writerSelector,
+          _dependencyResults,
+          sessionInfo as { parentSessionId?: string; reuseSession?: boolean } &
+            import('./check-provider.interface').ExecutionContext,
+          aiConfig
         );
+        if (aiConfig.allowEdit === false) {
+          throw new Error(
+            `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects disabled edit capability`
+          );
+        }
       }
       aiConfig.allowEdit = true;
     } else if (aiConfig.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE) {
@@ -2433,7 +2462,13 @@ export class AICheckProvider extends CheckProvider {
     // Test hook: capture the FINAL prompt (with PR context) before provider invocation
     try {
       const stepName = (config as any).checkName || 'unknown';
-      const serviceForCapture = new AIReviewService(aiConfig);
+      // An exact mock must not construct an isolated-profile service: its
+      // constructor validates the synthetic checkout path. The provider's
+      // already-created default service is sufficient to render/capture the
+      // complete prompt, while real executions retain the configured service.
+      const serviceForCapture = mockedIsolatedWriter
+        ? this.aiReviewService
+        : new AIReviewService(aiConfig);
       const finalPromptCapture = await (serviceForCapture as any).buildCustomPrompt(
         prInfo,
         finalPrompt,
@@ -2453,10 +2488,8 @@ export class AICheckProvider extends CheckProvider {
 
     // Test hook: mock output for this step (short-circuit provider)
     try {
-      const stepName = (config as any).checkName || 'unknown';
-      const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
-      if (mock !== undefined) {
-        const ms = mock as any;
+      if (hasExactStepMock) {
+        const ms = exactStepMock as any;
         const issuesArr = Array.isArray(ms?.issues) ? (ms.issues as any[]) : [];
         // Prefer explicit output if provided; otherwise treat the mock itself as output
         const out = ms && typeof ms === 'object' && 'output' in ms ? ms.output : ms;

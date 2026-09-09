@@ -24,7 +24,7 @@ tests:
               proof_input_state:
                 - {owner_kind: onboarding_structural_inventory, owner_id: jsonparser, input_kind: code, path: string_escape.go, file_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
               proof_component_subject: {component_id: json-string-escaping, fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-              baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+              baseline_commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           full_components:
             - *affected_work_item
             - &reused_work_item
@@ -37,7 +37,7 @@ tests:
               proof_input_state:
                 - {owner_kind: onboarding_structural_inventory, owner_id: jsonparser, input_kind: code, path: number_parse.go, file_hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
               proof_component_subject: {component_id: json-number-parsing, fingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-              baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+              baseline_commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
           affected_component_ids: [json-string-escaping]
           reused_component_ids: [json-number-parsing]
           retained_receipt_identities:
@@ -116,29 +116,29 @@ tests:
             reused_component_ids: [json-number-parsing]
         checkout-target:
           component_id: json-string-escaping
-          baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
-          worktree_root: /tmp/visor-native-continuation-test-worktree/json-string-escaping
+          baseline_commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          worktree_root: /__visor_test__/continuation-writer/json-string-escaping
         checkout-worktree:
           success: true
-          path: /Users/buger/go/src/visor-exp-0207b0a-proof-evidence-substrate
-          ref: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
-          commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          path: /__visor_test__/continuation-writer/json-string-escaping
+          ref: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           worktree_id: test-worktree-json-string-escaping
-          repository: /tmp/visor-native-continuation-subject
+          repository: /__visor_test__/continuation-subject
           is_worktree: true
         role-onboard-component: {text: "onboard role"}
         author-native-component: "grounded annotation summary"
         promote-native-component:
           status: promoted
           component_id: json-string-escaping
-          baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          baseline_commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           accepted_paths: [string_escape.go]
           ignored_paths: []
           rejected_paths: []
           promoted_commit: cccccccccccccccccccccccccccccccccccccccc
           validation: {status: 0, stdout: "", stderr: ""}
           checkpoint:
-            baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+            baseline_commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             component_id: json-string-escaping
             accepted_paths: [string_escape.go]
             ignored_paths: []
