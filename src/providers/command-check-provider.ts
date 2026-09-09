@@ -410,6 +410,7 @@ export class CommandCheckProvider extends CheckProvider {
 
       // Apply transform if specified (Liquid or JavaScript)
       let finalOutput = output;
+      let transformSnapshot: Record<string, unknown> | null = null;
 
       // First apply Liquid transform if present
       if (transform) {
@@ -590,8 +591,7 @@ ${bodyWithReturn}
               }
             }
           } catch {}
-          // @ts-ignore store for later extraction path
-          (this as any).__lastTransformSnapshot = finalSnapshot;
+          transformSnapshot = finalSnapshot;
           try {
             const isObj =
               finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput);
@@ -640,10 +640,7 @@ ${bodyWithReturn}
       let issues: ReviewIssue[] = [];
       let outputForDependents: unknown = finalOutput;
       // Capture a shallow snapshot created earlier if available (within transform_js path)
-      // @ts-ignore - finalSnapshot is defined in the transform_js scope above when applicable
-      // @ts-ignore retrieve snapshot captured after transform_js (if any)
-      const snapshotForExtraction: Record<string, unknown> | null =
-        (this as any).__lastTransformSnapshot || null;
+      const snapshotForExtraction = transformSnapshot;
       try {
         if (snapshotForExtraction) {
           logger.debug(`  provider: snapshot keys=${Object.keys(snapshotForExtraction).join(',')}`);

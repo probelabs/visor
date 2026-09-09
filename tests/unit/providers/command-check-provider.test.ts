@@ -574,6 +574,63 @@ describe('CommandCheckProvider', () => {
         transformed: 'raw text',
       });
     });
+
+    it('should keep transform snapshots local to concurrent executions', async () => {
+      const checkoutConfig: CheckProviderConfig = {
+        type: 'command',
+        exec: 'checkout-command',
+      };
+      const roleConfig: CheckProviderConfig = {
+        type: 'command',
+        exec: 'role-command',
+        transform_js: '({ text: output })',
+      };
+
+      let releaseCheckout!: () => void;
+      const checkoutReleased = new Promise<void>(resolve => {
+        releaseCheckout = resolve;
+      });
+      let signalCheckoutStarted!: () => void;
+      const checkoutStarted = new Promise<void>(resolve => {
+        signalCheckoutStarted = resolve;
+      });
+
+      mockExecute.mockImplementation(async command => {
+        if (command === 'checkout-command') {
+          signalCheckoutStarted();
+          await checkoutReleased;
+          return {
+            stdout: '{"kind":"checkout","status":"ready"}\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        if (command === 'role-command') {
+          return {
+            stdout: 'role output\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      });
+
+      const checkoutPromise = provider.execute(mockPRInfo, checkoutConfig);
+      await checkoutStarted;
+      await expect(provider.execute(mockPRInfo, roleConfig)).resolves.toMatchObject({
+        issues: [],
+        output: {text: 'role output'},
+      });
+
+      releaseCheckout();
+      const checkoutResult = (await checkoutPromise) as any;
+      expect(checkoutResult).toMatchObject({
+        issues: [],
+        output: {kind: 'checkout', status: 'ready'},
+      });
+      expect(checkoutResult.output).toEqual({kind: 'checkout', status: 'ready'});
+      expect(checkoutResult).not.toHaveProperty('text');
+    });
   });
 
   describe('Dependency Results Context', () => {
