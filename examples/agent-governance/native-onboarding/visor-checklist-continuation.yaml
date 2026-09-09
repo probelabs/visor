@@ -144,10 +144,12 @@ claim_types:
             retained:
               type: object
               additionalProperties: false
-              required: [checkpoint_sha256, prefix_checkpoint_sha256, checkpoint_session_id, prefix_session_id, checkpoint_graph_semantic_digest, prefix_graph_semantic_digest]
+              required: [checkpoint_sha256, prefix_checkpoint_sha256, checkpoint_path, prefix_checkpoint_path, checkpoint_session_id, prefix_session_id, checkpoint_graph_semantic_digest, prefix_graph_semantic_digest]
               properties:
                 checkpoint_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
                 prefix_checkpoint_sha256: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+                checkpoint_path: {type: string, minLength: 1}
+                prefix_checkpoint_path: {type: string, minLength: 1}
                 checkpoint_session_id: {type: string, minLength: 1}
                 prefix_session_id: {type: string, minLength: 1}
                 checkpoint_graph_semantic_digest: {type: string, minLength: 1}
@@ -353,6 +355,11 @@ subgraphs:
         timeout: 900000
         criticality: internal
         resource_group: proof-workspace-mutation
+        # The command provider retains transform snapshots on its instance;
+        # establish a fresh snapshot here so a prior role text claim cannot
+        # be promoted as an unrelated scalar field.
+        transform_js: |
+          return JSON.parse(String(output));
         schema:
           type: object
           additionalProperties: false
@@ -501,6 +508,8 @@ subgraphs:
           - {claim: native.continuation.project_item@1, as: project}
         emits:
           - {claim: native.continuation.catalog@1, from: output}
+        transform_js: |
+          return JSON.parse(String(output));
         expand:
           claim: native.continuation.catalog@1
           template: continuation-component
@@ -510,7 +519,7 @@ subgraphs:
         exec: |
           set -eu
           : "${NATIVE_CHECKLIST_CONTINUE_CATALOG:?validated retained catalog is required}"
-          node -e 'const value=JSON.parse(process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG); if (!value || !Array.isArray(value.components)) throw new Error("validated retained catalog components are invalid"); process.stdout.write(JSON.stringify(value));'
+          node -e 'const project = {{ outputs.project | json }}; const value=JSON.parse(process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG); const authority=value && value.authority; if (!project || typeof project.project_id !== "string" || !authority || typeof authority.project_id !== "string" || project.project_id !== authority.project_id) throw new Error("retained project scope is detached from current authority"); if (!Array.isArray(value.components) || !Array.isArray(value.full_components)) throw new Error("validated retained catalog components are invalid"); process.stdout.write(JSON.stringify(value));'
 
       checklist-continuation-snapshot:
         type: command
@@ -641,6 +650,8 @@ checks:
               project_id: {type: string, minLength: 1}
     emits:
       - {claim: native.continuation.project@1, from: output}
+    transform_js: |
+      return JSON.parse(String(output));
     expand:
       claim: native.continuation.project@1
       template: continuation-project
@@ -649,4 +660,5 @@ checks:
       item_claim: native.continuation.project_item@1
     exec: |
       set -eu
-      node -e 'process.stdout.write(JSON.stringify({projects: [{project_id: "retained"}]}));'
+      : "${NATIVE_CHECKLIST_CONTINUE_CATALOG:?validated retained catalog is required}"
+      node -e 'const value=JSON.parse(process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG); const authority=value && value.authority; if (!authority || typeof authority.project_id !== "string" || authority.project_id.length === 0) throw new Error("validated retained catalog authority project_id is required"); process.stdout.write(JSON.stringify({projects: [{project_id: authority.project_id}]}));'

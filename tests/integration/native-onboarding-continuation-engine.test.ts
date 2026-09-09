@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {jest} from '@jest/globals';
 import {AIReviewService} from '../../src/ai-review-service';
@@ -12,7 +13,12 @@ import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
 import {
   buildChecklistContinuationConfig,
   executeChecklistContinuationEngine,
+  validateJournaledContinuationAuthority,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
+import {
+  buildNativeChecklistProgressFromProjections,
+  renderNativeChecklistProgress,
+} from '../../examples/agent-governance/native-onboarding/native-checklist-progress';
 
 type WorkItem = {
   version: 'reqproof.onboarding-component-work-item/v1';
@@ -22,42 +28,65 @@ type WorkItem = {
   sorted_dependency_closure: string[];
   proof_path_mapping: Record<string, unknown>;
   proof_input_state: Array<Record<string, unknown>>;
-  proof_component_subject: {fingerprint: string};
+  proof_component_subject: {component_id: string; fingerprint: string};
   baseline_commit: string;
 };
 
-function continuationAuthority(workItem: WorkItem): Record<string, unknown> {
+function continuationAuthority(
+  workItems: readonly WorkItem[],
+  affectedComponentIds: readonly string[] = ['component-a'],
+  reusedComponentIds: readonly string[] = [],
+): Record<string, unknown> {
   const subjectFingerprint = `sha256:${'b'.repeat(64)}`;
+  const inventory = {
+    version: 'proof.structural-inventory/v1',
+    authority: {
+      version: 'proof.project-authority/v1',
+      project_id: workItems[0].project_id,
+      subject_fingerprint: subjectFingerprint,
+    },
+    sorted_paths: workItems.flatMap(item => item.sorted_owned_paths).sort(),
+    sorted_module_paths: [],
+    boundary_fingerprint: `sha256:${'c'.repeat(64)}`,
+    input_state: workItems.flatMap(item => item.proof_input_state),
+  };
   const receipt = {
     inventory_claim_id: `sha256:${'1'.repeat(64)}`,
     catalog_claim_id: `sha256:${'2'.repeat(64)}`,
     receipt_id: `sha256:${'3'.repeat(64)}`,
     admission_candidate_id: `sha256:${'4'.repeat(64)}`,
     admission_receipt_id: `sha256:${'5'.repeat(64)}`,
-    component_authorities: [{
+    component_authorities: workItems.map((workItem, index) => ({
       component_id: workItem.component_id,
-      work_item_digest: `sha256:${'6'.repeat(64)}`,
+      work_item_digest: `sha256:${String(index + 6).repeat(64)}`,
       subject: workItem.proof_component_subject,
-    }],
+    })),
   };
   return {
     version: 'native.checklist-continuation-authority/v1',
-    project_id: workItem.project_id,
+    project_id: workItems[0].project_id,
     subject_fingerprint: subjectFingerprint,
-    current_inventory: {authority: {project_id: workItem.project_id, subject_fingerprint: subjectFingerprint}},
-    current_revalidation: {receipt},
-    current_work_items: [workItem],
+    current_inventory: inventory,
+    current_revalidation: {
+      version: 'proof.catalog-revalidation/v2',
+      inventory,
+      catalog: {version: 'proof.onboarding-work-item-catalog/v1', work_items: workItems},
+      receipt,
+    },
+    current_work_items: workItems,
     current_receipt_identities: receipt,
     retained: {
       checkpoint_sha256: `sha256:${'7'.repeat(64)}`,
       prefix_checkpoint_sha256: `sha256:${'8'.repeat(64)}`,
+      checkpoint_path: '/__visor_test__/retained/checkpoint.json',
+      prefix_checkpoint_path: '/__visor_test__/retained/prefix-checkpoint.json',
       checkpoint_session_id: 'retained-checkpoint',
       prefix_session_id: 'retained-prefix',
       checkpoint_graph_semantic_digest: `digest-${'9'.repeat(64)}`,
       prefix_graph_semantic_digest: `digest-${'a'.repeat(64)}`,
     },
-    affected_component_ids: ['component-a'],
-    reused_component_ids: [],
+    affected_component_ids: [...affectedComponentIds],
+    reused_component_ids: [...reusedComponentIds],
   };
 }
 
@@ -75,7 +104,7 @@ function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8'}).trim();
 }
 
-function makeGitFixture(): {root: string; writerParent: string; output: string; proof: string; checklistState: string; checklistCalls: string; workItem: WorkItem; cleanup: () => void} {
+function makeGitFixture(): {root: string; writerParent: string; output: string; proof: string; checklistState: string; checklistCalls: string; workItem: WorkItem; reusedWorkItem: WorkItem; cleanup: () => void} {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-canonical-'));
   const writerParent = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-writers-'));
   const helperRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-helper-'));
@@ -84,7 +113,9 @@ function makeGitFixture(): {root: string; writerParent: string; output: string; 
   git(root, ['config', 'user.email', 'test@example.invalid']);
   git(root, ['config', 'user.name', 'Visor continuation test']);
   fs.writeFileSync(path.join(root, 'source.go'), 'package fixture\n\nfunc Source() {}\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'reused.go'), 'package fixture\n\nfunc Reused() {}\n', 'utf8');
   git(root, ['add', 'source.go']);
+  git(root, ['add', 'reused.go']);
   git(root, ['commit', '--quiet', '-m', 'baseline']);
   const commit = git(root, ['rev-parse', 'HEAD']);
   const proof = path.join(helperRoot, 'proof-fixture.js');
@@ -124,8 +155,19 @@ else process.stdout.write(JSON.stringify({status: 'pass'}));
     sorted_owned_paths: ['source.go'],
     sorted_dependency_closure: ['source.go'],
     proof_path_mapping: {},
-    proof_input_state: [{}],
-    proof_component_subject: {fingerprint: `sha256:${'a'.repeat(64)}`},
+    proof_input_state: [{owner_kind: 'onboarding_structural_inventory', owner_id: 'project-a', input_kind: 'code', path: 'source.go', file_hash: `sha256:${'a'.repeat(64)}`}],
+    proof_component_subject: {component_id: 'component-a', fingerprint: `sha256:${'a'.repeat(64)}`},
+    baseline_commit: commit,
+  };
+  const reusedWorkItem: WorkItem = {
+    version: 'reqproof.onboarding-component-work-item/v1',
+    project_id: 'project-a',
+    component_id: 'component-b',
+    sorted_owned_paths: ['reused.go'],
+    sorted_dependency_closure: ['reused.go'],
+    proof_path_mapping: {owned: ['reused.go']},
+    proof_input_state: [{owner_kind: 'onboarding_structural_inventory', owner_id: 'project-a', input_kind: 'code', path: 'reused.go', file_hash: `sha256:${'b'.repeat(64)}`}],
+    proof_component_subject: {component_id: 'component-b', fingerprint: `sha256:${'b'.repeat(64)}`},
     baseline_commit: commit,
   };
   return {
@@ -136,6 +178,7 @@ else process.stdout.write(JSON.stringify({status: 'pass'}));
     checklistState,
     checklistCalls,
     workItem,
+    reusedWorkItem,
     cleanup: () => {
       try { git(root, ['worktree', 'list', '--porcelain']); } catch {}
       fs.rmSync(writerParent, {recursive: true, force: true});
@@ -187,12 +230,24 @@ describe('production traces-light continuation graph', () => {
       process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
       process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
         components: [fixture.workItem],
-        full_components: [fixture.workItem],
+        full_components: [fixture.workItem, fixture.reusedWorkItem],
         affected_component_ids: ['component-a'],
-        reused_component_ids: [],
-        retained_receipt_identities: ['retained-fixture-receipt'],
-        current_receipt_identities: ['current-fixture-receipt'],
-        authority: continuationAuthority(fixture.workItem),
+        reused_component_ids: ['component-b'],
+        retained_receipt_identities: [`sha256:${'7'.repeat(64)}`, `sha256:${'8'.repeat(64)}`],
+        current_receipt_identities: [
+          `sha256:${'1'.repeat(64)}`,
+          `sha256:${'2'.repeat(64)}`,
+          `sha256:${'3'.repeat(64)}`,
+          `sha256:${'4'.repeat(64)}`,
+          `sha256:${'5'.repeat(64)}`,
+          `sha256:${'6'.repeat(64)}`,
+          `sha256:${'7'.repeat(64)}`,
+        ],
+        authority: continuationAuthority(
+          [fixture.workItem, fixture.reusedWorkItem],
+          ['component-a'],
+          ['component-b'],
+        ),
       });
       process.env.REQUEST_TIMEOUT = '120000';
       process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
@@ -205,6 +260,53 @@ describe('production traces-light continuation graph', () => {
       const engine = new StateMachineExecutionEngine(fixture.root);
       const paused = await executeChecklistContinuationEngine(engine, config, 120000, ['component-a']);
       expect(paused).toMatchObject({paused: true});
+      const pausedJournal = ExecutionJournal.restoreGraphCheckpoint(
+        compileClaimPlan(config),
+        paused.checkpoint,
+      );
+      const pausedProgress = buildNativeChecklistProgressFromProjections({
+        claimProjection: pausedJournal.getClaimProjection(),
+        instanceProjection: pausedJournal.getInstanceProjection(),
+        checkpoint: paused.checkpoint,
+        paused: true,
+        resumed: false,
+        retainedCatalogComponentIds: ['component-a', 'component-b'],
+        affectedComponentIds: ['component-a'],
+      });
+      expect(pausedProgress.operational.catalog_coverage).toMatchObject({
+        known: true,
+        known_count: 2,
+        affected_count: 1,
+        reused_count: 1,
+        unexpanded_count: 0,
+      });
+      expect(pausedProgress.operational.catalog_coverage.items).toEqual([
+        {id: 'component-a', disposition: 'affected'},
+        {id: 'component-b', disposition: 'reused'},
+      ]);
+      expect(pausedProgress.operational.components.items).toHaveLength(1);
+      expect(pausedProgress.operational.components.items[0].id).toBe('component-a');
+      const pausedRendered = renderNativeChecklistProgress(pausedProgress);
+      expect(pausedRendered.text).toContain(
+        'catalog coverage=known:2 affected:1 reused:1 unexpanded:0',
+      );
+      expect(pausedRendered.text).toContain('paused=true resumed=false');
+      expect(pausedRendered.html).toContain(
+        'catalog coverage: known=2, affected=1, reused=1, unexpanded=0',
+      );
+      const pausedStartedChecks = paused.checkpoint.events
+        .filter(event => event.type === 'AttemptStarted')
+        .map(event => event.checkId);
+      expect(pausedStartedChecks.filter(checkId => checkId === 'author-native-component')).toHaveLength(1);
+      expect(pausedStartedChecks.filter(checkId => checkId === 'promote-native-component')).toHaveLength(1);
+      const pausedMutationStarts = paused.checkpoint.events.filter(
+        event => event.type === 'AttemptStarted'
+          && (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component'),
+      );
+      expect(pausedMutationStarts).toHaveLength(2);
+      expect(pausedMutationStarts.every(event => event.scope.some(
+        part => part.kind === 'keyed' && part.key === 'component-a',
+      ))).toBe(true);
       const promotion = paused.checkpoint.events.find(event => event.type === 'ClaimPublished' && event.claim === 'native.continuation.promotion@1') as any;
       expect(promotion?.payload).toBeDefined();
       expect(promotion.payload.baseline_commit).toBe(fixture.workItem.baseline_commit);
@@ -241,6 +343,39 @@ describe('production traces-light continuation graph', () => {
       expect(canonicalGraphCheckpointJson(resumed.checkpoint.events.slice(0, restoredCheckpoint.events.length))).toBe(canonicalGraphCheckpointJson(restoredCheckpoint.events));
       const suffix = resumed.checkpoint.events.slice(restoredCheckpoint.events.length);
       expect(suffix.filter(event => event.type === 'AttemptStarted').map(event => event.checkId)).toEqual(['checklist-traces-light']);
+      const resumedJournal = ExecutionJournal.restoreGraphCheckpoint(
+        compileClaimPlan(restoredConfig),
+        resumed.checkpoint,
+      );
+      const resumedProgress = buildNativeChecklistProgressFromProjections({
+        claimProjection: resumedJournal.getClaimProjection(),
+        instanceProjection: resumedJournal.getInstanceProjection(),
+        checkpoint: resumed.checkpoint,
+        paused: false,
+        resumed: true,
+        retainedCatalogComponentIds: ['component-a', 'component-b'],
+        affectedComponentIds: ['component-a'],
+      });
+      expect(resumedProgress.operational.catalog_coverage).toMatchObject({
+        known: true,
+        known_count: 2,
+        affected_count: 1,
+        reused_count: 1,
+        unexpanded_count: 0,
+      });
+      expect(resumedProgress.operational.catalog_coverage.items).toEqual(
+        pausedProgress.operational.catalog_coverage.items,
+      );
+      expect(resumedProgress.operational.components.items).toHaveLength(1);
+      expect(resumedProgress.operational.components.items[0].id).toBe('component-a');
+      const resumedRendered = renderNativeChecklistProgress(resumedProgress);
+      expect(resumedRendered.text).toContain(
+        'catalog coverage=known:2 affected:1 reused:1 unexpanded:0',
+      );
+      expect(resumedRendered.text).toContain('paused=false resumed=true');
+      expect(resumedRendered.html).toContain(
+        'catalog coverage: known=2, affected=1, reused=1, unexpanded=0',
+      );
       expect(ai).toHaveBeenCalledTimes(1);
       const resumeCalls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line).args as string[]);
       expect(resumeCalls.map(args => args.slice(0, 2))).toEqual([
@@ -314,7 +449,7 @@ describe('production traces-light continuation graph', () => {
         reused_component_ids: [],
         retained_receipt_identities: ['retained-fixture-receipt'],
         current_receipt_identities: ['current-fixture-receipt'],
-        authority: continuationAuthority(fixture.workItem),
+        authority: continuationAuthority([fixture.workItem]),
       });
       process.env.REQUEST_TIMEOUT = '120000';
       process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
@@ -378,7 +513,7 @@ describe('production traces-light continuation graph', () => {
         reused_component_ids: [],
         retained_receipt_identities: ['retained-fixture-receipt'],
         current_receipt_identities: ['current-fixture-receipt'],
-        authority: continuationAuthority(fixture.workItem),
+        authority: continuationAuthority([fixture.workItem]),
       });
       process.env.REQUEST_TIMEOUT = '120000';
       process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
@@ -435,6 +570,78 @@ describe('production traces-light continuation graph', () => {
       worktreeManager.configure(previousWorktreeConfig);
       fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});
       fixture.cleanup();
+    }
+  });
+
+  it('revalidates the pinned mixed current authority and rejects detached WorkItems before dispatch', async () => {
+    const evidenceRoot = '/private/tmp/native-checklist-live.7EFE7S';
+    const outputRoot = path.join(evidenceRoot, 'output-checklist-traces-light-preflight-2026-09-09-3');
+    const prefixCheckpointPath = path.join(evidenceRoot, 'output-author-retry-escaping', 'checklist-skeleton-frontier-checkpoint.json');
+    const checkpointPath = path.join(evidenceRoot, 'output-checklist-skeleton-resume-escaping-verified-2', 'checkpoint.json');
+    const configPath = path.join(evidenceRoot, 'output-author-retry-escaping', 'checklist-materialized-config.json');
+    const inventoryPath = path.join(outputRoot, 'commands/preflight/onboarding-inventory.stdout');
+    const revalidationPath = path.join(outputRoot, 'commands/preflight/onboarding-revalidate.stdout');
+    const workItemsPath = path.join(outputRoot, 'commands/preflight/onboarding-work-items.stdout');
+    if (![prefixCheckpointPath, checkpointPath, configPath, inventoryPath, revalidationPath, workItemsPath].every(file => fs.existsSync(file))) return;
+    const inventory = JSON.parse(fs.readFileSync(inventoryPath, 'utf8')) as Record<string, any>;
+    const revalidation = JSON.parse(fs.readFileSync(revalidationPath, 'utf8')) as Record<string, any>;
+    const workItemsProjection = JSON.parse(fs.readFileSync(workItemsPath, 'utf8')) as Record<string, any>;
+    const retainedCheckpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as Record<string, any>;
+    const retainedPrefix = JSON.parse(fs.readFileSync(prefixCheckpointPath, 'utf8')) as Record<string, any>;
+    const preflight = JSON.parse(fs.readFileSync(path.join(outputRoot, 'preflight.json'), 'utf8')) as Record<string, any>;
+    const digestFile = (file: string): string => `sha256:${createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
+    const authority: Record<string, any> = {
+      version: 'native.checklist-continuation-authority/v1',
+      project_id: inventory.authority.project_id,
+      subject_fingerprint: inventory.authority.subject_fingerprint,
+      current_inventory: inventory,
+      current_revalidation: revalidation,
+      current_work_items: workItemsProjection.work_items.map((item: Record<string, any>) => ({
+        ...item,
+        baseline_commit: preflight.subject_revision,
+      })),
+      current_receipt_identities: {
+        inventory_claim_id: revalidation.receipt.inventory_claim_id,
+        catalog_claim_id: revalidation.receipt.catalog_claim_id,
+        receipt_id: revalidation.receipt.receipt_id,
+        admission_candidate_id: revalidation.receipt.admission_candidate_id,
+        admission_receipt_id: revalidation.receipt.admission_receipt_id,
+        component_authorities: revalidation.receipt.component_authorities,
+      },
+      retained: {
+        checkpoint_sha256: digestFile(checkpointPath),
+        prefix_checkpoint_sha256: digestFile(prefixCheckpointPath),
+        checkpoint_session_id: retainedCheckpoint.sessionId,
+        prefix_session_id: retainedPrefix.sessionId,
+        checkpoint_graph_semantic_digest: retainedCheckpoint.graphSemanticDigest,
+        prefix_graph_semantic_digest: retainedPrefix.graphSemanticDigest,
+        checkpoint_path: checkpointPath,
+        prefix_checkpoint_path: prefixCheckpointPath,
+      },
+      affected_component_ids: ['json-parser-core', 'json-string-escaping'],
+      reused_component_ids: ['benchmark-suite', 'byte-conversion-primitives'],
+    };
+    const probeModule = require('@probelabs/probe') as {validateGovernedCodexExecAttestation?: unknown};
+    const probeActual = require(path.resolve(process.cwd(), 'node_modules/@probelabs/probe/cjs/index.cjs')) as {validateGovernedCodexExecAttestation?: unknown};
+    Object.defineProperty(probeModule, 'validateGovernedCodexExecAttestation', {
+      value: probeActual.validateGovernedCodexExecAttestation,
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
+    expect(typeof probeModule.validateGovernedCodexExecAttestation).toBe('function');
+    await expect(validateJournaledContinuationAuthority(authority)).resolves.toBe(authority);
+    expect(authority.current_work_items).toHaveLength(4);
+    expect(authority.affected_component_ids).toHaveLength(2);
+    expect(authority.reused_component_ids).toHaveLength(2);
+
+    for (const mutate of [
+      (item: Record<string, any>) => { item.proof_component_subject = {...item.proof_component_subject, fingerprint: `sha256:${'0'.repeat(64)}`}; },
+      (item: Record<string, any>) => { item.project_id = 'detached-project'; },
+    ]) {
+      const detached = JSON.parse(JSON.stringify(authority)) as Record<string, any>;
+      mutate(detached.current_work_items[0]);
+      await expect(validateJournaledContinuationAuthority(detached)).rejects.toThrow(/current Proof authority bytes are invalid|detached/i);
     }
   });
 });

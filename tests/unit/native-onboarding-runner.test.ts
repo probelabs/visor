@@ -274,6 +274,41 @@ describe('native onboarding runner boundaries', () => {
       .toMatchObject({status: 2, cwd: root});
   });
 
+  it('accepts a passing orphan audit without a details field', async () => {
+    const proof = path.join(root, 'audit-pass-proof');
+    const output = path.join(root, 'audit-pass-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      "printf '%s\\n' 'Refreshing trace index + annotations…' >&2",
+      "printf '%s\\n' '{\"event\":\"check_done\",\"stage\":\"implement\",\"check\":\"orphan_code_clean\",\"status\":\"pass\"}'",
+      'exit 0',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    await expect(deriveCurrentChecklistAffectedBatches(proof, root, output, 1000, [{
+      component_id: 'component-a',
+      sorted_owned_paths: ['source.go'],
+    }] as any)).resolves.toEqual({
+      affectedComponentIds: [],
+      reusedComponentIds: ['component-a'],
+      batches: [],
+    });
+  });
+
+  it('rejects malformed nonblank orphan audit JSONL', async () => {
+    const proof = path.join(root, 'audit-malformed-proof');
+    const output = path.join(root, 'audit-malformed-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      "printf '%s\\n' '{not-json}'",
+      'exit 0',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    await expect(deriveCurrentChecklistAffectedBatches(proof, root, output, 1000, [{
+      component_id: 'component-a',
+      sorted_owned_paths: ['source.go'],
+    }] as any)).rejects.toThrow(/malformed JSONL/);
+  });
+
   it('builds and validates a closed continuation authority envelope', () => {
     const checkpointPath = path.join(root, 'cp255.json');
     const prefixCheckpointPath = path.join(root, 'cp251.json');

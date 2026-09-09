@@ -108,6 +108,8 @@ tests:
             retained:
               checkpoint_sha256: "sha256:8888888888888888888888888888888888888888888888888888888888888888"
               prefix_checkpoint_sha256: "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+              checkpoint_path: /__visor_test__/retained/checkpoint.json
+              prefix_checkpoint_path: /__visor_test__/retained/prefix-checkpoint.json
               checkpoint_session_id: retained-checkpoint-session
               prefix_session_id: retained-prefix-session
               checkpoint_graph_semantic_digest: retained-checkpoint-graph

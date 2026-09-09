@@ -16,11 +16,13 @@ import type { GraphJournalCheckpointV1 } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import { canonicalJson, immutableCanonicalValue, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { GeneratedDispatchGate, GeneratedDispatchGateDecision } from '../../../src/types/engine';
-import type { NodeGenerationProjection } from '../../../src/state-machine/graph/instance-kernel';
+import type { InstanceClaimProjection, NodeGenerationProjection } from '../../../src/state-machine/graph/instance-kernel';
 import { CheckProviderRegistry } from '../../../src/providers/check-provider-registry';
-import { createProofAdmissionCapability, goCompatibleProofJson } from '../../../src/providers/proof-admission-cli-child';
+import { createProofAdmissionCapability, goCompatibleProofJson, proofCanonicalJson } from '../../../src/providers/proof-admission-cli-child';
+import type { CandidateClaimInput } from '../../../src/providers/check-provider.interface';
 import {
   validateProofCandidateAdmissionBinding,
+  validateProofCurrentCatalogAuthorityBytes,
   validateProofCatalogRevalidationProjection,
   validateProofWorkItemsProjection,
   validateStructuralInventory,
@@ -1092,11 +1094,12 @@ function validateContinuationAuthority(value: unknown, label = 'continuation aut
     'current_revalidation', 'current_work_items', 'current_receipt_identities',
     'retained', 'affected_component_ids', 'reused_component_ids',
   ])) throw new Error(`${label} is not a closed authority envelope`);
+  const retained = isRecord(value.retained) ? value.retained : undefined;
   if (value.version !== CONTINUATION_AUTHORITY_VERSION || typeof value.project_id !== 'string' ||
       value.project_id.length === 0 || typeof value.subject_fingerprint !== 'string' ||
       !/^sha256:[0-9a-f]{64}$/.test(value.subject_fingerprint) ||
       !isRecord(value.current_inventory) || !isRecord(value.current_revalidation) ||
-      !isRecord(value.current_receipt_identities) || !isRecord(value.retained)) {
+      !isRecord(value.current_receipt_identities) || !retained) {
     throw new Error(`${label} has invalid project authority`);
   }
   const inventoryAuthority = isRecord(value.current_inventory.authority) ? value.current_inventory.authority : undefined;
@@ -1134,12 +1137,144 @@ function validateContinuationAuthority(value: unknown, label = 'continuation aut
   if (!revalidationReceipt || ['inventory_claim_id', 'catalog_claim_id', 'receipt_id', 'admission_candidate_id', 'admission_receipt_id'].some(key => revalidationReceipt[key] !== receipt[key])) {
     throw new Error(`${label} revalidation receipt is detached`);
   }
-  if (!hasExactKeys(value.retained, ['checkpoint_sha256', 'prefix_checkpoint_sha256', 'checkpoint_session_id', 'prefix_session_id', 'checkpoint_graph_semantic_digest', 'prefix_graph_semantic_digest']) ||
-      ['checkpoint_sha256', 'prefix_checkpoint_sha256'].some(key => typeof value.retained[key] !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(value.retained[key] as string)) ||
-      ['checkpoint_session_id', 'prefix_session_id', 'checkpoint_graph_semantic_digest', 'prefix_graph_semantic_digest'].some(key => typeof value.retained[key] !== 'string' || (value.retained[key] as string).length === 0)) {
+  const expectedReceipt = continuationReceiptIdentities(value.current_revalidation, workItems);
+  if (canonicalJson(expectedReceipt) !== canonicalJson(receipt)) {
+    throw new Error(`${label} current receipt identities are detached from native revalidation`);
+  }
+  const retainedKeys = ['checkpoint_sha256', 'prefix_checkpoint_sha256', 'checkpoint_session_id', 'prefix_session_id', 'checkpoint_graph_semantic_digest', 'prefix_graph_semantic_digest'];
+  const hasCheckpointPointers = Object.prototype.hasOwnProperty.call(retained, 'checkpoint_path') ||
+    Object.prototype.hasOwnProperty.call(retained, 'prefix_checkpoint_path');
+  if (hasCheckpointPointers && (!Object.prototype.hasOwnProperty.call(retained, 'checkpoint_path') ||
+      !Object.prototype.hasOwnProperty.call(retained, 'prefix_checkpoint_path'))) {
+    throw new Error(`${label} retained checkpoint source pointers are incomplete`);
+  }
+  const checkpointPath = retained.checkpoint_path;
+  const prefixCheckpointPath = retained.prefix_checkpoint_path;
+  if (!hasExactKeys(retained, hasCheckpointPointers ? [...retainedKeys, 'checkpoint_path', 'prefix_checkpoint_path'] : retainedKeys) ||
+      ['checkpoint_sha256', 'prefix_checkpoint_sha256'].some(key => typeof retained[key] !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(retained[key] as string)) ||
+      ['checkpoint_session_id', 'prefix_session_id', 'checkpoint_graph_semantic_digest', 'prefix_graph_semantic_digest'].some(key => typeof retained[key] !== 'string' || (retained[key] as string).length === 0) ||
+      (hasCheckpointPointers && (typeof checkpointPath !== 'string' || !path.isAbsolute(checkpointPath) || typeof prefixCheckpointPath !== 'string' || !path.isAbsolute(prefixCheckpointPath)))) {
     throw new Error(`${label} retained checkpoint identities are incomplete`);
   }
   return value;
+}
+
+function retainedProofClaimView(
+  claim: InstanceClaimProjection,
+  label: string,
+  includeCandidateEvidence = false,
+): CandidateClaimInput {
+  if (claim.kind !== 'generated-output' || claim.producerAttemptId === undefined || claim.producerFence === undefined) {
+    throw new Error(`${label} is not an attempt-produced claim`);
+  }
+  return {
+    claimId: claim.claimId,
+    claim: claim.claim,
+    payload: claim.payload,
+    payloadFingerprint: claim.payloadFingerprint,
+    producerCheckId: claim.producerCheckId,
+    scope: claim.scope,
+    parentClaimIds: claim.parentClaimIds,
+    wireMode: claim.wireMode,
+    provenance: 'attempt',
+    attemptId: claim.producerAttemptId,
+    fence: claim.producerFence,
+    ...(includeCandidateEvidence && claim.proofCandidateEvidence
+      ? {proofAdmission: claim.proofCandidateEvidence}
+      : {}),
+  };
+}
+
+function retainedProofCandidateAdmission(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+): {candidate: CandidateClaimInput; admission: CandidateClaimInput} {
+  const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
+  const active = Object.values(projection.claimsById).filter(claim => claim.active && claim.scope.length === 1);
+  const candidates = active.filter(claim => claim.claim === 'proof.candidate@1' && claim.producerCheckId === 'inspect');
+  const admissions = active.filter(claim => claim.claim === 'proof.admitted_receipt@1' && claim.producerCheckId === 'proof_admit');
+  if (candidates.length !== 1 || admissions.length !== 1) {
+    throw new Error('retained Proof prefix must contain exactly one project catalog candidate and admission');
+  }
+  return {
+    candidate: retainedProofClaimView(candidates[0], 'retained Proof candidate', true),
+    admission: retainedProofClaimView(admissions[0], 'retained Proof admission'),
+  };
+}
+
+/**
+ * Revalidate the durable current-authority envelope before a generated
+ * continuation frontier is resumed. This is intentionally a pure journal
+ * operation: it reads only the recorded CP255/CP251 bytes and invokes the
+ * existing Proof-byte validator, never a provider or subprocess.
+ */
+export async function validateJournaledContinuationAuthority(
+  authority: Json,
+): Promise<Json> {
+  const retained = isRecord(authority.retained) ? authority.retained : undefined;
+  if (!retained || typeof retained.checkpoint_path !== 'string' ||
+      typeof retained.prefix_checkpoint_path !== 'string' ||
+      !path.isAbsolute(retained.checkpoint_path) || !path.isAbsolute(retained.prefix_checkpoint_path)) {
+    throw new Error('journaled continuation authority has no retained checkpoint source pointers');
+  }
+  const checkpointPath = fs.realpathSync(retained.checkpoint_path);
+  const prefixCheckpointPath = fs.realpathSync(retained.prefix_checkpoint_path);
+  if (checkpointPath === prefixCheckpointPath) throw new Error('journaled continuation retained checkpoints must be distinct');
+  const checkpoint = readValidatedCheckpoint(checkpointPath, 'journaled retained CP255');
+  const prefix = readValidatedCheckpoint(prefixCheckpointPath, 'journaled retained CP251');
+  if (sha256File(checkpointPath) !== retained.checkpoint_sha256 ||
+      sha256File(prefixCheckpointPath) !== retained.prefix_checkpoint_sha256 ||
+      checkpoint.sessionId !== retained.checkpoint_session_id ||
+      prefix.sessionId !== retained.prefix_session_id ||
+      checkpoint.graphSemanticDigest !== retained.checkpoint_graph_semantic_digest ||
+      prefix.graphSemanticDigest !== retained.prefix_graph_semantic_digest) {
+    throw new Error('journaled continuation retained checkpoint bytes are detached from authority');
+  }
+  const prefixMaterialized = await loadChecklistMaterializedConfig(prefixCheckpointPath);
+  const expectedComponentIds = materializedComponentIds(prefixMaterialized.config, prefixMaterialized.checkpoint);
+  if (!checklistSkeletonResumeDeltaIsValid(prefixMaterialized.config, prefixMaterialized.checkpoint, checkpoint, expectedComponentIds)) {
+    throw new Error('journaled continuation retained CP255 does not contain the exact CP251 skeleton suffix');
+  }
+  const {candidate, admission} = retainedProofCandidateAdmission(prefixMaterialized.config, prefix);
+  const currentInventory = isRecord(authority.current_inventory) ? authority.current_inventory : undefined;
+  const currentRevalidation = isRecord(authority.current_revalidation) ? authority.current_revalidation : undefined;
+  if (!currentInventory || !currentRevalidation || !isRecord(currentRevalidation.inventory) ||
+      proofCanonicalJson(currentRevalidation.inventory) !== proofCanonicalJson(currentInventory)) {
+    throw new Error('journaled continuation current Proof inventory is detached from revalidation');
+  }
+  const rawWorkItems = Array.isArray(authority.current_work_items) ? authority.current_work_items : undefined;
+  if (!rawWorkItems || rawWorkItems.length === 0) throw new Error('journaled continuation has no current Proof WorkItems');
+  const workItems = rawWorkItems.map((item, index) => {
+    const checked = validateContinuationWorkItem(item, `journaled current Proof WorkItem ${index}`);
+    const {baseline_commit: _baselineCommit, ...proofWorkItem} = checked;
+    return proofWorkItem;
+  });
+  const catalog = currentRevalidation.catalog;
+  if (!isRecord(catalog) || !isRecord(currentInventory.authority)) {
+    throw new Error('journaled continuation current Proof authority projection is incomplete');
+  }
+  const workItemsProjection = {
+    version: 'proof.onboarding-work-item-projection/v1',
+    authority: currentInventory.authority,
+    catalog,
+    work_items: workItems,
+  };
+  let validated: ReturnType<typeof validateProofCurrentCatalogAuthorityBytes>;
+  try {
+    validated = validateProofCurrentCatalogAuthorityBytes({
+      revalidationBytesBase64: Buffer.from(proofCanonicalJson(currentRevalidation), 'utf8').toString('base64'),
+      workItemsBytesBase64: Buffer.from(proofCanonicalJson(workItemsProjection), 'utf8').toString('base64'),
+      candidate,
+      admission,
+    });
+  } catch (error) {
+    throw new Error(`journaled continuation current Proof authority bytes are invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (proofCanonicalJson(validated.revalidation) !== proofCanonicalJson(currentRevalidation) ||
+      proofCanonicalJson(validated.workItems) !== proofCanonicalJson(workItemsProjection)) {
+    throw new Error('journaled continuation current Proof authority bytes changed during validation');
+  }
+  return authority;
 }
 
 export function buildChecklistContinuationAuthority(
@@ -1154,9 +1289,11 @@ export function buildChecklistContinuationAuthority(
     throw new Error('current Proof inventory authority is incomplete');
   }
   const workItems = current.workItems.map((item, index) => validateContinuationWorkItem(item, `current Proof WorkItem ${index}`));
-  const retainedBytes = fs.readFileSync(checkpointPath);
-  const prefixPath = prefixCheckpointPath ?? checkpointPath;
+  const retainedPath = fs.realpathSync(path.resolve(checkpointPath));
+  const retainedBytes = fs.readFileSync(retainedPath);
+  const prefixPath = fs.realpathSync(path.resolve(prefixCheckpointPath ?? checkpointPath));
   const prefix = JSON.parse(fs.readFileSync(prefixPath, 'utf8')) as Json;
+  const retained = JSON.parse(retainedBytes.toString('utf8')) as Json;
   const authority = {
     version: CONTINUATION_AUTHORITY_VERSION,
     project_id: inventoryAuthority.project_id,
@@ -1168,10 +1305,12 @@ export function buildChecklistContinuationAuthority(
     retained: {
       checkpoint_sha256: `sha256:${createHash('sha256').update(retainedBytes).digest('hex')}`,
       prefix_checkpoint_sha256: sha256File(prefixPath),
-      checkpoint_session_id: typeof (JSON.parse(retainedBytes.toString('utf8')) as Json).sessionId === 'string' ? (JSON.parse(retainedBytes.toString('utf8')) as Json).sessionId : '',
+      checkpoint_session_id: typeof retained.sessionId === 'string' ? retained.sessionId : '',
       prefix_session_id: typeof prefix.sessionId === 'string' ? prefix.sessionId : '',
-      checkpoint_graph_semantic_digest: typeof (JSON.parse(retainedBytes.toString('utf8')) as Json).graphSemanticDigest === 'string' ? (JSON.parse(retainedBytes.toString('utf8')) as Json).graphSemanticDigest : '',
+      checkpoint_graph_semantic_digest: typeof retained.graphSemanticDigest === 'string' ? retained.graphSemanticDigest : '',
       prefix_graph_semantic_digest: typeof prefix.graphSemanticDigest === 'string' ? prefix.graphSemanticDigest : '',
+      checkpoint_path: retainedPath,
+      prefix_checkpoint_path: prefixPath,
     },
     affected_component_ids: utf8Sorted(affectedComponentIds),
     reused_component_ids: utf8Sorted(reusedComponentIds),
@@ -1260,7 +1399,9 @@ export async function validateChecklistContinuationCheckpoint(
   if (fs.existsSync(directMaterializedConfig)) {
     const restored = await loadChecklistMaterializedConfig(target);
     if (Object.prototype.hasOwnProperty.call(restored.config.checks || {}, 'continue-retained-catalog')) {
-      const authority = continuationGraphAuthority(restored.config, restored.checkpoint);
+      const authority = await validateJournaledContinuationAuthority(
+        continuationGraphAuthority(restored.config, restored.checkpoint),
+      );
       const workItems = continuationGraphWorkItems(restored.config, restored.checkpoint);
       return Object.freeze({mode: 'continuation-frontier', checkpoint, checkpointPath: target, config: restored.config,
         materializedConfigPath: restored.materializedConfigPath, expectedComponentIds: Object.freeze(workItems.map(item => item.component_id as string)), workItems,
@@ -2171,35 +2312,11 @@ export async function validateCurrentRetainedCatalog(
   }
   const inventory = parseJson(inventoryResult, 'current Proof onboarding inventory') as Json;
   const authority = assertAuthenticatedInventory(inventory, 'current Proof onboarding inventory');
-  validateStructuralInventory(inventory, authority.project_id);
+  const projectId = typeof authority.project_id === 'string' ? authority.project_id : undefined;
+  if (!projectId) throw new Error('current Proof onboarding inventory authority has no project ID');
+  validateStructuralInventory(inventory, projectId);
 
-  const projection = ExecutionJournal.restoreGraphCheckpoint(
-    compileClaimPlan(retainedConfig),
-    retainedCheckpoint,
-  ).getInstanceProjection();
-  const active = Object.values(projection.claimsById).filter(claim => claim.active && claim.scope.length === 1);
-  const candidates = active.filter(claim => claim.claim === 'proof.candidate@1' && claim.producerCheckId === 'inspect');
-  const admissions = active.filter(claim => claim.claim === 'proof.admitted_receipt@1' && claim.producerCheckId === 'proof_admit');
-  if (candidates.length !== 1 || admissions.length !== 1) {
-    throw new Error('retained Proof prefix must contain exactly one project catalog candidate and admission');
-  }
-  const candidateClaim = candidates[0];
-  const admissionClaim = admissions[0];
-  const candidate = {
-    claimId: candidateClaim.claimId,
-    claim: candidateClaim.claim,
-    payload: candidateClaim.payload,
-    payloadFingerprint: candidateClaim.payloadFingerprint,
-    producerCheckId: candidateClaim.producerCheckId,
-    scope: candidateClaim.scope,
-    parentClaimIds: candidateClaim.parentClaimIds,
-    provenance: 'attempt',
-    attemptId: candidateClaim.producerAttemptId,
-    fence: candidateClaim.producerFence,
-    wireMode: candidateClaim.wireMode,
-    proofAdmission: candidateClaim.proofCandidateEvidence,
-  } as any;
-  const admission = admissionClaim as any;
+  const {candidate, admission} = retainedProofCandidateAdmission(retainedConfig, retainedCheckpoint);
   const admitted = validateProofCandidateAdmissionBinding(candidate, admission);
   const admissionObject = JSON.parse(admitted.wire) as Json;
   const revalidationInput = governedCanonicalJson({
@@ -2225,7 +2342,7 @@ export async function validateCurrentRetainedCatalog(
     inventory,
     candidate,
     admission,
-    authority.project_id,
+    projectId,
   );
   const receipt = revalidation.receipt;
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
@@ -2253,7 +2370,7 @@ export async function validateCurrentRetainedCatalog(
     inventory,
     candidate,
     admission,
-    authority.project_id,
+    projectId,
   );
   if (!Array.isArray(validated.work_items) || validated.work_items.length === 0) {
     throw new Error('current Proof onboarding work-items returned no WorkItems');
@@ -2268,10 +2385,16 @@ export async function validateCurrentRetainedCatalog(
   // already-validated clean subject revision without changing Proof-owned
   // WorkItem content or hashes.
   const currentBaselineCommit = gitScalar(subject, ['rev-parse', 'HEAD^{commit}'], 'current Proof subject');
-  const materializedWorkItems = workItems.map(item => ({
-    ...item,
-    baseline_commit: typeof item.baseline_commit === 'string' ? item.baseline_commit : currentBaselineCommit,
-  }));
+  const materializedWorkItems: Array<Json & {component_id: string}> = workItems.map((item, index): Json & {component_id: string} => {
+    if (typeof item.component_id !== 'string' || item.component_id.length === 0) {
+      throw new Error(`current Proof WorkItem ${index} has no component ID`);
+    }
+    return {
+      ...item,
+      component_id: item.component_id,
+      baseline_commit: typeof item.baseline_commit === 'string' ? item.baseline_commit : currentBaselineCommit,
+    };
+  });
   writeJson(path.join(output, 'preflight', 'current-catalog-validation.json'), {
     status: 'current-proof-catalog-validated',
     authority,
@@ -2310,22 +2433,27 @@ export async function deriveCurrentChecklistAffectedBatches(
   if (result.status !== 0 && result.status !== 2) {
     throw new Error(`current Proof orphan_code_clean failed with exit ${result.status}`);
   }
-  const events = result.stdout.split(/\r?\n/).flatMap(line => {
-    try {
-      const value = JSON.parse(line);
-      return value && typeof value === 'object' && !Array.isArray(value) ? [value as Json] : [];
-    } catch {
-      return [];
+  const events: Json[] = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch {
+      throw new Error('current Proof orphan_code_clean emitted malformed JSONL');
     }
-  });
+    if (!isRecord(value)) throw new Error('current Proof orphan_code_clean emitted a non-object JSONL record');
+    events.push(value);
+  }
   const done = events.filter(event => event.event === 'check_done');
   if (done.length !== 1 || done[0].check !== 'orphan_code_clean' || done[0].stage !== 'implement' ||
       (result.status === 0 && done[0].status !== 'pass') ||
       (result.status === 2 && done[0].status !== 'warn') ||
-      !Array.isArray(done[0].details) || done[0].details.some(value => typeof value !== 'string')) {
+      (result.status === 0 && done[0].details !== undefined &&
+        (!Array.isArray(done[0].details) || done[0].details.some(value => typeof value !== 'string'))) ||
+      (result.status === 2 && (!Array.isArray(done[0].details) || done[0].details.some(value => typeof value !== 'string')))) {
     throw new Error('current Proof orphan_code_clean did not return exactly one matching implement check_done receipt');
   }
-  const orphanPaths = [...new Set((done[0].details as string[]).map(detail => {
+  const details = (done[0].details === undefined ? [] : done[0].details) as string[];
+  const orphanPaths = [...new Set(details.map(detail => {
     const match = /^([^:]+):[0-9]+(?:\s|$)/.exec(detail);
     if (!match) throw new Error(`orphan_code_clean detail has no exact source path: ${detail}`);
     return match[1];
@@ -4231,12 +4359,17 @@ export function materializedComponentWorkItems(config: VisorConfig, checkpoint: 
   );
   if (catalogs.length !== 1) throw new Error('checkpoint must contain exactly one active materialized component catalog');
   const catalog = catalogs[0];
-  const baselineCommit = (() => {
-    try { return checklistBaselineCommitFromCheckpoint(config, checkpoint); } catch { return undefined; }
+  const validatedCheckpoint = (() => {
+    try { return ExecutionJournal.validateGraphCheckpointIntegrity(checkpoint); } catch { return undefined; }
   })();
-  const items = activeClaims.filter(claim =>
+  const baselineCommit = (() => {
+    try {
+      return validatedCheckpoint ? checklistBaselineCommitFromCheckpoint(config, validatedCheckpoint) : undefined;
+    } catch { return undefined; }
+  })();
+  const items: Array<Json & {component_id: string}> = activeClaims.filter(claim =>
     claim.kind === 'controller-item' && claim.claim === 'component.work_item@1' && claim.controllerCatalogClaimId === catalog.claimId,
-  ).map((claim, index) => {
+  ).map((claim, index): Json & {component_id: string} => {
     if (!claim.payload || typeof claim.payload !== 'object' || Array.isArray(claim.payload)) {
       throw new Error(`materialized component WorkItem ${index} is not an object`);
     }
@@ -4250,13 +4383,17 @@ export function materializedComponentWorkItems(config: VisorConfig, checkpoint: 
     if (typeof item.baseline_commit !== 'string' && !baselineCommit) {
       throw new Error(`materialized component WorkItem ${index} has no immutable baseline commit`);
     }
-    return {...item, baseline_commit: item.baseline_commit ?? baselineCommit};
+    return {
+      ...item,
+      component_id: item.component_id,
+      baseline_commit: item.baseline_commit ?? baselineCommit,
+    };
   });
-  const ids = items.map(item => item.component_id as string);
+  const ids = items.map(item => item.component_id);
   if (new Set(ids).size !== ids.length || utf8Sorted(ids).join('\u0000') !== materializedComponentIds(config, checkpoint).join('\u0000')) {
     throw new Error('materialized component WorkItems do not exactly match the current component IDs');
   }
-  return Object.freeze(items.sort((left, right) => Buffer.from(left.component_id as string).compare(Buffer.from(right.component_id as string))));
+  return Object.freeze(items.sort((left, right) => Buffer.from(left.component_id).compare(Buffer.from(right.component_id))));
 }
 
 function continuationGraphWorkItems(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): readonly Json[] {
@@ -5537,7 +5674,9 @@ async function main(): Promise<void> {
 
   if (checklistOnboarding) {
     writeJson(path.join(roots.output, 'preflight.json'), {
-      status: checklistResumeCheckpointPath ? 'launch-ready-checklist-skeleton-resume' : 'launch-ready-checklist-init-journaled',
+      status: checklistContinueCheckpointPath
+        ? 'launch-ready-checklist-continuation-preflight'
+        : checklistResumeCheckpointPath ? 'launch-ready-checklist-skeleton-resume' : 'launch-ready-checklist-init-journaled',
       subject_root: roots.subject,
       protected_original_root: roots.original,
       subject_revision: revision,
@@ -5564,10 +5703,13 @@ async function main(): Promise<void> {
         codex_sha256: governedCodexSha256,
       } : {}),
       subject_codex_override_rejected: true,
-      journaled_init_pending: true,
-      journaled_baseline_pending: true,
+      journaled_init_pending: !checklistContinueCheckpointPath,
+      journaled_baseline_pending: !checklistContinueCheckpointPath,
       ...(checklistResumeCheckpointPath ? {checklist_skeleton_checkpoint: checklistResumeCheckpointPath} : {}),
-      note: 'Checklist bootstrap journals Proof init, confirmation, and immutable baseline commit as graph command boundaries.',
+      ...(checklistContinueCheckpointPath ? {checklist_continuation_checkpoint: checklistContinueCheckpointPath} : {}),
+      note: checklistContinueCheckpointPath
+        ? 'Checklist continuation validates the retained checkpoint and current Proof authority without re-running bootstrap commands.'
+        : 'Checklist bootstrap journals Proof init, confirmation, and immutable baseline commit as graph command boundaries.',
     });
   } else {
     const init = runProof(proof, roots.subject, roots.output, 'preflight', ['init', '--name', 'jsonparser', '--template', 'go-package', '--scope', '.', '--strict'], timeout);
@@ -5619,6 +5761,7 @@ async function main(): Promise<void> {
   let config: VisorConfig;
   let checklistResumeCheckpoint: GraphJournalCheckpointV1 | undefined;
   let checklistResumeMaterializedConfigPath: string | undefined;
+  let checklistContinuationMaterializedConfigPath: string | undefined;
   let checklistContinuationEvidence: ChecklistContinuationEvidence | undefined;
   if (checklistOnboarding) {
     // The checklist profile is a standalone native Visor graph.  Only the
@@ -5703,6 +5846,12 @@ async function main(): Promise<void> {
   } else {
     config = await loadOnboardingConfig(proof, roots.subject, roots.output, timeout);
   }
+  if (checklistContinuationEvidence) {
+    // Continuation outputs, including a completed/readback checkpoint, must
+    // retain the exact graph materialization that was loaded for this run.
+    const materialized = persistChecklistMaterializedConfig(roots.output, config);
+    checklistContinuationMaterializedConfigPath = materialized.path;
+  }
   if (checklistOnboarding) {
     writeJson(path.join(roots.output, 'preflight', 'checklist-overlay.json'), {
       mode: checklistContinueCheckpointPath ? 'checklist-continuation' : 'checklist-onboarding',
@@ -5718,7 +5867,14 @@ async function main(): Promise<void> {
     });
   }
   if (checklistContinuationEvidence) {
-      const currentChecklist = await loadCurrentChecklistShow(proof, roots.subject, roots.output, timeout);
+    const currentChecklist = await loadCurrentChecklistShow(proof, roots.subject, roots.output, timeout);
+    const expectedChecklist = activeChecklistNameFromCheckpoint(
+      checklistContinuationEvidence.config,
+      checklistContinuationEvidence.checkpoint,
+    );
+    if (currentChecklist.name !== expectedChecklist) {
+      throw new Error('current Proof checklist does not match the trusted active checkpoint checklist');
+    }
     const eligibility = validateChecklistContinuationEligibility(
       currentChecklist.show,
       checklistContinuationEvidence.mode === 'continuation-frontier',
@@ -5739,18 +5895,42 @@ async function main(): Promise<void> {
     });
   }
   if (values['preflight-only'] === 'true') {
+    const continuationAuthority = checklistContinuationEvidence?.authority
+      ? validateContinuationAuthority(checklistContinuationEvidence.authority, 'current continuation preflight authority')
+      : undefined;
+    const continuationWorkItems = continuationAuthority && Array.isArray(continuationAuthority.current_work_items)
+      ? continuationAuthority.current_work_items.length
+      : undefined;
+    const continuationAffected = continuationAuthority && Array.isArray(continuationAuthority.affected_component_ids)
+      ? continuationAuthority.affected_component_ids.length
+      : undefined;
+    const continuationReused = continuationAuthority && Array.isArray(continuationAuthority.reused_component_ids)
+      ? continuationAuthority.reused_component_ids.length
+      : undefined;
     writeJson(path.join(roots.output, 'preflight', 'summary.json'), {
       status: 'preflight-only-complete',
       subject_revision: revision,
-      requirements_baseline: checklistOnboarding ? 'journaled_pending' : 'recorded',
-      native_inventory: checklistOnboarding ? 'journaled_pending' : 'resolved',
-      project_role_invocation: checklistOnboarding ? 'journaled_at_managed_acquisition' : 'resolved',
+      requirements_baseline: checklistContinuationEvidence ? 'retained-checkpoint-authority' : checklistOnboarding ? 'journaled_pending' : 'recorded',
+      native_inventory: checklistContinuationEvidence ? 'current-proof-validated' : checklistOnboarding ? 'journaled_pending' : 'resolved',
+      project_role_invocation: checklistContinuationEvidence ? 'retained-checkpoint-authority' : checklistOnboarding ? 'journaled_at_managed_acquisition' : 'resolved',
       checklist_overlay: checklistOnboarding,
+      ...(checklistContinuationEvidence ? {
+        continuation_mode: 'current-authority-preflight',
+        current_catalog: {
+          status: 'validated',
+          full_component_count: continuationWorkItems,
+          affected_component_count: continuationAffected,
+          reused_component_count: continuationReused,
+        },
+      } : {}),
       strict_config: 'validated-with-actual-registered-providers',
       no_engine_dispatch: true,
       ...(checklistResumeMaterializedConfigPath ? {
         materialized_config: path.relative(roots.output, checklistResumeMaterializedConfigPath),
         checkpoint: path.relative(roots.output, checklistResumeCheckpointPath as string),
+      } : {}),
+      ...(checklistContinuationMaterializedConfigPath ? {
+        materialized_config: path.relative(roots.output, checklistContinuationMaterializedConfigPath),
       } : {}),
     });
     console.log(JSON.stringify({status: 'preflight-only-complete', output: roots.output}, null, 2));
@@ -5828,13 +6008,14 @@ async function main(): Promise<void> {
       checkpoint = continuationRun.checkpoint;
       checklistPausedBeforeTraces = continuationRun.paused;
       if (checklistPausedBeforeTraces) {
-        const materialized = persistChecklistMaterializedConfig(roots.output, config);
         writeCheckpoint(path.join(roots.output, 'checklist-traces-light-frontier-checkpoint.json'), checkpoint);
         writeJson(path.join(roots.output, 'preflight', 'checklist-traces-light-frontier.json'), {
           status: 'checklist-traces-light-ready-paused',
           checkpoint: 'checklist-traces-light-frontier-checkpoint.json',
           materialized_config: 'checklist-materialized-config.json',
-          materialized_config_sha256: materialized.digest,
+          materialized_config_sha256: checklistContinuationMaterializedConfigPath
+            ? sha256File(checklistContinuationMaterializedConfigPath)
+            : undefined,
           retained_component_ids: checklistContinuationEvidence.expectedComponentIds,
           resumed_from_retained_skeleton: checklistContinuationEvidence.mode === 'retained-skeleton',
           confirmation_replay: false,
@@ -5906,7 +6087,9 @@ async function main(): Promise<void> {
     }
     if (checklistOnboarding && checkpoint && typeof checkpoint === 'object') {
       latestChecklistCheckpoint = checkpoint as GraphJournalCheckpointV1;
-      refreshChecklistProgress(checklistProgressObservation);
+      refreshChecklistProgress(checklistPausedBeforeTraces
+        ? {...checklistProgressObservation, paused: true}
+        : checklistProgressObservation);
     }
     writeJson(path.join(roots.output, 'checkpoint.json'), checkpoint);
     writeJson(path.join(roots.output, 'visor-result.json'), result);

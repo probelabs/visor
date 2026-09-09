@@ -427,17 +427,21 @@ function validateExpandedStageCandidate(
   authorityClaimIds: ReadonlySet<string>,
 ): Json {
   validateCandidateShape(candidate, claimId, `expanded checklist ${stage} claim`);
+  const producerCheckId = typeof candidate.producerCheckId === 'string' ? candidate.producerCheckId : '';
+  const parentClaimIds = Array.isArray(candidate.parentClaimIds)
+    ? candidate.parentClaimIds.filter((parent): parent is string => typeof parent === 'string')
+    : [];
   if (
     candidate.claim !== (stage === 'continuation' ? 'native.continuation.checklist_snapshot@1' : `proof.checklist.${stage}-snapshot@1`) ||
     (stage === 'continuation'
-      ? !['checklist-continuation-snapshot', 'checklist-traces-light'].includes(candidate.producerCheckId)
-      : candidate.producerCheckId !== `checklist-${stage}`)
+      ? !['checklist-continuation-snapshot', 'checklist-traces-light'].includes(producerCheckId)
+      : producerCheckId !== `checklist-${stage}`)
   ) {
     throw new Error(`expanded checklist ${stage} claim has an invalid producer or claim reference`);
   }
   validateProjectScope(candidate.scope, `expanded checklist ${stage} claim`);
   if (stage === 'continuation' &&
-      (candidate.parentClaimIds.length !== 1 || !authorityClaimIds.has(candidate.parentClaimIds[0]))) {
+      (parentClaimIds.length !== 1 || !authorityClaimIds.has(parentClaimIds[0]))) {
     throw new Error('expanded checklist continuation claim must name the active catalog authority parent');
   }
   return { ...candidate, active: true };
