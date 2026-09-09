@@ -103,12 +103,12 @@ function createFixture(componentCount: 1 | 2): Fixture {
   return { parent, subject, original, codexHome, output };
 }
 
-function runnerEnv(fixture: Fixture): NodeJS.ProcessEnv {
+function runnerEnv(fixture: Fixture, defaultAuth = false): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of ['USE_CLAUDE_CODE', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'MODEL_NAME', 'MODEL', 'AI_PROVIDER']) {
     delete env[key];
   }
-  return {
+  const result = {
     ...env,
     NODE_ENV: 'test',
     VISOR_NATIVE_B_ZERO_MODEL_TEST: 'true',
@@ -116,9 +116,16 @@ function runnerEnv(fixture: Fixture): NodeJS.ProcessEnv {
     PROOF_BIN: configuredProof,
     TS_NODE_TRANSPILE_ONLY: '1',
   };
+  if (defaultAuth) delete result.CODEX_HOME;
+  return result;
 }
 
-function runRunnerResult(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume', extraArgs: string[] = []): ReturnType<typeof spawnSync> {
+function runRunnerResult(
+  fixture: Fixture,
+  mode: 'prepare' | 'pause' | 'resume',
+  extraArgs: string[] = [],
+  defaultAuth = false,
+): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, [
     '-r', 'ts-node/register/transpile-only', RUNNER, mode,
     '--subject-root', fixture.subject,
@@ -128,15 +135,20 @@ function runRunnerResult(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume',
     ...extraArgs,
   ], {
     cwd: ROOT,
-    env: runnerEnv(fixture),
+    env: runnerEnv(fixture, defaultAuth),
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 32 * 1024 * 1024,
   });
 }
 
-function runRunner(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume', extraArgs: string[] = []): ReturnType<typeof spawnSync> {
-  const result = runRunnerResult(fixture, mode, extraArgs);
+function runRunner(
+  fixture: Fixture,
+  mode: 'prepare' | 'pause' | 'resume',
+  extraArgs: string[] = [],
+  defaultAuth = false,
+): ReturnType<typeof spawnSync> {
+  const result = runRunnerResult(fixture, mode, extraArgs, defaultAuth);
   if (result.status !== 0) {
     throw new Error(`${mode} failed with exit ${result.status}\nstdout:\n${result.stdout || ''}\nstderr:\n${result.stderr || ''}`);
   }
@@ -416,6 +428,39 @@ describeNative('native Milestone B component/spec progression', () => {
       expect((resumed.events || []).filter((event: any) =>
         event?.claim === 'native.spec.item@1' && event.payload?.id !== focusId,
       )).toHaveLength(0);
+    } finally {
+      fs.rmSync(fixture.parent, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts the pinned default-auth path without requiring CODEX_HOME', () => {
+    const fixture = createFixture(1);
+    const codexBin = process.execPath;
+    const codexSha256 = sha256(codexBin);
+    const runner = fs.readFileSync(RUNNER, 'utf8');
+    expect(runner).toContain('engine.setExecutionContext(governedCodex);');
+    const governedArgs = [
+      '--governed-codex-transport', 'exec-jsonl-default-auth-v1',
+      '--codex-bin', codexBin,
+      '--codex-sha256', codexSha256,
+    ];
+    try {
+      runRunner(fixture, 'prepare', governedArgs, true);
+      const rows = nativeCatalog(fixture).rows;
+      expect(rows).toHaveLength(1);
+      const focusId = rows[0].id;
+
+      const invalid = runRunnerResult(fixture, 'pause', [
+        '--hold-id', focusId,
+        '--governed-codex-transport', 'unsupported-transport',
+      ], true);
+      expect(invalid.status).not.toBe(0);
+      expect(`${invalid.stdout || ''}${invalid.stderr || ''}`).toContain(
+        '--governed-codex-transport must be exec-jsonl-default-auth-v1',
+      );
+
+      runRunner(fixture, 'pause', ['--hold-id', focusId, ...governedArgs], true);
+      runRunner(fixture, 'resume', governedArgs, true);
     } finally {
       fs.rmSync(fixture.parent, { recursive: true, force: true });
     }

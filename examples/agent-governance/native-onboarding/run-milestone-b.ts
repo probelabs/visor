@@ -13,10 +13,16 @@ import { ExecutionJournal } from '../../../src/snapshot-store';
 import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import type { PRInfo } from '../../../src/pr-analyzer';
 import type { GeneratedDispatchGate } from '../../../src/types/engine';
+import { assertCodexHomeAbsent, verifyCodexBinarySha256 } from './run-onboarding';
 
 type Json = Record<string, unknown>;
 type ProofRow = { id: string; component: string; file_path: string } & Json;
 type CommandResult = { status: number; stdout: string; stderr: string };
+type GovernedCodexExecution = {
+  governedCodexTransport: 'exec-jsonl-default-auth-v1';
+  codexBin: string;
+  codexSha256: string;
+};
 
 const FOCUS_IDS_ENV = 'VISOR_NATIVE_B_FOCUS_IDS';
 
@@ -112,23 +118,40 @@ function assertRoots(subjectArg: string, originalArg: string, outputArg: string)
   return { subject, original, output };
 }
 
-function requireReadonlyCodexHome(subject: string, original: string, output: string): string {
-  const value = process.env.CODEX_HOME;
-  if (!value || !path.isAbsolute(value)) throw new Error('pause/resume requires an absolute CODEX_HOME');
-  const home = realDirectory(value, 'CODEX_HOME');
-  if (inside(home, subject) || inside(home, original) || inside(home, output) || inside(output, home)) {
-    throw new Error('CODEX_HOME must be outside subject, original, and run output roots');
-  }
-  if (!fs.existsSync(path.join(home, 'config.toml'))) throw new Error('CODEX_HOME/config.toml is required');
-  return home;
+function executable(value: string, option: string): string {
+  if (!path.isAbsolute(value)) throw new Error(`${option} must be an absolute path`);
+  const resolved = fs.realpathSync(value);
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error(`${option} is not executable`);
+  return resolved;
 }
 
 function proofExecutable(value: string): string {
-  if (!path.isAbsolute(value)) throw new Error('--proof-bin must be an absolute path');
-  const resolved = fs.realpathSync(value);
-  const stat = fs.statSync(resolved);
-  if (!stat.isFile() || (stat.mode & 0o111) === 0) throw new Error('--proof-bin is not executable');
-  return resolved;
+  return executable(value, '--proof-bin');
+}
+
+function resolveGovernedCodexExecution(
+  values: Record<string, string>,
+  subject: string,
+  original: string,
+  output: string,
+  zeroModel: boolean,
+): GovernedCodexExecution | undefined {
+  const transport = values['governed-codex-transport'];
+  const codexBinArg = values['codex-bin'];
+  const codexSha256Arg = values['codex-sha256'];
+  const anyPin = transport !== undefined || codexBinArg !== undefined || codexSha256Arg !== undefined;
+  if (!anyPin && zeroModel) return undefined;
+  if (transport !== 'exec-jsonl-default-auth-v1') {
+    throw new Error('--governed-codex-transport must be exec-jsonl-default-auth-v1');
+  }
+  if (!codexBinArg || !codexSha256Arg) {
+    throw new Error('--codex-bin and --codex-sha256 are required for exec-jsonl-default-auth-v1');
+  }
+  const codexBin = executable(codexBinArg, '--codex-bin');
+  const codexSha256 = verifyCodexBinarySha256(codexBin, codexSha256Arg);
+  assertCodexHomeAbsent(subject, original, output);
+  return { governedCodexTransport: transport, codexBin, codexSha256 };
 }
 
 function writeText(file: string, value: string): void {
@@ -373,7 +396,11 @@ function installZeroModelPromptWitness(output: string): void {
   };
 }
 
-async function configForSubject(subject: string, output: string) {
+async function configForSubject(
+  subject: string,
+  output: string,
+  governedCodex?: GovernedCodexExecution,
+) {
   const config = await loadConfig(CONFIG_PATH, { strict: true });
   if (zeroModelTestEnabled()) {
     const review = (config as any).subgraphs?.['native-spec-item']?.checks?.['review-native-item'];
@@ -383,7 +410,15 @@ async function configForSubject(subject: string, output: string) {
     review.ai = { ...mockAi, provider: 'mock', model: 'mock' };
     installZeroModelPromptWitness(output);
   }
-  return { config, engine: new StateMachineExecutionEngine(subject) };
+  const engine = new StateMachineExecutionEngine(subject);
+  // Zero-model fixtures intentionally replace the governed reviewer with the
+  // existing mock provider.  Keep their private-config path isolated from a
+  // governed transport context; production reviewers receive the exact pins.
+  if (governedCodex && !zeroModelTestEnabled()) {
+    engine.setExecutionContext(governedCodex);
+    writeJson(path.join(output, 'diagnostic', 'execution-context.json'), governedCodex);
+  }
+  return { config, engine };
 }
 
 async function prepare(subject: string, proof: string, output: string, focusIds?: readonly string[]): Promise<void> {
@@ -523,7 +558,13 @@ function assertUnchangedSiblingGenerations(before: any, after: any, heldId: stri
   }
 }
 
-async function pause(subject: string, proof: string, output: string, holdId?: string): Promise<void> {
+async function pause(
+  subject: string,
+  proof: string,
+  output: string,
+  governedCodex: GovernedCodexExecution | undefined,
+  holdId?: string,
+): Promise<void> {
   const catalogRows = baselineCatalogRows(output);
   const rows = baselineSelectedRows(output);
   const held = holdId || rows[0].id;
@@ -537,7 +578,7 @@ async function pause(subject: string, proof: string, output: string, holdId?: st
     if (pauseHashes[row.id] !== proofFileHash(baseline.requirement as Json, row.id)) throw new Error(`Proof input changed before pause for ${row.id}`);
   }
   process.env.PROOF_BIN = proof;
-  const { config, engine } = await configForSubject(subject, output);
+  const { config, engine } = await configForSubject(subject, output, governedCodex);
   const observations: Json[] = [];
   const result = await engine.executeGroupedChecks(
     prInfo,
@@ -595,7 +636,12 @@ async function pause(subject: string, proof: string, output: string, holdId?: st
   console.log(JSON.stringify({ mode: 'pause', status: 'quiescent-ready-frontier', held_scope: held, output }, null, 2));
 }
 
-async function resume(subject: string, proof: string, output: string): Promise<void> {
+async function resume(
+  subject: string,
+  proof: string,
+  output: string,
+  governedCodex: GovernedCodexExecution | undefined,
+): Promise<void> {
   const checkpointPath = path.join(output, 'paused', 'checkpoint.json');
   if (!fs.existsSync(checkpointPath)) throw new Error(`missing paused checkpoint: ${checkpointPath}`);
   if (fs.existsSync(path.join(output, 'resumed', 'checkpoint.json')) || fs.existsSync(path.join(output, 'commands', 'resume-catalog'))) {
@@ -624,7 +670,7 @@ async function resume(subject: string, proof: string, output: string): Promise<v
   }
 
   process.env.PROOF_BIN = proof;
-  const { config, engine } = await configForSubject(subject, output);
+  const { config, engine } = await configForSubject(subject, output, governedCodex);
   const observations: Json[] = [];
   const resumed = await engine.resumeGraphCheckpoint({
     checkpoint,
@@ -697,6 +743,7 @@ async function main(): Promise<void> {
   const roots = assertRoots(required(values, 'subject-root'), required(values, 'original-root'), required(values, 'output'));
   diagnosticOutput = roots.output;
   const proof = proofExecutable(required(values, 'proof-bin'));
+  const zeroModel = zeroModelTestEnabled();
   // workspace:false is intentional for this prototype.  Ordinary command
   // providers inherit process.cwd(), so make the validated subject the process
   // cwd before loading or executing any Graph-v2 mode.
@@ -706,14 +753,28 @@ async function main(): Promise<void> {
   process.env.USE_CODEX = 'true';
   process.env.DISABLE_FALLBACK = '1';
   process.env.AUTO_FALLBACK = '0';
-  process.env.VISOR_DEBUG_AI_SESSIONS = 'true';
+  process.env.VISOR_DEBUG_AI_SESSIONS = zeroModel ? 'true' : 'false';
   process.env.VISOR_TRACE_DIR = process.env.VISOR_TRACE_DIR || path.join(roots.output, 'traces');
   if (mode === 'prepare') {
+    const hasGovernedArgs = values['governed-codex-transport'] !== undefined ||
+      values['codex-bin'] !== undefined || values['codex-sha256'] !== undefined;
+    // Prepare is zero-model, but validate explicit transport pins when the
+    // caller supplies them so the same invocation can be copied to pause and
+    // resume without silently accepting an unverified identity.
+    if (hasGovernedArgs) {
+      resolveGovernedCodexExecution(values, roots.subject, roots.original, roots.output, zeroModel);
+    }
     ensureFreshPrepareOutput(roots.output);
     setFocusIdsTransport(requestedFocusIds);
     return prepare(roots.subject, proof, roots.output, requestedFocusIds);
   }
-  requireReadonlyCodexHome(roots.subject, roots.original, roots.output);
+  const governedCodex = resolveGovernedCodexExecution(
+    values,
+    roots.subject,
+    roots.original,
+    roots.output,
+    zeroModel,
+  );
   const selectedRows = baselineSelectedRows(roots.output);
   const persistedFocusIds = preparedFocusIds(roots.output, selectedRows);
   if (requestedFocusIds !== undefined) {
@@ -728,8 +789,8 @@ async function main(): Promise<void> {
   const aiArtifacts = path.join(roots.output, 'ai');
   fs.mkdirSync(aiArtifacts, { recursive: true });
   process.env.VISOR_DEBUG_ARTIFACTS = aiArtifacts;
-  if (mode === 'pause') return pause(roots.subject, proof, roots.output, values['hold-id']);
-  if (mode === 'resume') return resume(roots.subject, proof, roots.output);
+  if (mode === 'pause') return pause(roots.subject, proof, roots.output, governedCodex, values['hold-id']);
+  if (mode === 'resume') return resume(roots.subject, proof, roots.output, governedCodex);
   throw new Error(`unknown mode ${mode}; expected prepare, pause, or resume`);
 }
 
