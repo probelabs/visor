@@ -16,6 +16,7 @@ const CHECKLIST_SNAPSHOT_CLAIMS = {
   'proof.checklist.snapshot@1': undefined,
   'proof.checklist.research-snapshot@1': 'research',
   'proof.checklist.skeleton-snapshot@1': 'skeleton',
+  'native.continuation.checklist_snapshot@1': 'continuation',
 } as const;
 type ChecklistSnapshotClaim = keyof typeof CHECKLIST_SNAPSHOT_CLAIMS;
 
@@ -31,6 +32,10 @@ export type NativeChecklistProgressInput = Readonly<{
   requireProofSnapshotClaim?: boolean;
   paused?: boolean;
   resumed?: boolean;
+  /** Authoritative retained catalog IDs, when a continuation is running. */
+  retainedCatalogComponentIds?: readonly string[];
+  /** Component IDs with newly derived work in this continuation stage. */
+  affectedComponentIds?: readonly string[];
 }>;
 
 export type NativeChecklistProgressState =
@@ -82,6 +87,8 @@ export type NativeChecklistProgress = Readonly<{
     components: NativeChecklistOperationalCollection;
     specifications: NativeChecklistOperationalCollection;
     batches: NativeChecklistOperationalCollection;
+    /** Retained catalog coverage is distinct from this stage's work batches. */
+    catalog_coverage: NativeChecklistCatalogCoverage;
     discovered: Readonly<{
       project: number;
       components: number;
@@ -161,6 +168,18 @@ export type NativeChecklistOperationalCollection = Readonly<{
     id: string;
     state: NativeChecklistOperationalState;
     check_ids: readonly string[];
+  }>[];
+}>;
+
+export type NativeChecklistCatalogCoverage = Readonly<{
+  known: boolean;
+  known_count: number;
+  affected_count: number;
+  reused_count: number;
+  unexpanded_count: number;
+  items: readonly Readonly<{
+    id: string;
+    disposition: 'affected' | 'reused';
   }>[];
 }>;
 
@@ -305,7 +324,7 @@ function validateSnapshotClaim(
   snapshot: Json,
   claimInput: unknown,
   requireLiveClaim: boolean
-): { claim_id?: string; source?: ChecklistSnapshotClaim; stage?: 'research' | 'skeleton' } {
+): { claim_id?: string; source?: ChecklistSnapshotClaim; stage?: 'research' | 'skeleton' | 'continuation' } {
   if (claimInput === undefined) return {};
   const claimName =
     isRecord(claimInput) && typeof claimInput.claim === 'string' ? claimInput.claim : undefined;
@@ -341,7 +360,7 @@ function validateSnapshotClaim(
 
 type SelectedChecklistSnapshotClaim = Readonly<{
   claim: Json;
-  stage: 'bootstrap' | 'research' | 'skeleton';
+  stage: 'bootstrap' | 'research' | 'skeleton' | 'continuation';
 }>;
 
 function requireClaimId(value: unknown, label: string): string {
@@ -404,16 +423,23 @@ function validateProjectScope(scope: unknown, label: string): Json[] {
 function validateExpandedStageCandidate(
   candidate: Json,
   claimId: string,
-  stage: 'research' | 'skeleton'
+  stage: 'research' | 'skeleton' | 'continuation',
+  authorityClaimIds: ReadonlySet<string>,
 ): Json {
   validateCandidateShape(candidate, claimId, `expanded checklist ${stage} claim`);
   if (
-    candidate.claim !== `proof.checklist.${stage}-snapshot@1` ||
-    candidate.producerCheckId !== `checklist-${stage}`
+    candidate.claim !== (stage === 'continuation' ? 'native.continuation.checklist_snapshot@1' : `proof.checklist.${stage}-snapshot@1`) ||
+    (stage === 'continuation'
+      ? !['checklist-continuation-snapshot', 'checklist-traces-light'].includes(candidate.producerCheckId)
+      : candidate.producerCheckId !== `checklist-${stage}`)
   ) {
     throw new Error(`expanded checklist ${stage} claim has an invalid producer or claim reference`);
   }
   validateProjectScope(candidate.scope, `expanded checklist ${stage} claim`);
+  if (stage === 'continuation' &&
+      (candidate.parentClaimIds.length !== 1 || !authorityClaimIds.has(candidate.parentClaimIds[0]))) {
+    throw new Error('expanded checklist continuation claim must name the active catalog authority parent');
+  }
   return { ...candidate, active: true };
 }
 
@@ -464,6 +490,11 @@ function activeExpandedChecklistClaims(projection: unknown): SelectedChecklistSn
   if (!isRecord(projection) || !isRecord(projection.claimsById)) {
     throw new Error('expanded instance projection is malformed');
   }
+  const authorityClaimIds = new Set(
+    Object.entries(projection.claimsById)
+      .filter(([, candidate]) => isRecord(candidate) && candidate.active === true && candidate.claim === 'native.continuation.catalog@1')
+      .map(([claimId]) => claimId),
+  );
   const selected: SelectedChecklistSnapshotClaim[] = [];
   const seenByStage = new Set<string>();
   for (const [claimIdKey, candidateValue] of Object.entries(projection.claimsById)) {
@@ -474,13 +505,15 @@ function activeExpandedChecklistClaims(projection: unknown): SelectedChecklistSn
         ? 'research'
         : claim === 'proof.checklist.skeleton-snapshot@1'
           ? 'skeleton'
+          : claim === 'native.continuation.checklist_snapshot@1'
+            ? 'continuation'
           : undefined;
     if (!stage && claim === 'proof.checklist.snapshot@1') {
       throw new Error('expanded checklist bootstrap claim is foreign to the root stage');
     }
     if (!stage) continue;
     const claimId = requireClaimId(claimIdKey, `active expanded ${stage} claim ID`);
-    const candidate = validateExpandedStageCandidate(candidateValue, claimId, stage);
+    const candidate = validateExpandedStageCandidate(candidateValue, claimId, stage, authorityClaimIds);
     if (seenByStage.has(stage))
       throw new Error(`duplicate active expanded checklist ${stage} claim`);
     seenByStage.add(stage);
@@ -502,6 +535,8 @@ export type NativeChecklistProjectionInput = Readonly<{
   checkpointTimestamp?: unknown;
   paused?: boolean;
   resumed?: boolean;
+  retainedCatalogComponentIds?: readonly string[];
+  affectedComponentIds?: readonly string[];
 }>;
 
 export function buildNativeChecklistProgressFromProjections(
@@ -514,7 +549,8 @@ export function buildNativeChecklistProgressFromProjections(
   const bootstrap = candidates.find(candidate => candidate.stage === 'bootstrap');
   const research = candidates.find(candidate => candidate.stage === 'research');
   const skeleton = candidates.find(candidate => candidate.stage === 'skeleton');
-  if (!bootstrap) {
+  const continuation = candidates.find(candidate => candidate.stage === 'continuation');
+  if (!bootstrap && !continuation) {
     throw new Error('active expanded checklist stage requires an active root bootstrap claim');
   }
   if (skeleton) {
@@ -533,7 +569,7 @@ export function buildNativeChecklistProgressFromProjections(
       );
     }
   }
-  const selected = skeleton ?? research ?? bootstrap;
+  const selected = continuation ?? skeleton ?? research ?? bootstrap;
   if (!selected) throw new Error('no active supported Proof checklist snapshot claim was found');
   return buildNativeChecklistProgress({
     proofSnapshot: selected.claim.payload,
@@ -544,6 +580,8 @@ export function buildNativeChecklistProgressFromProjections(
     requireProofSnapshotClaim: true,
     paused: input.paused,
     resumed: input.resumed,
+    retainedCatalogComponentIds: input.retainedCatalogComponentIds,
+    affectedComponentIds: input.affectedComponentIds,
   });
 }
 
@@ -660,6 +698,37 @@ type OperationalProjectionResult = Readonly<{
   unknown: readonly string[];
 }>;
 
+function catalogCoverage(
+  retainedCatalogComponentIds: readonly string[] | undefined,
+  affectedComponentIds: readonly string[] | undefined,
+): NativeChecklistCatalogCoverage {
+  if (retainedCatalogComponentIds === undefined) {
+    return {
+      known: false,
+      known_count: 0,
+      affected_count: 0,
+      reused_count: 0,
+      unexpanded_count: 1,
+      items: [],
+    };
+  }
+  const known = [...new Set(retainedCatalogComponentIds.filter(id => id.length > 0))]
+    .sort((a, b) => Buffer.from(a).compare(Buffer.from(b)));
+  const affected = new Set((affectedComponentIds ?? []).filter(id => known.includes(id)));
+  const items = known.map(id => ({
+    id,
+    disposition: affected.has(id) ? 'affected' as const : 'reused' as const,
+  }));
+  return {
+    known: true,
+    known_count: known.length,
+    affected_count: affected.size,
+    reused_count: known.length - affected.size,
+    unexpanded_count: 0,
+    items,
+  };
+}
+
 type OperationalKind = 'project' | 'component' | 'specification' | 'batch';
 
 function explicitOperationalKind(generation: Json): OperationalKind | undefined {
@@ -676,7 +745,11 @@ function explicitOperationalKind(generation: Json): OperationalKind | undefined 
   return undefined;
 }
 
-function operationalProjection(projection: unknown): OperationalProjectionResult {
+function operationalProjection(
+  projection: unknown,
+  retainedCatalogComponentIds?: readonly string[],
+  affectedComponentIds?: readonly string[],
+): OperationalProjectionResult {
   if (!isRecord(projection) || !isRecord(projection.generationsById)) {
     const unknown = { state: 'unknown' as const, known: false, check_ids: [] };
     const empty = (unexpandedCount: number) => collection([], false, unexpandedCount);
@@ -686,6 +759,7 @@ function operationalProjection(projection: unknown): OperationalProjectionResult
         components: empty(1),
         specifications: empty(1),
         batches: empty(1),
+        catalog_coverage: catalogCoverage(retainedCatalogComponentIds, affectedComponentIds),
         discovered: { project: 0, components: 0, specifications: 0, batches: 0, total: 0 },
         unknown_count: 1,
         unexpanded_count: 4,
@@ -804,6 +878,7 @@ function operationalProjection(projection: unknown): OperationalProjectionResult
       components,
       specifications,
       batches,
+      catalog_coverage: catalogCoverage(retainedCatalogComponentIds, affectedComponentIds),
       discovered: {
         project: project.known ? 1 : 0,
         components: components.known_count,
@@ -927,7 +1002,11 @@ export function buildNativeChecklistProgress(
     journal.graph_semantic_digest !== undefined &&
     journal.integrity_digest !== undefined &&
     hasActiveReadyGeneration(input.instanceProjection);
-  const operationalResult = operationalProjection(input.instanceProjection);
+  const operationalResult = operationalProjection(
+    input.instanceProjection,
+    input.retainedCatalogComponentIds,
+    input.affectedComponentIds,
+  );
   unknown.push(...operationalResult.unknown);
   const checklistName = requiredString(snapshot.checklist, 'proof checklist checklist');
   const proofStepsPending =
@@ -1042,6 +1121,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
       `proof_snapshot=schema:${progress.evidence.proof_snapshot.schema_version} source:${progress.evidence.proof_snapshot.source || 'unlinked'}${progress.evidence.proof_snapshot.stage ? ` stage:${progress.evidence.proof_snapshot.stage}` : ''} digest:${progress.evidence.proof_snapshot.digest}${progress.evidence.proof_snapshot.claim_id ? ` claim:${progress.evidence.proof_snapshot.claim_id}` : ''}`,
       `checkpoint ${journalFields.join(' ')}`,
       `operational discovered=project:${progress.operational.discovered.project} components:${progress.operational.discovered.components} specifications:${progress.operational.discovered.specifications} batches:${progress.operational.discovered.batches} total:${progress.operational.discovered.total} unknown=${progress.operational.unknown_count} unexpanded=${progress.operational.unexpanded_count}`,
+      `catalog coverage=known:${progress.operational.catalog_coverage.known_count} affected:${progress.operational.catalog_coverage.affected_count} reused:${progress.operational.catalog_coverage.reused_count} unexpanded:${progress.operational.catalog_coverage.unexpanded_count}`,
       ...operationalRows.map(row => `operational ${row[0]}: state=${row[1]} ${row[2]} ${row[3]}`),
       ...(operationalItems.length
         ? ['operational items:', ...operationalItems.map(item => `  ${item}`)]
@@ -1074,7 +1154,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
   const htmlUnknown = progress.unknown.length
     ? `<h3>Unknown / unexpanded</h3><ul>${progress.unknown.map(reason => `<li>${escapedHtml(reason)}</li>`).join('')}</ul>`
     : '';
-  const html = `<section data-native-checklist-progress="v1"><style>.native-checklist-progress{font:14px system-ui,sans-serif;color:#222;max-width:100%;overflow-wrap:anywhere}.native-checklist-progress table{border-collapse:collapse;margin:.5rem 0 1rem;min-width:38rem}.native-checklist-progress .table-wrap{max-width:100%;overflow-x:auto}.native-checklist-progress td,.native-checklist-progress th{border:1px solid #bbb;padding:.3rem .5rem;text-align:left;vertical-align:top}.native-checklist-progress .state{font-weight:600}.native-checklist-progress .badge{display:inline-block;border:1px solid #999;border-radius:.25rem;padding:.08rem .35rem;font-weight:600;white-space:nowrap}.native-checklist-progress .state-confirmed{background:#e5f6e8}.native-checklist-progress .state-pending,.native-checklist-progress .state-blocked{background:#fff2cc}.native-checklist-progress .state-stale,.native-checklist-progress .state-failed{background:#ffe1e1}.native-checklist-progress .state-unknown{background:#eee}.native-checklist-progress .metrics{display:flex;flex-wrap:wrap;gap:.25rem .8rem}.native-checklist-progress .metric{white-space:nowrap}.native-checklist-progress small{color:#555}@media(max-width:640px){.native-checklist-progress{font-size:13px}.native-checklist-progress table{min-width:32rem}.native-checklist-progress td,.native-checklist-progress th{padding:.25rem}}</style><div class="native-checklist-progress"><h2>${escapedHtml(progress.checklist.name)}</h2><p class="status-summary"><span class="badge">confirmed=${counts.confirmed}</span> <span class="badge state-pending">pending=${counts.pending}</span> <span class="badge state-blocked">blocked=${counts.blocked}</span> <span class="badge state-stale">stale=${counts.stale}</span> <span class="badge state-failed">failed=${counts.failed}</span> <span class="badge state-unknown">unknown=${counts.unknown}</span> <span>unresolved=${progress.checklist.unresolved_count}</span></p><p><span class="badge">paused=${progress.paused}</span> <span class="badge">resumed=${progress.resumed}</span> <span class="badge">resumable=${progress.resumable}</span>; eligible=${escapedHtml(progress.checklist.eligible_step_ids.join(', ') || 'none')}</p><h3>Checklist stages</h3><div class="table-wrap"><table><thead><tr><th>State</th><th>ID</th><th>Stage</th><th>Evidence</th></tr></thead><tbody>${htmlChecklistRows.join('')}</tbody></table></div><h3>Operational work</h3><div class="table-wrap"><table><thead><tr><th>Unit</th><th>State / discovered</th><th>Coverage</th><th>Counts / checks</th></tr></thead><tbody>${htmlOperationalRows.join('')}</tbody></table></div>${htmlOperationalItems ? `<h4>Known units</h4><ul>${htmlOperationalItems}</ul>` : ''}<p>discovered: project=${progress.operational.discovered.project}, components=${progress.operational.discovered.components}, specifications=${progress.operational.discovered.specifications}, batches=${progress.operational.discovered.batches}; unknown=${progress.operational.unknown_count}; unexpanded=${progress.operational.unexpanded_count}</p><h3>Evidence and checkpoint</h3><p>Proof snapshot ${escapedHtml(progress.evidence.proof_snapshot.schema_version)} source ${escapedHtml(progress.evidence.proof_snapshot.source || 'unlinked')}${progress.evidence.proof_snapshot.stage ? ` stage ${escapedHtml(progress.evidence.proof_snapshot.stage)}` : ''} digest ${escapedHtml(progress.evidence.proof_snapshot.digest)}${progress.evidence.proof_snapshot.claim_id ? ` claim ${escapedHtml(progress.evidence.proof_snapshot.claim_id)}` : ''}<br>Checkpoint ${escapedHtml(journalFields.join(' '))}</p>${htmlUnknown}</div><script type="application/json" id="native-checklist-progress">${escapedHtmlJson(json)}</script></section>`;
+  const html = `<section data-native-checklist-progress="v1"><style>.native-checklist-progress{font:14px system-ui,sans-serif;color:#222;max-width:100%;overflow-wrap:anywhere}.native-checklist-progress table{border-collapse:collapse;margin:.5rem 0 1rem;min-width:38rem}.native-checklist-progress .table-wrap{max-width:100%;overflow-x:auto}.native-checklist-progress td,.native-checklist-progress th{border:1px solid #bbb;padding:.3rem .5rem;text-align:left;vertical-align:top}.native-checklist-progress .state{font-weight:600}.native-checklist-progress .badge{display:inline-block;border:1px solid #999;border-radius:.25rem;padding:.08rem .35rem;font-weight:600;white-space:nowrap}.native-checklist-progress .state-confirmed{background:#e5f6e8}.native-checklist-progress .state-pending,.native-checklist-progress .state-blocked{background:#fff2cc}.native-checklist-progress .state-stale,.native-checklist-progress .state-failed{background:#ffe1e1}.native-checklist-progress .state-unknown{background:#eee}.native-checklist-progress .metrics{display:flex;flex-wrap:wrap;gap:.25rem .8rem}.native-checklist-progress .metric{white-space:nowrap}.native-checklist-progress small{color:#555}@media(max-width:640px){.native-checklist-progress{font-size:13px}.native-checklist-progress table{min-width:32rem}.native-checklist-progress td,.native-checklist-progress th{padding:.25rem}}</style><div class="native-checklist-progress"><h2>${escapedHtml(progress.checklist.name)}</h2><p class="status-summary"><span class="badge">confirmed=${counts.confirmed}</span> <span class="badge state-pending">pending=${counts.pending}</span> <span class="badge state-blocked">blocked=${counts.blocked}</span> <span class="badge state-stale">stale=${counts.stale}</span> <span class="badge state-failed">failed=${counts.failed}</span> <span class="badge state-unknown">unknown=${counts.unknown}</span> <span>unresolved=${progress.checklist.unresolved_count}</span></p><p><span class="badge">paused=${progress.paused}</span> <span class="badge">resumed=${progress.resumed}</span> <span class="badge">resumable=${progress.resumable}</span>; eligible=${escapedHtml(progress.checklist.eligible_step_ids.join(', ') || 'none')}</p><h3>Checklist stages</h3><div class="table-wrap"><table><thead><tr><th>State</th><th>ID</th><th>Stage</th><th>Evidence</th></tr></thead><tbody>${htmlChecklistRows.join('')}</tbody></table></div><h3>Operational work</h3><div class="table-wrap"><table><thead><tr><th>Unit</th><th>State / discovered</th><th>Coverage</th><th>Counts / checks</th></tr></thead><tbody>${htmlOperationalRows.join('')}</tbody></table></div>${htmlOperationalItems ? `<h4>Known units</h4><ul>${htmlOperationalItems}</ul>` : ''}<p>discovered: project=${progress.operational.discovered.project}, components=${progress.operational.discovered.components}, specifications=${progress.operational.discovered.specifications}, batches=${progress.operational.discovered.batches}; unknown=${progress.operational.unknown_count}; unexpanded=${progress.operational.unexpanded_count}</p><p>catalog coverage: known=${progress.operational.catalog_coverage.known_count}, affected=${progress.operational.catalog_coverage.affected_count}, reused=${progress.operational.catalog_coverage.reused_count}, unexpanded=${progress.operational.catalog_coverage.unexpanded_count}</p><h3>Evidence and checkpoint</h3><p>Proof snapshot ${escapedHtml(progress.evidence.proof_snapshot.schema_version)} source ${escapedHtml(progress.evidence.proof_snapshot.source || 'unlinked')}${progress.evidence.proof_snapshot.stage ? ` stage ${escapedHtml(progress.evidence.proof_snapshot.stage)}` : ''} digest ${escapedHtml(progress.evidence.proof_snapshot.digest)}${progress.evidence.proof_snapshot.claim_id ? ` claim ${escapedHtml(progress.evidence.proof_snapshot.claim_id)}` : ''}<br>Checkpoint ${escapedHtml(journalFields.join(' '))}</p>${htmlUnknown}</div><script type="application/json" id="native-checklist-progress">${escapedHtmlJson(json)}</script></section>`;
   return { json, text, html };
 }
 

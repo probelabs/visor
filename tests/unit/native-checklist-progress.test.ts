@@ -138,7 +138,79 @@ function instanceProjection(claims: Record<string, unknown>[]): Record<string, u
   };
 }
 
+function continuationSnapshotClaim(
+  payload: Record<string, unknown>,
+  producerCheckId: 'checklist-continuation-snapshot' | 'checklist-traces-light',
+): Record<string, unknown> {
+  const authorityClaimId = 'a'.repeat(64);
+  const claimId = 'c'.repeat(64);
+  return {
+    authorityClaimId,
+    claim: {
+      claimId,
+      claim: 'native.continuation.checklist_snapshot@1',
+      payload,
+      payloadFingerprint: sha256Canonical(payload),
+      producerCheckId,
+      scope: projectScope('jsonparser'),
+      parentClaimIds: [authorityClaimId],
+      active: true,
+    },
+  } as any;
+}
+
 describe('native checklist progress projection', () => {
+  it.each(['checklist-continuation-snapshot', 'checklist-traces-light'] as const)(
+    'projects a continuation checklist snapshot from the %s producer with full/affected/reused coverage',
+    producerCheckId => {
+      const payload = snapshot({
+        steps: [{
+          step_id: 'traces-light',
+          title: 'Trace links',
+          stamp: 'confirm',
+          applicable: true,
+          eligible: true,
+          stored_status: 'pending',
+          effective_status: 'pending',
+          required_checks: [],
+          check_results: [],
+        }],
+      });
+      const continuation = continuationSnapshotClaim(payload, producerCheckId);
+      const progress = buildNativeChecklistProgressFromProjections({
+        claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+        instanceProjection: instanceProjection([
+          {
+            claimId: continuation.authorityClaimId,
+            claim: 'native.continuation.catalog@1',
+            payload: {},
+            active: true,
+          },
+          continuation.claim,
+        ]),
+        checkpoint: {
+          frontier: {eventCount: 3, lastEventId: 3},
+          graphSemanticDigest: 'sha256:graph',
+          integrity: {digest: 'sha256:checkpoint'},
+        },
+        paused: producerCheckId === 'checklist-continuation-snapshot',
+        resumed: producerCheckId === 'checklist-traces-light',
+        retainedCatalogComponentIds: ['affected-component', 'reused-component'],
+        affectedComponentIds: ['affected-component'],
+      });
+      expect(progress.evidence.proof_snapshot.source).toBe('native.continuation.checklist_snapshot@1');
+      expect(progress.operational.catalog_coverage).toMatchObject({
+        known: true,
+        known_count: 2,
+        affected_count: 1,
+        reused_count: 1,
+        unexpanded_count: 0,
+      });
+      expect(progress.paused).toBe(producerCheckId === 'checklist-continuation-snapshot');
+      expect(progress.resumed).toBe(producerCheckId === 'checklist-traces-light');
+    },
+  );
+
   it('projects effective Proof states and validates required-check/verify evidence', () => {
     const progress = buildNativeChecklistProgress({
       proofSnapshot: snapshot(),

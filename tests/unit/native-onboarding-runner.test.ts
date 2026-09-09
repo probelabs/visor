@@ -6,7 +6,7 @@ import {execFileSync, spawnSync} from 'node:child_process';
 import {jest} from '@jest/globals';
 import yaml from 'js-yaml';
 import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
-import {loadConfig} from '../../src/sdk';
+import {loadConfig, StateMachineExecutionEngine} from '../../src/sdk';
 import {canonicalJson, sha256Canonical} from '../../src/state-machine/graph/claim-kernel';
 import {ExecutionJournal} from '../../src/snapshot-store';
 import {
@@ -32,12 +32,18 @@ import {
   retainedProjectPrefixDispatchGate,
   buildRetainedReviewedAggregate,
   buildChecklistOnboardingConfig,
+  buildChecklistContinuationConfig,
+  buildChecklistContinuationAuthority,
   checklistProgressRefreshOptions,
   describeRecoveryTerminal,
   executeJournaledChecklistStep,
   loadRetainedOnboardingConfig,
   loadChecklistMaterializedConfig,
   parseChecklistPrefixRetryArguments,
+  parseChecklistContinueArguments,
+  executeChecklistContinuationEngine,
+  deriveChecklistAffectedBatches,
+  deriveCurrentChecklistAffectedBatches,
   parseRecoveryArguments,
   readRetainedReviewExport,
   readRecoveryReviewPackets,
@@ -206,6 +212,121 @@ describe('native onboarding runner boundaries', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-native-onboarding-runner-'));
     previousCodexHome = process.env.CODEX_HOME;
+  });
+
+  it('accepts one shared traces-light continuation entry and rejects unsupported stages', () => {
+    expect(parseChecklistContinueArguments({'checklist-continue': '/tmp/checkpoint.json'})).toEqual({
+      checkpoint: '/tmp/checkpoint.json',
+      step: 'traces-light',
+    });
+    expect(() => parseChecklistContinueArguments({
+      'checklist-continue': '/tmp/checkpoint.json',
+      'checklist-step': 'research',
+    })).toThrow(/only traces-light/);
+    expect(() => parseChecklistContinueArguments({'checklist-step': 'traces-light'}))
+      .toThrow(/checklist-continue is required/);
+  });
+
+  it('derives affected batches from unique WorkItem path ownership and preserves reused components', () => {
+    const result = deriveChecklistAffectedBatches([
+      {component_id: 'component-a', sorted_owned_paths: ['a.go', 'a_test.go']},
+      {component_id: 'component-b', sorted_owned_paths: ['b.go']},
+    ] as any, ['a.go']);
+    expect(result).toEqual({
+      affectedComponentIds: ['component-a'],
+      reusedComponentIds: ['component-b'],
+      batches: [{component_id: 'component-a', paths: ['a.go']}],
+    });
+    expect(() => deriveChecklistAffectedBatches([
+      {component_id: 'component-a', sorted_owned_paths: ['shared.go']},
+      {component_id: 'component-b', sorted_owned_paths: ['shared.go']},
+    ] as any, ['shared.go'])).toThrow(/ambiguous/);
+    expect(() => deriveChecklistAffectedBatches([
+      {component_id: 'component-a', sorted_owned_paths: ['a.go']},
+    ] as any, ['missing.go'])).toThrow(/no WorkItem owner/);
+  });
+
+  it('accepts Proof orphan warnings with JSONL stdout and a normal stderr heartbeat', async () => {
+    const proof = path.join(root, 'audit-heartbeat-proof');
+    const output = path.join(root, 'audit-heartbeat-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      "printf '%s\\n' 'Refreshing trace index + annotations (76 requirements)…' >&2",
+      "printf '%s\\n' '{\"event\":\"stage_start\",\"stage\":\"implement\"}'",
+      "printf '%s\\n' '{\"event\":\"check_start\",\"stage\":\"implement\",\"check\":\"orphan_code_clean\"}'",
+      "printf '%s\\n' '{\"event\":\"check_done\",\"stage\":\"implement\",\"check\":\"orphan_code_clean\",\"status\":\"warn\",\"details\":[\"source.go:20 Source\"]}'",
+      'exit 2',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    const workItem = {
+      component_id: 'component-a',
+      sorted_owned_paths: ['source.go'],
+    };
+    await expect(deriveCurrentChecklistAffectedBatches(proof, root, output, 1000, [workItem] as any))
+      .resolves.toEqual({
+        affectedComponentIds: ['component-a'],
+        reusedComponentIds: [],
+        batches: [{component_id: 'component-a', paths: ['source.go']}],
+      });
+    expect(fs.readFileSync(path.join(output, 'commands/preflight/audit---no-cache---check-orphan_code_clean---format-json.stderr'), 'utf8'))
+      .toContain('Refreshing trace index + annotations');
+    expect(JSON.parse(fs.readFileSync(path.join(output, 'commands/preflight/audit---no-cache---check-orphan_code_clean---format-json.meta.json'), 'utf8')))
+      .toMatchObject({status: 2, cwd: root});
+  });
+
+  it('builds and validates a closed continuation authority envelope', () => {
+    const checkpointPath = path.join(root, 'cp255.json');
+    const prefixCheckpointPath = path.join(root, 'cp251.json');
+    fs.writeFileSync(checkpointPath, JSON.stringify({sessionId: 'cp255', graphSemanticDigest: 'graph-255'}) + '\n', 'utf8');
+    fs.writeFileSync(prefixCheckpointPath, JSON.stringify({sessionId: 'cp251', graphSemanticDigest: 'graph-251'}) + '\n', 'utf8');
+    const subjectFingerprint = `sha256:${'b'.repeat(64)}`;
+    const receipt = {
+      inventory_claim_id: `sha256:${'1'.repeat(64)}`,
+      catalog_claim_id: `sha256:${'2'.repeat(64)}`,
+      receipt_id: `sha256:${'3'.repeat(64)}`,
+      admission_candidate_id: `sha256:${'4'.repeat(64)}`,
+      admission_receipt_id: `sha256:${'5'.repeat(64)}`,
+      component_authorities: [{
+        component_id: 'component-a',
+        work_item_digest: `sha256:${'6'.repeat(64)}`,
+        subject: {component_id: 'component-a', fingerprint: `sha256:${'a'.repeat(64)}`},
+      }],
+    };
+    const workItem = {
+      version: 'reqproof.onboarding-component-work-item/v1',
+      project_id: 'project-a',
+      component_id: 'component-a',
+      sorted_owned_paths: ['source.go'],
+      sorted_dependency_closure: ['source.go'],
+      proof_path_mapping: {},
+      proof_input_state: [{}],
+      proof_component_subject: {component_id: 'component-a', fingerprint: `sha256:${'a'.repeat(64)}`},
+      baseline_commit: 'c'.repeat(40),
+    };
+    const authority = buildChecklistContinuationAuthority(
+      {
+        inventory: {authority: {project_id: 'project-a', subject_fingerprint: subjectFingerprint}},
+        revalidation: {receipt},
+        workItems: [workItem],
+      } as any,
+      checkpointPath,
+      prefixCheckpointPath,
+      ['component-a'],
+      [],
+    ) as any;
+    expect(authority).toMatchObject({
+      version: 'native.checklist-continuation-authority/v1',
+      project_id: 'project-a',
+      affected_component_ids: ['component-a'],
+      reused_component_ids: [],
+      current_work_items: [workItem],
+      retained: {
+        checkpoint_session_id: 'cp255',
+        prefix_session_id: 'cp251',
+        checkpoint_graph_semantic_digest: 'graph-255',
+        prefix_graph_semantic_digest: 'graph-251',
+      },
+    });
   });
 
   afterEach(() => {

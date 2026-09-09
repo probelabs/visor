@@ -1,0 +1,233 @@
+version: "1.0"
+extends: "visor-checklist-continuation.yaml"
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+  cases:
+    - name: traces-light-one-affected-component
+      event: manual
+      mocks:
+        continue-retained-catalog:
+          projects:
+            - {project_id: jsonparser}
+        materialize-retained-catalog:
+          components:
+            - &affected_work_item
+              version: reqproof.onboarding-component-work-item/v1
+              project_id: jsonparser
+              component_id: json-string-escaping
+              sorted_owned_paths: [string_escape.go]
+              sorted_dependency_closure: [string_escape.go]
+              proof_path_mapping: {owned: [string_escape.go]}
+              proof_input_state:
+                - {owner_kind: onboarding_structural_inventory, owner_id: jsonparser, input_kind: code, path: string_escape.go, file_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+              proof_component_subject: {component_id: json-string-escaping, fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+              baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          full_components:
+            - *affected_work_item
+            - &reused_work_item
+              version: reqproof.onboarding-component-work-item/v1
+              project_id: jsonparser
+              component_id: json-number-parsing
+              sorted_owned_paths: [number_parse.go]
+              sorted_dependency_closure: [number_parse.go]
+              proof_path_mapping: {owned: [number_parse.go]}
+              proof_input_state:
+                - {owner_kind: onboarding_structural_inventory, owner_id: jsonparser, input_kind: code, path: number_parse.go, file_hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+              proof_component_subject: {component_id: json-number-parsing, fingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+              baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          affected_component_ids: [json-string-escaping]
+          reused_component_ids: [json-number-parsing]
+          retained_receipt_identities:
+            - "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            - "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            - "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            - "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            - "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+            - "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+            - "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+            - "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+            - "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+          current_receipt_identities:
+            - "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            - "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            - "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            - "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            - "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+            - "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+            - "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+            - "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+            - "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+          authority:
+            version: native.checklist-continuation-authority/v1
+            project_id: jsonparser
+            subject_fingerprint: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            current_inventory:
+              version: proof.structural-inventory/v1
+              authority:
+                version: proof.project-authority/v1
+                project_id: jsonparser
+                subject_fingerprint: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                code_fingerprint: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                tests_fingerprint: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              sorted_paths: [number_parse.go, string_escape.go]
+              sorted_module_paths: []
+              boundary_fingerprint: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+              input_state:
+                - {owner_kind: onboarding_structural_inventory, owner_id: jsonparser, input_kind: code, path: number_parse.go, file_hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+                - {owner_kind: onboarding_structural_inventory, owner_id: jsonparser, input_kind: code, path: string_escape.go, file_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+            current_revalidation:
+              version: proof.catalog-revalidation/v2
+              receipt:
+                inventory_claim_id: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                catalog_claim_id: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                receipt_id: "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+                admission_candidate_id: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+                admission_receipt_id: "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+                component_authorities:
+                  - {component_id: json-string-escaping, work_item_digest: "sha256:6666666666666666666666666666666666666666666666666666666666666666", subject: {component_id: json-string-escaping, fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+                  - {component_id: json-number-parsing, work_item_digest: "sha256:7777777777777777777777777777777777777777777777777777777777777777", subject: {component_id: json-number-parsing, fingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+              inventory: {authority: {project_id: jsonparser, subject_fingerprint: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}
+              work_items:
+                - *affected_work_item
+                - *reused_work_item
+            current_work_items:
+              - *affected_work_item
+              - *reused_work_item
+            current_receipt_identities:
+              inventory_claim_id: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+              catalog_claim_id: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              receipt_id: "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              admission_candidate_id: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+              admission_receipt_id: "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+              component_authorities:
+                - {component_id: json-string-escaping, work_item_digest: "sha256:6666666666666666666666666666666666666666666666666666666666666666", subject: {component_id: json-string-escaping, fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+                - {component_id: json-number-parsing, work_item_digest: "sha256:7777777777777777777777777777777777777777777777777777777777777777", subject: {component_id: json-number-parsing, fingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}
+            retained:
+              checkpoint_sha256: "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+              prefix_checkpoint_sha256: "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+              checkpoint_session_id: retained-checkpoint-session
+              prefix_session_id: retained-prefix-session
+              checkpoint_graph_semantic_digest: retained-checkpoint-graph
+              prefix_graph_semantic_digest: retained-prefix-graph
+            affected_component_ids: [json-string-escaping]
+            reused_component_ids: [json-number-parsing]
+        checkout-target:
+          component_id: json-string-escaping
+          baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          worktree_root: /tmp/visor-native-continuation-test-worktree/json-string-escaping
+        checkout-worktree:
+          success: true
+          path: /Users/buger/go/src/visor-exp-0207b0a-proof-evidence-substrate
+          ref: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          worktree_id: test-worktree-json-string-escaping
+          repository: /tmp/visor-native-continuation-subject
+          is_worktree: true
+        role-onboard-component: {text: "onboard role"}
+        author-native-component: "grounded annotation summary"
+        promote-native-component:
+          status: promoted
+          component_id: json-string-escaping
+          baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+          accepted_paths: [string_escape.go]
+          ignored_paths: []
+          rejected_paths: []
+          promoted_commit: cccccccccccccccccccccccccccccccccccccccc
+          validation: {status: 0, stdout: "", stderr: ""}
+          checkpoint:
+            baseline_commit: 1a02d5ea3343c1f349ff23860150a865bbe6a70f
+            component_id: json-string-escaping
+            accepted_paths: [string_escape.go]
+            ignored_paths: []
+            status: promoted
+        annotation_validity:
+          status: pass
+          check: annotation_validity
+          events:
+            - {event: check_done, stage: implement, check: annotation_validity, status: pass}
+        orphan_code_clean:
+          status: pass
+          check: orphan_code_clean
+          events:
+            - {event: check_done, stage: implement, check: orphan_code_clean, status: pass, details: []}
+        checklist-continuation-snapshot: &checklist_snapshot
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          new_project: true
+          steps:
+            - step_id: traces-light
+              applicable: true
+              eligible: false
+              stored_status: confirmed
+              effective_status: confirmed
+              stamp: confirm+verify
+              required_checks: []
+              check_results: []
+              verify_result: {passed: true, exit_code: 0, at: "2026-09-09T00:00:02Z"}
+        checklist-traces-light: *checklist_snapshot
+      expect:
+        calls:
+          - step: continue-retained-catalog
+            exactly: 1
+          - logical_step: materialize-retained-catalog
+            exactly: 1
+          - logical_step: component-promotions-complete
+            exactly: 1
+          - logical_step: checklist-continuation-snapshot
+            exactly: 1
+          - logical_step: checkout-target
+            exactly: 1
+          - logical_step: checkout-worktree
+            exactly: 1
+          - logical_step: role-onboard-component
+            exactly: 1
+          - logical_step: author-native-component
+            exactly: 1
+          - logical_step: promote-native-component
+            exactly: 1
+          - logical_step: annotation_validity
+            exactly: 1
+          - logical_step: orphan_code_clean
+            exactly: 1
+          - logical_step: checklist-traces-light
+            exactly: 1
+        outputs:
+          - step: materialize-retained-catalog
+            path: full_components.length
+            equals: 2
+          - step: materialize-retained-catalog
+            path: components.length
+            equals: 1
+          - step: materialize-retained-catalog
+            path: full_components[1].component_id
+            equals: json-number-parsing
+          - step: materialize-retained-catalog
+            path: components[0].component_id
+            equals: json-string-escaping
+          - step: materialize-retained-catalog
+            path: affected_component_ids
+            contains_unordered: [json-string-escaping]
+          - step: materialize-retained-catalog
+            path: reused_component_ids
+            contains_unordered: [json-number-parsing]
+          - step: promote-native-component
+            path: component_id
+            where:
+              path: component_id
+              equals: json-string-escaping
+          - step: promote-native-component
+            path: checkpoint.status
+            where:
+              path: component_id
+              equals: json-string-escaping
+            equals: promoted
+          - step: checklist-traces-light
+            path: steps[0].effective_status
+            equals: confirmed
+          - step: checklist-continuation-snapshot
+            path: steps[0].effective_status
+            equals: confirmed
