@@ -1123,7 +1123,7 @@ function expansionBarrierForProjection(
   return {
     ownerCompleted: ownerComplete,
     selectionAuthoritative: exactSelection,
-    ready: exactSelection && selectedKeys.size > 0 && children.every(child => child.terminalGenerationStatus === 'completed'),
+    ready: exactSelection && children.every(child => child.terminalGenerationStatus === 'completed'),
     digest: deriveExpansionBarrierDigest({
       expansionOwnerCheck: nestedExpansion.expansionOwnerCheck,
       terminalNode: wait.terminal_node,

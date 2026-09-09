@@ -39,6 +39,13 @@ type ContinuationTask = {
   orphan_code_clean: {paths: string[]; details: string[]};
 };
 
+type SkeletonContinuationTask = {
+  step_id: 'skeleton';
+  role: 'onboard';
+  required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'];
+  l2_software_complete: {paths: string[]; details: string[]};
+};
+
 type OperationalWorkItem = WorkItem & {continuation_task: ContinuationTask};
 
 function operationalWorkItem(
@@ -53,6 +60,22 @@ function operationalWorkItem(
       role: 'onboard',
       required_checks: ['annotation_validity', 'orphan_code_clean'],
       orphan_code_clean: {paths, details},
+    },
+  };
+}
+
+function operationalSkeletonWorkItem(
+  workItem: WorkItem,
+  paths: string[],
+  details: string[],
+): WorkItem & {continuation_task: SkeletonContinuationTask} {
+  return {
+    ...workItem,
+    continuation_task: {
+      step_id: 'skeleton',
+      role: 'onboard',
+      required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'],
+      l2_software_complete: {paths, details},
     },
   };
 }
@@ -204,6 +227,7 @@ function makeGitFixture(): {root: string; writerParent: string; output: string; 
   const checklistCalls = path.join(helperRoot, 'checklist-calls.jsonl');
   fs.writeFileSync(proof, `#!/usr/bin/env node
 const fs = require('node:fs');
+const path = require('node:path');
 const args = process.argv.slice(2);
 if (process.env.CONTINUATION_FIXTURE_CALL_LOG) fs.appendFileSync(process.env.CONTINUATION_FIXTURE_CALL_LOG, JSON.stringify({args, cwd: process.cwd()}) + '\\n');
 const checklistSnapshot = () => {
@@ -256,10 +280,17 @@ else if (args[0] === 'audit') {
   const skeletonChecks = new Set(['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']);
   const stage = skeletonChecks.has(requested) ? 'spec' : 'implement';
   const failedSkeleton = process.env.CONTINUATION_FIXTURE_SKELETON_MODE === 'fail' && requested === 'l2_software_complete';
-  const status = failedSkeleton ? 'error' : 'pass';
-  const details = failedSkeleton ? ['SW-REQ-FAILED current native finding'] : undefined;
+  const canonicalPromotionMissing = process.env.CONTINUATION_FIXTURE_REQUIRE_PROMOTED_CANONICAL === 'true'
+    && requested === 'l2_software_complete'
+    && !fs.readFileSync(path.join(process.cwd(), 'source.go'), 'utf8').includes('// Implements: REQ-1');
+  const status = failedSkeleton || canonicalPromotionMissing ? 'error' : 'pass';
+  const details = failedSkeleton
+    ? ['SW-REQ-FAILED current native finding']
+    : canonicalPromotionMissing
+      ? ['SW-REQ-REQ1 remains incomplete until the promoted canonical source is visible']
+      : undefined;
   process.stdout.write(JSON.stringify({event: 'stage_start', stage}) + '\\n' + JSON.stringify({event: 'check_done', stage, check, status, ...(details ? {details} : {})}) + '\\n');
-  if (failedSkeleton) process.exitCode = 1;
+  if (failedSkeleton || canonicalPromotionMissing) process.exitCode = 1;
 }
 else process.stdout.write(JSON.stringify({status: 'pass'}));
 `, {encoding: 'utf8', mode: 0o700});
@@ -589,6 +620,144 @@ describe('production traces-light continuation graph', () => {
       expect(ai).toHaveBeenCalledTimes(2);
       expect(fs.readFileSync(fixture.checklistCalls, 'utf8')).toBe('');
       resumeGraphSpy.mockRestore();
+    } finally {
+      ai.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      for (const testCheckout of testCheckouts) {
+        const worktree = (await worktreeManager.listWorktrees()).find(entry => entry.path === testCheckout || entry.metadata.worktree_path === testCheckout);
+        if (worktree) await worktreeManager.removeWorktree(worktree.id);
+      }
+      worktreeManager.configure(previousWorktreeConfig);
+      fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});
+      fixture.cleanup();
+    }
+  });
+
+  it('waits for a nonzero-owner promotion before running the skeleton audits', async () => {
+    const fixture = makeGitFixture();
+    const previous = new Map<string, string | undefined>([
+      ['PROOF_BIN', process.env.PROOF_BIN],
+      ['VISOR_WORKSPACE_MAIN_PROJECT', process.env.VISOR_WORKSPACE_MAIN_PROJECT],
+      ['NATIVE_ONBOARDING_WORKTREE_ROOT', process.env.NATIVE_ONBOARDING_WORKTREE_ROOT],
+      ['NATIVE_CHECKLIST_CONTINUE_CATALOG', process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG],
+      ['NATIVE_CHECKLIST_CONTINUE_STEP', process.env.NATIVE_CHECKLIST_CONTINUE_STEP],
+      ['NATIVE_CHECKLIST_CONTINUE_SNAPSHOT', process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT],
+      ['REQUEST_TIMEOUT', process.env.REQUEST_TIMEOUT],
+      ['NATIVE_ONBOARDING_TS_NODE', process.env.NATIVE_ONBOARDING_TS_NODE],
+      ['NATIVE_ONBOARDING_REPO_ROOT', process.env.NATIVE_ONBOARDING_REPO_ROOT],
+      ['NATIVE_ONBOARDING_OUTPUT_DIR', process.env.NATIVE_ONBOARDING_OUTPUT_DIR],
+      ['CONTINUATION_FIXTURE_CALL_LOG', process.env.CONTINUATION_FIXTURE_CALL_LOG],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STATE', process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STEP', process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP],
+      ['CONTINUATION_FIXTURE_REQUIRE_PROMOTED_CANONICAL', process.env.CONTINUATION_FIXTURE_REQUIRE_PROMOTED_CANONICAL],
+    ]);
+    const previousWorktreeConfig = worktreeManager.getConfig();
+    const fixtureWorktreeCache = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-skeleton-cache-'));
+    worktreeManager.configure({base_path: fixtureWorktreeCache, cleanup_on_exit: false});
+    const testCheckouts = new Set<string>();
+    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async function (_prInfo: any, customPrompt: string) {
+      expect(customPrompt).toContain('component-a');
+      expect(customPrompt).toContain('source.go');
+      const checkout = (this as any).config?.path as string;
+      testCheckouts.add(checkout);
+      expect((this as any).config?.model).toBe('gpt-5.6-luna');
+      expect((this as any).config?.codexExecutionProfile).toBe('luna-xhigh-isolated-writer-v1');
+      expect((this as any).config?.codexWorkingDirectoryFrom).toBe('checkout-worktree');
+      expect(fs.realpathSync(checkout)).not.toBe(fs.realpathSync(fixture.root));
+      fs.appendFileSync(path.join(checkout, 'source.go'), '// Implements: REQ-1\n', 'utf8');
+      return {issues: [], output: {status: 'no-model-mock'}} as any;
+    });
+    try {
+      const affectedWorkItem = operationalSkeletonWorkItem(
+        fixture.workItem,
+        ['source.go'],
+        ['source.go:1 missing Implements link for REQ-1'],
+      );
+      process.env.PROOF_BIN = fixture.proof;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
+      process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
+      process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'skeleton';
+      process.env.CONTINUATION_FIXTURE_REQUIRE_PROMOTED_CANONICAL = 'true';
+      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
+        components: [affectedWorkItem],
+        full_components: [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem],
+        affected_component_ids: ['component-a'],
+        reused_component_ids: ['component-b', 'component-c'],
+        retained_receipt_identities: [`sha256:${'7'.repeat(64)}`, `sha256:${'8'.repeat(64)}`],
+        current_receipt_identities: [
+          `sha256:${'1'.repeat(64)}`, `sha256:${'2'.repeat(64)}`, `sha256:${'3'.repeat(64)}`,
+          `sha256:${'4'.repeat(64)}`, `sha256:${'5'.repeat(64)}`, `sha256:${'6'.repeat(64)}`,
+          `sha256:${'7'.repeat(64)}`,
+        ],
+        authority: continuationAuthority(
+          [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem],
+          ['component-a'],
+          ['component-b', 'component-c'],
+        ),
+      });
+      process.env.REQUEST_TIMEOUT = '120000';
+      process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
+      process.env.NATIVE_ONBOARDING_REPO_ROOT = process.cwd();
+      process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+      process.env.CONTINUATION_FIXTURE_CALL_LOG = fixture.checklistCalls;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE = fixture.checklistState;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP = 'skeleton';
+      process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(skeletonContinuationSnapshot());
+      const config = await loadConfig(buildChecklistContinuationConfig('skeleton') as any, {strict: true});
+      const engine = new StateMachineExecutionEngine(fixture.root);
+      const paused = await executeChecklistContinuationEngine(engine, config, 120000, ['component-a'], undefined, 'skeleton');
+      expect(paused.paused).toBe(true);
+      expect(ai).toHaveBeenCalledTimes(1);
+      expect(git(fixture.root, ['show', 'HEAD:source.go'])).toBe('package fixture\n\nfunc Source() {}\n// Implements: REQ-1');
+
+      const events = paused.checkpoint.events;
+      const promotion = events.find(event => event.type === 'AttemptCompleted' && event.checkId === 'promote-native-component');
+      expect(promotion).toBeDefined();
+      const promotionReceipt = events.filter(event => event.type === 'ClaimPublished' && event.claim === 'native.continuation.promotion@1') as any[];
+      expect(promotionReceipt).toHaveLength(1);
+      expect(promotionReceipt[0].payload).toMatchObject({
+        status: 'promoted', component_id: 'component-a', accepted_paths: ['source.go'],
+      });
+      const auditIds = ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'];
+      const auditStarts = events.filter(event => event.type === 'AttemptStarted' && auditIds.includes(event.checkId));
+      expect(auditStarts.map(event => event.checkId).sort()).toEqual([...auditIds].sort());
+      expect(auditStarts.every(event => event.eventId > (promotion as any).eventId)).toBe(true);
+      for (const checkId of auditIds) {
+        const stdoutPath = path.join(
+          fixture.output,
+          `commands/continuation-audit-${checkId}`,
+          `audit---no-cache---check-${checkId}---format-json.stdout`,
+        );
+        const receipts = fs.readFileSync(stdoutPath, 'utf8').trim().split(/\r?\n/).map(line => JSON.parse(line));
+        expect(receipts.filter(receipt => receipt.event === 'check_done')).toEqual([
+          expect.objectContaining({event: 'check_done', stage: 'spec', check: checkId, status: 'pass'}),
+        ]);
+      }
+      expect(events.some(event => event.type === 'AttemptStarted' && event.checkId === 'checklist-skeleton')).toBe(false);
+      const calls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean)
+        .map(line => JSON.parse(line).args as string[]);
+      expect(calls.some(args => args[0] === 'checklist' && args[1] === 'confirm')).toBe(false);
+      const pausedJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), paused.checkpoint);
+      const skeletonGenerations = Object.values(pausedJournal.getInstanceProjection().generationsById)
+        .filter((generation: any) => generation.status !== 'inactive' && generation.checkId === 'checklist-skeleton');
+      expect(skeletonGenerations).toHaveLength(1);
+      expect((skeletonGenerations[0] as any).status).toBe('ready');
+      const pausedProgress = buildNativeChecklistProgressFromProjections({
+        claimProjection: pausedJournal.getClaimProjection(),
+        instanceProjection: pausedJournal.getInstanceProjection(),
+        checkpoint: paused.checkpoint,
+        paused: true,
+        resumed: false,
+        retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c'],
+        affectedComponentIds: ['component-a'],
+      });
+      expect(pausedProgress.operational.project.state).not.toBe('failed');
+      expect(pausedProgress.operational.catalog_coverage).toMatchObject({
+        known: true, known_count: 3, affected_count: 1, reused_count: 2, unexpanded_count: 0,
+      });
     } finally {
       ai.mockRestore();
       for (const [key, value] of previous) {

@@ -51,6 +51,9 @@ describe('EXP-0209 nested expansion completion barrier', () => {
   let engine: StateMachineExecutionEngine;
   let childCVerifyStarted: ReturnType<typeof deferred>;
   let releaseChildCVerify: ReturnType<typeof deferred>;
+  let materializeStarted: ReturnType<typeof deferred>;
+  let releaseMaterialize: ReturnType<typeof deferred>;
+  let deferMaterialize: boolean;
   let calls: string[];
   let expandedChildKeys: string[];
   let heldChildKey: string;
@@ -77,6 +80,8 @@ describe('EXP-0209 nested expansion completion barrier', () => {
         return { issues: [], output: { projects: [{ id: 'P' }] } };
       }
       if (checkId === 'materialize') {
+        materializeStarted.resolve();
+        if (deferMaterialize) await releaseMaterialize.promise;
         return { issues: [], output: { children: expandedChildKeys.map(id => ({ id })) } };
       }
       if (checkId === 'inspect') {
@@ -94,6 +99,9 @@ describe('EXP-0209 nested expansion completion barrier', () => {
     engine = new StateMachineExecutionEngine();
     childCVerifyStarted = deferred();
     releaseChildCVerify = deferred();
+    materializeStarted = deferred();
+    releaseMaterialize = deferred();
+    deferMaterialize = false;
     calls = [];
     expandedChildKeys = ['A', 'B', 'C'];
     heldChildKey = 'C';
@@ -102,8 +110,51 @@ describe('EXP-0209 nested expansion completion barrier', () => {
   });
 
   afterEach(() => {
+    releaseChildCVerify.resolve();
+    releaseMaterialize.resolve();
     registry.unregister('noop');
     registry.register(originalNoop);
+  });
+
+  it('keeps an empty expansion barrier closed until its owner succeeds, then joins once', async () => {
+    expandedChildKeys = [];
+    heldChildKey = '__no-held-child__';
+    deferMaterialize = true;
+    const run = engine.executeGroupedChecks(prInfo, ['discover'], undefined, fixtureConfig(), 'table', false, 3);
+    await materializeStarted.promise;
+
+    const context = (engine as any)._lastContext;
+    const journal = context.journal as ExecutionJournal;
+    const before = journal.getInstanceProjection();
+    const project = Object.values(before.instancesById)
+      .find((instance: any) => instance.itemKey === 'P' && instance.scope.length === 1) as any;
+    expect(project).toBeDefined();
+    expect(Object.values(before.instancesById).filter((instance: any) =>
+      instance.parentSubgraphInstanceId === project.subgraphInstanceId)).toHaveLength(0);
+    expect(Object.values(before.generationsById).filter((generation: any) =>
+      generation.templateNodeKey === 'join')).toHaveLength(0);
+    expect(calls).toEqual(['discover:', 'materialize:P']);
+
+    releaseMaterialize.resolve();
+    await run;
+
+    const after = journal.getInstanceProjection();
+    const children = Object.values(after.instancesById).filter((instance: any) =>
+      instance.parentSubgraphInstanceId === project.subgraphInstanceId);
+    expect(children).toHaveLength(0);
+    expect(Object.values(after.generationsById).filter((generation: any) =>
+      generation.templateNodeKey === 'inspect' || generation.templateNodeKey === 'verify')).toHaveLength(0);
+    const joinNodeId = project.nodeInstanceIdsByTemplateNode.join;
+    const joinGenerationId = after.activeGenerationIdByNode[joinNodeId];
+    expect(joinGenerationId).toBeDefined();
+    expect(after.generationsById[joinGenerationId!].status).toBe('completed');
+    expect(after.generationsById[joinGenerationId!].expansionBarrierDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(calls.filter(call => call.startsWith('join:'))).toEqual(['join:P']);
+
+    const checkpoint = journal.exportGraphCheckpoint(context.sessionId);
+    const restored = ExecutionJournal.restoreGraphCheckpoint(context.claimPlan, checkpoint);
+    expect(restored.getInstanceProjection()).toEqual(after);
+    expect(journal.replayInstanceProjection()).toEqual(after);
   });
 
   it('keeps the parent join open, then resumes it exactly once after the final child', async () => {
