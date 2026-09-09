@@ -20,6 +20,7 @@ import {
   commitInitializedProofBaseline,
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
+  currentUnresolvedGenerations,
   assertDraftInventoryUnchanged,
   assertRecoveryBaselineAncestor,
   inventoryAuthorDraft,
@@ -33,6 +34,7 @@ import {
   buildChecklistOnboardingConfig,
   checklistProgressRefreshOptions,
   describeRecoveryTerminal,
+  executeJournaledChecklistStep,
   loadRetainedOnboardingConfig,
   loadChecklistMaterializedConfig,
   parseChecklistPrefixRetryArguments,
@@ -173,6 +175,30 @@ function shippedPreparedConfig(): any {
   return materializeResultSchemas(raw);
 }
 
+function checklistReadbackProofFixture(root: string, step: any): {proof: string; output: string; calls: string} {
+  const proof = path.join(root, 'checklist-proof');
+  const output = path.join(root, 'checklist-output');
+  const calls = path.join(root, 'checklist-calls.log');
+  const snapshot = path.join(root, 'checklist-show.json');
+  fs.mkdirSync(output, {recursive: true});
+  fs.writeFileSync(snapshot, JSON.stringify({
+    schema_version: 'proof.checklist.show.v1',
+    checklist: 'onboard_v1',
+    active: true,
+    new_project: true,
+    steps: [step],
+  }), 'utf8');
+  const shellQuote = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
+  fs.writeFileSync(proof, [
+    '#!/bin/sh',
+    `printf '%s\\n' "$*" >> ${shellQuote(calls)}`,
+    `cat ${shellQuote(snapshot)}`,
+    '',
+  ].join('\n'), {encoding: 'utf8', mode: 0o700});
+  fs.chmodSync(proof, 0o700);
+  return {proof, output, calls};
+}
+
 describe('native onboarding runner boundaries', () => {
   let root: string;
   let previousCodexHome: string | undefined;
@@ -195,6 +221,155 @@ describe('native onboarding runner boundaries', () => {
     const resumed = checklistProgressRefreshOptions('/tmp/checklist-skeleton-frontier-checkpoint.json');
     expect(resumed).toEqual({resumed: true});
     expect(Object.isFrozen(resumed)).toBe(true);
+  });
+
+  it.each([
+    ['confirm', {stamp: 'confirm'}],
+    ['confirm+verify', {stamp: 'confirm+verify', verify_result: {passed: true, exit_code: 0, at: '2026-09-08T00:00:02Z'}}],
+  ])('reuses an exactly confirmed skeleton readback with %s without confirming again', (_kind, evidence) => {
+    const step = {
+      step_id: 'skeleton',
+      applicable: true,
+      eligible: false,
+      stored_status: 'confirmed',
+      effective_status: 'confirmed',
+      required_checks: ['check-a', 'check-b'],
+      check_results: [
+        {id: 'check-a', status: 'pass', at: '2026-09-08T00:00:00Z'},
+        {id: 'check-b', status: 'pass', at: '2026-09-08T00:00:01Z'},
+      ],
+      ...evidence,
+    };
+    const fixture = checklistReadbackProofFixture(root, step);
+    const priorProof = process.env.PROOF_BIN;
+    const priorOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+    process.env.PROOF_BIN = fixture.proof;
+    process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+    try {
+      expect(executeJournaledChecklistStep('skeleton', 'resume skeleton', true)).toEqual(
+        expect.objectContaining({schema_version: 'proof.checklist.show.v1'}),
+      );
+      const calls = fs.readFileSync(fixture.calls, 'utf8');
+      expect(calls).toContain('checklist show');
+      expect(calls).not.toContain('checklist confirm');
+      expect(calls.trim().split('\n')).toHaveLength(1);
+    } finally {
+      if (priorProof === undefined) delete process.env.PROOF_BIN;
+      else process.env.PROOF_BIN = priorProof;
+      if (priorOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+      else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = priorOutput;
+    }
+  });
+
+  it.each([
+    ['missing', [{id: 'check-a', status: 'pass', at: '2026-09-08T00:00:00Z'}]],
+    ['duplicate', [
+      {id: 'check-a', status: 'pass', at: '2026-09-08T00:00:00Z'},
+      {id: 'check-a', status: 'pass', at: '2026-09-08T00:00:01Z'},
+    ]],
+    ['failed', [
+      {id: 'check-a', status: 'pass', at: '2026-09-08T00:00:00Z'},
+      {id: 'check-b', status: 'fail', at: '2026-09-08T00:00:01Z'},
+    ]],
+    ['extra', [
+      {id: 'check-a', status: 'pass', at: '2026-09-08T00:00:00Z'},
+      {id: 'check-b', status: 'pass', at: '2026-09-08T00:00:01Z'},
+      {id: 'check-c', status: 'pass', at: '2026-09-08T00:00:02Z'},
+    ]],
+  ])('rejects a skeleton readback with %s check stamps', (_kind, checkResults) => {
+    const fixture = checklistReadbackProofFixture(root, {
+      step_id: 'skeleton',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: false,
+      stored_status: 'confirmed',
+      effective_status: 'confirmed',
+      required_checks: ['check-a', 'check-b'],
+      check_results: checkResults,
+    });
+    const priorProof = process.env.PROOF_BIN;
+    const priorOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+    process.env.PROOF_BIN = fixture.proof;
+    process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+    try {
+      expect(() => executeJournaledChecklistStep('skeleton', 'resume skeleton', false))
+        .toThrow(/not currently eligible/);
+      expect(fs.readFileSync(fixture.calls, 'utf8').trim().split('\n')).toHaveLength(1);
+    } finally {
+      if (priorProof === undefined) delete process.env.PROOF_BIN;
+      else process.env.PROOF_BIN = priorProof;
+      if (priorOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+      else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = priorOutput;
+    }
+  });
+
+  it.each([
+    ['missing stamp', undefined, undefined],
+    ['unknown stamp', 'confirm+review', undefined],
+    ['missing verify evidence', 'confirm+verify', undefined],
+    ['failed verify evidence', 'confirm+verify', {passed: false, exit_code: 1, at: '2026-09-08T00:00:02Z'}],
+  ])('rejects a confirmed skeleton with %s', (_kind, stamp, verifyResult) => {
+    const step: any = {
+      step_id: 'skeleton',
+      applicable: true,
+      eligible: false,
+      stored_status: 'confirmed',
+      effective_status: 'confirmed',
+      required_checks: ['check-a'],
+      check_results: [{id: 'check-a', status: 'pass', at: '2026-09-08T00:00:00Z'}],
+      ...(stamp === undefined ? {} : {stamp}),
+      ...(verifyResult === undefined ? {} : {verify_result: verifyResult}),
+    };
+    const fixture = checklistReadbackProofFixture(root, step);
+    const priorProof = process.env.PROOF_BIN;
+    const priorOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+    process.env.PROOF_BIN = fixture.proof;
+    process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+    try {
+      expect(() => executeJournaledChecklistStep('skeleton', 'resume skeleton', false))
+        .toThrow(/not currently eligible/);
+      expect(fs.readFileSync(fixture.calls, 'utf8').trim().split('\n')).toHaveLength(1);
+    } finally {
+      if (priorProof === undefined) delete process.env.PROOF_BIN;
+      else process.env.PROOF_BIN = priorProof;
+      if (priorOutput === undefined) delete process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+      else process.env.NATIVE_ONBOARDING_OUTPUT_DIR = priorOutput;
+    }
+  });
+
+  it('classifies historical contract failures by current unresolved generation state', () => {
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const checkpoint = {
+      events: Array.from({length: 10}, (_, index) => ({
+        type: 'AttemptFailed',
+        attemptId: String(index + 1),
+        nodeGenerationId: 'generation-' + index,
+      })),
+    } as any;
+    let currentStatus = 'completed';
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockReturnValue({
+      getInstanceProjection: () => ({
+        generationsById: {
+          current: {nodeGenerationId: 'current', status: currentStatus},
+        },
+      }),
+    } as any);
+    try {
+      const historicalContractFailures = checkpoint.events.filter((event: any) =>
+        event.type === 'AttemptFailed' || event.type === 'CheckErrored',
+      ).length;
+      const resolved = currentUnresolvedGenerations(config, checkpoint);
+      expect(historicalContractFailures).toBe(10);
+      expect(resolved).toEqual([]);
+      expect(0 === 0 && resolved.length === 0).toBe(true);
+
+      currentStatus = 'failed';
+      const unresolved = currentUnresolvedGenerations(config, checkpoint);
+      expect(unresolved).toHaveLength(1);
+      expect(0 === 0 && unresolved.length === 0).toBe(false);
+    } finally {
+      restore.mockRestore();
+    }
   });
 
   it.each([

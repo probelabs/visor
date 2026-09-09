@@ -1736,6 +1736,44 @@ const CHECKLIST_RESEARCH_SNAPSHOT_CLAIM = 'proof.checklist.research-snapshot@1';
 const PROOF_INIT_GITIGNORE_BLOCK =
   '\n# ReqProof local-only state (versionable .proof/ audit objects stay tracked).\n.proof/\n';
 
+function hasExactChecklistConfirmationEvidence(row: Json): boolean {
+  if (row.applicable !== true || row.stored_status !== 'confirmed' || row.effective_status !== 'confirmed') {
+    return false;
+  }
+  if (row.stamp !== 'confirm' && row.stamp !== 'confirm+verify') return false;
+  const required = row.required_checks;
+  const results = row.check_results;
+  if (!Array.isArray(required) || !Array.isArray(results) || required.length !== results.length) return false;
+  const requiredIds = new Set<string>();
+  for (const value of required) {
+    if (typeof value !== 'string' || value.length === 0 || requiredIds.has(value)) return false;
+    requiredIds.add(value);
+  }
+  const resultIds = new Set<string>();
+  for (const value of results) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const result = value as Json;
+    const keys = Object.keys(result).sort();
+    if (keys.length !== 3 || keys.join('\0') !== ['at', 'id', 'status'].join('\0') ||
+        typeof result.id !== 'string' || result.id.length === 0 || resultIds.has(result.id) ||
+        !requiredIds.has(result.id) || result.status !== 'pass' ||
+        typeof result.at !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(result.at) ||
+        Number.isNaN(Date.parse(result.at))) {
+      return false;
+    }
+    resultIds.add(result.id);
+  }
+  if (resultIds.size !== requiredIds.size || [...requiredIds].some(id => !resultIds.has(id))) return false;
+  if (row.stamp === 'confirm') return true;
+  const verifyResult = row.verify_result;
+  return !!verifyResult && typeof verifyResult === 'object' && !Array.isArray(verifyResult) &&
+    (verifyResult as Json).passed === true && (verifyResult as Json).exit_code === 0 &&
+    typeof (verifyResult as Json).at === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test((verifyResult as Json).at as string) &&
+    !Number.isNaN(Date.parse((verifyResult as Json).at as string));
+}
+
 
 /**
  * Execute one journaled Proof checklist mutation and return its authoritative
@@ -1776,6 +1814,7 @@ export function executeJournaledChecklistStep(stepId: string, note: string, veri
     throw new Error('Proof checklist is not the active new-project campaign');
   }
   const row = Array.isArray(before.steps) ? before.steps.find(value => value && typeof value === 'object' && !Array.isArray(value) && (value as Json).step_id === stepId) as Json | undefined : undefined;
+  if (stepId === 'skeleton' && row && hasExactChecklistConfirmationEvidence(row)) return before;
   if (!row || row.applicable !== true || row.eligible !== true || row.effective_status !== 'pending') {
     throw new Error(`Proof checklist step ${stepId} is not currently eligible`);
   }
@@ -3773,7 +3812,7 @@ function historicalFailedAttempts(checkpoint: GraphJournalCheckpointV1): Json[] 
     }));
 }
 
-function currentUnresolvedGenerations(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): Json[] {
+export function currentUnresolvedGenerations(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): Json[] {
   const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
   const projection: any = journal.getInstanceProjection();
   return Object.values(projection.generationsById)
@@ -4978,9 +5017,13 @@ async function main(): Promise<void> {
     const statistics = result && typeof result === 'object' ? (result as Json).statistics as Json | undefined : undefined;
     const failedExecutions = statistics && typeof statistics.failedExecutions === 'number' ? statistics.failedExecutions : null;
     const checkpointEvents = checkpointObject?.events ?? [];
-    const executionClean = failedExecutions === 0 && !checkpointEvents.some(event =>
+    const historicalContractFailures = checkpointEvents.filter(event =>
       event.type === 'AttemptFailed' || event.type === 'CheckErrored',
-    );
+    ).length;
+    const currentUnresolvedFailures = checkpointObject
+      ? currentUnresolvedGenerations(config, checkpointObject)
+      : [];
+    const executionClean = failedExecutions === 0 && currentUnresolvedFailures.length === 0;
     const steps = checklistProgress?.checklist.steps ?? [];
     const requiredSteps = ['init', 'research', 'skeleton'];
     const confirmedSteps = requiredSteps.every(stepId => steps.some(step => step.id === stepId && step.state === 'confirmed'));
@@ -5010,7 +5053,9 @@ async function main(): Promise<void> {
       later_proof_steps_note: 'Component admission, specification review, and reconciliation remain outside this checklist slice.',
       execution: {
         failed_executions: failedExecutions,
-        contract_failures: checkpointEvents.filter(event => event.type === 'AttemptFailed' || event.type === 'CheckErrored').length,
+        contract_failures: historicalContractFailures,
+        historical_contract_failures: historicalContractFailures,
+        current_unresolved_failures: currentUnresolvedFailures.length,
         skeleton_resume_delta_valid: resumeDelta,
       },
       postflight,
