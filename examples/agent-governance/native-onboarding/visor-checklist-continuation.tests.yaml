@@ -8,11 +8,12 @@ tests:
   cases:
     - name: traces-light-one-affected-component
       event: manual
+      env: {NATIVE_CHECKLIST_CONTINUE_STEP: traces-light}
       mocks:
-        continue-retained-catalog:
+        continue-retained-catalog: &continuation_projects
           projects:
             - {project_id: jsonparser}
-        materialize-retained-catalog:
+        materialize-retained-catalog: &retained_catalog
           components:
             -
               version: reqproof.onboarding-component-work-item/v1
@@ -77,7 +78,7 @@ tests:
             - "sha256:7777777777777777777777777777777777777777777777777777777777777777"
             - "sha256:8888888888888888888888888888888888888888888888888888888888888888"
             - "sha256:9999999999999999999999999999999999999999999999999999999999999999"
-          authority:
+          authority: &catalog_authority
             version: native.checklist-continuation-authority/v1
             project_id: jsonparser
             subject_fingerprint: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -133,11 +134,11 @@ tests:
               prefix_graph_semantic_digest: retained-prefix-graph
             affected_component_ids: [json-string-escaping]
             reused_component_ids: [json-number-parsing]
-        checkout-target:
+        checkout-target: &checkout_target
           component_id: json-string-escaping
           baseline_commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           worktree_root: /__visor_test__/continuation-writer/json-string-escaping
-        checkout-worktree:
+        checkout-worktree: &checkout_worktree
           success: true
           path: /__visor_test__/continuation-writer/json-string-escaping
           ref: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -145,9 +146,9 @@ tests:
           worktree_id: test-worktree-json-string-escaping
           repository: /__visor_test__/continuation-subject
           is_worktree: true
-        role-onboard-component: {text: "onboard role"}
-        author-native-component: "grounded annotation summary"
-        promote-native-component:
+        role-onboard-component: &role_onboard {text: "onboard role"}
+        author-native-component: &author_component "grounded annotation summary"
+        promote-native-component: &promote_component
           status: promoted
           component_id: json-string-escaping
           baseline_commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -199,13 +200,23 @@ tests:
           - logical_step: orphan_code_clean
             exactly: 1
           - logical_step: l0_stakeholder_complete
-            exactly: 1
+            exactly: 0
           - logical_step: l1_system_complete
-            exactly: 1
+            exactly: 0
           - logical_step: l2_software_complete
-            exactly: 1
+            exactly: 0
           - logical_step: levels_connected
-            exactly: 1
+            exactly: 0
+          - logical_step: checklist-skeleton
+            exactly: 0
+          - logical_step: variable_orphans_clean
+            exactly: 0
+          - logical_step: variables_declared
+            exactly: 0
+          - logical_step: variable_drift
+            exactly: 0
+          - logical_step: checklist-variables
+            exactly: 0
           - logical_step: checklist-traces-light
             exactly: 1
         outputs:
@@ -256,3 +267,290 @@ tests:
               - "Emit unsupported_mapping only after checking both an existing fit"
             not_contains:
               - "Report an explicit unsupported_mapping when a requirement cannot be mapped."
+
+    - name: skeleton-one-affected-component
+      event: manual
+      env: {NATIVE_CHECKLIST_CONTINUE_STEP: skeleton}
+      mocks:
+        continue-retained-catalog: *continuation_projects
+        materialize-retained-catalog:
+          <<: *retained_catalog
+          components:
+            - <<: *affected_work_item
+              continuation_task:
+                step_id: skeleton
+                role: onboard
+                required_checks: [l0_stakeholder_complete, l1_system_complete, l2_software_complete, levels_connected]
+                l2_software_complete:
+                  paths: [escape.go]
+                  details: ["escape.go:20 combineUTF16Surrogates", "escape.go:64 isUTF16EncodedRune"]
+        checkout-target: *checkout_target
+        checkout-worktree: *checkout_worktree
+        role-onboard-component: *role_onboard
+        author-native-component: *author_component
+        promote-native-component: *promote_component
+        l0_stakeholder_complete:
+          status: pass
+          check: l0_stakeholder_complete
+          events: [{event: check_done, stage: spec, check: l0_stakeholder_complete, status: pass, details: []}]
+        l1_system_complete:
+          status: pass
+          check: l1_system_complete
+          events: [{event: check_done, stage: spec, check: l1_system_complete, status: pass, details: []}]
+        l2_software_complete:
+          status: pass
+          check: l2_software_complete
+          events: [{event: check_done, stage: spec, check: l2_software_complete, status: pass, details: []}]
+        levels_connected:
+          status: pass
+          check: levels_connected
+          events: [{event: check_done, stage: spec, check: levels_connected, status: pass, details: []}]
+        checklist-continuation-snapshot:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          new_project: true
+          steps_total: 1
+          steps_pending: 1
+          counts: {confirmed: 0, skipped: 0, not_applicable: 0, pending: 1, blocked: 0}
+          ok: false
+          verify_failed: []
+          eligible_step_ids: [skeleton]
+          next:
+            {step_id: skeleton, title: "Four-layer STK/SYS/SW/INT breadth skeleton", role: onboard, stamp: confirm, scope: repo, notes_required: false, requires: [research], required_checks: [l0_stakeholder_complete, l1_system_complete, l2_software_complete, levels_connected]}
+          steps:
+            - {step_id: skeleton, title: "Four-layer STK/SYS/SW/INT breadth skeleton", when: new_project, requires: [research], role: onboard, stamp: confirm, scope: repo, notes_required: false, invalidates: [], required_checks: [l0_stakeholder_complete, l1_system_complete, l2_software_complete, levels_connected], stored_status: pending, effective_status: pending, applicable: true, eligible: true, unmet_requires: [], check_results: []}
+        checklist-skeleton:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          new_project: true
+          steps_total: 1
+          steps_pending: 0
+          counts: {confirmed: 1, skipped: 0, not_applicable: 0, pending: 0, blocked: 0}
+          ok: false
+          verify_failed: []
+          eligible_step_ids: []
+          next: null
+          steps:
+            - {step_id: skeleton, title: "Four-layer STK/SYS/SW/INT breadth skeleton", when: new_project, requires: [research], role: onboard, stamp: confirm, scope: repo, notes_required: false, invalidates: [], required_checks: [l0_stakeholder_complete, l1_system_complete, l2_software_complete, levels_connected], stored_status: confirmed, effective_status: confirmed, applicable: true, eligible: false, unmet_requires: [], confirmed_at: "2026-09-09T06:01:39Z", confirmed_by: visor-checklist-continuation, check_results: [{id: l0_stakeholder_complete, status: pass, at: "2026-09-09T06:01:39Z"}, {id: l1_system_complete, status: pass, at: "2026-09-09T06:01:39Z"}, {id: l2_software_complete, status: pass, at: "2026-09-09T06:01:39Z"}, {id: levels_connected, status: pass, at: "2026-09-09T06:01:39Z"}]}
+      expect:
+        calls:
+          - step: continue-retained-catalog
+            exactly: 1
+          - logical_step: materialize-retained-catalog
+            exactly: 1
+          - logical_step: component-promotions-complete
+            exactly: 1
+          - logical_step: checklist-continuation-snapshot
+            exactly: 1
+          - logical_step: checkout-target
+            exactly: 1
+          - logical_step: checkout-worktree
+            exactly: 1
+          - logical_step: role-onboard-component
+            exactly: 1
+          - logical_step: author-native-component
+            exactly: 1
+          - logical_step: promote-native-component
+            exactly: 1
+          - logical_step: annotation_validity
+            exactly: 0
+          - logical_step: orphan_code_clean
+            exactly: 0
+          - logical_step: l0_stakeholder_complete
+            exactly: 1
+          - logical_step: l1_system_complete
+            exactly: 1
+          - logical_step: l2_software_complete
+            exactly: 1
+          - logical_step: levels_connected
+            exactly: 1
+          - logical_step: checklist-skeleton
+            exactly: 1
+          - logical_step: variable_orphans_clean
+            exactly: 0
+          - logical_step: variables_declared
+            exactly: 0
+          - logical_step: variable_drift
+            exactly: 0
+          - logical_step: checklist-variables
+            exactly: 0
+          - logical_step: checklist-traces-light
+            exactly: 0
+        outputs:
+          - step: materialize-retained-catalog
+            path: full_components.length
+            equals: 2
+          - step: materialize-retained-catalog
+            path: components.length
+            equals: 1
+          - step: materialize-retained-catalog
+            path: components[0].continuation_task.step_id
+            equals: skeleton
+          - step: promote-native-component
+            path: checkpoint.status
+            equals: promoted
+          - step: checklist-skeleton
+            path: steps[0].effective_status
+            equals: confirmed
+          - step: checklist-continuation-snapshot
+            path: steps[0].effective_status
+            equals: pending
+
+    - name: variables-zero-owner
+      event: manual
+      env: {NATIVE_CHECKLIST_CONTINUE_STEP: variables}
+      mocks:
+        continue-retained-catalog: *continuation_projects
+        materialize-retained-catalog:
+          <<: *retained_catalog
+          components: []
+          affected_component_ids: []
+          reused_component_ids: [json-string-escaping, json-number-parsing]
+          authority:
+            <<: *catalog_authority
+            affected_component_ids: []
+            reused_component_ids: [json-string-escaping, json-number-parsing]
+        checklist-continuation-snapshot:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          new_project: true
+          steps_total: 2
+          steps_pending: 1
+          counts: {confirmed: 1, skipped: 0, not_applicable: 0, pending: 1, blocked: 0}
+          ok: false
+          verify_failed: []
+          eligible_step_ids: [variables]
+          next:
+            {step_id: variables, title: "Variables named by requirements", role: onboard, stamp: confirm, scope: repo, notes_required: false, requires: [traces-light], required_checks: [variable_orphans_clean, variables_declared, variable_drift]}
+          steps:
+            - {step_id: traces-light, title: "Light code↔spec graph (Implements/Documents)", when: both, requires: [skeleton], role: onboard, stamp: confirm, scope: package, notes_required: false, invalidates: [], required_checks: [annotation_validity, orphan_code_clean], stored_status: confirmed, effective_status: confirmed, applicable: true, eligible: false, unmet_requires: [], scope_key: project-a, check_results: [{id: annotation_validity, status: pass, at: "2026-09-09T06:01:39Z"}, {id: orphan_code_clean, status: pass, at: "2026-09-09T06:01:39Z"}]}
+            - {step_id: variables, title: "Variables named by requirements", when: both, requires: [traces-light], role: onboard, stamp: confirm, scope: repo, notes_required: false, invalidates: [], required_checks: [variable_orphans_clean, variables_declared, variable_drift], stored_status: pending, effective_status: pending, applicable: true, eligible: true, unmet_requires: [], check_results: []}
+        variable_orphans_clean:
+          status: pass
+          check: variable_orphans_clean
+          events: [{event: check_done, stage: spec, check: variable_orphans_clean, status: pass, details: []}]
+        variables_declared:
+          status: pass
+          check: variables_declared
+          events: [{event: check_done, stage: spec, check: variables_declared, status: pass, details: []}]
+        variable_drift:
+          status: pass
+          check: variable_drift
+          events: [{event: check_done, stage: spec, check: variable_drift, status: pass, details: []}]
+        checklist-variables:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          new_project: true
+          steps_total: 2
+          steps_pending: 0
+          counts: {confirmed: 2, skipped: 0, not_applicable: 0, pending: 0, blocked: 0}
+          ok: false
+          verify_failed: []
+          eligible_step_ids: []
+          next: null
+          steps:
+            - {step_id: traces-light, title: "Light code↔spec graph (Implements/Documents)", when: both, requires: [skeleton], role: onboard, stamp: confirm, scope: package, notes_required: false, invalidates: [], required_checks: [annotation_validity, orphan_code_clean], stored_status: confirmed, effective_status: confirmed, applicable: true, eligible: false, unmet_requires: [], scope_key: project-a, check_results: [{id: annotation_validity, status: pass, at: "2026-09-09T06:01:39Z"}, {id: orphan_code_clean, status: pass, at: "2026-09-09T06:01:39Z"}]}
+            - {step_id: variables, title: "Variables named by requirements", when: both, requires: [traces-light], role: onboard, stamp: confirm, scope: repo, notes_required: false, invalidates: [], required_checks: [variable_orphans_clean, variables_declared, variable_drift], stored_status: confirmed, effective_status: confirmed, applicable: true, eligible: false, unmet_requires: [], confirmed_at: "2026-09-09T06:01:39Z", confirmed_by: visor-checklist-continuation, check_results: [{id: variable_orphans_clean, status: pass, at: "2026-09-09T06:01:39Z"}, {id: variables_declared, status: pass, at: "2026-09-09T06:01:39Z"}, {id: variable_drift, status: pass, at: "2026-09-09T06:01:39Z"}]}
+      expect:
+        calls:
+          - step: continue-retained-catalog
+            exactly: 1
+          - logical_step: materialize-retained-catalog
+            exactly: 1
+          - logical_step: component-promotions-complete
+            exactly: 1
+          - logical_step: checklist-continuation-snapshot
+            exactly: 1
+          - logical_step: checkout-target
+            exactly: 0
+          - logical_step: checkout-worktree
+            exactly: 0
+          - logical_step: role-onboard-component
+            exactly: 0
+          - logical_step: author-native-component
+            exactly: 0
+          - logical_step: promote-native-component
+            exactly: 0
+          - logical_step: annotation_validity
+            exactly: 0
+          - logical_step: orphan_code_clean
+            exactly: 0
+          - logical_step: l0_stakeholder_complete
+            exactly: 0
+          - logical_step: l1_system_complete
+            exactly: 0
+          - logical_step: l2_software_complete
+            exactly: 0
+          - logical_step: levels_connected
+            exactly: 0
+          - logical_step: checklist-skeleton
+            exactly: 0
+          - logical_step: checklist-traces-light
+            exactly: 0
+          - logical_step: variable_orphans_clean
+            exactly: 1
+          - logical_step: variables_declared
+            exactly: 1
+          - logical_step: variable_drift
+            exactly: 1
+          - logical_step: checklist-variables
+            exactly: 1
+        outputs:
+          - step: materialize-retained-catalog
+            path: full_components.length
+            equals: 2
+          - step: materialize-retained-catalog
+            path: components.length
+            equals: 0
+          - step: materialize-retained-catalog
+            path: affected_component_ids.length
+            equals: 0
+          - step: materialize-retained-catalog
+            path: reused_component_ids
+            contains_unordered: [json-string-escaping, json-number-parsing]
+          - step: variable_orphans_clean
+            path: check
+            equals: variable_orphans_clean
+          - step: variable_orphans_clean
+            path: events[0].stage
+            equals: spec
+          - step: variable_orphans_clean
+            path: events[0].check
+            equals: variable_orphans_clean
+          - step: variable_orphans_clean
+            path: events[0].status
+            equals: pass
+          - step: variables_declared
+            path: check
+            equals: variables_declared
+          - step: variables_declared
+            path: events[0].stage
+            equals: spec
+          - step: variables_declared
+            path: events[0].check
+            equals: variables_declared
+          - step: variables_declared
+            path: events[0].status
+            equals: pass
+          - step: variable_drift
+            path: check
+            equals: variable_drift
+          - step: variable_drift
+            path: events[0].stage
+            equals: spec
+          - step: variable_drift
+            path: events[0].check
+            equals: variable_drift
+          - step: variable_drift
+            path: events[0].status
+            equals: pass
+          - step: checklist-variables
+            path: steps[1].effective_status
+            equals: confirmed
+          - step: checklist-continuation-snapshot
+            path: steps[1].effective_status
+            equals: pending

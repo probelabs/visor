@@ -4715,6 +4715,24 @@ function updateStats(
       },
     };
 
+    // Generated checks carry explicit condition/dependency skips on a
+    // non-enumerable result marker. Preserve that marker in the generated
+    // stats row instead of counting a skipped result as a successful run.
+    const skippedMarker = (result as any).__skipped;
+    if (skippedMarker) {
+      stats.skipped = true;
+      stats.skipReason =
+        typeof skippedMarker === 'string'
+          ? skippedMarker
+          : (stats.skipReason as any) || 'if_condition';
+      stats.totalRuns = 0;
+      stats.successfulRuns = 0;
+      stats.failedRuns = 0;
+      stats.skippedRuns++;
+      state.stats.set(checkId, stats);
+      continue;
+    }
+
     // DEBUG: Log when updateStats is called for post-response
     if (checkId === 'post-response') {
       logger.info(

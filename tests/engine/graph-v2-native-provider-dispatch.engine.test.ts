@@ -105,6 +105,12 @@ function config(): VisorConfig {
             consumes: [{ claim: 'fixture.first@1', as: 'first' }],
             emits: [{ claim: 'fixture.final@1', from: 'output' }],
           },
+          inactive: {
+            type: 'command',
+            if: 'false',
+            exec: `node -e 'throw new Error("inactive provider invoked")'`,
+            consumes: [{ claim: 'fixture.item@1', as: 'item' }],
+          },
         },
       },
     },
@@ -200,9 +206,29 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
     const journal = (engine as any)._lastContext.journal;
     const projection = journal.getInstanceProjection();
     const childGenerations = Object.values(projection.generationsById).filter((generation: any) =>
-      generation.checkId === 'command1' || generation.checkId === 'command2'
+      generation.checkId === 'command1' ||
+      generation.checkId === 'command2' ||
+      generation.checkId === 'inactive'
     ) as any[];
-    expect(childGenerations).toHaveLength(2);
+    expect(childGenerations).toHaveLength(3);
+
+    const inactive = childGenerations.find(child => child.checkId === 'inactive');
+    expect(inactive).toBeDefined();
+    const inactiveStats = result.statistics.checks.find(
+      (stats: any) => stats.checkName === inactive!.nodeGenerationId
+    );
+    expect(inactiveStats).toEqual(
+      expect.objectContaining({
+        checkName: inactive!.nodeGenerationId,
+        logicalCheckName: 'inactive',
+        skipped: true,
+        skipReason: 'if_condition',
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 1,
+      })
+    );
 
     // The returned child rows are keyed by opaque nodeGenerationId, but carry
     // the logical check id needed by native Visor assertions.
@@ -228,6 +254,7 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
           { step: 'catalog', exactly: 1 },
           { logical_step: 'command1', exactly: 1 },
           { logical_step: 'command2', exactly: 1 },
+          { logical_step: 'inactive', exactly: 0 },
         ],
       } satisfies ExpectBlock,
       true,
@@ -247,7 +274,9 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
       {
         calls: [
           { step: 'catalog', exactly: 1 },
-          ...childGenerations.map(child => ({ step: child.nodeGenerationId, exactly: 1 })),
+          ...childGenerations
+            .filter(child => child.checkId !== 'inactive')
+            .map(child => ({ step: child.nodeGenerationId, exactly: 1 })),
         ],
       } satisfies ExpectBlock,
       true,
@@ -259,7 +288,17 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
 
     const events = journal.readRuntimeEvents() as readonly any[];
     const generated = events.filter(event => event.nodeGenerationId);
-    expect(generated.filter(event => event.type === 'AttemptFailed')).toHaveLength(0);
+    expect(
+      generated.find(event => event.type === 'AttemptFailed' && event.checkId === 'inactive')
+    ).toEqual(
+      expect.objectContaining({
+        checkId: 'inactive',
+        reason: 'IF_CONDITION_NOT_MET',
+      })
+    );
+    expect(
+      generated.filter(event => event.type === 'AttemptFailed' && event.checkId !== 'inactive')
+    ).toHaveLength(0);
     expect(generated.filter(event => event.type === 'AttemptCompleted')).toHaveLength(2);
     expect(
       generated
