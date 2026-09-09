@@ -115,6 +115,7 @@ export function writeNativeChecklistProgress(
   instanceProjection: unknown,
   checkpoint: unknown,
   options: ChecklistProgressRefreshOptions = {},
+  currentProofSnapshot?: unknown,
 ): NativeChecklistProgress {
   const progress = buildNativeChecklistProgressFromProjections({
     claimProjection,
@@ -124,6 +125,7 @@ export function writeNativeChecklistProgress(
     resumed: options.resumed,
     retainedCatalogComponentIds: options.retainedCatalogComponentIds,
     affectedComponentIds: options.affectedComponentIds,
+    currentProofSnapshot,
   });
   const rendered = renderNativeChecklistProgress(progress);
   writeText(path.join(output, 'progress.json'), rendered.json);
@@ -138,6 +140,7 @@ function writeRestoredChecklistProgress(
   checkpoint: GraphJournalCheckpointV1,
   options: ChecklistProgressRefreshOptions = {},
   liveInstanceProjection?: unknown,
+  currentProofSnapshot?: unknown,
 ): NativeChecklistProgress {
   const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
   return writeNativeChecklistProgress(
@@ -146,6 +149,7 @@ function writeRestoredChecklistProgress(
     liveInstanceProjection ?? journal.getInstanceProjection(),
     checkpoint,
     options,
+    currentProofSnapshot,
   );
 }
 
@@ -6341,7 +6345,8 @@ async function main(): Promise<void> {
         config,
         latestChecklistCheckpoint,
         checklistProgressObservation,
-        engine.getInstanceProjection(),
+        undefined,
+        postflightValues.checklist,
       );
     } catch {
       checklistProgress = undefined;

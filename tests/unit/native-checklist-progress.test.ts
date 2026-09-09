@@ -159,6 +159,76 @@ function continuationSnapshotClaim(
   } as any;
 }
 
+function currentProofReadbackSnapshot(scopeKey = 'jsonparser'): Record<string, unknown> {
+  const confirmedAt = '2026-09-09T00:00:02Z';
+  const confirmedBaseSteps = (snapshot().steps as Record<string, unknown>[]).map(step => ({
+    ...step,
+    eligible: false,
+    stored_status: 'confirmed',
+    effective_status: 'confirmed',
+    unmet_requires: [],
+    ...(step.step_id === 'research'
+      ? { check_results: [] }
+      : step.step_id === 'skeleton'
+        ? {
+          check_results: [{ id: 'requirements', status: 'pass', at: confirmedAt }],
+          verify_result: { exit_code: 0, passed: true, at: confirmedAt },
+        }
+        : {}),
+  }));
+  const traceRow = {
+    step_id: 'traces-light',
+    title: 'Trace links',
+    stamp: 'confirm',
+    scope: 'package',
+    scope_key: scopeKey,
+    applicable: true,
+    eligible: false,
+    stored_status: 'confirmed',
+    effective_status: 'confirmed',
+    required_checks: ['annotation_validity', 'orphan_code_clean'],
+    check_results: [
+      { id: 'annotation_validity', status: 'pass', at: '2026-09-09T00:00:02Z' },
+      { id: 'orphan_code_clean', status: 'pass', at: '2026-09-09T00:00:02Z' },
+    ],
+  };
+  return snapshot({
+    eligible_step_ids: ['variables'],
+    steps: [...confirmedBaseSteps, traceRow],
+    steps_total: 4,
+    steps_pending: 11,
+  });
+}
+
+function continuationProjectionWithTrace(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-traces-light');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'trace-generation',
+    nodeInstanceId: 'trace-node',
+    checkId: 'checklist-traces-light',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: { 'trace-generation': generation },
+    activeGenerationIdByNode: { 'trace-node': 'trace-generation' },
+  };
+}
+
 describe('native checklist progress projection', () => {
   it.each(['checklist-continuation-snapshot', 'checklist-traces-light'] as const)(
     'projects a continuation checklist snapshot from the %s producer with full/affected/reused coverage',
@@ -210,6 +280,115 @@ describe('native checklist progress projection', () => {
       expect(progress.resumed).toBe(producerCheckId === 'checklist-traces-light');
     },
   );
+
+  it('uses a current confirmed Proof readback only for the completed scoped traces generation', () => {
+    const anchor = snapshot({
+      steps: [{
+        step_id: 'traces-light',
+        title: 'Trace links',
+        stamp: 'confirm',
+        applicable: true,
+        eligible: true,
+        stored_status: 'pending',
+        effective_status: 'pending',
+        required_checks: [],
+        check_results: [],
+      }],
+    });
+    const readback = currentProofReadbackSnapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: continuationProjectionWithTrace(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['affected-component', 'reused-component'],
+      affectedComponentIds: ['affected-component'],
+    });
+    expect(progress.checklist.steps_total).toBe(4);
+    expect(progress.checklist.counts.confirmed).toBe(4);
+    expect(progress.checklist.eligible_step_ids).toEqual(['variables']);
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      anchor_claim_id: 'c'.repeat(64),
+      generation_id: 'trace-generation',
+      digest: sha256Canonical(readback),
+    });
+    expect(progress.evidence.proof_snapshot).not.toHaveProperty('claim_id');
+    expect(progress.operational.catalog_coverage).toMatchObject({
+      known_count: 2,
+      affected_count: 1,
+      reused_count: 1,
+    });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=4');
+    expect(rendered.text).toContain('eligible=variables');
+    expect(rendered.html).toContain('confirmed=4');
+    expect(JSON.parse(rendered.json).evidence.proof_snapshot.source).toBe('current-proof-readback');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('rejects a current readback whose package key is not the continuation anchor key', () => {
+    const anchor = snapshot({ steps: [{
+      step_id: 'traces-light',
+      title: 'Trace links',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      required_checks: [],
+      check_results: [],
+    }] });
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: continuationProjectionWithTrace(anchor),
+      currentProofSnapshot: currentProofReadbackSnapshot('other-project'),
+    })).toThrow(/exact confirmed package evidence/);
+  });
+
+  it('rejects a current readback until the active traces generation is completed', () => {
+    const anchor = snapshot({ steps: [{
+      step_id: 'traces-light',
+      title: 'Trace links',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      required_checks: [],
+      check_results: [],
+    }] });
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: continuationProjectionWithTrace(anchor, 'ready'),
+      currentProofSnapshot: currentProofReadbackSnapshot(),
+    })).toThrow(/completed traces-light generation/);
+  });
+
+  it('rejects a same-scope current readback from an unrelated traces generation', () => {
+    const anchor = snapshot({ steps: [{
+      step_id: 'traces-light',
+      title: 'Trace links',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      required_checks: [],
+      check_results: [],
+    }] });
+    const projection = continuationProjectionWithTrace(anchor);
+    const generation = (projection.generationsById as Record<string, Record<string, unknown>>)['trace-generation'];
+    generation.activeInputClaimIds = ['e'.repeat(64)];
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: projection,
+      currentProofSnapshot: currentProofReadbackSnapshot(),
+    })).toThrow(/generation inputs/);
+  });
 
   it('projects effective Proof states and validates required-check/verify evidence', () => {
     const progress = buildNativeChecklistProgress({

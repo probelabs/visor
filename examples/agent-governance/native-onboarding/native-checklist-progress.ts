@@ -19,11 +19,22 @@ const CHECKLIST_SNAPSHOT_CLAIMS = {
   'native.continuation.checklist_snapshot@1': 'continuation',
 } as const;
 type ChecklistSnapshotClaim = keyof typeof CHECKLIST_SNAPSHOT_CLAIMS;
+type ChecklistSnapshotEvidenceSource = ChecklistSnapshotClaim | 'current-proof-readback';
 
 export type NativeChecklistProgressInput = Readonly<{
   proofSnapshot: unknown;
   /** Optional graph claim used to prove that the supplied snapshot is journal-linked. */
   proofSnapshotClaim?: unknown;
+  /**
+   * A current Proof readback selected by the projection layer.  This is not a
+   * synthetic claim: the historical continuation claim remains the lineage
+   * anchor and this small record only identifies that anchor and the completed
+   * traces generation which caused the readback to be observed.
+   */
+  proofSnapshotReadback?: Readonly<{
+    anchorClaimId: string;
+    generationId: string;
+  }>;
   instanceProjection?: InstanceProjection | unknown;
   checkpoint?: unknown;
   /** Persisted checkpoint creation time.  The projector never uses the clock. */
@@ -104,9 +115,11 @@ export type NativeChecklistProgress = Readonly<{
       schema_version: string;
       checklist: string;
       digest: string;
-      source?: ChecklistSnapshotClaim;
+      source?: ChecklistSnapshotEvidenceSource;
       stage?: 'research' | 'skeleton';
       claim_id?: string;
+      anchor_claim_id?: string;
+      generation_id?: string;
       updated_at?: string;
     }>;
     journal: Readonly<{
@@ -358,6 +371,23 @@ function validateSnapshotClaim(
   return { ...(claimId ? { claim_id: claimId } : {}), source, ...(stage ? { stage } : {}) };
 }
 
+function validateCurrentReadbackEvidence(
+  readback: NativeChecklistProgressInput['proofSnapshotReadback']
+): {
+  source: 'current-proof-readback';
+  anchor_claim_id: string;
+  generation_id: string;
+} {
+  if (!readback) throw new Error('current Proof readback evidence is missing');
+  const anchorClaimId = requireClaimId(readback.anchorClaimId, 'current Proof readback anchor claim ID');
+  const generationId = requiredString(readback.generationId, 'current Proof readback generation ID');
+  return {
+    source: 'current-proof-readback',
+    anchor_claim_id: anchorClaimId,
+    generation_id: generationId,
+  };
+}
+
 type SelectedChecklistSnapshotClaim = Readonly<{
   claim: Json;
   stage: 'bootstrap' | 'research' | 'skeleton' | 'continuation';
@@ -526,6 +556,117 @@ function activeExpandedChecklistClaims(projection: unknown): SelectedChecklistSn
   return selected;
 }
 
+function completedChecklistTracesGeneration(
+  projection: unknown,
+  anchor: Json,
+  anchorScope: readonly Json[],
+): string {
+  if (!isRecord(projection) || !isRecord(projection.generationsById) ||
+      !isRecord(projection.activeGenerationIdByNode)) {
+    throw new Error('current Proof readback requires an instance generation projection');
+  }
+  const activeGenerationIds = new Set(
+    Object.values(projection.activeGenerationIdByNode).filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    ),
+  );
+  const activeTraces = Object.entries(projection.generationsById)
+    .filter(([generationId, value]) =>
+      activeGenerationIds.has(generationId) && isRecord(value) &&
+      optionalString(value.checkId) === 'checklist-traces-light',
+    )
+    .map(([generationId, value]) => ({generationId, generation: value as Json}));
+  if (activeTraces.length !== 1) {
+    throw new Error('current Proof readback requires exactly one active traces-light generation');
+  }
+  const selected = activeTraces[0];
+  if (selected.generation.status !== 'completed') {
+    throw new Error('current Proof readback requires a completed traces-light generation');
+  }
+  validateProjectScope(selected.generation.scope, 'current traces-light generation scope');
+  if (canonicalJson(selected.generation.scope) !== canonicalJson(anchorScope)) {
+    throw new Error('current traces-light generation scope does not match the continuation anchor');
+  }
+  if (selected.generation.nodeGenerationId !== selected.generationId) {
+    throw new Error('current traces-light generation ID does not match its projection key');
+  }
+  const anchorParents = stringArray(anchor.parentClaimIds, 'continuation anchor parentClaimIds');
+  const generationInputs = stringArray(
+    selected.generation.activeInputClaimIds,
+    'current traces-light generation activeInputClaimIds',
+  );
+  const sortIds = (ids: readonly string[]) =>
+    [...ids].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
+  if (canonicalJson(sortIds(generationInputs)) !== canonicalJson(sortIds(anchorParents))) {
+    throw new Error('current traces-light generation inputs do not match the continuation anchor');
+  }
+  return selected.generationId;
+}
+
+function validateCurrentProofReadback(
+  readback: unknown,
+  anchor: Json,
+  instanceProjection: unknown,
+): {snapshot: Json; generationId: string} {
+  if (!isRecord(readback)) throw new Error('current Proof checklist readback must be an object');
+  if (!isRecord(anchor.payload)) throw new Error('continuation anchor payload must be an object');
+  const anchorSnapshot = anchor.payload;
+  // Validate both snapshots before comparing the lineage identity fields. This
+  // keeps malformed/external bytes from being treated as a current Proof view.
+  snapshotSteps(anchorSnapshot);
+  snapshotSteps(readback);
+  for (const field of ['schema_version', 'checklist', 'active', 'new_project'] as const) {
+    if (
+      (field === 'schema_version' || field === 'checklist') &&
+      (typeof anchorSnapshot[field] !== 'string' || typeof readback[field] !== 'string')
+    ) {
+      throw new Error(`current Proof checklist readback ${field} is malformed`);
+    }
+    if (
+      (field === 'active' || field === 'new_project') &&
+      (typeof anchorSnapshot[field] !== 'boolean' || typeof readback[field] !== 'boolean')
+    ) {
+      throw new Error(`current Proof checklist readback ${field} is malformed`);
+    }
+    if (canonicalJson(readback[field]) !== canonicalJson(anchorSnapshot[field])) {
+      throw new Error(`current Proof checklist readback ${field} does not match the continuation anchor`);
+    }
+  }
+  const anchorScope = validateProjectScope(anchor.scope, 'continuation anchor scope');
+  const projectKey = requiredString(anchorScope[0].key, 'continuation anchor project key');
+  const tracesRows = snapshotSteps(readback).filter(row => row.step_id === 'traces-light');
+  if (tracesRows.length !== 1) {
+    throw new Error('current Proof checklist readback must contain exactly one traces-light row');
+  }
+  const traces = tracesRows[0];
+  const requiredTraceChecks = stringArray(
+    traces.required_checks,
+    'current traces-light required_checks',
+  );
+  const traceCheckResults = objectArray(
+    traces.check_results,
+    'current traces-light check_results',
+  );
+  if (
+    traces.applicable !== true ||
+    traces.stored_status !== 'confirmed' ||
+    traces.effective_status !== 'confirmed' ||
+    (traces.stamp !== 'confirm' && traces.stamp !== 'confirm+verify') ||
+    traces.scope !== 'package' ||
+    traces.scope_key !== projectKey ||
+    traceCheckResults.length !== requiredTraceChecks.length ||
+    !requiredChecksPass(traces) ||
+    (traces.stamp === 'confirm+verify' && verifyPassed(traces) !== true)
+  ) {
+    throw new Error('current Proof checklist readback lacks exact confirmed package evidence');
+  }
+  const generationId = requiredString(
+    completedChecklistTracesGeneration(instanceProjection, anchor, anchorScope),
+    'current traces-light generation ID',
+  );
+  return {snapshot: readback, generationId};
+}
+
 /**
  * Select the latest lineage-consistent Proof checklist snapshot from the two
  * journal projections. Root ClaimProjection owns bootstrap; expanded
@@ -541,6 +682,8 @@ export type NativeChecklistProjectionInput = Readonly<{
   resumed?: boolean;
   retainedCatalogComponentIds?: readonly string[];
   affectedComponentIds?: readonly string[];
+  /** Current Proof `checklist show` bytes, bound to the completed traces run. */
+  currentProofSnapshot?: unknown;
 }>;
 
 export function buildNativeChecklistProgressFromProjections(
@@ -575,9 +718,29 @@ export function buildNativeChecklistProgressFromProjections(
   }
   const selected = continuation ?? skeleton ?? research ?? bootstrap;
   if (!selected) throw new Error('no active supported Proof checklist snapshot claim was found');
+  let proofSnapshot = selected.claim.payload;
+  let proofSnapshotClaim: unknown = selected.claim;
+  let proofSnapshotReadback: NativeChecklistProgressInput['proofSnapshotReadback'];
+  if (input.currentProofSnapshot !== undefined) {
+    if (!continuation) {
+      throw new Error('current Proof checklist readback requires an active continuation anchor');
+    }
+    const current = validateCurrentProofReadback(
+      input.currentProofSnapshot,
+      continuation.claim,
+      input.instanceProjection,
+    );
+    proofSnapshot = current.snapshot;
+    proofSnapshotClaim = undefined;
+    proofSnapshotReadback = {
+      anchorClaimId: requireClaimId(continuation.claim.claimId, 'continuation anchor claim ID'),
+      generationId: current.generationId,
+    };
+  }
   return buildNativeChecklistProgress({
-    proofSnapshot: selected.claim.payload,
-    proofSnapshotClaim: selected.claim,
+    proofSnapshot,
+    proofSnapshotClaim,
+    proofSnapshotReadback,
     instanceProjection: input.instanceProjection,
     checkpoint: input.checkpoint,
     checkpointTimestamp: input.checkpointTimestamp,
@@ -945,10 +1108,16 @@ export function buildNativeChecklistProgress(
   const snapshot = input.proofSnapshot;
   const steps = snapshotSteps(snapshot);
   const requireLiveClaim = input.requireProofSnapshotClaim === true;
-  if (requireLiveClaim && input.proofSnapshotClaim === undefined) {
+  if (
+    requireLiveClaim &&
+    input.proofSnapshotClaim === undefined &&
+    input.proofSnapshotReadback === undefined
+  ) {
     throw new Error('live checklist progress requires a lineage-linked proof snapshot claim');
   }
-  const claimEvidence = validateSnapshotClaim(snapshot, input.proofSnapshotClaim, requireLiveClaim);
+  const claimEvidence = input.proofSnapshotReadback
+    ? validateCurrentReadbackEvidence(input.proofSnapshotReadback)
+    : validateSnapshotClaim(snapshot, input.proofSnapshotClaim, requireLiveClaim);
   const counts = {
     confirmed: 0,
     skipped: 0,
@@ -1054,6 +1223,12 @@ export function buildNativeChecklistProgress(
         checklist: checklistName,
         digest: snapshotDigest,
         ...(claimEvidence.claim_id ? { claim_id: claimEvidence.claim_id } : {}),
+        ...(claimEvidence.anchor_claim_id
+          ? { anchor_claim_id: claimEvidence.anchor_claim_id }
+          : {}),
+        ...(claimEvidence.generation_id
+          ? { generation_id: claimEvidence.generation_id }
+          : {}),
         ...(claimEvidence.source ? { source: claimEvidence.source } : {}),
         ...(claimEvidence.stage ? { stage: claimEvidence.stage } : {}),
         ...(optionalString(snapshot.updated_at)
