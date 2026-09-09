@@ -658,7 +658,7 @@ subgraphs:
 
       annotation_validity:
         type: command
-        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"'
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "traces-light"'
         depends_on: [component-promotions-complete]
         timeout: 900000
         resource_group: proof-workspace-mutation
@@ -688,7 +688,7 @@ subgraphs:
 
       orphan_code_clean:
         type: command
-        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"'
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "traces-light"'
         depends_on: [annotation_validity]
         timeout: 900000
         resource_group: proof-workspace-mutation
@@ -779,9 +779,60 @@ subgraphs:
         schema: {type: object}
         exec: *skeleton_audit_exec
 
+      variable_orphans_clean:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"'
+        depends_on: [component-promotions-complete]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: variable_orphans_clean}
+        schema: {type: object}
+        exec: &variables_audit_exec |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          : "${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const path = require('node:path');
+          const {runProof} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          const proof = process.argv[2];
+          const check = process.env.NATIVE_CHECKLIST_AUDIT;
+          const run = runProof(proof, process.env.VISOR_WORKSPACE_MAIN_PROJECT, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, `continuation-audit-${check}`, ['audit', '--no-cache', '--check', check, '--format', 'json'], Number(process.env.REQUEST_TIMEOUT));
+          if (run.status !== 0) throw new Error(`Proof audit failed for ${check} with exit ${run.status}`);
+          const lines = String(run.stdout || '').split(/\r?\n/).filter(line => line.trim() !== '');
+          if (lines.length === 0) throw new Error(`Proof audit returned no records for ${check}`);
+          const events = lines.map(line => {
+            try { return JSON.parse(line); } catch { throw new Error(`Proof audit returned a non-JSONL record for ${check}`); }
+          });
+          const done = events.filter(event => event && typeof event === 'object' && !Array.isArray(event) && event.event === 'check_done');
+          if (done.length !== 1 || done[0].check !== check || done[0].stage !== 'spec' || done[0].status !== 'pass' || (done[0].details !== undefined && (!Array.isArray(done[0].details) || done[0].details.length !== 0 || done[0].details.some(value => typeof value !== 'string')))) throw new Error(`Proof audit did not provide exactly one passing spec check_done for ${check}`);
+          process.stdout.write(JSON.stringify({status: run.status, check, events}));
+          NODE
+
+      variables_declared:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"'
+        depends_on: [component-promotions-complete]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: variables_declared}
+        schema: {type: object}
+        exec: *variables_audit_exec
+
+      variable_drift:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"'
+        depends_on: [component-promotions-complete]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: variable_drift}
+        schema: {type: object}
+        exec: *variables_audit_exec
+
       checklist-traces-light:
         type: command
-        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"'
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "traces-light"'
         depends_on: [orphan_code_clean, checklist-continuation-snapshot]
         timeout: 120000
         resource_group: proof-workspace-mutation
@@ -796,6 +847,25 @@ subgraphs:
           const path = require('node:path');
           const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
           process.stdout.write(JSON.stringify(executeJournaledChecklistStep('traces-light', 'Confirmed current native trace links after retained component onboarding.', true)));
+          NODE
+
+      checklist-variables:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"'
+        depends_on: [variable_orphans_clean, variables_declared, variable_drift, checklist-continuation-snapshot]
+        timeout: 120000
+        resource_group: proof-workspace-mutation
+        schema: {type: object}
+        consumes:
+          - {claim: native.continuation.catalog@1, as: authority}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - <<'NODE'
+          const path = require('node:path');
+          const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          process.stdout.write(JSON.stringify(executeJournaledChecklistStep('variables', 'Confirmed current native variable declarations and drift after retained component onboarding.', false)));
           NODE
 
       checklist-skeleton:

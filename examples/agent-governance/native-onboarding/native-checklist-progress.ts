@@ -464,7 +464,7 @@ function validateExpandedStageCandidate(
   if (
     candidate.claim !== (stage === 'continuation' ? 'native.continuation.checklist_snapshot@1' : `proof.checklist.${stage}-snapshot@1`) ||
     (stage === 'continuation'
-      ? !['checklist-continuation-snapshot', 'checklist-traces-light', 'checklist-skeleton'].includes(producerCheckId)
+      ? !['checklist-continuation-snapshot', 'checklist-traces-light', 'checklist-skeleton', 'checklist-variables'].includes(producerCheckId)
       : producerCheckId !== `checklist-${stage}`)
   ) {
     throw new Error(`expanded checklist ${stage} claim has an invalid producer or claim reference`);
@@ -556,7 +556,8 @@ function activeExpandedChecklistClaims(projection: unknown): SelectedChecklistSn
   return selected;
 }
 
-type NativeContinuationStep = 'skeleton' | 'traces-light';
+const NATIVE_CONTINUATION_STEPS = ['skeleton', 'traces-light', 'variables'] as const;
+type NativeContinuationStep = (typeof NATIVE_CONTINUATION_STEPS)[number];
 
 function completedChecklistContinuationGeneration(
   projection: unknown,
@@ -644,7 +645,7 @@ function validateCurrentProofReadback(
       )
       : [],
   );
-  const completedSteps = (['skeleton', 'traces-light'] as const).filter(step => {
+  const completedSteps = NATIVE_CONTINUATION_STEPS.filter(step => {
     if (!isRecord(instanceProjection) || !isRecord(instanceProjection.generationsById)) return false;
     const matches = Object.entries(instanceProjection.generationsById).filter(([generationId, value]) =>
       activeGenerationIds.has(generationId) && isRecord(value) &&
@@ -653,7 +654,7 @@ function validateCurrentProofReadback(
     return matches.length === 1 && isRecord(matches[0][1]) && matches[0][1].status === 'completed';
   });
   if (completedSteps.length !== 1) {
-    const activePendingStep = (['skeleton', 'traces-light'] as const).find(step => {
+    const activePendingStep = NATIVE_CONTINUATION_STEPS.find(step => {
       if (!isRecord(instanceProjection) || !isRecord(instanceProjection.generationsById)) return false;
       const matches = Object.entries(instanceProjection.generationsById).filter(([generationId, value]) =>
         activeGenerationIds.has(generationId) && isRecord(value) && value.checkId === `checklist-${step}`,
@@ -663,7 +664,7 @@ function validateCurrentProofReadback(
     if (activePendingStep) {
       throw new Error(`current Proof readback requires a completed ${activePendingStep} generation`);
     }
-    throw new Error('current Proof readback requires exactly one active completed skeleton or traces-light generation');
+    throw new Error('current Proof readback requires exactly one active completed skeleton, traces-light, or variables generation');
   }
   const step = completedSteps[0];
   const rows = snapshotSteps(readback).filter(row => row.step_id === step);
@@ -673,9 +674,15 @@ function validateCurrentProofReadback(
   const selected = rows[0];
   const expectedChecks = step === 'skeleton'
     ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
-    : ['annotation_validity', 'orphan_code_clean'];
-  const expectedRequires = step === 'skeleton' ? ['research'] : ['skeleton'];
-  const expectedScope = step === 'skeleton' ? 'repo' : 'package';
+    : step === 'traces-light'
+      ? ['annotation_validity', 'orphan_code_clean']
+      : ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+  const expectedRequires = step === 'skeleton'
+    ? ['research']
+    : step === 'traces-light'
+      ? ['skeleton']
+      : ['traces-light'];
+  const expectedScope = step === 'traces-light' ? 'package' : 'repo';
   const requiredChecks = stringArray(
     selected.required_checks,
     `current ${step} required_checks`,
@@ -695,9 +702,14 @@ function validateCurrentProofReadback(
     selected.effective_status !== 'confirmed' ||
     checkResults.length !== requiredChecks.length ||
     !requiredChecksPass(selected) ||
-    (step === 'traces-light' && selected.scope_key !== projectKey)
+    (step === 'traces-light' && selected.scope_key !== projectKey) ||
+    (step !== 'traces-light' && selected.scope_key !== undefined)
   ) {
-    const evidenceScope = step === 'skeleton' ? 'repository skeleton' : 'package';
+    const evidenceScope = step === 'skeleton'
+      ? 'repository skeleton'
+      : step === 'traces-light'
+        ? 'package'
+        : 'repository variables';
     throw new Error(`current Proof checklist readback lacks exact confirmed ${evidenceScope} evidence`);
   }
   const generationId = requiredString(
@@ -1301,7 +1313,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
   });
   const operationalRows = [
     [
-      'project',
+      'selected workflow',
       progress.operational.project.state,
       progress.operational.project.known ? 'known' : 'unknown',
       progress.operational.project.check_ids.join(',') || 'none',
@@ -1356,7 +1368,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
   );
   const htmlOperationalRows = operationalRows.map(row => {
     const metrics =
-      row[0] === 'project'
+      row[0] === 'selected workflow'
         ? `<span class="metric"><b>Checks:</b> ${escapedHtml(row[3])}</span>`
         : row[3]
             .split(',')

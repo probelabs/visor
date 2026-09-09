@@ -140,7 +140,7 @@ function instanceProjection(claims: Record<string, unknown>[]): Record<string, u
 
 function continuationSnapshotClaim(
   payload: Record<string, unknown>,
-  producerCheckId: 'checklist-continuation-snapshot' | 'checklist-traces-light' | 'checklist-skeleton',
+  producerCheckId: 'checklist-continuation-snapshot' | 'checklist-traces-light' | 'checklist-skeleton' | 'checklist-variables',
 ): Record<string, unknown> {
   const authorityClaimId = 'a'.repeat(64);
   const claimId = 'c'.repeat(64);
@@ -260,8 +260,120 @@ function continuationProjectionWithSkeleton(
   };
 }
 
+function continuationProjectionWithVariables(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-variables');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'variables-generation',
+    nodeInstanceId: 'variables-node',
+    checkId: 'checklist-variables',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: {'variables-generation': generation},
+    activeGenerationIdByNode: {'variables-node': 'variables-generation'},
+  };
+}
+
+function variablesAnchorSnapshot(): Record<string, unknown> {
+  const base = snapshot();
+  const confirmedAt = '2026-09-09T00:00:02Z';
+  const checkStamp = (id: string) => ({id, status: 'pass', at: confirmedAt});
+  const skeletonChecks = ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'];
+  const traceChecks = ['annotation_validity', 'orphan_code_clean'];
+  const variableChecks = ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+  const steps = [
+    {
+      step_id: 'init', title: 'Init', stamp: 'confirm+verify', scope: 'repo', requires: [],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: ['structure'], check_results: [checkStamp('structure')],
+      verify_result: {exit_code: 0, passed: true, at: confirmedAt},
+    },
+    {
+      step_id: 'research', title: 'Research', stamp: 'confirm', scope: 'repo', requires: ['init'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: [], check_results: [],
+    },
+    {
+      step_id: 'skeleton', title: 'Four-layer skeleton', stamp: 'confirm', role: 'onboard', scope: 'repo', requires: ['research'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: skeletonChecks, check_results: skeletonChecks.map(checkStamp),
+    },
+    {
+      step_id: 'traces-light', title: 'Trace links', stamp: 'confirm', role: 'onboard', scope: 'package', scope_key: 'jsonparser', requires: ['skeleton'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: traceChecks, check_results: traceChecks.map(checkStamp),
+    },
+    {
+      step_id: 'variables', title: 'Variables', stamp: 'confirm', role: 'onboard', scope: 'repo', requires: ['traces-light'],
+      unmet_requires: [], applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending',
+      required_checks: variableChecks, check_results: [],
+    },
+    {
+      step_id: 'spec-review-1', title: 'Specification review', stamp: 'confirm', role: 'review', scope: 'repo', requires: ['variables'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'pending', effective_status: 'pending',
+      required_checks: [], check_results: [],
+    },
+    ...Array.from({length: 9}, (_, index) => ({
+      step_id: `blocked-${index + 1}`, title: `Blocked ${index + 1}`, stamp: 'confirm', scope: 'repo', requires: ['spec-review-1'],
+      unmet_requires: ['spec-review-1'], applicable: true, eligible: false, stored_status: 'pending', effective_status: 'blocked',
+      required_checks: [], check_results: [],
+    })),
+  ];
+  return {
+    ...base,
+    steps,
+    steps_total: steps.length,
+    steps_pending: 10,
+    counts: {confirmed: 4, skipped: 0, not_applicable: 0, pending: 1, blocked: 9},
+    eligible_step_ids: ['variables'],
+    next: {step_id: 'variables', title: 'Variables', role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['traces-light'], required_checks: variableChecks},
+  };
+}
+
+function variablesReadbackSnapshot(): Record<string, unknown> {
+  const anchor = variablesAnchorSnapshot();
+  const confirmedAt = '2026-09-09T00:00:03Z';
+  const variableChecks = ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+  const steps = (anchor.steps as Record<string, unknown>[]).map(step => {
+    if (step.step_id === 'variables') {
+      return {
+        ...step,
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        check_results: variableChecks.map(id => ({id, status: 'pass', at: confirmedAt})),
+      };
+    }
+    if (step.step_id === 'spec-review-1') return {...step, eligible: true};
+    return step;
+  });
+  return {
+    ...anchor,
+    steps,
+    steps_pending: 10,
+    counts: {confirmed: 5, skipped: 0, not_applicable: 0, pending: 1, blocked: 9},
+    eligible_step_ids: ['spec-review-1'],
+    next: {step_id: 'spec-review-1', title: 'Specification review', role: 'review', stamp: 'confirm', scope: 'repo', requires: ['variables'], required_checks: []},
+  };
+}
+
 describe('native checklist progress projection', () => {
-  it.each(['checklist-continuation-snapshot', 'checklist-traces-light'] as const)(
+  it.each(['checklist-continuation-snapshot', 'checklist-traces-light', 'checklist-variables'] as const)(
     'projects a continuation checklist snapshot from the %s producer with full/affected/reused coverage',
     producerCheckId => {
       const payload = snapshot({
@@ -432,6 +544,59 @@ describe('native checklist progress projection', () => {
     const rendered = renderNativeChecklistProgress(progress);
     expect(rendered.text).toContain('confirmed=3');
     expect(rendered.html).toContain('confirmed=3');
+  });
+
+  it('uses a current confirmed Proof readback for the completed variables generation', () => {
+    const anchor = variablesAnchorSnapshot();
+    const readback = variablesReadbackSnapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithVariables(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c', 'component-d'],
+      affectedComponentIds: [],
+    });
+    expect(progress.checklist.steps_total).toBe(15);
+    expect(progress.checklist.counts).toMatchObject({confirmed: 5, pending: 1, blocked: 9});
+    expect(progress.checklist.eligible_step_ids).toEqual(['spec-review-1']);
+    expect(progress.checklist.steps.find(step => step.id === 'variables')).toMatchObject({
+      state: 'confirmed',
+      effective_status: 'confirmed',
+      scope: 'repo',
+      required_checks: ['variable_orphans_clean', 'variables_declared', 'variable_drift'],
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      anchor_claim_id: 'c'.repeat(64),
+      generation_id: 'variables-generation',
+      digest: sha256Canonical(readback),
+    });
+    expect(progress.evidence.proof_snapshot).not.toHaveProperty('claim_id');
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=5');
+    expect(rendered.text).toContain('eligible=spec-review-1');
+    expect(rendered.text).toContain('operational selected workflow: state=completed');
+    expect(rendered.text).not.toContain('operational project: state=completed');
+    expect(rendered.html).toContain('confirmed=5');
+    expect(rendered.html).toContain('spec-review-1');
+    expect(rendered.html).toContain('selected workflow');
+    expect(rendered.html).toContain('<b>Checks:</b>');
+    expect(rendered.html).toContain('checklist-variables');
+    expect(rendered.html).not.toContain('<th>project</th>');
+    expect(JSON.parse(rendered.json).checklist.counts).toMatchObject({confirmed: 5, pending: 1, blocked: 9});
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('rejects a variables readback until the active variables generation is completed', () => {
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithVariables(variablesAnchorSnapshot(), 'ready'),
+      currentProofSnapshot: variablesReadbackSnapshot(),
+    })).toThrow(/completed variables generation/);
   });
 
   it('rejects a current readback whose package key is not the continuation anchor key', () => {

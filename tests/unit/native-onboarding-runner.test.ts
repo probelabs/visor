@@ -302,7 +302,7 @@ describe('native onboarding runner boundaries', () => {
     previousCodexHome = process.env.CODEX_HOME;
   });
 
-  it('accepts one shared native continuation entry for traces-light or skeleton and rejects unsupported stages', () => {
+  it('accepts one shared native continuation entry for traces-light, skeleton, or variables and rejects unsupported stages', () => {
     expect(parseChecklistContinueArguments({'checklist-continue': '/tmp/checkpoint.json'})).toEqual({
       checkpoint: '/tmp/checkpoint.json',
       step: 'traces-light',
@@ -311,22 +311,27 @@ describe('native onboarding runner boundaries', () => {
       'checklist-continue': '/tmp/checkpoint.json',
       'checklist-step': 'skeleton',
     })).toEqual({checkpoint: '/tmp/checkpoint.json', step: 'skeleton'});
+    expect(parseChecklistContinueArguments({
+      'checklist-continue': '/tmp/checkpoint.json',
+      'checklist-step': 'variables',
+    })).toEqual({checkpoint: '/tmp/checkpoint.json', step: 'variables'});
     expect(() => parseChecklistContinueArguments({
       'checklist-continue': '/tmp/checkpoint.json',
       'checklist-step': 'research',
-    })).toThrow(/only traces-light or skeleton/);
+    })).toThrow(/only traces-light, skeleton, or variables/);
     expect(() => parseChecklistContinueArguments({'checklist-step': 'traces-light'}))
       .toThrow(/checklist-continue is required/);
   });
 
   it('materializes only the selected continuation branch before strict loading', async () => {
-    const checksFor = (step: 'traces-light' | 'skeleton') => {
+    const checksFor = (step: 'traces-light' | 'skeleton' | 'variables') => {
       const config = buildChecklistContinuationConfig(step) as any;
       return config.subgraphs['continuation-project'].checks as Record<string, any>;
     };
     const shared = ['materialize-retained-catalog', 'checklist-continuation-snapshot', 'component-promotions-complete'];
     const traces = checksFor('traces-light');
     const skeleton = checksFor('skeleton');
+    const variables = checksFor('variables');
     expect(Object.keys(traces).sort()).toEqual([
       ...shared, 'annotation_validity', 'orphan_code_clean', 'checklist-traces-light',
     ].sort());
@@ -334,10 +339,15 @@ describe('native onboarding runner boundaries', () => {
       ...shared, 'l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete',
       'levels_connected', 'checklist-skeleton',
     ].sort());
+    expect(Object.keys(variables).sort()).toEqual([
+      ...shared, 'variable_orphans_clean', 'variables_declared', 'variable_drift', 'checklist-variables',
+    ].sort());
     expect(Object.values(traces).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
     expect(Object.values(skeleton).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
+    expect(Object.values(variables).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
     await loadConfig(buildChecklistContinuationConfig('traces-light') as any, {strict: true});
     await loadConfig(buildChecklistContinuationConfig('skeleton') as any, {strict: true});
+    await loadConfig(buildChecklistContinuationConfig('variables') as any, {strict: true});
   });
 
   it('binds continuation eligibility to one exact native pending frontier and preserves confirmed readback', () => {
@@ -389,6 +399,26 @@ describe('native onboarding runner boundaries', () => {
     });
     expect(() => validateChecklistContinuationEligibility(confirmedShow, false, 'traces-light'))
       .toThrow(/eligible traces-light/);
+
+    const variablesChecks = ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+    const variablesPending = {
+      step_id: 'variables', applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending',
+      role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['traces-light'], required_checks: variablesChecks,
+      check_results: [],
+    };
+    const variablesShow = {
+      ...confirmedShow, eligible_step_ids: ['variables'], next: {
+        step_id: 'variables', role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['traces-light'],
+        required_checks: variablesChecks,
+      }, steps: [skeleton, confirmed, variablesPending],
+    };
+    expect(validateChecklistContinuationEligibility(variablesShow, false, 'variables')).toMatchObject({
+      checklist: 'onboard_v1', step: 'variables', role: 'onboard', eligible: true,
+      'traces-light': 'confirmed',
+    });
+    expect(() => validateChecklistContinuationEligibility({
+      ...variablesShow, next: {...variablesShow.next, scope: 'package'},
+    }, false, 'variables')).toThrow(/eligible variables/);
 
     const skeletonPending = {
       ...pending, step_id: 'skeleton', scope: 'repo', requires: ['research'], required_checks: skeleton.required_checks,
@@ -469,6 +499,47 @@ describe('native onboarding runner boundaries', () => {
       reusedComponentIds: ['component-a'],
       batches: [],
     });
+  });
+
+  it('derives a zero-owner variables batch only from three passing native spec audits', async () => {
+    const proof = path.join(root, 'variables-audit-proof');
+    const output = path.join(root, 'variables-audit-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      'check="$4"',
+      'printf \'%s\\n\' "{\\"event\\":\\"check_done\\",\\"stage\\":\\"spec\\",\\"check\\":\\"$check\\",\\"status\\":\\"pass\\"}"',
+      'exit 0',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    await expect(deriveCurrentChecklistAffectedBatches(proof, root, output, 1000, [{
+      component_id: 'component-a', sorted_owned_paths: ['source.go'],
+    }] as any, 'variables')).resolves.toEqual({
+      affectedComponentIds: [],
+      reusedComponentIds: ['component-a'],
+      batches: [],
+    });
+    expect(JSON.parse(fs.readFileSync(path.join(output, 'preflight', 'current-affected-batches.json'), 'utf8')))
+      .toMatchObject({status: 'current-proof-variables-ownership-derived', variable_checks: [
+        'variable_orphans_clean', 'variables_declared', 'variable_drift',
+      ], affected_component_ids: [], reused_component_ids: ['component-a']});
+  });
+
+  it('fails closed when any native variables audit is non-passing', async () => {
+    const proof = path.join(root, 'variables-audit-failed-proof');
+    const output = path.join(root, 'variables-audit-failed-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      'check="$4"',
+      'status=pass',
+      'exit_code=0',
+      'if [ "$check" = variable_drift ]; then status=error; exit_code=1; fi',
+      'printf \'%s\\n\' "{\\"event\\":\\"check_done\\",\\"stage\\":\\"spec\\",\\"check\\":\\"$check\\",\\"status\\":\\"$status\\"}"',
+      'exit "$exit_code"',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    await expect(deriveCurrentChecklistAffectedBatches(proof, root, output, 1000, [{
+      component_id: 'component-a', sorted_owned_paths: ['source.go'],
+    }] as any, 'variables')).rejects.toThrow(/variable_drift failed with exit 1/);
   });
 
   it('derives arbitrary skeleton owners from the native L2 JSONL and resolves each requirement through Proof', async () => {

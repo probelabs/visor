@@ -46,6 +46,12 @@ type SkeletonContinuationTask = {
   l2_software_complete: {paths: string[]; details: string[]};
 };
 
+type VariablesContinuationTask = {
+  step_id: 'variables';
+  role: 'onboard';
+  required_checks: ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+};
+
 type OperationalWorkItem = WorkItem & {continuation_task: ContinuationTask};
 
 function operationalWorkItem(
@@ -202,6 +208,38 @@ function confirmedSkeletonContinuationSnapshot(): Record<string, unknown> {
   };
 }
 
+function variablesContinuationSnapshot(): Record<string, unknown> {
+  const snapshot = continuationSnapshot();
+  const steps = (snapshot.steps as Array<Record<string, unknown>>).map(step => {
+    if (step.step_id === 'traces-light') {
+      return {
+        ...step,
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        scope_key: 'project-a',
+        check_results: ['annotation_validity', 'orphan_code_clean']
+          .map(id => ({id, status: 'pass', at: '2026-09-09T06:01:00Z'})),
+      };
+    }
+    if (step.step_id === 'variables') return {...step, eligible: true, unmet_requires: []};
+    return step;
+  });
+  const variables = steps.find(step => step.step_id === 'variables') as Record<string, unknown>;
+  return {
+    ...snapshot,
+    steps_pending: 1,
+    counts: {...(snapshot.counts as Record<string, number>), confirmed: 4, pending: 1, blocked: 10},
+    eligible_step_ids: ['variables'],
+    next: {
+      step_id: 'variables', title: variables.title, role: variables.role, stamp: variables.stamp,
+      scope: variables.scope, notes_required: variables.notes_required, requires: variables.requires,
+      required_checks: variables.required_checks,
+    },
+    steps,
+  };
+}
+
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8'}).trim();
 }
@@ -236,11 +274,31 @@ const checklistSnapshot = () => {
   const completionStep = process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP || 'traces-light';
   const completionChecks = completionStep === 'skeleton'
     ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
-    : ['annotation_validity', 'orphan_code_clean'];
+    : completionStep === 'traces-light'
+      ? ['annotation_validity', 'orphan_code_clean']
+      : ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
   if (!confirmed) return snapshot;
   const steps = Array.isArray(snapshot.steps) ? snapshot.steps.map(step => step && step.step_id === completionStep
-    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', scope_key: 'project-a', check_results: completionChecks.map(id => ({id, status: 'pass', at: '2026-09-09T06:02:00Z'})), verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}}
+    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', ...(completionStep === 'traces-light' ? {scope_key: 'project-a'} : {}), check_results: completionChecks.map(id => ({id, status: 'pass', at: '2026-09-09T06:02:00Z'})), ...(step.stamp === 'confirm+verify' ? {verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}} : {})}
     : step) : [];
+  if (completionStep === 'variables') {
+    const nextStep = steps.find(step => step && step.step_id === 'spec-review-1');
+    const resumedSteps = steps.map(step => step && step.step_id === 'spec-review-1'
+      ? {...step, eligible: true, unmet_requires: []}
+      : step);
+    return {
+      ...snapshot,
+      steps_pending: 1,
+      counts: {confirmed: 5, skipped: 0, not_applicable: 0, pending: 1, blocked: 9},
+      eligible_step_ids: ['spec-review-1'],
+      next: nextStep ? {
+        step_id: nextStep.step_id, title: nextStep.title, role: nextStep.role, stamp: nextStep.stamp,
+        scope: nextStep.scope, notes_required: nextStep.notes_required, requires: nextStep.requires,
+        required_checks: nextStep.required_checks,
+      } : null,
+      steps: resumedSteps,
+    };
+  }
   return {
     ...snapshot,
     steps_pending: typeof snapshot.steps_pending === 'number' ? Math.max(0, snapshot.steps_pending - 1) : snapshot.steps_pending,
@@ -256,7 +314,7 @@ if (args[0] === 'checklist' && args[1] === 'show') process.stdout.write(JSON.str
 else if (args[0] === 'checklist' && args[1] === 'confirm') {
   const completionStep = process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP || 'traces-light';
   const packageIndex = args.indexOf('--package');
-  if (completionStep !== 'skeleton' && (packageIndex < 0 || args[packageIndex + 1] !== 'project-a')) {
+  if (completionStep === 'traces-light' && (packageIndex < 0 || args[packageIndex + 1] !== 'project-a')) {
     process.stderr.write('step "' + completionStep + '" is package-scoped; pass package key\\n');
     process.exit(1);
   }
@@ -278,19 +336,23 @@ else if (args[0] === 'audit') {
     ? 'annotation_validity'
     : requested;
   const skeletonChecks = new Set(['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']);
-  const stage = skeletonChecks.has(requested) ? 'spec' : 'implement';
+  const variableChecks = new Set(['variable_orphans_clean', 'variables_declared', 'variable_drift']);
+  const stage = skeletonChecks.has(requested) || variableChecks.has(requested) ? 'spec' : 'implement';
   const failedSkeleton = process.env.CONTINUATION_FIXTURE_SKELETON_MODE === 'fail' && requested === 'l2_software_complete';
+  const failedVariables = process.env.CONTINUATION_FIXTURE_VARIABLE_MODE === 'fail' && requested === 'variable_drift';
   const canonicalPromotionMissing = process.env.CONTINUATION_FIXTURE_REQUIRE_PROMOTED_CANONICAL === 'true'
     && requested === 'l2_software_complete'
     && !fs.readFileSync(path.join(process.cwd(), 'source.go'), 'utf8').includes('// Implements: REQ-1');
-  const status = failedSkeleton || canonicalPromotionMissing ? 'error' : 'pass';
+  const status = failedSkeleton || failedVariables || canonicalPromotionMissing ? 'error' : 'pass';
   const details = failedSkeleton
     ? ['SW-REQ-FAILED current native finding']
-    : canonicalPromotionMissing
+    : failedVariables
+      ? ['variable drift remains in the current native subject']
+      : canonicalPromotionMissing
       ? ['SW-REQ-REQ1 remains incomplete until the promoted canonical source is visible']
       : undefined;
   process.stdout.write(JSON.stringify({event: 'stage_start', stage}) + '\\n' + JSON.stringify({event: 'check_done', stage, check, status, ...(details ? {details} : {})}) + '\\n');
-  if (failedSkeleton || canonicalPromotionMissing) process.exitCode = 1;
+  if (failedSkeleton || failedVariables || canonicalPromotionMissing) process.exitCode = 1;
 }
 else process.stdout.write(JSON.stringify({status: 'pass'}));
 `, {encoding: 'utf8', mode: 0o700});
@@ -629,6 +691,135 @@ describe('production traces-light continuation graph', () => {
       for (const testCheckout of testCheckouts) {
         const worktree = (await worktreeManager.listWorktrees()).find(entry => entry.path === testCheckout || entry.metadata.worktree_path === testCheckout);
         if (worktree) await worktreeManager.removeWorktree(worktree.id);
+      }
+      worktreeManager.configure(previousWorktreeConfig);
+      fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});
+      fixture.cleanup();
+    }
+  });
+
+  it('runs the zero-owner variables branch through native audits and a confirmation-only resume', async () => {
+    const fixture = makeGitFixture();
+    const previous = new Map<string, string | undefined>([
+      ['PROOF_BIN', process.env.PROOF_BIN],
+      ['VISOR_WORKSPACE_MAIN_PROJECT', process.env.VISOR_WORKSPACE_MAIN_PROJECT],
+      ['NATIVE_ONBOARDING_WORKTREE_ROOT', process.env.NATIVE_ONBOARDING_WORKTREE_ROOT],
+      ['NATIVE_CHECKLIST_CONTINUE_CATALOG', process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG],
+      ['NATIVE_CHECKLIST_CONTINUE_STEP', process.env.NATIVE_CHECKLIST_CONTINUE_STEP],
+      ['NATIVE_CHECKLIST_CONTINUE_SNAPSHOT', process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT],
+      ['REQUEST_TIMEOUT', process.env.REQUEST_TIMEOUT],
+      ['NATIVE_ONBOARDING_TS_NODE', process.env.NATIVE_ONBOARDING_TS_NODE],
+      ['NATIVE_ONBOARDING_REPO_ROOT', process.env.NATIVE_ONBOARDING_REPO_ROOT],
+      ['NATIVE_ONBOARDING_OUTPUT_DIR', process.env.NATIVE_ONBOARDING_OUTPUT_DIR],
+      ['CONTINUATION_FIXTURE_CALL_LOG', process.env.CONTINUATION_FIXTURE_CALL_LOG],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STATE', process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STEP', process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP],
+      ['CONTINUATION_FIXTURE_VARIABLE_MODE', process.env.CONTINUATION_FIXTURE_VARIABLE_MODE],
+    ]);
+    const previousWorktreeConfig = worktreeManager.getConfig();
+    const fixtureWorktreeCache = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-variables-cache-'));
+    worktreeManager.configure({base_path: fixtureWorktreeCache, cleanup_on_exit: false});
+    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async () => {
+      throw new Error('variables zero-owner branch must not dispatch a model author');
+    });
+    try {
+      const allWorkItems = [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem];
+      process.env.PROOF_BIN = fixture.proof;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
+      process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
+      process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'variables';
+      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
+        components: [],
+        full_components: allWorkItems,
+        affected_component_ids: [],
+        reused_component_ids: ['component-a', 'component-b', 'component-c'],
+        retained_receipt_identities: [`sha256:${'7'.repeat(64)}`, `sha256:${'8'.repeat(64)}`],
+        current_receipt_identities: [
+          `sha256:${'1'.repeat(64)}`, `sha256:${'2'.repeat(64)}`, `sha256:${'3'.repeat(64)}`,
+          `sha256:${'4'.repeat(64)}`, `sha256:${'5'.repeat(64)}`, `sha256:${'6'.repeat(64)}`,
+        ],
+        authority: continuationAuthority(allWorkItems, [], ['component-a', 'component-b', 'component-c']),
+      });
+      process.env.REQUEST_TIMEOUT = '120000';
+      process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
+      process.env.NATIVE_ONBOARDING_REPO_ROOT = process.cwd();
+      process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+      process.env.CONTINUATION_FIXTURE_CALL_LOG = fixture.checklistCalls;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE = fixture.checklistState;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP = 'variables';
+      process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(variablesContinuationSnapshot());
+      const config = await loadConfig(buildChecklistContinuationConfig('variables') as any, {strict: true});
+      process.env.CONTINUATION_FIXTURE_VARIABLE_MODE = 'fail';
+      const failedEngine = new StateMachineExecutionEngine(fixture.root);
+      await expect(executeChecklistContinuationEngine(failedEngine, config, 120000, [], undefined, 'variables'))
+        .rejects.toThrow(/failed before variables frontier/);
+      const failedStarted = failedEngine.exportGraphCheckpoint().events
+        .filter(event => event.type === 'AttemptStarted')
+        .map(event => event.checkId);
+      expect(failedStarted).not.toContain('checklist-variables');
+      delete process.env.CONTINUATION_FIXTURE_VARIABLE_MODE;
+      const engine = new StateMachineExecutionEngine(fixture.root);
+      const paused = await executeChecklistContinuationEngine(engine, config, 120000, [], undefined, 'variables');
+      expect(paused.paused).toBe(true);
+      const started = paused.checkpoint.events
+        .filter(event => event.type === 'AttemptStarted')
+        .map(event => event.checkId);
+      expect(started).toEqual(expect.arrayContaining([
+        'continue-retained-catalog', 'materialize-retained-catalog', 'checklist-continuation-snapshot',
+        'component-promotions-complete', 'variable_orphans_clean', 'variables_declared', 'variable_drift',
+      ]));
+      expect(started).not.toContain('checklist-variables');
+      expect(started).not.toContain('checklist-traces-light');
+      expect(started).not.toContain('checklist-skeleton');
+      expect(started).not.toContain('author-native-component');
+      expect(started).not.toContain('promote-native-component');
+      const variableAudits = paused.checkpoint.events.filter(event =>
+        event.type === 'ClaimPublished' && event.claim === 'native.continuation.author@1',
+      );
+      expect(variableAudits).toHaveLength(0);
+      const pausedJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), paused.checkpoint);
+      const pausedGenerations = Object.values(pausedJournal.getInstanceProjection().generationsById)
+        .filter((generation: any) => generation.status !== 'inactive' && generation.checkId === 'checklist-variables');
+      expect(pausedGenerations).toHaveLength(1);
+      expect((pausedGenerations[0] as any).status).toBe('ready');
+      const pausedSnapshot = JSON.parse(process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT as string) as any;
+      expect(pausedSnapshot.eligible_step_ids).toEqual(['variables']);
+      expect(pausedSnapshot.next).toMatchObject({step_id: 'variables', scope: 'repo', requires: ['traces-light']});
+
+      fs.writeFileSync(fixture.checklistCalls, '', 'utf8');
+      const freshEngine = new StateMachineExecutionEngine(fixture.root);
+      const resumed = await executeChecklistContinuationEngine(freshEngine, config, 120000, [], paused.checkpoint, 'variables');
+      expect(resumed.paused).toBe(false);
+      expect(resumed.checkpoint.sessionId).toBe(paused.checkpoint.sessionId);
+      expect(resumed.checkpoint.graphSemanticDigest).toBe(paused.checkpoint.graphSemanticDigest);
+      expect(canonicalGraphCheckpointJson(resumed.checkpoint.events.slice(0, paused.checkpoint.events.length)))
+        .toBe(canonicalGraphCheckpointJson(paused.checkpoint.events));
+      const suffix = resumed.checkpoint.events.slice(paused.checkpoint.events.length);
+      expect(suffix.filter(event => event.type === 'AttemptStarted').map(event => event.checkId))
+        .toEqual(['checklist-variables']);
+      expect(ai).not.toHaveBeenCalled();
+      const calls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean)
+        .map(line => JSON.parse(line).args as string[]);
+      expect(calls.map(args => args.slice(0, 2))).toEqual([
+        ['checklist', 'show'], ['checklist', 'confirm'], ['checklist', 'show'],
+      ]);
+      expect(calls[1]).not.toContain('--package');
+      const after = JSON.parse(execFileSync(fixture.proof, ['checklist', 'show', '--format', 'json'], {
+        encoding: 'utf8', env: process.env,
+      }));
+      expect(after.counts).toMatchObject({confirmed: 5, pending: 1, blocked: 9});
+      expect(after.eligible_step_ids).toEqual(['spec-review-1']);
+      expect(after.next).toMatchObject({step_id: 'spec-review-1'});
+      expect((after.steps as any[]).find(step => step.step_id === 'variables')).toMatchObject({
+        effective_status: 'confirmed', stored_status: 'confirmed', scope: 'repo', required_checks: [
+          'variable_orphans_clean', 'variables_declared', 'variable_drift',
+        ],
+      });
+    } finally {
+      ai.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
       }
       worktreeManager.configure(previousWorktreeConfig);
       fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});
