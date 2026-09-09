@@ -5,6 +5,11 @@ import type { GroupedCheckResults } from '../reviewer';
  */
 export interface CheckExecutionStats {
   checkName: string;
+  /**
+   * Logical check id for a generated execution row. This is intentionally
+   * optional: legacy/top-level rows continue to be identified by checkName.
+   */
+  logicalCheckName?: string;
   totalRuns: number; // How many times the check executed (1 or forEach iterations)
   successfulRuns: number;
   failedRuns: number;

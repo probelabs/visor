@@ -1046,10 +1046,21 @@ async function handleClaimReadyDispatch(
             terminalLatch,
           }
         );
-        updateStats([{ checkId: key, result, duration: Date.now() - startedAt }], state);
+        updateStats(
+          [{ checkId: key, logicalCheckName: generation.checkId, result, duration: Date.now() - startedAt }],
+          state
+        );
       } catch (error) {
-        updateStats([{ checkId: key, result: { issues: [] },
-          error: error instanceof Error ? error : new Error(String(error)), duration: Date.now() - startedAt }], state);
+        updateStats(
+          [{
+            checkId: key,
+            logicalCheckName: generation.checkId,
+            result: { issues: [] },
+            error: error instanceof Error ? error : new Error(String(error)),
+            duration: Date.now() - startedAt,
+          }],
+          state
+        );
         if (terminalLatch.phase === 'managed_acquired' && terminalLatch.terminalizeFailure) {
           await terminalLatch.terminalizeFailure('MANAGED_POST_PROVIDER_FAILED');
         } else if (terminalLatch.phase !== 'terminal') {
@@ -4673,15 +4684,22 @@ function hasFatalIssues(result: ReviewSummary): boolean {
  * Update execution stats
  */
 function updateStats(
-  results: Array<{ checkId: string; result: ReviewSummary; error?: Error; duration?: number }>,
+  results: Array<{
+    checkId: string;
+    logicalCheckName?: string;
+    result: ReviewSummary;
+    error?: Error;
+    duration?: number;
+  }>,
   state: RunState,
   isForEachIteration: boolean = false
 ): void {
-  for (const { checkId, result, error, duration } of results) {
+  for (const { checkId, logicalCheckName, result, error, duration } of results) {
     const existing = state.stats.get(checkId);
 
     const stats: CheckExecutionStats = existing || {
       checkName: checkId,
+      ...(logicalCheckName !== undefined ? { logicalCheckName } : {}),
       totalRuns: 0,
       successfulRuns: 0,
       failedRuns: 0,

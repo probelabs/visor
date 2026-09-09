@@ -6,6 +6,8 @@ export type CountExpectation = {
 
 export interface CallsExpectation extends CountExpectation {
   step?: string;
+  /** Select generated executions by their logical check id. */
+  logical_step?: string;
   provider?: 'github' | string;
   op?: string;
   args?: Record<string, unknown>;

@@ -7,6 +7,8 @@ import type {
 import type { PRInfo } from '../../src/pr-analyzer';
 import type { ReviewSummary } from '../../src/reviewer';
 import type { VisorConfig } from '../../src/types/config';
+import { evaluateCase } from '../../src/test-runner/evaluators';
+import type { ExpectBlock } from '../../src/test-runner/assertions';
 
 const prInfo = {
   number: 214,
@@ -134,6 +136,7 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
       dependencies?: Map<string, ReviewSummary>;
       context?: ExecutionContext;
     }> = [];
+    let result: Awaited<ReturnType<StateMachineExecutionEngine['executeGroupedChecks']>>;
 
     commandProvider.execute = async function (
       pr: PRInfo,
@@ -151,7 +154,7 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
     };
 
     try {
-      await engine.executeGroupedChecks(
+      result = await engine.executeGroupedChecks(
         prInfo,
         ['catalog'],
         undefined,
@@ -195,6 +198,65 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
     expect(command2!.dependencies?.get('command1')?.output).toEqual(firstClaim!.payload);
 
     const journal = (engine as any)._lastContext.journal;
+    const projection = journal.getInstanceProjection();
+    const childGenerations = Object.values(projection.generationsById).filter((generation: any) =>
+      generation.checkId === 'command1' || generation.checkId === 'command2'
+    ) as any[];
+    expect(childGenerations).toHaveLength(2);
+
+    // The returned child rows are keyed by opaque nodeGenerationId, but carry
+    // the logical check id needed by native Visor assertions.
+    for (const child of childGenerations) {
+      const childStats = result.statistics.checks.find(
+        (stats: any) => stats.checkName === child.nodeGenerationId
+      );
+      expect(childStats).toEqual(
+        expect.objectContaining({
+          checkName: child.nodeGenerationId,
+          logicalCheckName: child.checkId,
+        })
+      );
+    }
+
+    const logicalErrors = evaluateCase(
+      'graph-v2-generated-logical-step',
+      result.statistics,
+      { calls: [] },
+      undefined,
+      {
+        calls: [
+          { step: 'catalog', exactly: 1 },
+          { logical_step: 'command1', exactly: 1 },
+          { logical_step: 'command2', exactly: 1 },
+        ],
+      } satisfies ExpectBlock,
+      true,
+      {},
+      result.results,
+      {}
+    );
+    expect(logicalErrors).toEqual([]);
+
+    // Legacy exact-hash assertions remain valid against the same engine
+    // result, with no logical-id aliasing of the exact step selector.
+    const exactErrors = evaluateCase(
+      'graph-v2-generated-exact-step',
+      result.statistics,
+      { calls: [] },
+      undefined,
+      {
+        calls: [
+          { step: 'catalog', exactly: 1 },
+          ...childGenerations.map(child => ({ step: child.nodeGenerationId, exactly: 1 })),
+        ],
+      } satisfies ExpectBlock,
+      true,
+      {},
+      result.results,
+      {}
+    );
+    expect(exactErrors).toEqual([]);
+
     const events = journal.readRuntimeEvents() as readonly any[];
     const generated = events.filter(event => event.nodeGenerationId);
     expect(generated.filter(event => event.type === 'AttemptFailed')).toHaveLength(0);
@@ -215,6 +277,6 @@ describe('Graph v2 generated nodes use the ordinary command provider', () => {
       consumed: 'command1',
     });
     expect(finalClaim?.parentClaimIds).toContain(firstClaim!.claimId);
-    expect(journal.getInstanceProjection()).toEqual(journal.replayInstanceProjection());
+    expect(projection).toEqual(journal.replayInstanceProjection());
   });
 });
