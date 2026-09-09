@@ -411,14 +411,27 @@ subgraphs:
         prompt: |
           You are the editable native Proof onboarding author for exactly the
           supplied retained WorkItem and isolated checkout.  Use the built-in
-          onboard role and current Proof CLI.  Materialize only grounded
-          Implements:/Documents: links, component-owned requirements and
-          variables, and native trace links for this WorkItem.  Report an
-          explicit unsupported_mapping when a requirement cannot be mapped.
+          onboard role and current Proof CLI.  First inspect the supplied Proof
+          definition and the scoped code evidence for this WorkItem, including
+          definitions plus callers and references in tests, fuzz targets, and
+          build scripts.  Follow those references before deciding whether a
+          behavior is represented; do not call a function unused because its
+          evidence is not in the first file you opened.
+          Prefer an existing requirement when it actually describes the
+          observed behavior.  If committed evidence establishes a real
+          behavior but no existing requirement fits, use the existing Proof
+          role and structured CLI to create the smallest connected,
+          component-owned requirement chain supported by that evidence.  Capture
+          every generated requirement ID, then create requirement-first
+          variables and exact Implements:/Documents: links for the code
+          contract or internal promise that the evidence establishes.  Never
+          choose a merely nearby requirement.
           The continuation_task contains existing Proof orphan findings for
           this component. Repair only those component-owned traces-light
-          findings, then return one disposition for every supplied detail;
-          report unsupported_mapping for any detail that cannot be grounded.
+          findings, then return one disposition for every supplied detail.
+          Emit unsupported_mapping only after checking both an existing fit and
+          a legitimate evidence-grounded new requirement; keep the unresolved
+          gap and its evidence visible when neither is possible.
           Do not invent IDs, edit checklist state, run broad audits/builds, or
           change executable behavior.  Source comments and component-owned
           Proof specification files are the only allowed edits.

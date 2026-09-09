@@ -236,3 +236,15 @@ tests:
           - step: checklist-continuation-snapshot
             path: steps[0].effective_status
             equals: pending
+        prompts:
+          - step: author-native-component
+            contains:
+              - "First inspect the supplied Proof"
+              - "callers and references in tests, fuzz targets, and"
+              - "smallest connected,"
+              - "component-owned requirement chain supported"
+              - "requirement-first"
+              - "variables and exact Implements:/Documents: links"
+              - "Emit unsupported_mapping only after checking both an existing fit"
+            not_contains:
+              - "Report an explicit unsupported_mapping when a requirement cannot be mapped."
