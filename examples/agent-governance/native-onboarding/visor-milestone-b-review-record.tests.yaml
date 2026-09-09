@@ -1,0 +1,88 @@
+version: "1.0"
+extends: "visor-milestone-b-review-record.yaml"
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+  cases:
+    - name: two-retained-items-needs-changes-recorded
+      event: manual
+      env: {PROOF_BIN: /bin/echo}
+      mocks:
+        materialize-retained-native-review-items:
+          items:
+            - &item_a
+              id: SW-REQ-FIXTURE-001
+              packet:
+                requirement: {id: SW-REQ-FIXTURE-001, level: SW, title: "Fixture software behavior"}
+                req_show: {id: SW-REQ-FIXTURE-001, file: specs/software/fixture.md}
+                spec_graph: {nodes: [SW-REQ-FIXTURE-001], edges: []}
+                claim_id: packet-001
+                payload_fingerprint: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+              current_context:
+                locations:
+                  - {path: parser.go, start_line: 10, end_line: 14, symbol: parseFixture, code: "func parseFixture() int { return 0 }"}
+                notes: "Only the supplied function slice is in scope."
+              parent_bindings:
+                - {requirement_id: STK-FIXTURE-001, file_path: specs/stakeholder/fixture.md, file_hash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
+              lineage: {packet_id: packet-001, checkpoint_id: checkpoint-fixture-001}
+              spec_review_role: "role show spec-review --format agent"
+              reviewer: agent:luna-xhigh-native-spec-review
+            - &item_b
+              id: SYS-REQ-FIXTURE-002
+              packet:
+                requirement: {id: SYS-REQ-FIXTURE-002, level: SYS, title: "Fixture system behavior"}
+                req_show: {id: SYS-REQ-FIXTURE-002, file: specs/system/fixture.md}
+                spec_graph: {nodes: [SYS-REQ-FIXTURE-002], edges: []}
+                claim_id: packet-002
+                payload_fingerprint: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+              current_context:
+                locations:
+                  - {path: parser.go, start_line: 20, end_line: 24, symbol: systemFixture, code: "func systemFixture() bool { return true }"}
+                notes: "Only the supplied function slice is in scope."
+              parent_bindings:
+                - {requirement_id: STK-FIXTURE-002, file_path: specs/stakeholder/fixture.md, file_hash: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}
+              lineage: {packet_id: packet-002, checkpoint_id: checkpoint-fixture-002}
+              spec_review_role: "role show spec-review --format agent"
+              reviewer: agent:luna-xhigh-native-spec-review
+        adjudicate-native-review[]:
+          - {decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:10@parseFixture"]}
+          - {decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:20@systemFixture"]}
+        record-native-review[]:
+          - &receipt_a
+            status: recorded
+            review_id: review-fixture-001
+            kind: spec_conformance
+            subject: SW-REQ-FIXTURE-001
+            reviewer: agent:luna-xhigh-native-spec-review
+            decision: needs_changes
+            comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract."
+            citations: ["parser.go:10@parseFixture"]
+            review: {id: review-fixture-001, kind: spec_conformance, subject: SW-REQ-FIXTURE-001, reviewer: agent:luna-xhigh-native-spec-review, decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:10@parseFixture"]}
+            lineage: {item_id: SW-REQ-FIXTURE-001, packet_id: packet-001, checkpoint_id: checkpoint-fixture-001}
+          - &receipt_b
+            status: recorded
+            review_id: review-fixture-002
+            kind: spec_conformance
+            subject: SYS-REQ-FIXTURE-002
+            reviewer: agent:luna-xhigh-native-spec-review
+            decision: needs_changes
+            comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract."
+            citations: ["parser.go:20@systemFixture"]
+            review: {id: review-fixture-002, kind: spec_conformance, subject: SYS-REQ-FIXTURE-002, reviewer: agent:luna-xhigh-native-spec-review, decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:20@systemFixture"]}
+            lineage: {item_id: SYS-REQ-FIXTURE-002, packet_id: packet-002, checkpoint_id: checkpoint-fixture-002}
+      expect:
+        calls:
+          - {step: role-spec-review, exactly: 1}
+          - {step: materialize-retained-native-review-items, exactly: 1}
+          - {logical_step: adjudicate-native-review, exactly: 2}
+          - {logical_step: record-native-review, exactly: 2}
+          - {logical_step: checklist-confirm, exactly: 0}
+          - {logical_step: proof-admit, exactly: 0}
+          - {logical_step: author-native-component, exactly: 0}
+          - {logical_step: promote-native-component, exactly: 0}
+        outputs:
+          - {step: materialize-retained-native-review-items, path: "items.length", equals: 2}
+          - {step: materialize-retained-native-review-items, path: "items[0].id", equals: SW-REQ-FIXTURE-001}
+          - {step: materialize-retained-native-review-items, path: "items[1].id", equals: SYS-REQ-FIXTURE-002}

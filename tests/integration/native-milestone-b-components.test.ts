@@ -23,11 +23,13 @@ const describeNative = configuredProof ? describe : describe.skip;
 const ROOT = path.resolve(__dirname, '../..');
 const RUNNER = path.join(ROOT, 'examples/agent-governance/native-onboarding/run-milestone-b.ts');
 const PROFILE = path.join(ROOT, 'examples/agent-governance/native-onboarding/visor-milestone-b.yaml');
+const REVIEW_PROFILE = path.join(ROOT, 'examples/agent-governance/native-onboarding/visor-milestone-b-review-record.yaml');
 
 type ProofRow = {
   id: string;
   component: string;
   file_path: string;
+  priority_level?: string;
 };
 
 type Fixture = {
@@ -105,6 +107,7 @@ function createFixture(componentCount: 1 | 2): Fixture {
 
 function runnerEnv(fixture: Fixture, defaultAuth = false): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.JEST_WORKER_ID;
   for (const key of ['USE_CLAUDE_CODE', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'MODEL_NAME', 'MODEL', 'AI_PROVIDER']) {
     delete env[key];
   }
@@ -115,6 +118,7 @@ function runnerEnv(fixture: Fixture, defaultAuth = false): NodeJS.ProcessEnv {
     CODEX_HOME: fixture.codexHome,
     PROOF_BIN: configuredProof,
     TS_NODE_TRANSPILE_ONLY: '1',
+    TS_NODE_PROJECT: path.join(ROOT, 'tsconfig.json'),
   };
   if (defaultAuth) delete result.CODEX_HOME;
   return result;
@@ -122,20 +126,22 @@ function runnerEnv(fixture: Fixture, defaultAuth = false): NodeJS.ProcessEnv {
 
 function runRunnerResult(
   fixture: Fixture,
-  mode: 'prepare' | 'pause' | 'resume',
+  mode: 'prepare' | 'pause' | 'resume' | 'record-prepare' | 'record-pause' | 'record-resume' | 'record-recover',
   extraArgs: string[] = [],
   defaultAuth = false,
+  output = fixture.output,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): ReturnType<typeof spawnSync> {
   return spawnSync(process.execPath, [
     '-r', 'ts-node/register/transpile-only', RUNNER, mode,
     '--subject-root', fixture.subject,
     '--original-root', fixture.original,
     '--proof-bin', configuredProof,
-    '--output', fixture.output,
+    '--output', output,
     ...extraArgs,
   ], {
     cwd: ROOT,
-    env: runnerEnv(fixture, defaultAuth),
+    env: {...runnerEnv(fixture, defaultAuth), ...envOverrides},
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 32 * 1024 * 1024,
@@ -144,11 +150,13 @@ function runRunnerResult(
 
 function runRunner(
   fixture: Fixture,
-  mode: 'prepare' | 'pause' | 'resume',
+  mode: 'prepare' | 'pause' | 'resume' | 'record-prepare' | 'record-pause' | 'record-resume' | 'record-recover',
   extraArgs: string[] = [],
   defaultAuth = false,
+  output = fixture.output,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): ReturnType<typeof spawnSync> {
-  const result = runRunnerResult(fixture, mode, extraArgs, defaultAuth);
+  const result = runRunnerResult(fixture, mode, extraArgs, defaultAuth, output, envOverrides);
   if (result.status !== 0) {
     throw new Error(`${mode} failed with exit ${result.status}\nstdout:\n${result.stdout || ''}\nstderr:\n${result.stderr || ''}`);
   }
@@ -492,6 +500,77 @@ describeNative('native Milestone B component/spec progression', () => {
       expect(`${result.stdout || ''}${result.stderr || ''}`).toContain(`Proof input changed before pause for ${focus}`);
     } finally {
       fs.rmSync(hashFixture.parent, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses completed reader packets for per-item native review records with exact fresh resume', () => {
+    const fixture = createFixture(2);
+    const reviewOutput = path.join(fixture.parent, 'review-run');
+    const reviewer = 'agent:luna-xhigh-native-spec-review';
+    try {
+      runRunner(fixture, 'prepare');
+      const rows = nativeCatalog(fixture).rows;
+      runRunner(fixture, 'pause', ['--hold-id', rows[0].id]);
+      runRunner(fixture, 'resume');
+
+      expect(fs.existsSync(REVIEW_PROFILE)).toBe(true);
+      runRunner(fixture, 'record-prepare', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+      ], false, reviewOutput);
+      const reviewItems = json<any>(path.join(reviewOutput, 'review', 'items.json')).items;
+      expect(reviewItems).toHaveLength(rows.length);
+      expect(reviewItems.every((item: any) => item.reviewer === reviewer)).toBe(true);
+      expect(reviewItems.every((item: any) => /^sha256:[0-9a-f]{64}$/.test(item.current_context_sha256))).toBe(true);
+      expect(reviewItems.every((item: any) => item.lineage.candidate_claim_id && item.lineage.candidate_payload_fingerprint)).toBe(true);
+      expect(JSON.stringify(reviewItems.map((item: any) => item.packet?.candidate))).not.toMatch(/401 Unauthorized|api\.openai\.com\/v1\/responses/);
+
+      runRunner(fixture, 'record-pause', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+        '--hold-id', rows[0].id,
+      ], false, reviewOutput);
+      const paused = json<any>(path.join(reviewOutput, 'paused', 'checkpoint.json'));
+      const pausedEvents = paused.events || [];
+      const pausedSummary = json<any>(path.join(reviewOutput, 'paused', 'summary.json'));
+      expect(pausedSummary.held_scope).toBe('all-record-native-review');
+      expect(pausedSummary.held_item_ids).toEqual(rows.map(row => row.id));
+      expect(pausedSummary.pid).toBeGreaterThan(0);
+      expect(pausedEvents.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'record-native-review')).toHaveLength(0);
+      expect(pausedEvents.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'record-native-review')).toHaveLength(0);
+      const beforeRecords = JSON.parse(proof(fixture.subject, ['review', 'list', '--kind', 'spec_conformance', '--format', 'json'])) as any[];
+      expect(beforeRecords).toHaveLength(0);
+
+      // Exercise the real Graph failure window: the recorder writes its native
+      // Proof record and then dies before emitting a command receipt. The
+      // failed checkpoint is retried through the journal's explicit
+      // safely-idempotent path, which must reuse the exact native tuple.
+      const failedResume = runRunnerResult(fixture, 'record-resume', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+      ], false, reviewOutput, { VISOR_NATIVE_B_CRASH_AFTER_NATIVE_WRITE: 'true' });
+      expect(failedResume.status).not.toBe(0);
+      const failedCheckpoint = json<any>(path.join(reviewOutput, 'resumed', 'failure-checkpoint.json'));
+      expect(failedCheckpoint.events.slice(0, pausedEvents.length)).toEqual(pausedEvents);
+      expect(failedCheckpoint.events.filter((event: any) => event.type === 'AttemptFailed' && event.checkId === 'record-native-review').length).toBeGreaterThan(0);
+
+      runRunner(fixture, 'record-recover', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+      ], false, reviewOutput);
+      const recovered = json<any>(path.join(reviewOutput, 'recovered', 'checkpoint.json'));
+      const recoveredEvents = recovered.events || [];
+      const retryPrefix = json<any>(path.join(reviewOutput, 'diagnostic', 'record-recover-retry-prefix.json'));
+      const recoverySuffix = recoveredEvents.slice(retryPrefix.events.length);
+      expect(retryPrefix.events.slice(0, failedCheckpoint.events.length)).toEqual(failedCheckpoint.events);
+      expect(recoverySuffix.filter((event: any) => event.type === 'AttemptStarted' && event.checkId !== 'record-native-review')).toHaveLength(0);
+      expect(recoverySuffix.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'adjudicate-native-review')).toHaveLength(0);
+      expect(recoverySuffix.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'record-native-review')).toHaveLength(rows.length);
+      const records = JSON.parse(proof(fixture.subject, ['review', 'list', '--kind', 'spec_conformance', '--format', 'json'])) as any[];
+      expect(records).toHaveLength(rows.length);
+      expect(records.every(record => record.kind === 'spec_conformance' && record.reviewer === reviewer && record.decision === 'needs_changes')).toBe(true);
+    } finally {
+      fs.rmSync(fixture.parent, { recursive: true, force: true });
     }
   });
 });

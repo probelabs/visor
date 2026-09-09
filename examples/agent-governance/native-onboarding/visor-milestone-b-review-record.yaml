@@ -1,0 +1,308 @@
+# Milestone B review-record policy.
+#
+# This is a separate, per-item Graph-v2 entrypoint.  Its controller supplies
+# retained candidate packets together with the current Proof context and
+# checkpoint lineage.  The policy adjudicates and records one item at a time;
+# it never fans in items, admits Proof state, or confirms a checklist.
+version: "1.0"
+max_parallelism: 4
+fail_fast: false
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+
+claim_types:
+  native.role.spec-review@1:
+    schema:
+      type: string
+      minLength: 1
+
+  native.review.controller.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: true
+            required: [id, packet, current_context, parent_bindings, lineage, spec_review_role, reviewer]
+            properties:
+              id: {type: string, minLength: 1}
+              packet: {type: object}
+              current_context: {type: object}
+              parent_bindings:
+                type: array
+                items: {type: object}
+              lineage:
+                type: object
+                required: [packet_id, checkpoint_id]
+                properties:
+                  packet_id: {type: string, minLength: 1}
+                  checkpoint_id: {type: string, minLength: 1}
+              spec_review_role: {type: string, minLength: 1}
+              reviewer: {const: agent:luna-xhigh-native-spec-review}
+
+  native.review.controller.item@1:
+    schema:
+      type: object
+      additionalProperties: true
+      required: [id, packet, current_context, parent_bindings, lineage, spec_review_role, reviewer]
+      properties:
+        id: {type: string, minLength: 1}
+        packet: {type: object}
+        current_context: {type: object}
+        parent_bindings:
+          type: array
+          items: {type: object}
+        lineage:
+          type: object
+          required: [packet_id, checkpoint_id]
+          properties:
+            packet_id: {type: string, minLength: 1}
+            checkpoint_id: {type: string, minLength: 1}
+        spec_review_role: {type: string, minLength: 1}
+        reviewer: {const: agent:luna-xhigh-native-spec-review}
+
+  native.review.adjudication@1:
+    schema: &native_review_adjudication_schema
+      type: object
+      additionalProperties: false
+      required: [decision, comment, citations]
+      properties:
+        decision:
+          type: string
+          enum: [needs_changes, rejected, approved]
+        comment:
+          type: string
+          minLength: 1
+        citations:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+
+  native.review.record.receipt@1:
+    schema: &native_review_receipt_schema
+      type: object
+      additionalProperties: false
+      required: [status, review_id, kind, subject, reviewer, decision, comment, citations, review, lineage]
+      properties:
+        status:
+          type: string
+          enum: [recorded, reused]
+        review_id: {type: string, minLength: 1}
+        kind: {const: spec_conformance}
+        subject: {type: string, minLength: 1}
+        reviewer: {const: agent:luna-xhigh-native-spec-review}
+        decision:
+          type: string
+          enum: [needs_changes, rejected, approved]
+        comment: {type: string, minLength: 1}
+        citations:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, minLength: 1}
+        review:
+          type: object
+          additionalProperties: true
+          required: [id, kind, subject, reviewer, decision, comment, citations]
+          properties:
+            id: {type: string, minLength: 1}
+            kind: {const: spec_conformance}
+            subject: {type: string, minLength: 1}
+            reviewer: {const: agent:luna-xhigh-native-spec-review}
+            decision:
+              type: string
+              enum: [needs_changes, rejected, approved]
+            comment: {type: string, minLength: 1}
+            citations:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items: {type: string, minLength: 1}
+        lineage:
+          type: object
+          additionalProperties: true
+          required: [item_id, packet_id, checkpoint_id]
+          properties:
+            item_id: {type: string, minLength: 1}
+            packet_id: {type: string, minLength: 1}
+            checkpoint_id: {type: string, minLength: 1}
+
+subgraphs:
+  native-review-item:
+    input: {name: item, claim: native.review.controller.item@1}
+    checks:
+      adjudicate-native-review:
+        type: ai
+        timeout: 540000
+        criticality: policy
+        schema: *native_review_adjudication_schema
+        consumes:
+          - {claim: native.review.controller.item@1, as: item}
+        emits:
+          - {claim: native.review.adjudication@1, from: output}
+        prompt: |
+          You are the governed read-only spec-conformance adjudicator for
+          exactly one retained native review packet.  Use the built-in
+          `spec-review` role supplied in the exact role claim below and review
+          only this item.  The packet, current Proof context, parent bindings,
+          and checkpoint lineage are controller-supplied evidence; preserve
+          their identity and do not substitute a neighboring requirement.
+
+          Read the relevant source, callers, tests, variables, annotations,
+          and parent context through the permitted Probe read tools as needed.
+          Assess behavioral fidelity, evidence grounding, honest inferred
+          intent, and semantic parent fit.  A populated trace, parent link, or
+          nonempty field is not sufficient evidence of conformance.  Distinguish
+          an implementation defect from an underspecified contract and retain
+          unresolved questions in the comment.
+
+          The current_context contains the exact supplied code blocks,
+          annotations, and line starts; the retained packet's req_show and
+          spec_graph bind the requirement files and hashes.  Treat citations as
+          valid only within those supplied path/line extents.  Describe what
+          was covered as supplied function slices and graph requirement files,
+          never as whole-repository or unrelated-test freshness.
+
+          Return exactly one closed JSON object with an explicit decision,
+          substantive comment, and one or more concrete Proof citation tokens.
+          The decision is never defaulted to `approved`: if the evidence is
+          incomplete or the semantics remain unresolved, choose `needs_changes`
+          or `rejected` and explain why.  `approved` is valid only as an
+          explicit conclusion grounded in the supplied context and targeted
+          reads.  Use reviewer identity
+          `agent:luna-xhigh-native-spec-review`; do not let model prose choose
+          another reviewer or invoke `proof review record` itself.
+
+          Do not edit files, run Proof state mutators, confirm or reset a
+          checklist, admit a candidate, promote status, or claim full-project
+          quality.  This node produces an adjudication for the recorder only.
+
+          --- exact built-in role claim ---
+          {{ outputs.item.spec_review_role | json }}
+          --- controller item ---
+          {{ outputs.item | json }}
+          --- end supplied context ---
+        ai:
+          model: gpt-5.6-luna
+          codex_execution_profile: luna-xhigh-readonly-v1
+          prompt_type: engineer
+          allowEdit: false
+          allowBash: false
+          allowedTools: [search, extract, listFiles]
+          max_iterations: 12
+          timeout: 480000
+
+      record-native-review:
+        type: command
+        depends_on: [adjudicate-native-review]
+        timeout: 900000
+        criticality: policy
+        resource_group: proof-workspace-mutation
+        schema: *native_review_receipt_schema
+        consumes:
+          - {claim: native.review.controller.item@1, as: item}
+          - {claim: native.review.adjudication@1, as: adjudication}
+        emits:
+          - {claim: native.review.record.receipt@1, from: output}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          # The runner-owned adapter is the sole Proof review persistence
+          # boundary.  It performs list -> exact tuple normalization, reuses
+          # one exact record, records only when none exists, and performs the
+          # show/list readback.  It also makes a failed-after-write retry
+          # idempotent without requiring a receipt file.
+          node -r "$NATIVE_ONBOARDING_TS_NODE" \
+            "$NATIVE_ONBOARDING_REPO_ROOT/examples/agent-governance/native-onboarding/run-milestone-b.ts" \
+            record-native-review <<'JSON'
+          {{ outputs | json }}
+          JSON
+
+checks:
+  role-spec-review:
+    type: command
+    timeout: 120000
+    schema: plain
+    transform_js: |
+      return String(output);
+    emits:
+      - {claim: native.role.spec-review@1, from: output}
+    exec: |
+      set -eu
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      "$PROOF_BIN" role show spec-review --format agent
+
+  materialize-retained-native-review-items:
+    type: command
+    depends_on: [role-spec-review]
+    timeout: 180000
+    schema: plain
+    consumes:
+      - {claim: native.role.spec-review@1, as: role, cardinality: one}
+    emits:
+      - {claim: native.review.controller.catalog@1, from: output}
+    expand:
+      claim: native.review.controller.catalog@1
+      template: native-review-item
+      items_pointer: /items
+      key_pointer: /id
+      item_claim: native.review.controller.item@1
+    exec: |
+      set -eu
+      node <<'NODE'
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const inputPath = process.env.VISOR_NATIVE_B_REVIEW_ITEMS_FILE;
+      if (!inputPath || !path.isAbsolute(inputPath)) {
+        throw new Error('VISOR_NATIVE_B_REVIEW_ITEMS_FILE must be an absolute JSON input path');
+      }
+      const parsed = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+      const items = Array.isArray(parsed) ? parsed : parsed && parsed.items;
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new Error('retained native review input must contain a non-empty items array');
+      }
+      const role = {{ outputs['role-spec-review'] | json }};
+      const ids = new Set();
+      for (const [index, item] of items.entries()) {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+          throw new Error(`retained review item ${index} is not an object`);
+        }
+        if (typeof item.id !== 'string' || item.id.length === 0) {
+          throw new Error(`retained review item ${index} has no id`);
+        }
+        if (ids.has(item.id)) throw new Error(`retained review input has duplicate item id ${item.id}`);
+        ids.add(item.id);
+        if (!item.packet || typeof item.packet !== 'object' || Array.isArray(item.packet)) {
+          throw new Error(`retained review item ${item.id} has no packet`);
+        }
+        if (!item.current_context || typeof item.current_context !== 'object' || Array.isArray(item.current_context)) {
+          throw new Error(`retained review item ${item.id} has no current Proof context`);
+        }
+        if (!Array.isArray(item.parent_bindings)) {
+          throw new Error(`retained review item ${item.id} has no parent bindings`);
+        }
+        if (!item.lineage || typeof item.lineage !== 'object' || Array.isArray(item.lineage) ||
+            typeof item.lineage.packet_id !== 'string' || !item.lineage.packet_id ||
+            typeof item.lineage.checkpoint_id !== 'string' || !item.lineage.checkpoint_id) {
+          throw new Error(`retained review item ${item.id} has incomplete packet/checkpoint lineage`);
+        }
+        if (item.spec_review_role !== role) {
+          throw new Error(`retained review item ${item.id} does not carry the exact built-in spec-review role claim`);
+        }
+        if (item.reviewer !== 'agent:luna-xhigh-native-spec-review') {
+          throw new Error(`retained review item ${item.id} has an unapproved reviewer identity`);
+        }
+      }
+      process.stdout.write(JSON.stringify({items}));
+      NODE
