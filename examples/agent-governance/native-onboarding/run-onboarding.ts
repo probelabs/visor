@@ -1007,6 +1007,7 @@ type ChecklistContinuationEvidence = Readonly<{
   affectedComponentIds?: readonly string[];
   reusedComponentIds?: readonly string[];
   affectedBatches?: readonly Readonly<{component_id: string; paths: readonly string[]}>[];
+  affectedDetailsByComponent?: Readonly<Record<string, readonly string[]>>;
 }>;
 
 const CONTINUATION_AUTHORITY_VERSION = 'native.checklist-continuation-authority/v1';
@@ -1027,6 +1028,77 @@ function uniqueSortedStrings(value: unknown, label: string): string[] {
   const sorted = utf8Sorted(value as string[]);
   if (new Set(sorted).size !== sorted.length) throw new Error(`${label} must be unique`);
   return sorted;
+}
+
+type ContinuationTaskObservation = Readonly<{
+  batches: readonly Readonly<{component_id: string; paths: readonly string[]}>[];
+  detailsByComponent: Readonly<Record<string, readonly string[]>>;
+}>;
+
+function continuationTaskObservation(
+  catalog: Json,
+  affectedComponentIds: readonly string[],
+  authorityWorkItems: readonly unknown[],
+): ContinuationTaskObservation {
+  const components = Array.isArray(catalog.components) ? catalog.components.filter(isRecord) : [];
+  const expectedIds = uniqueSortedStrings(affectedComponentIds, 'continuation task affected component IDs');
+  if (components.length !== expectedIds.length) {
+    throw new Error('continuation task components must exactly match affected component IDs');
+  }
+  const authorityById = new Map<string, Json>();
+  for (const [index, authorityItem] of authorityWorkItems.entries()) {
+    const validated = validateContinuationWorkItem(authorityItem, `authority WorkItem ${index}`);
+    const componentId = String(validated.component_id);
+    if (authorityById.has(componentId)) throw new Error(`authority WorkItems contain duplicate component ${componentId}`);
+    authorityById.set(componentId, validated);
+  }
+  const batches: Array<Readonly<{component_id: string; paths: readonly string[]}>> = [];
+  const detailsByComponent: Record<string, readonly string[]> = {};
+  const operationalById = new Map<string, Json>();
+  for (const component of components) {
+    if (typeof component.component_id !== 'string' || !expectedIds.includes(component.component_id) || operationalById.has(component.component_id)) {
+      throw new Error('continuation task components contain an unexpected or duplicate component ID');
+    }
+    operationalById.set(component.component_id, component);
+  }
+  for (const componentId of expectedIds) {
+    const item = components.find(candidate => candidate.component_id === componentId);
+    const authorityItem = authorityById.get(componentId);
+    const task = item && isRecord(item.continuation_task) ? item.continuation_task : undefined;
+    const orphan = task && isRecord(task.orphan_code_clean) ? task.orphan_code_clean : undefined;
+    if (!item || !authorityItem || !task || !orphan || !hasExactKeys(task, ['step_id', 'role', 'required_checks', 'orphan_code_clean']) ||
+        task.step_id !== 'traces-light' || task.role !== 'onboard' ||
+        canonicalJson(task.required_checks) !== canonicalJson(['annotation_validity', 'orphan_code_clean']) ||
+        !hasExactKeys(orphan, ['paths', 'details'])) {
+      throw new Error(`affected WorkItem ${componentId} has an invalid closed continuation task`);
+    }
+    const {continuation_task: _continuationTask, ...baseWorkItem} = item;
+    if (canonicalJson(baseWorkItem) !== canonicalJson(authorityItem)) {
+      throw new Error(`continuation task WorkItem ${componentId} is detached from native authority`);
+    }
+    const paths = uniqueSortedStrings(orphan.paths, `continuation task ${componentId} paths`);
+    const ownedPaths = Array.isArray(authorityItem.sorted_owned_paths) ? authorityItem.sorted_owned_paths : [];
+    if (paths.some(candidate => !ownedPaths.includes(candidate))) {
+      throw new Error(`continuation task ${componentId} paths exceed native owned paths`);
+    }
+    if (paths.length === 0 || !Array.isArray(orphan.details) || orphan.details.length === 0 ||
+        orphan.details.some(detail => typeof detail !== 'string' || detail.length === 0)) {
+      throw new Error(`continuation task ${componentId} details are incomplete`);
+    }
+    const details = Object.freeze((orphan.details as string[]).slice());
+    if (details.some(detail => {
+      const match = /^([^:]+):[0-9]+(?:\s|$)/.exec(detail);
+      return !match || !paths.includes(match[1]);
+    })) {
+      throw new Error(`continuation task ${componentId} details are not mapped to owned paths`);
+    }
+    batches.push(Object.freeze({component_id: componentId, paths: Object.freeze(paths)}));
+    detailsByComponent[componentId] = details;
+  }
+  return Object.freeze({
+    batches: Object.freeze(batches),
+    detailsByComponent: Object.freeze(detailsByComponent),
+  });
 }
 
 function validateContinuationWorkItem(value: unknown, label: string): Json {
@@ -1403,10 +1475,24 @@ export async function validateChecklistContinuationCheckpoint(
         continuationGraphAuthority(restored.config, restored.checkpoint),
       );
       const workItems = continuationGraphWorkItems(restored.config, restored.checkpoint);
+      const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(restored.config), restored.checkpoint).getInstanceProjection();
+      const catalogs = Object.values(projection.claimsById)
+        .filter(claim => claim.active && claim.claim === 'native.continuation.catalog@1');
+      if (catalogs.length !== 1 || !isRecord(catalogs[0].payload)) {
+        throw new Error('continuation checkpoint must contain exactly one catalog authority envelope');
+      }
+      const taskObservation = continuationTaskObservation(
+        catalogs[0].payload,
+        uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs'),
+        Array.isArray(authority.current_work_items) ? authority.current_work_items : [],
+      );
       return Object.freeze({mode: 'continuation-frontier', checkpoint, checkpointPath: target, config: restored.config,
         materializedConfigPath: restored.materializedConfigPath, expectedComponentIds: Object.freeze(workItems.map(item => item.component_id as string)), workItems,
         authority, affectedComponentIds: Object.freeze(uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs')),
-        reusedComponentIds: Object.freeze(uniqueSortedStrings(authority.reused_component_ids, 'journaled reused component IDs'))});
+        reusedComponentIds: Object.freeze(uniqueSortedStrings(authority.reused_component_ids, 'journaled reused component IDs')),
+        affectedBatches: taskObservation.batches,
+        affectedDetailsByComponent: taskObservation.detailsByComponent,
+      });
     }
   }
   const prefix = resolveChecklistContinuationPrefix(target);
@@ -2459,14 +2545,31 @@ export async function deriveCurrentChecklistAffectedBatches(
     return match[1];
   }))];
   const batches = deriveChecklistAffectedBatches(workItems, orphanPaths);
+  const orphanDetailsByComponent: Record<string, string[]> = {};
+  for (const detail of details) {
+    const match = /^([^:]+):[0-9]+(?:\s|$)/.exec(detail);
+    if (!match) throw new Error(`orphan_code_clean detail has no exact source path: ${detail}`);
+    const owner = batches.batches.find(batch => batch.paths.includes(match[1]))?.component_id;
+    if (!owner) throw new Error(`orphan_code_clean detail path has no unique WorkItem owner: ${match[1]}`);
+    (orphanDetailsByComponent[owner] ??= []).push(detail);
+  }
+  const frozenDetails = Object.freeze(Object.fromEntries(
+    Object.entries(orphanDetailsByComponent).map(([componentId, componentDetails]) => [componentId, Object.freeze(componentDetails.slice())]),
+  ));
+  const enrichedBatches = {...batches};
+  Object.defineProperty(enrichedBatches, 'orphanDetailsByComponent', {
+    value: frozenDetails,
+    enumerable: false,
+  });
   writeJson(path.join(output, 'preflight', 'current-affected-batches.json'), {
     status: 'current-proof-orphan-ownership-derived',
     orphan_paths: orphanPaths,
     affected_component_ids: batches.affectedComponentIds,
     reused_component_ids: batches.reusedComponentIds,
     batches: batches.batches,
+    orphan_details_by_component: frozenDetails,
   });
-  return batches;
+  return Object.freeze(enrichedBatches);
 }
 
 function activeChecklistNameFromCheckpoint(
@@ -4425,6 +4528,8 @@ export type ChecklistAffectedBatches = Readonly<{
   affectedComponentIds: readonly string[];
   reusedComponentIds: readonly string[];
   batches: readonly Readonly<{component_id: string; paths: readonly string[]}>[];
+  /** Exact native orphan detail strings keyed by their unique WorkItem owner. */
+  orphanDetailsByComponent?: Readonly<Record<string, readonly string[]>>;
 }>;
 
 /** Map Proof orphan findings to exactly one retained WorkItem owner. */
@@ -5814,14 +5919,36 @@ async function main(): Promise<void> {
           affectedComponentIds: batches.affectedComponentIds,
           reusedComponentIds: batches.reusedComponentIds,
           affectedBatches: batches.batches,
+          affectedDetailsByComponent: batches.orphanDetailsByComponent,
         });
       }
       const authority = checklistContinuationEvidence.authority
         ? validateContinuationAuthority(checklistContinuationEvidence.authority)
         : undefined;
       if (!authority) throw new Error('checklist continuation is missing one closed current authority envelope');
-      const affected = new Set(checklistContinuationEvidence.affectedComponentIds ?? authority.affected_component_ids as string[]);
-      const graphWorkItems = checklistContinuationEvidence.workItems.filter(item => affected.has(String(item.component_id)));
+      const continuationEvidence = checklistContinuationEvidence;
+      const affected = new Set(continuationEvidence.affectedComponentIds ?? authority.affected_component_ids as string[]);
+      const detailByComponent = continuationEvidence.affectedDetailsByComponent ?? {};
+      const affectedBatches = continuationEvidence.affectedBatches;
+      const graphWorkItems = continuationEvidence.workItems
+        .filter(item => affected.has(String(item.component_id)))
+        .map(item => {
+          const componentId = String(item.component_id);
+          const batch = affectedBatches?.find(candidate => candidate.component_id === componentId);
+          const details = detailByComponent[componentId];
+          if (!batch || !details || details.length === 0) {
+            throw new Error(`checklist continuation has no exact orphan findings for affected WorkItem ${componentId}`);
+          }
+          return {
+            ...item,
+            continuation_task: {
+              step_id: 'traces-light',
+              role: 'onboard',
+              required_checks: ['annotation_validity', 'orphan_code_clean'],
+              orphan_code_clean: {paths: [...batch.paths], details: [...details]},
+            },
+          } as Json;
+        });
       if (graphWorkItems.length !== affected.size) throw new Error('checklist continuation affected WorkItems are incomplete');
       const catalog = {
         components: graphWorkItems,
@@ -5890,6 +6017,7 @@ async function main(): Promise<void> {
       affected_component_ids: checklistContinuationEvidence.affectedComponentIds,
       reused_component_ids: checklistContinuationEvidence.reusedComponentIds,
       affected_batches: checklistContinuationEvidence.affectedBatches,
+      affected_details_by_component: checklistContinuationEvidence.affectedDetailsByComponent,
       work_item_count: checklistContinuationEvidence.workItems.length,
       fresh_graph_policy: path.relative(REPO_ROOT, CHECKLIST_CONTINUATION_CONFIG_PATH),
     });
@@ -5939,7 +6067,7 @@ async function main(): Promise<void> {
   const engine = new StateMachineExecutionEngine(roots.subject);
   let latestChecklistCheckpoint: GraphJournalCheckpointV1 | undefined = checklistResumeCheckpoint;
   const refreshChecklistProgress = (options: ChecklistProgressRefreshOptions = {}): void => {
-    if (!checklistOnboarding || !latestChecklistCheckpoint) return;
+    if (!checklistOnboarding) return;
     let liveInstanceProjection: unknown;
     try {
       liveInstanceProjection = engine.getInstanceProjection();
@@ -5950,6 +6078,7 @@ async function main(): Promise<void> {
       // the checkpoint is intentionally not exportable.  Keep the last
       // durable checkpoint and pair it with the live operational projection.
     }
+    if (!latestChecklistCheckpoint) return;
     try {
       writeRestoredChecklistProgress(
         roots.output,

@@ -50,7 +50,7 @@ claim_types:
           items:
             type: object
             additionalProperties: false
-            required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, baseline_commit]
+            required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, baseline_commit, continuation_task]
             properties:
               version: {const: reqproof.onboarding-component-work-item/v1}
               project_id: {type: string, minLength: 1}
@@ -72,6 +72,21 @@ claim_types:
                 minItems: 1
                 items: {type: object}
               proof_component_subject: {type: object}
+              continuation_task: &continuation_task_schema
+                type: object
+                additionalProperties: false
+                required: [step_id, role, required_checks, orphan_code_clean]
+                properties:
+                  step_id: {const: traces-light}
+                  role: {const: onboard}
+                  required_checks: {const: [annotation_validity, orphan_code_clean]}
+                  orphan_code_clean:
+                    type: object
+                    additionalProperties: false
+                    required: [paths, details]
+                    properties:
+                      paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+                      details: {type: array, minItems: 1, items: {type: string, minLength: 1}}
         full_components:
           type: array
           minItems: 0
@@ -160,7 +175,7 @@ claim_types:
     schema:
       type: object
       additionalProperties: false
-      required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, baseline_commit]
+      required: [version, project_id, component_id, sorted_owned_paths, sorted_dependency_closure, proof_path_mapping, proof_input_state, proof_component_subject, baseline_commit, continuation_task]
       properties:
         version: {const: reqproof.onboarding-component-work-item/v1}
         project_id: {type: string, minLength: 1}
@@ -182,19 +197,86 @@ claim_types:
           minItems: 1
           items: {type: object}
         proof_component_subject: {type: object}
+        continuation_task: *continuation_task_schema
   native.continuation.checklist_snapshot@1:
-    schema:
+    schema: &checklist_snapshot_schema
       type: object
       additionalProperties: false
-      required: [schema_version, checklist, active, new_project, steps]
+      required: [schema_version, checklist, active, new_project, steps_total, steps_pending, counts, ok, verify_failed, eligible_step_ids, next, steps]
       properties:
         schema_version: {const: proof.checklist.show.v1}
         checklist: {type: string, minLength: 1}
-        active: {const: true}
-        new_project: {const: true}
-        steps: {type: array, minItems: 1, items: {type: object}}
-        eligible_step_ids: {type: array, items: {type: string, minLength: 1}}
-        next: {}
+        active: {type: boolean}
+        new_project: {type: boolean}
+        steps_total: {type: integer, minimum: 0}
+        steps_pending: {type: integer, minimum: 0}
+        ok: {type: boolean}
+        verify_failed: {type: array, items: {type: string}}
+        eligible_step_ids: {type: array, items: {type: string}}
+        definition_source: {type: string}
+        updated_at: {type: string}
+        next:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            step_id: {type: string}
+            title: {type: string}
+            role: {type: string}
+            verify_cmd: {type: string}
+            stamp: {type: string}
+            scope: {type: string}
+            notes_required: {type: boolean}
+            requires: {type: array, items: {type: string}}
+            required_checks: {type: array, items: {type: string}}
+        counts:
+          type: object
+          additionalProperties: false
+          required: [confirmed, skipped, not_applicable, pending, blocked]
+          properties:
+            confirmed: {type: integer, minimum: 0}
+            skipped: {type: integer, minimum: 0}
+            not_applicable: {type: integer, minimum: 0}
+            pending: {type: integer, minimum: 0}
+            blocked: {type: integer, minimum: 0}
+        steps:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [step_id, title, when, requires, stamp, scope, notes_required, invalidates, required_checks, stored_status, effective_status, applicable, eligible, unmet_requires, check_results]
+            properties:
+              step_id: {type: string, minLength: 1}
+              title: {type: string}
+              when: {type: string}
+              requires: {type: array, items: {type: string}}
+              stamp: {type: string}
+              scope: {type: string}
+              notes_required: {type: boolean}
+              invalidates: {type: array, items: {type: string}}
+              required_checks: {type: array, items: {type: string}}
+              stored_status: {type: string}
+              effective_status: {type: string}
+              applicable: {type: boolean}
+              eligible: {type: boolean}
+              unmet_requires: {type: array, items: {type: string}}
+              role: {type: string}
+              verify_cmd: {type: string}
+              confirmed_at: {type: string}
+              confirmed_by: {type: string}
+              note: {type: string}
+              skip_reason: {type: string}
+              scope_key: {type: string}
+              verify_result: {type: object, additionalProperties: true}
+              check_results:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [id, status, at]
+                  properties:
+                    id: {type: string}
+                    status: {type: string}
+                    at: {type: string}
   native.continuation.checkout@1:
     schema:
       type: object
@@ -333,6 +415,10 @@ subgraphs:
           Implements:/Documents: links, component-owned requirements and
           variables, and native trace links for this WorkItem.  Report an
           explicit unsupported_mapping when a requirement cannot be mapped.
+          The continuation_task contains existing Proof orphan findings for
+          this component. Repair only those component-owned traces-light
+          findings, then return one disposition for every supplied detail;
+          report unsupported_mapping for any detail that cannot be grounded.
           Do not invent IDs, edit checklist state, run broad audits/builds, or
           change executable behavior.  Source comments and component-owned
           Proof specification files are the only allowed edits.
@@ -355,11 +441,6 @@ subgraphs:
         timeout: 900000
         criticality: internal
         resource_group: proof-workspace-mutation
-        # The command provider retains transform snapshots on its instance;
-        # establish a fresh snapshot here so a prior role text claim cannot
-        # be promoted as an unrelated scalar field.
-        transform_js: |
-          return JSON.parse(String(output));
         schema:
           type: object
           additionalProperties: false
@@ -431,7 +512,8 @@ subgraphs:
             const checkout = deps.checkout;
             if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || workItem.component_id.length === 0 || Buffer.byteLength(workItem.component_id, 'utf8') > 180 || typeof workItem.baseline_commit !== 'string') throw new Error('promotion is missing the prepared WorkItem');
             if (!checkout || typeof checkout !== 'object' || checkout.success !== true || checkout.is_worktree !== true || typeof checkout.path !== 'string' || typeof checkout.commit !== 'string' || typeof checkout.worktree_id !== 'string') throw new Error('promotion is missing the verified writer checkout');
-            const result = promoteNativeDelta({canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT, baselineCommit: workItem.baseline_commit, writerCheckout: checkout, workItem, proofBin, sourceWritePolicy: 'go-trace-annotations-only', commitAcceptedArtifacts: true, timeoutMs: Number(process.env.REQUEST_TIMEOUT)});
+            const {continuation_task: _continuationTask, ...proofWorkItem} = workItem;
+            const result = promoteNativeDelta({canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT, baselineCommit: proofWorkItem.baseline_commit, writerCheckout: checkout, workItem: proofWorkItem, proofBin, sourceWritePolicy: 'go-trace-annotations-only', commitAcceptedArtifacts: true, timeoutMs: Number(process.env.REQUEST_TIMEOUT)});
             const output = {...result, component_id: workItem.component_id, baseline_commit: result.checkpoint.baseline_commit};
             persistRecord(workItem.component_id, output);
             process.stdout.write(JSON.stringify(output));
@@ -482,6 +564,7 @@ subgraphs:
                     minItems: 1
                     items: {type: object}
                   proof_component_subject: {type: object}
+                  continuation_task: *continuation_task_schema
             full_components:
               type: array
               minItems: 0
@@ -508,8 +591,6 @@ subgraphs:
           - {claim: native.continuation.project_item@1, as: project}
         emits:
           - {claim: native.continuation.catalog@1, from: output}
-        transform_js: |
-          return JSON.parse(String(output));
         expand:
           claim: native.continuation.catalog@1
           template: continuation-component
@@ -525,18 +606,7 @@ subgraphs:
         type: command
         depends_on: [materialize-retained-catalog]
         timeout: 120000
-        schema:
-          type: object
-          additionalProperties: false
-          required: [schema_version, checklist, active, new_project, steps]
-          properties:
-            schema_version: {const: proof.checklist.show.v1}
-            checklist: {type: string, minLength: 1}
-            active: {const: true}
-            new_project: {const: true}
-            steps: {type: array, minItems: 1, items: {type: object}}
-            eligible_step_ids: {type: array, items: {type: string, minLength: 1}}
-            next: {}
+        schema: *checklist_snapshot_schema
         consumes:
           - {claim: native.continuation.catalog@1, as: authority}
         emits:
@@ -650,8 +720,6 @@ checks:
               project_id: {type: string, minLength: 1}
     emits:
       - {claim: native.continuation.project@1, from: output}
-    transform_js: |
-      return JSON.parse(String(output));
     expand:
       claim: native.continuation.project@1
       template: continuation-project

@@ -32,6 +32,31 @@ type WorkItem = {
   baseline_commit: string;
 };
 
+type ContinuationTask = {
+  step_id: 'traces-light';
+  role: 'onboard';
+  required_checks: ['annotation_validity', 'orphan_code_clean'];
+  orphan_code_clean: {paths: string[]; details: string[]};
+};
+
+type OperationalWorkItem = WorkItem & {continuation_task: ContinuationTask};
+
+function operationalWorkItem(
+  workItem: WorkItem,
+  paths: string[],
+  details: string[],
+): OperationalWorkItem {
+  return {
+    ...workItem,
+    continuation_task: {
+      step_id: 'traces-light',
+      role: 'onboard',
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+      orphan_code_clean: {paths, details},
+    },
+  };
+}
+
 function continuationAuthority(
   workItems: readonly WorkItem[],
   affectedComponentIds: readonly string[] = ['component-a'],
@@ -91,20 +116,17 @@ function continuationAuthority(
 }
 
 function continuationSnapshot(): Record<string, unknown> {
-  return {
-    schema_version: 'proof.checklist.show.v1',
-    checklist: 'onboard_v1',
-    active: true,
-    new_project: true,
-    steps: [{step_id: 'traces-light', title: 'Trace links', applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending', required_checks: [], check_results: []}],
-  };
+  return JSON.parse(fs.readFileSync(
+    path.resolve(__dirname, '../fixtures/native-onboarding/checklist-show-onboard-v1.json'),
+    'utf8',
+  )) as Record<string, unknown>;
 }
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8'}).trim();
 }
 
-function makeGitFixture(): {root: string; writerParent: string; output: string; proof: string; checklistState: string; checklistCalls: string; workItem: WorkItem; reusedWorkItem: WorkItem; cleanup: () => void} {
+function makeGitFixture(): {root: string; writerParent: string; output: string; proof: string; checklistState: string; checklistCalls: string; workItem: WorkItem; secondWorkItem: WorkItem; reusedWorkItem: WorkItem; cleanup: () => void} {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-canonical-'));
   const writerParent = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-writers-'));
   const helperRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-helper-'));
@@ -113,8 +135,10 @@ function makeGitFixture(): {root: string; writerParent: string; output: string; 
   git(root, ['config', 'user.email', 'test@example.invalid']);
   git(root, ['config', 'user.name', 'Visor continuation test']);
   fs.writeFileSync(path.join(root, 'source.go'), 'package fixture\n\nfunc Source() {}\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'second.go'), 'package fixture\n\nfunc Second() {}\n', 'utf8');
   fs.writeFileSync(path.join(root, 'reused.go'), 'package fixture\n\nfunc Reused() {}\n', 'utf8');
   git(root, ['add', 'source.go']);
+  git(root, ['add', 'second.go']);
   git(root, ['add', 'reused.go']);
   git(root, ['commit', '--quiet', '-m', 'baseline']);
   const commit = git(root, ['rev-parse', 'HEAD']);
@@ -125,16 +149,34 @@ function makeGitFixture(): {root: string; writerParent: string; output: string; 
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (process.env.CONTINUATION_FIXTURE_CALL_LOG) fs.appendFileSync(process.env.CONTINUATION_FIXTURE_CALL_LOG, JSON.stringify({args, cwd: process.cwd()}) + '\\n');
-const checklistRow = () => {
+const checklistSnapshot = () => {
+  const snapshot = JSON.parse(process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT || '{}');
   const confirmed = process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE && fs.existsSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE) && JSON.parse(fs.readFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, 'utf8')).status === 'confirmed';
-  return confirmed
-    ? {step_id: 'traces-light', applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', stamp: 'confirm+verify', required_checks: [], check_results: [], verify_result: {passed: true, exit_code: 0, at: '2026-09-09T00:00:02Z'}}
-    : {step_id: 'traces-light', applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending', stamp: 'confirm+verify', required_checks: [], check_results: []};
+  if (!confirmed) return snapshot;
+  const steps = Array.isArray(snapshot.steps) ? snapshot.steps.map(step => step && step.step_id === 'traces-light'
+    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', check_results: [{id: 'annotation_validity', status: 'pass', at: '2026-09-09T06:02:00Z'}, {id: 'orphan_code_clean', status: 'pass', at: '2026-09-09T06:02:00Z'}], verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}}
+    : step) : [];
+  return {
+    ...snapshot,
+    steps_pending: typeof snapshot.steps_pending === 'number' ? Math.max(0, snapshot.steps_pending - 1) : snapshot.steps_pending,
+    counts: snapshot.counts && typeof snapshot.counts === 'object'
+      ? {...snapshot.counts, confirmed: Number(snapshot.counts.confirmed || 0) + 1, pending: Math.max(0, Number(snapshot.counts.pending || 0) - 1)}
+      : snapshot.counts,
+    eligible_step_ids: Array.isArray(snapshot.eligible_step_ids) ? snapshot.eligible_step_ids.filter(id => id !== 'traces-light') : snapshot.eligible_step_ids,
+    next: snapshot.next && snapshot.next.step_id === 'traces-light' ? null : snapshot.next,
+    steps,
+  };
 };
-if (args[0] === 'checklist' && args[1] === 'show') process.stdout.write(JSON.stringify({schema_version: 'proof.checklist.show.v1', checklist: 'onboard_v1', active: true, new_project: true, steps: [checklistRow()]}));
+if (args[0] === 'checklist' && args[1] === 'show') process.stdout.write(JSON.stringify(checklistSnapshot()));
 else if (args[0] === 'checklist' && args[1] === 'confirm') { fs.writeFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, JSON.stringify({status: 'confirmed'})); }
 else if (args[0] === 'role' && args[1] === 'show') process.stdout.write('onboard role\\n');
-else if (args[0] === 'req' && args[1] === 'list') process.stdout.write(JSON.stringify([{id: 'REQ-1', file_path: 'specs/REQ-1.req.yaml', component: 'component-a'}]));
+else if (args[0] === 'req' && args[1] === 'list') {
+  const component = args[args.indexOf('--component') + 1];
+  const row = component === 'component-c'
+    ? {id: 'REQ-2', file_path: 'specs/REQ-2.req.yaml', component: 'component-c'}
+    : {id: 'REQ-1', file_path: 'specs/REQ-1.req.yaml', component: 'component-a'};
+  process.stdout.write(JSON.stringify([row]));
+}
 else if (args[0] === 'var' && args[1] === 'list') process.stdout.write('[]');
 else if (args[0] === 'var' && args[1] === 'diagnose') process.stdout.write(JSON.stringify({variables: []}));
 else if (args[0] === 'audit') {
@@ -159,6 +201,17 @@ else process.stdout.write(JSON.stringify({status: 'pass'}));
     proof_component_subject: {component_id: 'component-a', fingerprint: `sha256:${'a'.repeat(64)}`},
     baseline_commit: commit,
   };
+  const secondWorkItem: WorkItem = {
+    version: 'reqproof.onboarding-component-work-item/v1',
+    project_id: 'project-a',
+    component_id: 'component-c',
+    sorted_owned_paths: ['second.go'],
+    sorted_dependency_closure: ['second.go'],
+    proof_path_mapping: {owned: ['second.go']},
+    proof_input_state: [{owner_kind: 'onboarding_structural_inventory', owner_id: 'project-a', input_kind: 'code', path: 'second.go', file_hash: `sha256:${'c'.repeat(64)}`}],
+    proof_component_subject: {component_id: 'component-c', fingerprint: `sha256:${'c'.repeat(64)}`},
+    baseline_commit: commit,
+  };
   const reusedWorkItem: WorkItem = {
     version: 'reqproof.onboarding-component-work-item/v1',
     project_id: 'project-a',
@@ -178,6 +231,7 @@ else process.stdout.write(JSON.stringify({status: 'pass'}));
     checklistState,
     checklistCalls,
     workItem,
+    secondWorkItem,
     reusedWorkItem,
     cleanup: () => {
       try { git(root, ['worktree', 'list', '--porcelain']); } catch {}
@@ -210,10 +264,25 @@ describe('production traces-light continuation graph', () => {
     const previousWorktreeConfig = worktreeManager.getConfig();
     const fixtureWorktreeCache = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-cache-'));
     worktreeManager.configure({base_path: fixtureWorktreeCache, cleanup_on_exit: false});
-    let testCheckout: string | undefined;
-    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async function () {
+    const affectedWorkItems = [
+      operationalWorkItem(fixture.workItem, ['source.go'], ['source.go:1 missing Implements link for REQ-1']),
+      operationalWorkItem(fixture.secondWorkItem, ['second.go'], ['second.go:1 missing Documents link for REQ-2']),
+    ];
+    const nativeFindings: Record<string, string> = {
+      'component-a': 'source.go:1 missing Implements link for REQ-1',
+      'component-c': 'second.go:1 missing Documents link for REQ-2',
+    };
+    const testCheckouts = new Set<string>();
+    const promptsByComponent = new Map<string, string>();
+    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async function (_prInfo: any, customPrompt: string) {
+      const componentId = ['component-a', 'component-c'].find(id => customPrompt.includes(id));
+      if (!componentId) throw new Error('mock author prompt does not identify a component');
+      const otherComponentId = componentId === 'component-a' ? 'component-c' : 'component-a';
+      expect(customPrompt).toContain(nativeFindings[componentId]);
+      expect(customPrompt).not.toContain(nativeFindings[otherComponentId]);
+      promptsByComponent.set(componentId, customPrompt);
       const checkout = (this as any).config?.path as string;
-      testCheckout = checkout;
+      testCheckouts.add(checkout);
       expect((this as any).config?.model).toBe('gpt-5.6-luna');
       expect((this as any).config?.codexExecutionProfile).toBe('luna-xhigh-isolated-writer-v1');
       expect((this as any).config?.codexWorkingDirectoryFrom).toBe('checkout-worktree');
@@ -221,7 +290,9 @@ describe('production traces-light continuation graph', () => {
       expect(effectiveCwd).not.toBe(fs.realpathSync(fixture.root));
       expect(fs.realpathSync(git(checkout, ['rev-parse', '--show-toplevel']))).toBe(effectiveCwd);
       expect(() => git(checkout, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).toThrow();
-      fs.appendFileSync(path.join(checkout, 'source.go'), '// Implements: REQ-1\n', 'utf8');
+      const ownedPath = componentId === 'component-a' ? 'source.go' : 'second.go';
+      const marker = componentId === 'component-a' ? '// Implements: REQ-1\n' : '// Documents: REQ-2\n';
+      fs.appendFileSync(path.join(checkout, ownedPath), marker, 'utf8');
       return {issues: [], output: {status: 'no-model-mock'}} as any;
     });
     try {
@@ -229,9 +300,9 @@ describe('production traces-light continuation graph', () => {
       process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
       process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
       process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
-        components: [fixture.workItem],
-        full_components: [fixture.workItem, fixture.reusedWorkItem],
-        affected_component_ids: ['component-a'],
+        components: affectedWorkItems,
+        full_components: [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem],
+        affected_component_ids: ['component-a', 'component-c'],
         reused_component_ids: ['component-b'],
         retained_receipt_identities: [`sha256:${'7'.repeat(64)}`, `sha256:${'8'.repeat(64)}`],
         current_receipt_identities: [
@@ -244,8 +315,8 @@ describe('production traces-light continuation graph', () => {
           `sha256:${'7'.repeat(64)}`,
         ],
         authority: continuationAuthority(
-          [fixture.workItem, fixture.reusedWorkItem],
-          ['component-a'],
+          [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem],
+          ['component-a', 'component-c'],
           ['component-b'],
         ),
       });
@@ -258,7 +329,7 @@ describe('production traces-light continuation graph', () => {
       process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(continuationSnapshot());
       const config = await loadConfig(buildChecklistContinuationConfig() as any, {strict: true});
       const engine = new StateMachineExecutionEngine(fixture.root);
-      const paused = await executeChecklistContinuationEngine(engine, config, 120000, ['component-a']);
+      const paused = await executeChecklistContinuationEngine(engine, config, 120000, ['component-a', 'component-c']);
       expect(paused).toMatchObject({paused: true});
       const pausedJournal = ExecutionJournal.restoreGraphCheckpoint(
         compileClaimPlan(config),
@@ -270,63 +341,108 @@ describe('production traces-light continuation graph', () => {
         checkpoint: paused.checkpoint,
         paused: true,
         resumed: false,
-        retainedCatalogComponentIds: ['component-a', 'component-b'],
-        affectedComponentIds: ['component-a'],
+        retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c'],
+        affectedComponentIds: ['component-a', 'component-c'],
       });
       expect(pausedProgress.operational.catalog_coverage).toMatchObject({
         known: true,
-        known_count: 2,
-        affected_count: 1,
+        known_count: 3,
+        affected_count: 2,
         reused_count: 1,
         unexpanded_count: 0,
       });
       expect(pausedProgress.operational.catalog_coverage.items).toEqual([
         {id: 'component-a', disposition: 'affected'},
         {id: 'component-b', disposition: 'reused'},
+        {id: 'component-c', disposition: 'affected'},
       ]);
-      expect(pausedProgress.operational.components.items).toHaveLength(1);
-      expect(pausedProgress.operational.components.items[0].id).toBe('component-a');
+      expect(pausedProgress.operational.components.items).toHaveLength(2);
+      expect(pausedProgress.operational.components.items.map(item => item.id).sort()).toEqual(['component-a', 'component-c']);
       const pausedRendered = renderNativeChecklistProgress(pausedProgress);
       expect(pausedRendered.text).toContain(
-        'catalog coverage=known:2 affected:1 reused:1 unexpanded:0',
+        'catalog coverage=known:3 affected:2 reused:1 unexpanded:0',
       );
       expect(pausedRendered.text).toContain('paused=true resumed=false');
       expect(pausedRendered.html).toContain(
-        'catalog coverage: known=2, affected=1, reused=1, unexpanded=0',
+        'catalog coverage: known=3, affected=2, reused=1, unexpanded=0',
       );
       const pausedStartedChecks = paused.checkpoint.events
         .filter(event => event.type === 'AttemptStarted')
         .map(event => event.checkId);
-      expect(pausedStartedChecks.filter(checkId => checkId === 'author-native-component')).toHaveLength(1);
-      expect(pausedStartedChecks.filter(checkId => checkId === 'promote-native-component')).toHaveLength(1);
+      const generatedStartedScopes = (checkId: string): string[] => paused.checkpoint.events
+        .filter(event => event.type === 'AttemptStarted' && event.checkId === checkId)
+        .map(event => {
+        const keyed = event.scope.filter(part => part.kind === 'keyed');
+        return keyed[keyed.length - 1]?.key;
+      }).sort();
+      for (const checkId of ['checkout-worktree', 'role-onboard-component', 'author-native-component', 'promote-native-component']) {
+        expect(generatedStartedScopes(checkId)).toEqual(['component-a', 'component-c']);
+      }
+      const checkoutClaims = paused.checkpoint.events.filter(
+        event => event.type === 'ClaimPublished' && event.claim === 'native.continuation.checkout@1',
+      ) as any[];
+      expect(checkoutClaims).toHaveLength(2);
+      expect(checkoutClaims.every(event => !Object.prototype.hasOwnProperty.call(event.payload, 'text'))).toBe(true);
+      const snapshotClaims = paused.checkpoint.events.filter(
+        event => event.type === 'ClaimPublished' && event.claim === 'native.continuation.checklist_snapshot@1',
+      ) as any[];
+      expect(snapshotClaims).toHaveLength(1);
+      expect(snapshotClaims[0].payload).toEqual(continuationSnapshot());
       const pausedMutationStarts = paused.checkpoint.events.filter(
         event => event.type === 'AttemptStarted'
           && (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component'),
       );
-      expect(pausedMutationStarts).toHaveLength(2);
-      expect(pausedMutationStarts.every(event => event.scope.some(
-        part => part.kind === 'keyed' && part.key === 'component-a',
-      ))).toBe(true);
-      const promotion = paused.checkpoint.events.find(event => event.type === 'ClaimPublished' && event.claim === 'native.continuation.promotion@1') as any;
-      expect(promotion?.payload).toBeDefined();
-      expect(promotion.payload.baseline_commit).toBe(fixture.workItem.baseline_commit);
-      expect(promotion.payload.accepted_paths).toEqual(['source.go']);
-      expect(promotion.payload.ignored_paths).toEqual([]);
-      expect(promotion.payload.rejected_paths).toEqual([]);
-      expect(promotion.payload.promoted_commit).toBe(git(fixture.root, ['rev-parse', 'HEAD']));
-      expect(promotion.payload.validation).toMatchObject({status: 0, stderr: ''});
-      expect(promotion.payload.checkpoint).toEqual({
+      expect(pausedMutationStarts).toHaveLength(4);
+      expect(pausedMutationStarts.map(event => {
+        const keyed = event.scope.filter(part => part.kind === 'keyed');
+        return keyed[keyed.length - 1]?.key;
+      }).sort()).toEqual([
+        'component-a', 'component-a', 'component-c', 'component-c',
+      ]);
+      expect(promptsByComponent).toEqual(new Map([
+        ['component-a', expect.any(String)],
+        ['component-c', expect.any(String)],
+      ]));
+      expect(new Set(testCheckouts).size).toBe(2);
+      const promotions = paused.checkpoint.events.filter(event => event.type === 'ClaimPublished' && event.claim === 'native.continuation.promotion@1') as any[];
+      expect(promotions).toHaveLength(2);
+      const promotionByComponent = new Map(promotions.map(event => [event.payload.component_id, event.payload]));
+      expect([...promotionByComponent.keys()].sort()).toEqual(['component-a', 'component-c']);
+      expect(promotionByComponent.get('component-a')).toMatchObject({
         baseline_commit: fixture.workItem.baseline_commit,
-        component_id: 'component-a',
         accepted_paths: ['source.go'],
         ignored_paths: [],
-        status: 'promoted',
+        rejected_paths: [],
+        validation: {status: 0, stderr: ''},
+        checkpoint: {
+          baseline_commit: fixture.workItem.baseline_commit,
+          component_id: 'component-a',
+          accepted_paths: ['source.go'],
+          ignored_paths: [],
+          status: 'promoted',
+        },
+      });
+      expect(promotionByComponent.get('component-c')).toMatchObject({
+        baseline_commit: fixture.secondWorkItem.baseline_commit,
+        accepted_paths: ['second.go'],
+        ignored_paths: [],
+        rejected_paths: [],
+        validation: {status: 0, stderr: ''},
+        checkpoint: {
+          baseline_commit: fixture.secondWorkItem.baseline_commit,
+          component_id: 'component-c',
+          accepted_paths: ['second.go'],
+          ignored_paths: [],
+          status: 'promoted',
+        },
       });
       expect(git(fixture.root, ['status', '--porcelain'])).toBe('');
       expect(git(fixture.root, ['rev-parse', 'HEAD'])).not.toBe(fixture.workItem.baseline_commit);
-      expect(git(fixture.root, ['diff', '--name-only', `${fixture.workItem.baseline_commit}..HEAD`])).toBe('source.go');
-      expect(git(fixture.root, ['diff', '--numstat', `${fixture.workItem.baseline_commit}..HEAD`])).toBe('1\t0\tsource.go');
+      expect(git(fixture.root, ['diff', '--name-only', `${fixture.workItem.baseline_commit}..HEAD`])).toBe('second.go\nsource.go');
+      expect(git(fixture.root, ['diff', '--numstat', `${fixture.workItem.baseline_commit}..HEAD`])).toBe('1\t0\tsecond.go\n1\t0\tsource.go');
       expect(git(fixture.root, ['show', 'HEAD:source.go'])).toBe('package fixture\n\nfunc Source() {}\n// Implements: REQ-1');
+      expect(git(fixture.root, ['show', 'HEAD:second.go'])).toBe('package fixture\n\nfunc Second() {}\n// Documents: REQ-2');
+      expect(git(fixture.root, ['show', 'HEAD:reused.go'])).toBe('package fixture\n\nfunc Reused() {}');
       const savedConfigPath = path.join(fixture.output, 'checklist-materialized-config.json');
       const savedCheckpointPath = path.join(fixture.output, 'checklist-traces-light-frontier-checkpoint.json');
       fs.writeFileSync(savedConfigPath, canonicalJson(config) + '\n', {encoding: 'utf8', mode: 0o600});
@@ -336,7 +452,7 @@ describe('production traces-light continuation graph', () => {
       expect(restoredCheckpoint.graphSemanticDigest).toBe(compileClaimPlan(restoredConfig).expansionPlan.graphSemanticDigest);
       fs.writeFileSync(fixture.checklistCalls, '', 'utf8');
       const freshEngine = new StateMachineExecutionEngine(fixture.root);
-      const resumed = await executeChecklistContinuationEngine(freshEngine, restoredConfig, 120000, ['component-a'], restoredCheckpoint);
+      const resumed = await executeChecklistContinuationEngine(freshEngine, restoredConfig, 120000, ['component-a', 'component-c'], restoredCheckpoint);
       expect(resumed.paused).toBe(false);
       expect(resumed.checkpoint.sessionId).toBe(restoredCheckpoint.sessionId);
       expect(resumed.checkpoint.graphSemanticDigest).toBe(restoredCheckpoint.graphSemanticDigest);
@@ -353,30 +469,30 @@ describe('production traces-light continuation graph', () => {
         checkpoint: resumed.checkpoint,
         paused: false,
         resumed: true,
-        retainedCatalogComponentIds: ['component-a', 'component-b'],
-        affectedComponentIds: ['component-a'],
+        retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c'],
+        affectedComponentIds: ['component-a', 'component-c'],
       });
       expect(resumedProgress.operational.catalog_coverage).toMatchObject({
         known: true,
-        known_count: 2,
-        affected_count: 1,
+        known_count: 3,
+        affected_count: 2,
         reused_count: 1,
         unexpanded_count: 0,
       });
       expect(resumedProgress.operational.catalog_coverage.items).toEqual(
         pausedProgress.operational.catalog_coverage.items,
       );
-      expect(resumedProgress.operational.components.items).toHaveLength(1);
-      expect(resumedProgress.operational.components.items[0].id).toBe('component-a');
+      expect(resumedProgress.operational.components.items).toHaveLength(2);
+      expect(resumedProgress.operational.components.items.map(item => item.id).sort()).toEqual(['component-a', 'component-c']);
       const resumedRendered = renderNativeChecklistProgress(resumedProgress);
       expect(resumedRendered.text).toContain(
-        'catalog coverage=known:2 affected:1 reused:1 unexpanded:0',
+        'catalog coverage=known:3 affected:2 reused:1 unexpanded:0',
       );
       expect(resumedRendered.text).toContain('paused=false resumed=true');
       expect(resumedRendered.html).toContain(
-        'catalog coverage: known=2, affected=1, reused=1, unexpanded=0',
+        'catalog coverage: known=3, affected=2, reused=1, unexpanded=0',
       );
-      expect(ai).toHaveBeenCalledTimes(1);
+      expect(ai).toHaveBeenCalledTimes(2);
       const resumeCalls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line).args as string[]);
       expect(resumeCalls.map(args => args.slice(0, 2))).toEqual([
         ['checklist', 'show'],
@@ -390,10 +506,10 @@ describe('production traces-light continuation graph', () => {
       fs.writeFileSync(fixture.checklistCalls, '', 'utf8');
       const tamperedEngine = new StateMachineExecutionEngine(fixture.root);
       const resumeGraphSpy = jest.spyOn(tamperedEngine, 'resumeGraphCheckpoint');
-      await expect(executeChecklistContinuationEngine(tamperedEngine, restoredConfig, 120000, ['component-a'], tampered))
+      await expect(executeChecklistContinuationEngine(tamperedEngine, restoredConfig, 120000, ['component-a', 'component-c'], tampered))
         .rejects.toThrow(/resume checkpoint is invalid/i);
       expect(resumeGraphSpy).not.toHaveBeenCalled();
-      expect(ai).toHaveBeenCalledTimes(1);
+      expect(ai).toHaveBeenCalledTimes(2);
       expect(fs.readFileSync(fixture.checklistCalls, 'utf8')).toBe('');
       resumeGraphSpy.mockRestore();
     } finally {
@@ -402,7 +518,7 @@ describe('production traces-light continuation graph', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      if (testCheckout) {
+      for (const testCheckout of testCheckouts) {
         const worktree = (await worktreeManager.listWorktrees()).find(entry => entry.path === testCheckout || entry.metadata.worktree_path === testCheckout);
         if (worktree) await worktreeManager.removeWorktree(worktree.id);
       }
@@ -443,7 +559,7 @@ describe('production traces-light continuation graph', () => {
       process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
       process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
       process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
-        components: [fixture.workItem],
+        components: [operationalWorkItem(fixture.workItem, ['source.go'], ['source.go:1 missing Implements link for REQ-1'])],
         full_components: [fixture.workItem],
         affected_component_ids: ['component-a'],
         reused_component_ids: [],
@@ -507,7 +623,7 @@ describe('production traces-light continuation graph', () => {
       process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
       process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
       process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
-        components: [fixture.workItem],
+        components: [operationalWorkItem(fixture.workItem, ['source.go'], ['source.go:1 missing Implements link for REQ-1'])],
         full_components: [fixture.workItem],
         affected_component_ids: ['component-a'],
         reused_component_ids: [],

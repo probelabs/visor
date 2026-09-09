@@ -655,6 +655,35 @@ describe('native onboarding runner boundaries', () => {
     await expect(loadConfig(profile as any, {strict: true})).resolves.toBeDefined();
   });
 
+  it('reuses the original strict checklist snapshot schema and a portable live receipt', () => {
+    const original = yaml.load(fs.readFileSync(
+      path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-checklist-onboarding.yaml'),
+      'utf8',
+    )) as any;
+    const continuation = yaml.load(fs.readFileSync(
+      path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/visor-checklist-continuation.yaml'),
+      'utf8',
+    )) as any;
+    const originalSchema = original.claim_types['proof.checklist.snapshot@1'].schema;
+    expect(continuation.claim_types['native.continuation.checklist_snapshot@1'].schema).toEqual(originalSchema);
+    expect(continuation.subgraphs['continuation-project'].checks['checklist-continuation-snapshot'].schema)
+      .toEqual(originalSchema);
+
+    const fixturePath = path.resolve(__dirname, '../fixtures/native-onboarding/checklist-show-onboard-v1.json');
+    const fixtureBytes = fs.readFileSync(fixturePath);
+    expect(fixtureBytes.byteLength).toBe(8155);
+    expect(createHash('sha256').update(fixtureBytes).digest('hex'))
+      .toBe('9b465976e8688011011ceb70d6c0c18907cbacfc4a8bc0c58f2e95f3cf23b4b2');
+    expect(JSON.parse(fixtureBytes.toString('utf8'))).toMatchObject({
+      schema_version: 'proof.checklist.show.v1',
+      checklist: 'onboard_v1',
+      active: true,
+      new_project: true,
+      steps_total: 15,
+      eligible_step_ids: ['traces-light'],
+    });
+  });
+
   it('loads a retained checklist checkpoint from its sibling exact materialized config', async () => {
     const checkpointRoot = path.join(root, 'retained-checklist-prefix');
     fs.mkdirSync(checkpointRoot, {recursive: true});
