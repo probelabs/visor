@@ -118,8 +118,8 @@ function runnerEnv(fixture: Fixture): NodeJS.ProcessEnv {
   };
 }
 
-function runRunner(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume', extraArgs: string[] = []): ReturnType<typeof spawnSync> {
-  const result = spawnSync(process.execPath, [
+function runRunnerResult(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume', extraArgs: string[] = []): ReturnType<typeof spawnSync> {
+  return spawnSync(process.execPath, [
     '-r', 'ts-node/register/transpile-only', RUNNER, mode,
     '--subject-root', fixture.subject,
     '--original-root', fixture.original,
@@ -133,6 +133,10 @@ function runRunner(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume', extra
     timeout: 180_000,
     maxBuffer: 32 * 1024 * 1024,
   });
+}
+
+function runRunner(fixture: Fixture, mode: 'prepare' | 'pause' | 'resume', extraArgs: string[] = []): ReturnType<typeof spawnSync> {
+  const result = runRunnerResult(fixture, mode, extraArgs);
   if (result.status !== 0) {
     throw new Error(`${mode} failed with exit ${result.status}\nstdout:\n${result.stdout || ''}\nstderr:\n${result.stderr || ''}`);
   }
@@ -344,6 +348,21 @@ describe('native Milestone B profile wiring', () => {
   });
 });
 
+describe('native Milestone B focus argument policy', () => {
+  it.each([
+    ['unsorted', 'B,A', /sorted and unique/],
+    ['duplicate', 'A,A', /sorted and unique/],
+    ['empty entry', 'A,,B', /empty requirement IDs/],
+    ['whitespace-bearing ID', 'A,not valid', /empty requirement IDs/],
+  ])('rejects %s focus IDs before touching a subject', (_label, value, expected) => {
+    const result = spawnSync(process.execPath, [
+      '-r', 'ts-node/register/transpile-only', RUNNER, 'prepare', '--focus-ids', value,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout || ''}${result.stderr || ''}`).toMatch(expected);
+  });
+});
+
 describeNative('native Milestone B component/spec progression', () => {
   jest.setTimeout(240_000);
 
@@ -353,5 +372,81 @@ describeNative('native Milestone B component/spec progression', () => {
 
   it('accepts a natural single-component catalog with the same runner path', () => {
     runFlow(1);
+  });
+
+  it('focuses one requested requirement while retaining and validating the full catalog', () => {
+    const fixture = createFixture(2);
+    try {
+      const catalog = JSON.parse(proof(fixture.subject, ['req', 'list', '--format', 'json'])) as ProofRow[];
+      const focusId = [...catalog.map(row => row.id)].sort()[0];
+      const unselected = catalog.filter(row => row.id !== focusId);
+      expect(focusId).toBeTruthy();
+      expect(unselected.length).toBeGreaterThan(0);
+
+      runRunner(fixture, 'prepare', ['--focus-ids', focusId]);
+      const preparedCatalog = json<ProofRow[]>(path.join(fixture.output, 'prepare', 'catalog.json'));
+      const preparedSummary = json<any>(path.join(fixture.output, 'prepare', 'summary.json'));
+      expect(preparedCatalog.map(row => row.id).sort()).toEqual(catalog.map(row => row.id).sort());
+      expect(preparedSummary).toMatchObject({
+        catalog_item_count: catalog.length,
+        item_count: 1,
+        focus_ids: [focusId],
+      });
+      expect(preparedSummary.items.map((item: any) => item.id)).toEqual([focusId]);
+      expect(fs.existsSync(path.join(fixture.output, 'prepare', 'items', focusId, 'req-show.json'))).toBe(true);
+      for (const row of unselected) {
+        expect(fs.existsSync(path.join(fixture.output, 'prepare', 'items', row.id, 'req-show.json'))).toBe(false);
+      }
+
+      runRunner(fixture, 'pause', ['--hold-id', focusId]);
+      const paused = json<any>(path.join(fixture.output, 'paused', 'checkpoint.json'));
+      assertNativeItemClaims(paused, [catalog.find(row => row.id === focusId)!], fixture);
+      assertCandidatePackets(paused, [], fixture);
+      const pausedIds = new Set(
+        (paused.events || [])
+          .filter((event: any) => event?.scope?.some((part: any) => part.key === focusId))
+          .map((event: any) => event.scope.find((part: any) => part.key === focusId)?.key),
+      );
+      expect(pausedIds).toEqual(new Set([focusId]));
+
+      runRunner(fixture, 'resume');
+      const resumed = json<any>(path.join(fixture.output, 'resumed', 'checkpoint.json'));
+      assertNativeItemClaims(resumed, [catalog.find(row => row.id === focusId)!], fixture);
+      assertCandidatePackets(resumed, [catalog.find(row => row.id === focusId)!], fixture);
+      expect((resumed.events || []).filter((event: any) =>
+        event?.claim === 'native.spec.item@1' && event.payload?.id !== focusId,
+      )).toHaveLength(0);
+    } finally {
+      fs.rmSync(fixture.parent, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an absent focus ID and a focused Proof hash change', () => {
+    const absentFixture = createFixture(2);
+    try {
+      const catalog = JSON.parse(proof(absentFixture.subject, ['req', 'list', '--format', 'json'])) as ProofRow[];
+      const existingIds = catalog.map(row => row.id).sort();
+      const absentId = 'ZZZ-REQ-NOT-IN-CATALOG';
+      const result = runRunnerResult(absentFixture, 'prepare', ['--focus-ids', [...existingIds, absentId].sort().join(',')]);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout || ''}${result.stderr || ''}`).toContain(`requested requirement ${absentId}`);
+    } finally {
+      fs.rmSync(absentFixture.parent, { recursive: true, force: true });
+    }
+
+    const hashFixture = createFixture(2);
+    try {
+      const catalog = JSON.parse(proof(hashFixture.subject, ['req', 'list', '--format', 'json'])) as ProofRow[];
+      const focus = [...catalog.map(row => row.id)].sort()[0];
+      runRunner(hashFixture, 'prepare', ['--focus-ids', focus]);
+      const focused = catalog.find(row => row.id === focus);
+      if (!focused) throw new Error(`fixture did not produce ${focus}`);
+      fs.appendFileSync(path.join(hashFixture.subject, focused.file_path), '\n', 'utf8');
+      const result = runRunnerResult(hashFixture, 'pause', ['--hold-id', focus]);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout || ''}${result.stderr || ''}`).toContain(`Proof input changed before pause for ${focus}`);
+    } finally {
+      fs.rmSync(hashFixture.parent, { recursive: true, force: true });
+    }
   });
 });

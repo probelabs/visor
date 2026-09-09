@@ -148,14 +148,35 @@ subgraphs:
           const proof = process.argv[2];
           const component = {{ outputs['discover-native-components'] | json }};
           const componentId = component.id;
+          const focusRaw = process.env.VISOR_NATIVE_B_FOCUS_IDS;
+          const parseFocusIds = raw => {
+            if (raw === undefined) return undefined;
+            const ids = raw.split(',').map(value => value.trim());
+            if (!ids.length || ids.some(id => !id || /\s/.test(id))) throw new Error('VISOR_NATIVE_B_FOCUS_IDS contains an empty or malformed requirement ID');
+            const sorted = [...ids].sort();
+            if (new Set(ids).size !== ids.length || ids.some((id, index) => id !== sorted[index])) throw new Error('VISOR_NATIVE_B_FOCUS_IDS must be sorted and unique');
+            return ids;
+          };
+          const focusIds = parseFocusIds(focusRaw);
           const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], { encoding: 'utf8' }));
           if (!Array.isArray(rows) || !rows.length) throw new Error('Proof catalog has no native requirements');
+          const ids = new Set();
           for (const [index, row] of rows.entries()) {
             if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.component !== 'string' || !row.component || typeof row.id !== 'string' || !row.id || typeof row.file_path !== 'string' || !row.file_path) {
               throw new Error(`Proof catalog row ${index} is missing component, id, or file_path`);
             }
+            if (ids.has(row.id)) throw new Error(`Proof catalog contains duplicate requirement id ${row.id}`);
+            ids.add(row.id);
           }
-          const items = rows.filter(row => row && row.component === componentId).map(row => {
+          const byId = new Map(rows.map(row => [row.id, row]));
+          const selectedRows = focusIds === undefined ? rows : focusIds.map(id => {
+            const row = byId.get(id);
+            if (!row) throw new Error(`VISOR_NATIVE_B_FOCUS_IDS requested absent requirement ${id}`);
+            return row;
+          });
+          if (!selectedRows.length) throw new Error('focus selection resolved no native requirements');
+          if (new Set(selectedRows.map(row => row.id)).size !== selectedRows.length) throw new Error('focus selection resolved an ambiguous duplicate catalog identity');
+          const items = selectedRows.filter(row => row && row.component === componentId).map(row => {
             const reqShow = JSON.parse(execFileSync(proof, ['req', 'show', row.id, '--with', 'file', '--format', 'json'], { encoding: 'utf8' }));
             const requirement = reqShow && reqShow.requirement;
             if (!requirement || requirement.id !== row.id || requirement.component !== componentId || reqShow.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the catalog row`);
@@ -191,10 +212,16 @@ subgraphs:
           set -eu
           node - "$PROOF_BIN" <<'NODE'
           const { execFileSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const path = require('node:path');
           const proof = process.argv[2];
           const baselinePath = process.env.VISOR_NATIVE_B_PREPARE_SUMMARY;
           if (!baselinePath) throw new Error('runner did not provide its prepare catalog summary');
-          const baseline = JSON.parse(require('node:fs').readFileSync(baselinePath, 'utf8'));
+          const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+          const baselineCatalogPath = path.join(path.dirname(baselinePath), 'catalog.json');
+          if (!fs.existsSync(baselineCatalogPath)) throw new Error('runner prepare catalog is missing');
+          const baselineCatalog = JSON.parse(fs.readFileSync(baselineCatalogPath, 'utf8'));
+          if (!Array.isArray(baselineCatalog) || !baselineCatalog.length) throw new Error('runner prepare catalog has no complete native item set');
           const graphScope = {{ scope | json }};
           if (!Array.isArray(graphScope) || graphScope.length !== 1) {
             throw new Error('wait-for-native-items requires exactly one component scope');
@@ -222,11 +249,11 @@ subgraphs:
           }
           if (!Array.isArray(baseline.items) || !baseline.items.length) throw new Error('runner prepare catalog summary has no complete native item set');
           const allExpectedIdsSeen = new Set();
-          const allExpectedIdentity = baseline.items.map((item, index) => {
-            if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.id !== 'string' || !item.id || typeof item.component !== 'string' || !item.component || typeof item.file_path !== 'string' || !item.file_path || typeof item.file_hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(item.file_hash)) {
-              throw new Error(`prepared Proof summary contains an incomplete global item at ${index}`);
+          const allExpectedIdentity = baselineCatalog.map((item, index) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.id !== 'string' || !item.id || typeof item.component !== 'string' || !item.component || typeof item.file_path !== 'string' || !item.file_path) {
+              throw new Error(`prepared Proof catalog contains an incomplete global item at ${index}`);
             }
-            if (allExpectedIdsSeen.has(item.id)) throw new Error(`prepared Proof summary contains duplicate global requirement id ${item.id}`);
+            if (allExpectedIdsSeen.has(item.id)) throw new Error(`prepared Proof catalog contains duplicate global requirement id ${item.id}`);
             allExpectedIdsSeen.add(item.id);
             return `${item.id}\u0000${item.component}\u0000${item.file_path}`;
           }).sort();
@@ -245,14 +272,18 @@ subgraphs:
           if (!expected || !Array.isArray(expected.items) || !expected.items.length) throw new Error('expanded Proof catalog is empty');
           const listed = run(['req', 'list', '--format', 'json']);
           if (listed.exit_code !== 0 || !Array.isArray(listed.value)) throw new Error('Proof req list failed at component fan-in');
+          const currentIdsSeen = new Set();
           for (const [index, row] of listed.value.entries()) {
             if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.component !== 'string' || !row.component || typeof row.id !== 'string' || !row.id || typeof row.file_path !== 'string' || !row.file_path) {
               throw new Error(`Proof catalog row ${index} is missing component, id, or file_path at fan-in`);
             }
+            if (currentIdsSeen.has(row.id)) throw new Error(`Proof catalog contains duplicate requirement id ${row.id} at fan-in`);
+            currentIdsSeen.add(row.id);
           }
           const currentIdentity = listed.value.map(row => `${row.id}\u0000${row.component}\u0000${row.file_path}`).sort();
           if (JSON.stringify(allExpectedIdentity) !== JSON.stringify(currentIdentity)) throw new Error('Proof requirement ID/component/path set changed before fan-in');
-          const currentItems = listed.value.filter(row => row && row.component === componentId);
+          const expectedItemIds = new Set(expected.items.map(item => item.id));
+          const currentItems = listed.value.filter(row => row && row.component === componentId && expectedItemIds.has(row.id));
           const expectedIds = expected.items.map(item => item.id).sort();
           const currentIds = currentItems.map(item => item.id).sort();
           if (JSON.stringify(expectedIds) !== JSON.stringify(currentIds)) throw new Error('Proof requirement ID set changed before fan-in');
@@ -326,6 +357,21 @@ subgraphs:
           unresolved questions instead of expanding scope.  Return a concise
           final candidate response, aiming for about three minutes; this is a
           timebox hint, not a fixed call quota or a successful-call gate.
+
+          Review substance, not link presence.  Assess behavioral fidelity:
+          does the requirement describe the behavior the implementation must
+          preserve, including meaningful failure, boundary, and negative
+          states?  Ground every finding in the supplied Proof snapshot or a
+          targeted read of the authorized source, tests, vars, annotations,
+          or trace context; label missing evidence instead of filling gaps
+          with speculation.  Separate honest inferred intent from what the
+          requirement actually states, and flag when the inferred intent is
+          not supported by the recorded evidence.  For every parent/child or
+          `satisfies` relationship visible in `spec_graph`, assess semantic
+          parent fit: the child must refine the parent at its own level rather
+          than merely repeat it or rely on a nonempty link.  Do not call a
+          requirement faithful just because it has a trace, a parent, or a
+          populated field.
 
           Keep implementation behavior unchanged.  Check applicability to the
           parser slice and leave unrelated DeFi obligations deferred.  Do not
@@ -407,6 +453,16 @@ checks:
       node - "$PROOF_BIN" <<'NODE'
       const { execFileSync } = require('node:child_process');
       const proof = process.argv[2];
+      const focusRaw = process.env.VISOR_NATIVE_B_FOCUS_IDS;
+      const parseFocusIds = raw => {
+        if (raw === undefined) return undefined;
+        const ids = raw.split(',').map(value => value.trim());
+        if (!ids.length || ids.some(id => !id || /\s/.test(id))) throw new Error('VISOR_NATIVE_B_FOCUS_IDS contains an empty or malformed requirement ID');
+        const sorted = [...ids].sort();
+        if (new Set(ids).size !== ids.length || ids.some((id, index) => id !== sorted[index])) throw new Error('VISOR_NATIVE_B_FOCUS_IDS must be sorted and unique');
+        return ids;
+      };
+      const focusIds = parseFocusIds(focusRaw);
       const rows = JSON.parse(execFileSync(proof, ['req', 'list', '--format', 'json'], { encoding: 'utf8' }));
       const role = {{ outputs['role-spec-review'] | json }};
       if (!Array.isArray(rows) || !rows.length) throw new Error('Proof catalog has no native requirements');
@@ -418,7 +474,15 @@ checks:
         if (ids.has(row.id)) throw new Error(`Proof catalog contains duplicate requirement id ${row.id}`);
         ids.add(row.id);
       }
-      const components = [...new Set(rows.map(row => row.component))]
+      const byId = new Map(rows.map(row => [row.id, row]));
+      const selectedRows = focusIds === undefined ? rows : focusIds.map(id => {
+        const row = byId.get(id);
+        if (!row) throw new Error(`VISOR_NATIVE_B_FOCUS_IDS requested absent requirement ${id}`);
+        return row;
+      });
+      if (!selectedRows.length) throw new Error('focus selection resolved no native requirements');
+      if (new Set(selectedRows.map(row => row.id)).size !== selectedRows.length) throw new Error('focus selection resolved an ambiguous duplicate catalog identity');
+      const components = [...new Set(selectedRows.map(row => row.component))]
         .sort((left, right) => left.localeCompare(right))
         .map(id => ({ id, spec_review_role: role }));
       if (!components.length) throw new Error('Proof catalog has no native components');

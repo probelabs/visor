@@ -18,6 +18,8 @@ type Json = Record<string, unknown>;
 type ProofRow = { id: string; component: string; file_path: string } & Json;
 type CommandResult = { status: number; stdout: string; stderr: string };
 
+const FOCUS_IDS_ENV = 'VISOR_NATIVE_B_FOCUS_IDS';
+
 const CONFIG_PATH = path.resolve(__dirname, 'visor-milestone-b.yaml');
 
 const prInfo: PRInfo = {
@@ -45,6 +47,23 @@ function parseArgs(argv: string[]): { mode: string; values: Record<string, strin
     i += 1;
   }
   return { mode, values };
+}
+
+/**
+ * Focus IDs are a transport-level selection, not a second catalog.  Keep the
+ * input closed and deterministic so a generated scope can never be ambiguous.
+ */
+function parseFocusIds(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const ids = value.split(',').map(item => item.trim());
+  if (!ids.length || ids.some(id => !id || /\s/.test(id))) {
+    throw new Error('--focus-ids must contain comma-separated non-empty requirement IDs');
+  }
+  const sorted = [...ids].sort();
+  if (new Set(ids).size !== ids.length || ids.some((id, index) => id !== sorted[index])) {
+    throw new Error('--focus-ids must be sorted and unique');
+  }
+  return ids;
 }
 
 function required(values: Record<string, string>, key: string): string {
@@ -201,6 +220,24 @@ function nativeRows(value: Json | ProofRow[]): ProofRow[] {
   return rows.sort((left, right) => left.component.localeCompare(right.component) || left.id.localeCompare(right.id));
 }
 
+function resolveFocusRows(rows: ProofRow[], focusIds: readonly string[] | undefined): ProofRow[] {
+  if (focusIds === undefined) return rows;
+  const byId = new Map<string, ProofRow>();
+  for (const row of rows) {
+    if (byId.has(row.id)) throw new Error(`Proof catalog contains ambiguous requirement identity ${row.id}`);
+    byId.set(row.id, row);
+  }
+  const selected = focusIds.map(id => {
+    const row = byId.get(id);
+    if (!row) throw new Error(`--focus-ids requested requirement ${id}, but it is absent from the Proof catalog`);
+    return row;
+  });
+  if (new Set(selected.map(row => row.id)).size !== selected.length) {
+    throw new Error('--focus-ids resolved an ambiguous duplicate catalog identity');
+  }
+  return rows.filter(row => byId.has(row.id) && focusIds.includes(row.id));
+}
+
 function proofFileHash(value: Json, id: string): string {
   const hash = (value._computed as Json | undefined)?.file_hash;
   if (typeof hash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(hash)) {
@@ -219,18 +256,21 @@ function verifyCurrentProofInputs(
   proof: string,
   subject: string,
   output: string,
-  rows: ProofRow[],
+  catalogRows: ProofRow[],
+  selectedRows: ProofRow[],
   phase: string,
 ): Record<string, string> {
   const currentList = runProof(proof, subject, output, `${phase}-catalog`, ['req', 'list', '--format', 'json']);
   const currentRows = nativeRows(parseJson(currentList, 'Proof req list') as ProofRow[]);
-  const expectedIds = rows.map(row => row.id).sort();
+  const expectedIds = catalogRows.map(row => row.id).sort();
   const currentIds = currentRows.map(row => row.id).sort();
   if (JSON.stringify(expectedIds) !== JSON.stringify(currentIds)) throw new Error(`Proof requirement ID set changed during ${phase}`);
   const hashes: Record<string, string> = {};
-  for (const row of rows) {
+  for (const row of catalogRows) {
     const currentRow = currentRows.find(item => item.id === row.id);
     if (!currentRow || currentRow.component !== row.component || currentRow.file_path !== row.file_path) throw new Error(`Proof requirement component/path changed during ${phase} for ${row.id}`);
+  }
+  for (const row of selectedRows) {
     const shown = runProof(proof, subject, output, `${phase}-${row.id}`, ['req', 'show', row.id, '--with', 'file', '--format', 'json']);
     const value = parseJson(shown, `Proof req show ${row.id}`) as Json;
     const requirement = value.requirement as Json | undefined;
@@ -240,10 +280,42 @@ function verifyCurrentProofInputs(
   return hashes;
 }
 
-function baselineRows(output: string): ProofRow[] {
+function baselineCatalogRows(output: string): ProofRow[] {
   const file = path.join(output, 'prepare', 'catalog.json');
   if (!fs.existsSync(file)) throw new Error(`missing prepare catalog: ${file}`);
   return nativeRows(JSON.parse(fs.readFileSync(file, 'utf8')) as Json | ProofRow[]);
+}
+
+function baselineSelectedRows(output: string): ProofRow[] {
+  const file = path.join(output, 'prepare', 'summary.json');
+  if (!fs.existsSync(file)) throw new Error(`missing prepare summary: ${file}`);
+  const summary = JSON.parse(fs.readFileSync(file, 'utf8')) as Json;
+  if (!Array.isArray(summary.items)) throw new Error('prepare summary has no selected native item set');
+  return nativeRows(summary.items as ProofRow[]);
+}
+
+function setFocusIdsTransport(focusIds: readonly string[] | undefined): void {
+  if (focusIds === undefined) {
+    delete process.env[FOCUS_IDS_ENV];
+  } else {
+    process.env[FOCUS_IDS_ENV] = focusIds.join(',');
+  }
+}
+
+function preparedFocusIds(output: string, selectedRows: readonly ProofRow[]): string[] | undefined {
+  const file = path.join(output, 'prepare', 'summary.json');
+  if (!fs.existsSync(file)) throw new Error(`missing prepare summary: ${file}`);
+  const summary = JSON.parse(fs.readFileSync(file, 'utf8')) as Json;
+  if (summary.focus_ids === null || summary.focus_ids === undefined) return undefined;
+  if (!Array.isArray(summary.focus_ids) || summary.focus_ids.some(id => typeof id !== 'string')) {
+    throw new Error('prepare summary has malformed focus_ids');
+  }
+  const ids = parseFocusIds(summary.focus_ids.join(','));
+  const selectedIds = selectedRows.map(row => row.id).sort();
+  if (!ids || JSON.stringify(ids) !== JSON.stringify(selectedIds)) {
+    throw new Error('prepare summary focus_ids do not match its selected native items');
+  }
+  return ids;
 }
 
 function zeroModelTestEnabled(): boolean {
@@ -314,7 +386,7 @@ async function configForSubject(subject: string, output: string) {
   return { config, engine: new StateMachineExecutionEngine(subject) };
 }
 
-async function prepare(subject: string, proof: string, output: string): Promise<void> {
+async function prepare(subject: string, proof: string, output: string, focusIds?: readonly string[]): Promise<void> {
   const config = await loadConfig(CONFIG_PATH, { strict: true });
   const claimPlan = compileClaimPlan(config);
   const validatedClaimCounts: Record<string, number> = {};
@@ -324,9 +396,13 @@ async function prepare(subject: string, proof: string, output: string): Promise<
   writeText(path.join(output, 'prepare', 'role-spec-review.txt'), role.stdout);
 
   const list = runProof(proof, subject, output, 'prepare', ['req', 'list', '--format', 'json']);
-  const rows = nativeRows(parseJson(list, 'Proof req list') as ProofRow[]);
-  writeJson(path.join(output, 'prepare', 'catalog.json'), rows);
+  const catalogRows = nativeRows(parseJson(list, 'Proof req list') as ProofRow[]);
+  // Keep the full current Proof catalog on disk, even for a focused run.  The
+  // focused set is resolved only after every catalog identity has been checked.
+  const rows = resolveFocusRows(catalogRows, focusIds);
+  writeJson(path.join(output, 'prepare', 'catalog.json'), catalogRows);
   const componentIds = [...new Set(rows.map(row => row.component))].sort((left, right) => left.localeCompare(right));
+  if (!componentIds.length) throw new Error('focus selection resolved no native components');
   const componentClaims = componentIds.map(id => ({ id, spec_review_role: role.stdout }));
   validatePreparedClaim(claimPlan, 'native.component.catalog@1', { components: componentClaims }, validatedClaimCounts);
   for (const component of componentClaims) {
@@ -388,18 +464,23 @@ async function prepare(subject: string, proof: string, output: string): Promise<
     role_exit: role.status,
     catalog_exit: list.status,
     proof_bin: proof,
+    catalog_item_count: catalogRows.length,
+    catalog_item_ids: catalogRows.map(item => item.id),
+    focus_ids: focusIds === undefined ? null : [...focusIds],
     preflight: {
       status: 'validated',
       claim_types: Object.keys(validatedClaimCounts).sort(),
       validator_counts: validatedClaimCounts,
       component_ids: identity.component_ids,
       item_ids: identity.item_ids,
+      catalog_item_ids: catalogRows.map(item => item.id),
+      focus_ids: focusIds === undefined ? null : [...focusIds],
       graph_semantic_digest: claimPlan.expansionPlan.graphSemanticDigest,
       digest: preparedIdentityDigest(identity),
     },
     note: 'Native state is collected from Proof; this is not an admission receipt.',
   });
-  console.log(JSON.stringify({ mode: 'prepare', status: 'ready-for-review', item_count: rows.length, output }, null, 2));
+  console.log(JSON.stringify({ mode: 'prepare', status: 'ready-for-review', item_count: rows.length, catalog_item_count: catalogRows.length, focus_ids: focusIds || null, output }, null, 2));
 }
 
 function dispatchGate(mode: 'pause' | 'resume', holdId: string, observations: Json[]): GeneratedDispatchGate {
@@ -443,13 +524,14 @@ function assertUnchangedSiblingGenerations(before: any, after: any, heldId: stri
 }
 
 async function pause(subject: string, proof: string, output: string, holdId?: string): Promise<void> {
-  const rows = baselineRows(output);
+  const catalogRows = baselineCatalogRows(output);
+  const rows = baselineSelectedRows(output);
   const held = holdId || rows[0].id;
   if (!rows.some(row => row.id === held)) throw new Error(`--hold-id ${held} is not a prepared native requirement`);
   if (fs.existsSync(path.join(output, 'paused', 'checkpoint.json')) || fs.existsSync(path.join(output, 'commands', 'pause-catalog'))) {
     throw new Error('pause output already exists; use a fresh run output');
   }
-  const pauseHashes = verifyCurrentProofInputs(proof, subject, output, rows, 'pause');
+  const pauseHashes = verifyCurrentProofInputs(proof, subject, output, catalogRows, rows, 'pause');
   for (const row of rows) {
     const baseline = JSON.parse(fs.readFileSync(path.join(output, 'prepare', 'items', row.id, 'req-show.json'), 'utf8')) as Json;
     if (pauseHashes[row.id] !== proofFileHash(baseline.requirement as Json, row.id)) throw new Error(`Proof input changed before pause for ${row.id}`);
@@ -524,10 +606,11 @@ async function resume(subject: string, proof: string, output: string): Promise<v
   const pausedSummary = JSON.parse(fs.readFileSync(pausedSummaryPath, 'utf8')) as Json;
   if (pausedSummary.pid === process.pid) throw new Error('resume must run in a fresh OS process');
   const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
-  const rows = baselineRows(output);
+  const catalogRows = baselineCatalogRows(output);
+  const rows = baselineSelectedRows(output);
   const heldId = String(pausedSummary.held_scope || '');
   if (!rows.some(row => row.id === heldId)) throw new Error('paused held scope is not present in the prepared catalog');
-  const currentHashes = verifyCurrentProofInputs(proof, subject, output, rows, 'resume');
+  const currentHashes = verifyCurrentProofInputs(proof, subject, output, catalogRows, rows, 'resume');
   const stale: Json[] = [];
   for (const row of rows) {
     const baseline = JSON.parse(fs.readFileSync(path.join(output, 'prepare', 'items', row.id, 'req-show.json'), 'utf8')) as Json;
@@ -610,6 +693,7 @@ async function resume(subject: string, proof: string, output: string): Promise<v
 
 async function main(): Promise<void> {
   const { mode, values } = parseArgs(process.argv.slice(2));
+  const requestedFocusIds = parseFocusIds(values['focus-ids']);
   const roots = assertRoots(required(values, 'subject-root'), required(values, 'original-root'), required(values, 'output'));
   diagnosticOutput = roots.output;
   const proof = proofExecutable(required(values, 'proof-bin'));
@@ -626,9 +710,21 @@ async function main(): Promise<void> {
   process.env.VISOR_TRACE_DIR = process.env.VISOR_TRACE_DIR || path.join(roots.output, 'traces');
   if (mode === 'prepare') {
     ensureFreshPrepareOutput(roots.output);
-    return prepare(roots.subject, proof, roots.output);
+    setFocusIdsTransport(requestedFocusIds);
+    return prepare(roots.subject, proof, roots.output, requestedFocusIds);
   }
   requireReadonlyCodexHome(roots.subject, roots.original, roots.output);
+  const selectedRows = baselineSelectedRows(roots.output);
+  const persistedFocusIds = preparedFocusIds(roots.output, selectedRows);
+  if (requestedFocusIds !== undefined) {
+    const expectedIds = selectedRows.map(row => row.id).sort();
+    if (JSON.stringify(requestedFocusIds) !== JSON.stringify(expectedIds)) {
+      throw new Error('--focus-ids does not match the prepared native selection');
+    }
+  }
+  // Pause/resume must replay the same focused graph that prepare resolved;
+  // callers cannot broaden or replace it between checkpoint processes.
+  setFocusIdsTransport(persistedFocusIds);
   const aiArtifacts = path.join(roots.output, 'ai');
   fs.mkdirSync(aiArtifacts, { recursive: true });
   process.env.VISOR_DEBUG_ARTIFACTS = aiArtifacts;
