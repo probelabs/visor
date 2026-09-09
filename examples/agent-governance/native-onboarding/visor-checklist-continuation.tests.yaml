@@ -198,6 +198,14 @@ tests:
             exactly: 1
           - logical_step: orphan_code_clean
             exactly: 1
+          - logical_step: l0_stakeholder_complete
+            exactly: 1
+          - logical_step: l1_system_complete
+            exactly: 1
+          - logical_step: l2_software_complete
+            exactly: 1
+          - logical_step: levels_connected
+            exactly: 1
           - logical_step: checklist-traces-light
             exactly: 1
         outputs:

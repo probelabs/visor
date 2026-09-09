@@ -75,18 +75,37 @@ claim_types:
               continuation_task: &continuation_task_schema
                 type: object
                 additionalProperties: false
-                required: [step_id, role, required_checks, orphan_code_clean]
                 properties:
-                  step_id: {const: traces-light}
-                  role: {const: onboard}
-                  required_checks: {const: [annotation_validity, orphan_code_clean]}
-                  orphan_code_clean:
-                    type: object
-                    additionalProperties: false
-                    required: [paths, details]
+                  step_id: {type: string, minLength: 1}
+                  role: {type: string, minLength: 1}
+                  required_checks: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+                  orphan_code_clean: {type: object}
+                  l2_software_complete: {type: object}
+                oneOf:
+                  - required: [step_id, role, required_checks, orphan_code_clean]
                     properties:
-                      paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
-                      details: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+                      step_id: {const: traces-light}
+                      role: {const: onboard}
+                      required_checks: {const: [annotation_validity, orphan_code_clean]}
+                      orphan_code_clean:
+                        type: object
+                        additionalProperties: false
+                        required: [paths, details]
+                        properties:
+                          paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+                          details: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+                  - required: [step_id, role, required_checks, l2_software_complete]
+                    properties:
+                      step_id: {const: skeleton}
+                      role: {const: onboard}
+                      required_checks: {const: [l0_stakeholder_complete, l1_system_complete, l2_software_complete, levels_connected]}
+                      l2_software_complete:
+                        type: object
+                        additionalProperties: false
+                        required: [paths, details]
+                        properties:
+                          paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+                          details: {type: array, minItems: 1, items: {type: string, minLength: 1}}
         full_components:
           type: array
           minItems: 0
@@ -426,9 +445,10 @@ subgraphs:
           variables and exact Implements:/Documents: links for the code
           contract or internal promise that the evidence establishes.  Never
           choose a merely nearby requirement.
-          The continuation_task contains existing Proof orphan findings for
-          this component. Repair only those component-owned traces-light
-          findings, then return one disposition for every supplied detail.
+          The continuation_task contains the exact current native findings for
+          this component and identifies the selected checklist policy. Repair
+          only those component-owned findings for that selected policy, then
+          return one disposition for every supplied detail.
           Emit unsupported_mapping only after checking both an existing fit and
           a legitimate evidence-grounded new requirement; keep the unresolved
           gap and its evidence visible when neither is possible.
@@ -638,6 +658,7 @@ subgraphs:
 
       annotation_validity:
         type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"'
         depends_on: [component-promotions-complete]
         timeout: 900000
         resource_group: proof-workspace-mutation
@@ -667,6 +688,7 @@ subgraphs:
 
       orphan_code_clean:
         type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"'
         depends_on: [annotation_validity]
         timeout: 900000
         resource_group: proof-workspace-mutation
@@ -694,8 +716,72 @@ subgraphs:
           process.stdout.write(JSON.stringify({status: run.status === 0 ? 'pass' : 'fail', check, events}));
           NODE
 
+      l0_stakeholder_complete:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
+        depends_on: [materialize-retained-catalog]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: l0_stakeholder_complete}
+        schema: {type: object}
+        exec: &skeleton_audit_exec |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          : "${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const path = require('node:path');
+          const {runProof} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          const proof = process.argv[2];
+          const check = process.env.NATIVE_CHECKLIST_AUDIT;
+          const run = runProof(proof, process.env.VISOR_WORKSPACE_MAIN_PROJECT, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, `continuation-audit-${check}`, ['audit', '--no-cache', '--check', check, '--format', 'json'], Number(process.env.REQUEST_TIMEOUT));
+          if (run.status !== 0) throw new Error(`Proof audit failed for ${check} with exit ${run.status}`);
+          const lines = String(run.stdout || '').split(/\r?\n/).filter(line => line.trim() !== '');
+          if (lines.length === 0) throw new Error(`Proof audit returned no records for ${check}`);
+          const events = lines.map(line => {
+            try { return JSON.parse(line); } catch { throw new Error(`Proof audit returned a non-JSONL record for ${check}`); }
+          });
+          const done = events.filter(event => event && typeof event === 'object' && !Array.isArray(event) && event.event === 'check_done');
+          if (done.length !== 1 || done[0].check !== check || done[0].stage !== 'spec' || done[0].status !== 'pass') {
+            throw new Error(`Proof audit did not provide exactly one passing spec check_done for ${check}`);
+          }
+          process.stdout.write(JSON.stringify({status: run.status, check, events}));
+          NODE
+
+      l1_system_complete:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
+        depends_on: [materialize-retained-catalog]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: l1_system_complete}
+        schema: {type: object}
+        exec: *skeleton_audit_exec
+
+      l2_software_complete:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
+        depends_on: [materialize-retained-catalog]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: l2_software_complete}
+        schema: {type: object}
+        exec: *skeleton_audit_exec
+
+      levels_connected:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
+        depends_on: [materialize-retained-catalog]
+        timeout: 900000
+        resource_group: proof-workspace-mutation
+        env: {NATIVE_CHECKLIST_AUDIT: levels_connected}
+        schema: {type: object}
+        exec: *skeleton_audit_exec
+
       checklist-traces-light:
         type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"'
         depends_on: [orphan_code_clean, checklist-continuation-snapshot]
         timeout: 120000
         resource_group: proof-workspace-mutation
@@ -710,6 +796,25 @@ subgraphs:
           const path = require('node:path');
           const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
           process.stdout.write(JSON.stringify(executeJournaledChecklistStep('traces-light', 'Confirmed current native trace links after retained component onboarding.', true)));
+          NODE
+
+      checklist-skeleton:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
+        depends_on: [l0_stakeholder_complete, l1_system_complete, l2_software_complete, levels_connected, checklist-continuation-snapshot]
+        timeout: 120000
+        resource_group: proof-workspace-mutation
+        schema: {type: object}
+        consumes:
+          - {claim: native.continuation.catalog@1, as: authority}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - <<'NODE'
+          const path = require('node:path');
+          const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          process.stdout.write(JSON.stringify(executeJournaledChecklistStep('skeleton', 'Confirmed the current native four-layer skeleton after retained component onboarding.', true)));
           NODE
 
 checks:

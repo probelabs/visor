@@ -122,6 +122,63 @@ function continuationSnapshot(): Record<string, unknown> {
   )) as Record<string, unknown>;
 }
 
+function skeletonContinuationSnapshot(): Record<string, unknown> {
+  const snapshot = continuationSnapshot();
+  const steps = (snapshot.steps as Array<Record<string, unknown>>).map(step => {
+    if (step.step_id === 'skeleton') {
+      const {confirmed_at: _confirmedAt, confirmed_by: _confirmedBy, note: _note, verify_result: _verifyResult, ...pending} = step;
+      return {...pending, eligible: true, stored_status: 'pending', effective_status: 'pending', unmet_requires: [], check_results: []};
+    }
+    if (step.step_id === 'traces-light') return {...step, eligible: false, unmet_requires: ['skeleton']};
+    return step;
+  });
+  const skeleton = steps.find(step => step.step_id === 'skeleton') as Record<string, unknown>;
+  return {
+    ...snapshot,
+    steps_pending: 13,
+    counts: {...(snapshot.counts as Record<string, number>), confirmed: 2, pending: 1, blocked: 12},
+    eligible_step_ids: ['skeleton'],
+    next: {
+      step_id: 'skeleton', title: skeleton.title, role: skeleton.role, stamp: skeleton.stamp,
+      scope: skeleton.scope, notes_required: skeleton.notes_required, requires: skeleton.requires,
+      required_checks: skeleton.required_checks,
+    },
+    steps,
+  };
+}
+
+function confirmedSkeletonContinuationSnapshot(): Record<string, unknown> {
+  const snapshot = skeletonContinuationSnapshot();
+  const steps = (snapshot.steps as Array<Record<string, unknown>>).map(step => step.step_id === 'skeleton'
+    ? {
+      ...step,
+      eligible: false,
+      stored_status: 'confirmed',
+      effective_status: 'confirmed',
+      check_results: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
+        .map(id => ({id, status: 'pass', at: '2026-09-09T06:02:00Z'})),
+    }
+    : step.step_id === 'traces-light'
+      ? {...step, eligible: true, unmet_requires: []}
+      : step);
+  return {
+    ...snapshot,
+    steps_pending: 12,
+    counts: {...(snapshot.counts as Record<string, number>), confirmed: 3, pending: 1, blocked: 11},
+    eligible_step_ids: ['traces-light'],
+    next: {
+      step_id: 'traces-light',
+      title: 'Trace links',
+      role: 'onboard',
+      stamp: 'confirm',
+      scope: 'package',
+      requires: ['skeleton'],
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+    },
+    steps,
+  };
+}
+
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8'}).trim();
 }
@@ -152,9 +209,13 @@ if (process.env.CONTINUATION_FIXTURE_CALL_LOG) fs.appendFileSync(process.env.CON
 const checklistSnapshot = () => {
   const snapshot = JSON.parse(process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT || '{}');
   const confirmed = process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE && fs.existsSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE) && JSON.parse(fs.readFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, 'utf8')).status === 'confirmed';
+  const completionStep = process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP || 'traces-light';
+  const completionChecks = completionStep === 'skeleton'
+    ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
+    : ['annotation_validity', 'orphan_code_clean'];
   if (!confirmed) return snapshot;
-  const steps = Array.isArray(snapshot.steps) ? snapshot.steps.map(step => step && step.step_id === 'traces-light'
-    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', scope_key: 'project-a', check_results: [{id: 'annotation_validity', status: 'pass', at: '2026-09-09T06:02:00Z'}, {id: 'orphan_code_clean', status: 'pass', at: '2026-09-09T06:02:00Z'}], verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}}
+  const steps = Array.isArray(snapshot.steps) ? snapshot.steps.map(step => step && step.step_id === completionStep
+    ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', scope_key: 'project-a', check_results: completionChecks.map(id => ({id, status: 'pass', at: '2026-09-09T06:02:00Z'})), verify_result: {passed: true, exit_code: 0, at: '2026-09-09T06:02:00Z'}}
     : step) : [];
   return {
     ...snapshot,
@@ -162,16 +223,17 @@ const checklistSnapshot = () => {
     counts: snapshot.counts && typeof snapshot.counts === 'object'
       ? {...snapshot.counts, confirmed: Number(snapshot.counts.confirmed || 0) + 1, pending: Math.max(0, Number(snapshot.counts.pending || 0) - 1)}
       : snapshot.counts,
-    eligible_step_ids: Array.isArray(snapshot.eligible_step_ids) ? snapshot.eligible_step_ids.filter(id => id !== 'traces-light') : snapshot.eligible_step_ids,
-    next: snapshot.next && snapshot.next.step_id === 'traces-light' ? null : snapshot.next,
+    eligible_step_ids: Array.isArray(snapshot.eligible_step_ids) ? snapshot.eligible_step_ids.filter(id => id !== completionStep) : snapshot.eligible_step_ids,
+    next: snapshot.next && snapshot.next.step_id === completionStep ? null : snapshot.next,
     steps,
   };
 };
 if (args[0] === 'checklist' && args[1] === 'show') process.stdout.write(JSON.stringify(checklistSnapshot()));
 else if (args[0] === 'checklist' && args[1] === 'confirm') {
+  const completionStep = process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP || 'traces-light';
   const packageIndex = args.indexOf('--package');
-  if (packageIndex < 0 || args[packageIndex + 1] !== 'project-a') {
-    process.stderr.write('step "traces-light" is package-scoped; pass package key\\n');
+  if (completionStep !== 'skeleton' && (packageIndex < 0 || args[packageIndex + 1] !== 'project-a')) {
+    process.stderr.write('step "' + completionStep + '" is package-scoped; pass package key\\n');
     process.exit(1);
   }
   fs.writeFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, JSON.stringify({status: 'confirmed'}));
@@ -191,8 +253,13 @@ else if (args[0] === 'audit') {
   const check = process.env.CONTINUATION_FIXTURE_AUDIT_MODE === 'mismatch' && requested === 'orphan_code_clean'
     ? 'annotation_validity'
     : requested;
-  const stage = 'implement';
-  process.stdout.write(JSON.stringify({event: 'stage_start', stage}) + '\\n' + JSON.stringify({event: 'check_done', stage, check, status: 'pass'}) + '\\n');
+  const skeletonChecks = new Set(['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']);
+  const stage = skeletonChecks.has(requested) ? 'spec' : 'implement';
+  const failedSkeleton = process.env.CONTINUATION_FIXTURE_SKELETON_MODE === 'fail' && requested === 'l2_software_complete';
+  const status = failedSkeleton ? 'error' : 'pass';
+  const details = failedSkeleton ? ['SW-REQ-FAILED current native finding'] : undefined;
+  process.stdout.write(JSON.stringify({event: 'stage_start', stage}) + '\\n' + JSON.stringify({event: 'check_done', stage, check, status, ...(details ? {details} : {})}) + '\\n');
+  if (failedSkeleton) process.exitCode = 1;
 }
 else process.stdout.write(JSON.stringify({status: 'pass'}));
 `, {encoding: 'utf8', mode: 0o700});
@@ -531,6 +598,160 @@ describe('production traces-light continuation graph', () => {
       for (const testCheckout of testCheckouts) {
         const worktree = (await worktreeManager.listWorktrees()).find(entry => entry.path === testCheckout || entry.metadata.worktree_path === testCheckout);
         if (worktree) await worktreeManager.removeWorktree(worktree.id);
+      }
+      worktreeManager.configure(previousWorktreeConfig);
+      fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});
+      fixture.cleanup();
+    }
+  });
+
+  it('runs a zero-component skeleton continuation through native audits and a fresh confirmation-only resume', async () => {
+    const fixture = makeGitFixture();
+    const previous = new Map<string, string | undefined>([
+      ['PROOF_BIN', process.env.PROOF_BIN],
+      ['VISOR_WORKSPACE_MAIN_PROJECT', process.env.VISOR_WORKSPACE_MAIN_PROJECT],
+      ['NATIVE_ONBOARDING_WORKTREE_ROOT', process.env.NATIVE_ONBOARDING_WORKTREE_ROOT],
+      ['NATIVE_CHECKLIST_CONTINUE_CATALOG', process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG],
+      ['NATIVE_CHECKLIST_CONTINUE_STEP', process.env.NATIVE_CHECKLIST_CONTINUE_STEP],
+      ['NATIVE_CHECKLIST_CONTINUE_SNAPSHOT', process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT],
+      ['REQUEST_TIMEOUT', process.env.REQUEST_TIMEOUT],
+      ['NATIVE_ONBOARDING_TS_NODE', process.env.NATIVE_ONBOARDING_TS_NODE],
+      ['NATIVE_ONBOARDING_REPO_ROOT', process.env.NATIVE_ONBOARDING_REPO_ROOT],
+      ['NATIVE_ONBOARDING_OUTPUT_DIR', process.env.NATIVE_ONBOARDING_OUTPUT_DIR],
+      ['CONTINUATION_FIXTURE_CALL_LOG', process.env.CONTINUATION_FIXTURE_CALL_LOG],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STATE', process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STEP', process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP],
+      ['CONTINUATION_FIXTURE_SKELETON_MODE', process.env.CONTINUATION_FIXTURE_SKELETON_MODE],
+    ]);
+    const previousWorktreeConfig = worktreeManager.getConfig();
+    const fixtureWorktreeCache = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-continuation-skeleton-cache-'));
+    worktreeManager.configure({base_path: fixtureWorktreeCache, cleanup_on_exit: false});
+    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async () => {
+      throw new Error('zero-component skeleton continuation must not dispatch an author');
+    });
+    try {
+      process.env.PROOF_BIN = fixture.proof;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
+      process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
+      process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'skeleton';
+      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
+        components: [],
+        full_components: [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem],
+        affected_component_ids: [],
+        reused_component_ids: ['component-a', 'component-b', 'component-c'],
+        retained_receipt_identities: [`sha256:${'7'.repeat(64)}`, `sha256:${'8'.repeat(64)}`],
+        current_receipt_identities: [
+          `sha256:${'1'.repeat(64)}`, `sha256:${'2'.repeat(64)}`, `sha256:${'3'.repeat(64)}`,
+          `sha256:${'4'.repeat(64)}`, `sha256:${'5'.repeat(64)}`, `sha256:${'6'.repeat(64)}`,
+          `sha256:${'7'.repeat(64)}`,
+        ],
+        authority: continuationAuthority(
+          [fixture.workItem, fixture.secondWorkItem, fixture.reusedWorkItem],
+          [],
+          ['component-a', 'component-b', 'component-c'],
+        ),
+      });
+      process.env.REQUEST_TIMEOUT = '120000';
+      process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
+      process.env.NATIVE_ONBOARDING_REPO_ROOT = process.cwd();
+      process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+      process.env.CONTINUATION_FIXTURE_CALL_LOG = fixture.checklistCalls;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE = fixture.checklistState;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP = 'skeleton';
+      process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(skeletonContinuationSnapshot());
+      const config = await loadConfig(buildChecklistContinuationConfig('skeleton') as any, {strict: true});
+      const engine = new StateMachineExecutionEngine(fixture.root);
+      const paused = await executeChecklistContinuationEngine(engine, config, 120000, [], undefined, 'skeleton');
+      expect(paused.paused).toBe(true);
+      expect(ai).not.toHaveBeenCalled();
+      const started = paused.checkpoint.events
+        .filter(event => event.type === 'AttemptStarted')
+        .map(event => event.checkId);
+      expect(started.filter(checkId => ['author-native-component', 'promote-native-component', 'checkout-worktree', 'role-onboard-component', 'annotation_validity', 'orphan_code_clean', 'checklist-traces-light'].includes(checkId))).toEqual([]);
+      expect(started.filter(checkId => ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'].includes(checkId))).toHaveLength(4);
+      expect(started).not.toContain('checklist-skeleton');
+      const pausedJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), paused.checkpoint);
+      const skeletonGenerations = Object.values(pausedJournal.getInstanceProjection().generationsById)
+        .filter((generation: any) => generation.status !== 'inactive' && generation.checkId === 'checklist-skeleton');
+      expect(skeletonGenerations).toHaveLength(1);
+      expect((skeletonGenerations[0] as any).status).toBe('ready');
+      const pausedProgress = buildNativeChecklistProgressFromProjections({
+        claimProjection: pausedJournal.getClaimProjection(),
+        instanceProjection: pausedJournal.getInstanceProjection(),
+        checkpoint: paused.checkpoint,
+        paused: true,
+        resumed: false,
+        retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c'],
+        affectedComponentIds: [],
+      });
+      expect(pausedProgress.operational.catalog_coverage).toMatchObject({
+        known: true, known_count: 3, affected_count: 0, reused_count: 3, unexpanded_count: 0,
+      });
+      expect(pausedProgress.operational.project.state).not.toBe('failed');
+      expect(pausedProgress.checklist.steps.find(step => step.id === 'skeleton')).toMatchObject({
+        state: 'pending', eligible: true,
+      });
+      expect(pausedProgress.checklist.steps.find(step => step.id === 'traces-light')).toMatchObject({
+        state: 'blocked', eligible: false,
+      });
+      expect(renderNativeChecklistProgress(pausedProgress).text).toContain('catalog coverage=known:3 affected:0 reused:3 unexpanded:0');
+
+      fs.writeFileSync(fixture.checklistCalls, '', 'utf8');
+      const freshEngine = new StateMachineExecutionEngine(fixture.root);
+      const resumed = await executeChecklistContinuationEngine(freshEngine, config, 120000, [], paused.checkpoint, 'skeleton');
+      expect(resumed.paused).toBe(false);
+      expect(ai).not.toHaveBeenCalled();
+      const suffix = resumed.checkpoint.events.slice(paused.checkpoint.events.length);
+      expect(suffix.filter(event => event.type === 'AttemptStarted').map(event => event.checkId)).toEqual(['checklist-skeleton']);
+      const resumeCalls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line).args as string[]);
+      expect(resumeCalls.map(args => args.slice(0, 2))).toEqual([
+        ['checklist', 'show'], ['checklist', 'confirm'], ['checklist', 'show'],
+      ]);
+      expect(resumeCalls.every(args => !args.includes('--package'))).toBe(true);
+      const resumedJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), resumed.checkpoint);
+      const resumedProgress = buildNativeChecklistProgressFromProjections({
+        claimProjection: resumedJournal.getClaimProjection(),
+        instanceProjection: resumedJournal.getInstanceProjection(),
+        checkpoint: resumed.checkpoint,
+        currentProofSnapshot: confirmedSkeletonContinuationSnapshot(),
+        paused: false,
+        resumed: true,
+        retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c'],
+        affectedComponentIds: [],
+      });
+      expect(resumedProgress.operational.catalog_coverage).toMatchObject({
+        known: true, known_count: 3, affected_count: 0, reused_count: 3, unexpanded_count: 0,
+      });
+      expect(resumedProgress.operational.project.state).toBe('completed');
+      expect(resumedProgress.checklist.steps.find(step => step.id === 'skeleton')).toMatchObject({
+        state: 'confirmed', eligible: false,
+      });
+      expect(resumedProgress.evidence.proof_snapshot).toMatchObject({
+        source: 'current-proof-readback',
+        generation_id: expect.any(String),
+      });
+      expect(resumedProgress.checklist.steps.find(step => step.id === 'traces-light')).toMatchObject({
+        state: 'pending', eligible: true,
+      });
+
+      // A native audit failure must stop before the selected confirmation
+      // frontier, even when the retained catalog has no affected writers.
+      process.env.CONTINUATION_FIXTURE_SKELETON_MODE = 'fail';
+      fs.writeFileSync(fixture.checklistCalls, '', 'utf8');
+      const failedEngine = new StateMachineExecutionEngine(fixture.root);
+      await expect(
+        executeChecklistContinuationEngine(failedEngine, config, 120000, [], undefined, 'skeleton'),
+      ).rejects.toThrow(/failed before skeleton frontier/);
+      const failedCheckpoint = failedEngine.exportGraphCheckpoint();
+      expect(failedCheckpoint.events.some(event =>
+        event.type === 'AttemptFailed' && event.checkId === 'l2_software_complete')).toBe(true);
+      expect(failedCheckpoint.events.some(event =>
+        event.type === 'AttemptStarted' && event.checkId === 'checklist-skeleton')).toBe(false);
+    } finally {
+      ai.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
       }
       worktreeManager.configure(previousWorktreeConfig);
       fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});

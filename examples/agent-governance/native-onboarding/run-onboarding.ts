@@ -375,12 +375,14 @@ export type ChecklistPrefixRetryArguments = Readonly<{
   retryGenerationId: string;
 }>;
 
+export type ChecklistContinuationStep = 'traces-light' | 'skeleton';
+
 export type ChecklistContinueArguments = Readonly<{
   checkpoint: string;
-  step: 'traces-light';
+  step: ChecklistContinuationStep;
 }>;
 
-/** Parse the one shared continuation entry.  Unsupported checklist steps fail closed. */
+/** Parse the one shared continuation entry. Unsupported checklist steps fail closed. */
 export function parseChecklistContinueArguments(
   values: Record<string, string>,
 ): ChecklistContinueArguments | undefined {
@@ -388,10 +390,10 @@ export function parseChecklistContinueArguments(
   const step = values['checklist-step'];
   if (checkpoint === undefined && step === undefined) return undefined;
   if (!checkpoint) throw new Error('--checklist-continue is required for checklist continuation');
-  if (step !== undefined && step !== 'traces-light') {
-    throw new Error(`unsupported checklist continuation step: ${step}; only traces-light is supported`);
+  if (step !== undefined && step !== 'traces-light' && step !== 'skeleton') {
+    throw new Error(`unsupported checklist continuation step: ${step}; only traces-light or skeleton is supported`);
   }
-  return Object.freeze({checkpoint, step: 'traces-light'});
+  return Object.freeze({checkpoint, step: (step ?? 'traces-light') as ChecklistContinuationStep});
 }
 
 /** Parse the explicit, closed recovery mode instead of inferring failed work. */
@@ -868,9 +870,13 @@ const checklistSkeletonPauseGate: GeneratedDispatchGate = (
   generation: NodeGenerationProjection,
 ): GeneratedDispatchGateDecision => generation.checkId === 'checklist-skeleton' ? 'defer' : 'dispatch';
 
-const checklistContinuationPauseGate: GeneratedDispatchGate = (
-  generation: NodeGenerationProjection,
-): GeneratedDispatchGateDecision => generation.checkId === 'checklist-traces-light' ? 'defer' : 'dispatch';
+function checklistContinuationPauseGateFor(step: ChecklistContinuationStep): GeneratedDispatchGate {
+  const target = `checklist-${step}`;
+  return (generation: NodeGenerationProjection): GeneratedDispatchGateDecision =>
+    generation.checkId === target ? 'defer' : 'dispatch';
+}
+
+const checklistContinuationPauseGate: GeneratedDispatchGate = checklistContinuationPauseGateFor('traces-light');
 
 type ChecklistSkeletonFrontierAssessment = Readonly<{
   ready: boolean;
@@ -999,6 +1005,7 @@ export async function loadChecklistMaterializedConfig(
 
 type ChecklistContinuationEvidence = Readonly<{
   mode: 'retained-skeleton' | 'continuation-frontier';
+  step?: ChecklistContinuationStep;
   checkpoint: GraphJournalCheckpointV1;
   checkpointPath: string;
   config: VisorConfig;
@@ -1025,9 +1032,10 @@ function sha256File(file: string): string {
   return `sha256:${createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
 }
 
-function uniqueSortedStrings(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.length === 0)) {
-    throw new Error(`${label} must be a non-empty string array`);
+function uniqueSortedStrings(value: unknown, label: string, allowEmpty = false): string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) ||
+      value.some(item => typeof item !== 'string' || item.length === 0)) {
+    throw new Error(`${label} must be a ${allowEmpty ? '' : 'non-empty '}string array`);
   }
   const sorted = utf8Sorted(value as string[]);
   if (new Set(sorted).size !== sorted.length) throw new Error(`${label} must be unique`);
@@ -1043,9 +1051,10 @@ function continuationTaskObservation(
   catalog: Json,
   affectedComponentIds: readonly string[],
   authorityWorkItems: readonly unknown[],
+  step: ChecklistContinuationStep = 'traces-light',
 ): ContinuationTaskObservation {
   const components = Array.isArray(catalog.components) ? catalog.components.filter(isRecord) : [];
-  const expectedIds = uniqueSortedStrings(affectedComponentIds, 'continuation task affected component IDs');
+  const expectedIds = uniqueSortedStrings(affectedComponentIds, 'continuation task affected component IDs', true);
   if (components.length !== expectedIds.length) {
     throw new Error('continuation task components must exactly match affected component IDs');
   }
@@ -1069,28 +1078,32 @@ function continuationTaskObservation(
     const item = components.find(candidate => candidate.component_id === componentId);
     const authorityItem = authorityById.get(componentId);
     const task = item && isRecord(item.continuation_task) ? item.continuation_task : undefined;
-    const orphan = task && isRecord(task.orphan_code_clean) ? task.orphan_code_clean : undefined;
-    if (!item || !authorityItem || !task || !orphan || !hasExactKeys(task, ['step_id', 'role', 'required_checks', 'orphan_code_clean']) ||
-        task.step_id !== 'traces-light' || task.role !== 'onboard' ||
-        canonicalJson(task.required_checks) !== canonicalJson(['annotation_validity', 'orphan_code_clean']) ||
-        !hasExactKeys(orphan, ['paths', 'details'])) {
+    const findingKey = step === 'skeleton' ? 'l2_software_complete' : 'orphan_code_clean';
+    const requiredChecks = step === 'skeleton'
+      ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
+      : ['annotation_validity', 'orphan_code_clean'];
+    const finding = task && isRecord(task[findingKey]) ? task[findingKey] : undefined;
+    if (!item || !authorityItem || !task || !finding || !hasExactKeys(task, ['step_id', 'role', 'required_checks', findingKey]) ||
+        task.step_id !== step || task.role !== 'onboard' ||
+        canonicalJson(task.required_checks) !== canonicalJson(requiredChecks) ||
+        !hasExactKeys(finding, ['paths', 'details'])) {
       throw new Error(`affected WorkItem ${componentId} has an invalid closed continuation task`);
     }
     const {continuation_task: _continuationTask, ...baseWorkItem} = item;
     if (canonicalJson(baseWorkItem) !== canonicalJson(authorityItem)) {
       throw new Error(`continuation task WorkItem ${componentId} is detached from native authority`);
     }
-    const paths = uniqueSortedStrings(orphan.paths, `continuation task ${componentId} paths`);
+    const paths = uniqueSortedStrings(finding.paths, `continuation task ${componentId} paths`);
     const ownedPaths = Array.isArray(authorityItem.sorted_owned_paths) ? authorityItem.sorted_owned_paths : [];
     if (paths.some(candidate => !ownedPaths.includes(candidate))) {
       throw new Error(`continuation task ${componentId} paths exceed native owned paths`);
     }
-    if (paths.length === 0 || !Array.isArray(orphan.details) || orphan.details.length === 0 ||
-        orphan.details.some(detail => typeof detail !== 'string' || detail.length === 0)) {
+    if (paths.length === 0 || !Array.isArray(finding.details) || finding.details.length === 0 ||
+        finding.details.some(detail => typeof detail !== 'string' || detail.length === 0)) {
       throw new Error(`continuation task ${componentId} details are incomplete`);
     }
-    const details = Object.freeze((orphan.details as string[]).slice());
-    if (details.some(detail => {
+    const details = Object.freeze((finding.details as string[]).slice());
+    if (step === 'traces-light' && details.some(detail => {
       const match = /^([^:]+):[0-9]+(?:\s|$)/.exec(detail);
       return !match || !paths.includes(match[1]);
     })) {
@@ -1188,8 +1201,8 @@ function validateContinuationAuthority(value: unknown, label = 'continuation aut
   }
   const workItems = value.current_work_items.map((item, index) => validateContinuationWorkItem(item, `${label} WorkItem ${index}`));
   const workItemIds = uniqueSortedStrings(workItems.map(item => item.component_id), `${label} WorkItem IDs`);
-  const affected = uniqueSortedStrings(value.affected_component_ids, `${label} affected component IDs`);
-  const reused = uniqueSortedStrings(value.reused_component_ids, `${label} reused component IDs`);
+  const affected = uniqueSortedStrings(value.affected_component_ids, `${label} affected component IDs`, true);
+  const reused = uniqueSortedStrings(value.reused_component_ids, `${label} reused component IDs`, true);
   if (affected.some(id => !workItemIds.includes(id)) || reused.some(id => !workItemIds.includes(id)) ||
       affected.some(id => reused.includes(id)) || utf8Sorted([...affected, ...reused]).join('\u0000') !== workItemIds.join('\u0000')) {
     throw new Error(`${label} affected/reused partition is not exact and disjoint`);
@@ -1460,28 +1473,57 @@ export function resolveChecklistContinuationPrefix(checkpointPath: string): {
   throw new Error('checklist continuation checkpoint does not record a retained checklist_skeleton_checkpoint');
 }
 
-export function validateChecklistContinuationEligibility(show: unknown, allowConfirmed = false): Json {
+export function validateChecklistContinuationEligibility(
+  show: unknown,
+  allowConfirmed = false,
+  step: ChecklistContinuationStep = 'traces-light',
+): Json {
   if (!show || typeof show !== 'object' || Array.isArray(show)) throw new Error('current Proof checklist show is not an object');
   const value = show as Json;
   if (value.schema_version !== 'proof.checklist.show.v1' || value.active !== true || value.new_project !== true) {
     throw new Error('current Proof checklist is not the active new-project campaign');
   }
   const steps = Array.isArray(value.steps) ? value.steps.filter(isRecord) : [];
-  const skeleton = steps.find(step => step.step_id === 'skeleton');
-  if (!skeleton || !hasExactChecklistConfirmationEvidence(skeleton)) {
+  const selectedRows = steps.filter(candidate => candidate.step_id === step);
+  if (selectedRows.length !== 1) {
+    throw new Error(`checklist continuation requires exactly one ${step} step row`);
+  }
+  const selected = selectedRows[0];
+  const skeletonRows = steps.filter(candidate => candidate.step_id === 'skeleton');
+  const skeleton = skeletonRows.length === 1 ? skeletonRows[0] : undefined;
+  if (step === 'traces-light' && (!skeleton || !hasExactChecklistConfirmationEvidence(skeleton))) {
     throw new Error('checklist continuation requires an exactly evidenced confirmed skeleton step');
   }
-  const traces = steps.find(step => step.step_id === 'traces-light');
-  const pending = traces && traces.applicable === true && traces.eligible === true &&
-    traces.effective_status === 'pending' && traces.role === 'onboard';
-  const confirmed = allowConfirmed && traces && hasExactChecklistConfirmationEvidence(traces);
-  if (!traces || (!pending && !confirmed)) {
-    throw new Error('checklist continuation requires eligible traces-light with the onboard role');
+  const expectedChecks = step === 'skeleton'
+    ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
+    : ['annotation_validity', 'orphan_code_clean'];
+  const expectedScope = step === 'skeleton' ? 'repo' : 'package';
+  const expectedRequires = step === 'skeleton' ? ['research'] : ['skeleton'];
+  const selectedPolicyMatches = selected && selected.role === 'onboard' &&
+    selected.scope === expectedScope && selected.stamp === 'confirm' &&
+    canonicalJson(selected.requires) === canonicalJson(expectedRequires) &&
+    canonicalJson(selected.required_checks) === canonicalJson(expectedChecks);
+  const eligibleIds = value.eligible_step_ids;
+  const eligibleIdsValid = Array.isArray(eligibleIds) &&
+    eligibleIds.every(id => typeof id === 'string' && id.length > 0) &&
+    new Set(eligibleIds as string[]).size === eligibleIds.length;
+  const next = isRecord(value.next) ? value.next : undefined;
+  const nextPolicyMatches = next !== undefined && next.step_id === step &&
+    next.role === 'onboard' && next.scope === expectedScope && next.stamp === 'confirm' &&
+    canonicalJson(next.requires) === canonicalJson(expectedRequires) &&
+    canonicalJson(next.required_checks) === canonicalJson(expectedChecks);
+  const pendingPolicyMatches = selectedPolicyMatches && eligibleIdsValid &&
+    (eligibleIds as string[]).includes(step) && nextPolicyMatches;
+  const pending = selected && selected.applicable === true && selected.eligible === true &&
+    selected.effective_status === 'pending' && pendingPolicyMatches;
+  const confirmed = allowConfirmed && selected && hasExactChecklistConfirmationEvidence(selected);
+  if (!selected || !selectedPolicyMatches || (!pending && !confirmed)) {
+    throw new Error(`checklist continuation requires eligible ${step} with the onboard role`);
   }
   return Object.freeze({
     checklist: typeof value.checklist === 'string' ? value.checklist : undefined,
-    skeleton: 'confirmed',
-    step: 'traces-light',
+    ...(skeleton && hasExactChecklistConfirmationEvidence(skeleton) ? {skeleton: 'confirmed'} : {}),
+    step,
     role: 'onboard',
     eligible: true,
   });
@@ -1490,6 +1532,7 @@ export function validateChecklistContinuationEligibility(show: unknown, allowCon
 /** Validate CP255's exact CP251→CP255 skeleton-only suffix before any fresh graph is built. */
 export async function validateChecklistContinuationCheckpoint(
   checkpointPath: string,
+  step: ChecklistContinuationStep = 'traces-light',
 ): Promise<ChecklistContinuationEvidence> {
   const target = fs.realpathSync(path.resolve(checkpointPath));
   const checkpoint = readValidatedCheckpoint(target, 'checklist continuation checkpoint');
@@ -1512,13 +1555,14 @@ export async function validateChecklistContinuationCheckpoint(
       }
       const taskObservation = continuationTaskObservation(
         catalogs[0].payload,
-        uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs'),
+        uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true),
         Array.isArray(authority.current_work_items) ? authority.current_work_items : [],
+        step,
       );
-      return Object.freeze({mode: 'continuation-frontier', checkpoint, checkpointPath: target, config: restored.config,
+      return Object.freeze({mode: 'continuation-frontier', step, checkpoint, checkpointPath: target, config: restored.config,
         materializedConfigPath: restored.materializedConfigPath, expectedComponentIds: Object.freeze(workItems.map(item => item.component_id as string)), workItems,
-        authority, affectedComponentIds: Object.freeze(uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs')),
-        reusedComponentIds: Object.freeze(uniqueSortedStrings(authority.reused_component_ids, 'journaled reused component IDs')),
+        authority, affectedComponentIds: Object.freeze(uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true)),
+        reusedComponentIds: Object.freeze(uniqueSortedStrings(authority.reused_component_ids, 'journaled reused component IDs', true)),
         affectedBatches: taskObservation.batches,
         affectedDetailsByComponent: taskObservation.detailsByComponent,
       });
@@ -1536,7 +1580,7 @@ export async function validateChecklistContinuationCheckpoint(
     throw new Error('retained CP255 does not contain exactly the validated skeleton-only resume suffix');
   }
   const workItems = materializedComponentWorkItems(restored.config, restored.checkpoint);
-  return Object.freeze({mode: 'retained-skeleton', checkpoint, checkpointPath: target, config: restored.config,
+  return Object.freeze({mode: 'retained-skeleton', step, checkpoint, checkpointPath: target, config: restored.config,
     materializedConfigPath: restored.materializedConfigPath, prefixCheckpoint: restored.checkpoint,
     prefixCheckpointPath: prefix.checkpointPath, expectedComponentIds: expected, workItems});
 }
@@ -2204,14 +2248,15 @@ function checklistContinuationPauseIsValid(
   config: VisorConfig,
   checkpoint: GraphJournalCheckpointV1,
   expectedComponentIds: readonly string[],
+  step: ChecklistContinuationStep = 'traces-light',
 ): boolean {
   try {
     const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
     const active = new Set(Object.values(projection.activeGenerationIdByNode));
     const generations = Object.values(projection.generationsById).filter(generation =>
       generation.status !== 'inactive' && active.has(generation.nodeGenerationId));
-    const traces = generations.filter(generation => generation.checkId === 'checklist-traces-light');
-    return traces.length === 1 && traces[0].status === 'ready' &&
+    const selected = generations.filter(generation => generation.checkId === `checklist-${step}`);
+    return selected.length === 1 && selected[0].status === 'ready' &&
       !generations.some(generation => generation.status === 'failed' || generation.status === 'running') &&
       continuationPromotionComponentIds(config, checkpoint).join('\u0000') === utf8Sorted(expectedComponentIds).join('\u0000');
   } catch {
@@ -2222,6 +2267,7 @@ function checklistContinuationPauseIsValid(
 export function checklistContinuationResumeDispatchIsValid(
   before: GraphJournalCheckpointV1,
   after: GraphJournalCheckpointV1,
+  step: ChecklistContinuationStep = 'traces-light',
 ): boolean {
   try {
     const validatedBefore = ExecutionJournal.validateGraphCheckpointIntegrity(before);
@@ -2233,7 +2279,7 @@ export function checklistContinuationResumeDispatchIsValid(
           canonicalGraphCheckpointJson(validatedBefore.events)) return false;
     const suffix = validatedAfter.events.slice(validatedBefore.events.length);
     const started = suffix.filter(event => event.type === 'AttemptStarted');
-    return started.length === 1 && started[0].checkId === 'checklist-traces-light' &&
+    return started.length === 1 && started[0].checkId === `checklist-${step}` &&
       !suffix.some(event => event.type === 'AttemptStarted' &&
         (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component'));
   } catch {
@@ -2245,9 +2291,10 @@ export function checklistContinuationResumeDeltaIsValid(
   config: VisorConfig,
   before: GraphJournalCheckpointV1,
   after: GraphJournalCheckpointV1,
+  step: ChecklistContinuationStep = 'traces-light',
 ): boolean {
-  return checklistContinuationResumeDispatchIsValid(before, after) &&
-    checklistContinuationResumeCompleted(config, after);
+  return checklistContinuationResumeDispatchIsValid(before, after, step) &&
+    checklistContinuationResumeCompleted(config, after, step);
 }
 
 /** Accept an already-completed frontier as an idempotent readback. */
@@ -2255,6 +2302,7 @@ export function checklistContinuationReadbackIsValid(
   config: VisorConfig,
   before: GraphJournalCheckpointV1,
   after: GraphJournalCheckpointV1,
+  step: ChecklistContinuationStep = 'traces-light',
 ): boolean {
   try {
     const validatedBefore = ExecutionJournal.validateGraphCheckpointIntegrity(before);
@@ -2262,19 +2310,23 @@ export function checklistContinuationReadbackIsValid(
     return validatedBefore.sessionId === validatedAfter.sessionId &&
       validatedBefore.graphSemanticDigest === validatedAfter.graphSemanticDigest &&
       canonicalGraphCheckpointJson(validatedBefore) === canonicalGraphCheckpointJson(validatedAfter) &&
-      checklistContinuationResumeCompleted(config, validatedAfter);
+      checklistContinuationResumeCompleted(config, validatedAfter, step);
   } catch {
     return false;
   }
 }
 
-function checklistContinuationResumeCompleted(config: VisorConfig, checkpoint: GraphJournalCheckpointV1): boolean {
+function checklistContinuationResumeCompleted(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  step: ChecklistContinuationStep = 'traces-light',
+): boolean {
   try {
     const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
     const active = new Set(Object.values(projection.activeGenerationIdByNode));
-    const traces = Object.values(projection.generationsById).filter(generation =>
-      generation.status !== 'inactive' && active.has(generation.nodeGenerationId) && generation.checkId === 'checklist-traces-light');
-    return traces.length === 1 && traces[0].status === 'completed' &&
+    const selected = Object.values(projection.generationsById).filter(generation =>
+      generation.status !== 'inactive' && active.has(generation.nodeGenerationId) && generation.checkId === `checklist-${step}`);
+    return selected.length === 1 && selected[0].status === 'completed' &&
       !Object.values(projection.generationsById).some(generation =>
         generation.status !== 'inactive' && active.has(generation.nodeGenerationId) &&
         (generation.status === 'failed' || generation.status === 'running'));
@@ -2290,7 +2342,12 @@ function checklistContinuationResumeFailureMessage(result: unknown): string {
   if (isRecord(traces) && typeof traces.errorMessage === 'string' && traces.errorMessage.trim().length > 0) {
     return traces.errorMessage;
   }
-  return 'checklist continuation traces-light confirmation failed';
+  const selected = checks.find(value => isRecord(value) && typeof value.checkName === 'string' &&
+    value.checkName.startsWith('checklist-'));
+  if (isRecord(selected) && typeof selected.errorMessage === 'string' && selected.errorMessage.trim().length > 0) {
+    return selected.errorMessage;
+  }
+  return 'checklist continuation confirmation failed';
 }
 
 /** Execute the fresh continuation graph, pausing before traces-light, or
@@ -2301,9 +2358,10 @@ export async function executeChecklistContinuationEngine(
   timeout: number,
   expectedComponentIds: readonly string[],
   checkpoint?: GraphJournalCheckpointV1,
+  step: ChecklistContinuationStep = 'traces-light',
 ): Promise<{result: unknown; checkpoint: GraphJournalCheckpointV1; paused: boolean}> {
   if (checkpoint) {
-    if (checklistContinuationResumeCompleted(config, checkpoint)) {
+    if (checklistContinuationResumeCompleted(config, checkpoint, step)) {
       return {
         result: {statistics: {failedExecutions: 0, completedExecutions: 0, totalExecutions: 0}},
         checkpoint,
@@ -2312,11 +2370,11 @@ export async function executeChecklistContinuationEngine(
     }
     try {
       const validated = ExecutionJournal.validateGraphCheckpointIntegrity(checkpoint);
-      if (!checklistContinuationPauseIsValid(config, validated, expectedComponentIds)) {
-        throw new Error('checklist continuation resume requires a clean traces-light frontier');
+      if (!checklistContinuationPauseIsValid(config, validated, expectedComponentIds, step)) {
+        throw new Error(`checklist continuation resume requires a clean ${step} frontier`);
       }
     } catch (error) {
-      if (error instanceof Error && error.message === 'checklist continuation resume requires a clean traces-light frontier') throw error;
+      if (error instanceof Error && error.message === `checklist continuation resume requires a clean ${step} frontier`) throw error;
       throw new Error(`checklist continuation resume checkpoint is invalid: ${error instanceof Error ? error.message : String(error)}`);
     }
     const resumed = await engine.resumeGraphCheckpoint({
@@ -2326,22 +2384,31 @@ export async function executeChecklistContinuationEngine(
       maxParallelism: config.max_parallelism,
       failFast: false,
     });
-    if (!checklistContinuationResumeDispatchIsValid(checkpoint, resumed.checkpoint)) {
-      throw new Error('checklist continuation resume dispatched work other than traces-light confirmation');
+    if (!checklistContinuationResumeDispatchIsValid(checkpoint, resumed.checkpoint, step)) {
+      throw new Error(`checklist continuation resume dispatched work other than ${step} confirmation`);
     }
-    if (!checklistContinuationResumeCompleted(config, resumed.checkpoint)) {
+    if (!checklistContinuationResumeCompleted(config, resumed.checkpoint, step)) {
       throw new Error(checklistContinuationResumeFailureMessage(resumed.result));
     }
     return {result: resumed.result, checkpoint: resumed.checkpoint, paused: false};
   }
   const first = await engine.executeGroupedChecks(
     PR, ['continue-retained-catalog'], timeout, config, 'json', false, config.max_parallelism, false,
-    undefined, checklistContinuationPauseGate,
+    undefined, checklistContinuationPauseGateFor(step),
   );
   const current = engine.exportGraphCheckpoint();
-  if (first.statistics.failedExecutions > 0) throw new Error('checklist continuation failed before traces-light frontier');
-  if (!checklistContinuationPauseIsValid(config, current, expectedComponentIds)) {
-    throw new Error('checklist continuation did not reach a clean traces-light frontier');
+  if (first.statistics.failedExecutions > 0) throw new Error(`checklist continuation failed before ${step} frontier`);
+  if (!checklistContinuationPauseIsValid(config, current, expectedComponentIds, step)) {
+    let diagnostic = '';
+    try {
+      const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), current).getInstanceProjection();
+      const active = new Set(Object.values(projection.activeGenerationIdByNode));
+      diagnostic = ` active=${Object.values(projection.generationsById)
+        .filter(generation => generation.status !== 'inactive' && active.has(generation.nodeGenerationId))
+        .map(generation => `${generation.checkId}:${generation.status}`)
+        .join(',')} promotions=${continuationPromotionComponentIds(config, current).join(',')} expected=${expectedComponentIds.join(',')}`;
+    } catch (diagnosticError) { diagnostic = ` diagnostic-error=${String(diagnosticError)}`; }
+    throw new Error(`checklist continuation did not reach a clean ${step} frontier${diagnostic}`);
   }
   return {result: first, checkpoint: current, paused: true};
 }
@@ -2551,7 +2618,11 @@ export async function deriveCurrentChecklistAffectedBatches(
   output: string,
   timeout: number,
   workItems: readonly Json[],
+  step: ChecklistContinuationStep = 'traces-light',
 ): Promise<ChecklistAffectedBatches> {
+  if (step === 'skeleton') {
+    return deriveCurrentChecklistSkeletonAffectedBatches(proof, subject, output, timeout, workItems);
+  }
   const result = runProof(
     proof,
     subject,
@@ -2619,6 +2690,135 @@ export async function deriveCurrentChecklistAffectedBatches(
     orphan_details_by_component: frozenDetails,
   });
   return Object.freeze(enrichedBatches);
+}
+
+/**
+ * Derive the selected skeleton policy from Proof's native L2 JSONL receipt.
+ * Requirement IDs are resolved through the current list/show boundary before
+ * their component ownership is accepted; no detail text is treated as a
+ * substitute for the native requirement record.
+ */
+export async function deriveCurrentChecklistSkeletonAffectedBatches(
+  proof: string,
+  subject: string,
+  output: string,
+  timeout: number,
+  workItems: readonly Json[],
+): Promise<ChecklistAffectedBatches> {
+  const result = runProof(
+    proof,
+    subject,
+    output,
+    'preflight',
+    ['audit', '--no-cache', '--check', 'l2_software_complete', '--format', 'json'],
+    timeout,
+  );
+  if (result.status < 0 || result.status > 2) {
+    throw new Error(`current Proof l2_software_complete failed with exit ${result.status}`);
+  }
+  const events: Json[] = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch {
+      throw new Error('current Proof l2_software_complete emitted malformed JSONL');
+    }
+    if (!isRecord(value)) throw new Error('current Proof l2_software_complete emitted a non-object JSONL record');
+    events.push(value);
+  }
+  const done = events.filter(event => event.event === 'check_done');
+  if (done.length !== 1 || done[0].check !== 'l2_software_complete' || done[0].stage !== 'spec' ||
+      (result.status === 0 && done[0].status !== 'pass') ||
+      (result.status !== 0 && done[0].status !== 'error' && done[0].status !== 'warn') ||
+      (result.status === 0 && done[0].details !== undefined &&
+        (!Array.isArray(done[0].details) || done[0].details.some(value => typeof value !== 'string'))) ||
+      (result.status !== 0 && (!Array.isArray(done[0].details) || done[0].details.length === 0 ||
+        done[0].details.some(value => typeof value !== 'string')))) {
+    throw new Error('current Proof l2_software_complete did not return exactly one matching spec check_done receipt');
+  }
+  const details = (done[0].details === undefined ? [] : done[0].details) as string[];
+  const requirementMatches = details.map(detail => detail.match(/\b(?:SW|INT)-REQ-[A-Z0-9-]+\b/g) ?? []);
+  if (requirementMatches.some(matches => matches.length !== 1)) {
+    throw new Error('current Proof l2_software_complete detail must contain exactly one SW/INT requirement ID');
+  }
+  const requirementIds = requirementMatches.map(matches => matches[0]);
+  if (new Set(requirementIds).size !== requirementIds.length) {
+    throw new Error('current Proof l2_software_complete contains duplicate requirement IDs');
+  }
+  if (requirementIds.length === 0) {
+    const seenComponentIds = new Set<string>();
+    const reusedComponentIds = utf8Sorted(workItems.map(item => {
+      if (!isRecord(item) || typeof item.component_id !== 'string' || item.component_id.length === 0) {
+        throw new Error('current Proof WorkItems contain duplicate or invalid component IDs');
+      }
+      if (seenComponentIds.has(item.component_id)) {
+        throw new Error('current Proof WorkItems contain duplicate or invalid component IDs');
+      }
+      seenComponentIds.add(item.component_id);
+      return item.component_id;
+    }));
+    const empty = {affectedComponentIds: [], reusedComponentIds, batches: []};
+    writeJson(path.join(output, 'preflight', 'current-affected-batches.json'), {
+      status: 'current-proof-l2-ownership-derived',
+      requirement_ids: [],
+      affected_component_ids: [],
+      reused_component_ids: reusedComponentIds,
+      batches: [],
+      finding_details_by_component: {},
+    });
+    return Object.freeze(empty);
+  }
+  const resolved = await loadCurrentProofRequirementHashes(
+    proof, subject, output, timeout, requirementIds,
+  );
+  const workItemById = new Map<string, Json>();
+  for (const item of workItems) {
+    if (!isRecord(item) || typeof item.component_id !== 'string' || item.component_id.length === 0 ||
+        workItemById.has(item.component_id)) {
+      throw new Error('current Proof WorkItems contain duplicate or invalid component IDs');
+    }
+    workItemById.set(item.component_id, item);
+  }
+  const componentByRequirement = new Map(resolved.map(item => [item.id, item.componentId]));
+  const idsByComponent: Record<string, string[]> = {};
+  for (const id of requirementIds) {
+    const componentId = componentByRequirement.get(id);
+    if (!componentId || !workItemById.has(componentId)) {
+      throw new Error(`current Proof l2_software_complete requirement ${id} has no unique WorkItem owner`);
+    }
+    (idsByComponent[componentId] ??= []).push(id);
+  }
+  const affectedIds = utf8Sorted(Object.keys(idsByComponent));
+  const affectedPaths = workItems
+    .filter(item => typeof item.component_id === 'string' && affectedIds.includes(item.component_id))
+    .flatMap(item => Array.isArray(item.sorted_owned_paths) ? item.sorted_owned_paths as string[] : []);
+  const batches = deriveChecklistAffectedBatches(workItems, affectedPaths);
+  const detailsByComponent: Record<string, string[]> = {};
+  for (const detail of details) {
+    const id = detail.match(/\b(?:SW|INT)-REQ-[A-Z0-9-]+\b/)?.[0];
+    const componentId = id ? componentByRequirement.get(id) : undefined;
+    if (!componentId) throw new Error(`current Proof l2_software_complete detail has no unique WorkItem owner: ${detail}`);
+    (detailsByComponent[componentId] ??= []).push(detail);
+  }
+  const frozenDetails = Object.freeze(Object.fromEntries(
+    Object.entries(detailsByComponent).map(([componentId, values]) => [componentId, Object.freeze(values.slice())]),
+  ));
+  const frozenIds = Object.freeze(Object.fromEntries(
+    Object.entries(idsByComponent).map(([componentId, values]) => [componentId, Object.freeze(utf8Sorted(values))]),
+  ));
+  const enriched = {...batches};
+  Object.defineProperty(enriched, 'findingDetailsByComponent', {value: frozenDetails, enumerable: false});
+  Object.defineProperty(enriched, 'requirementIdsByComponent', {value: frozenIds, enumerable: false});
+  writeJson(path.join(output, 'preflight', 'current-affected-batches.json'), {
+    status: 'current-proof-l2-ownership-derived',
+    requirement_ids: requirementIds,
+    affected_component_ids: batches.affectedComponentIds,
+    reused_component_ids: batches.reusedComponentIds,
+    batches: batches.batches,
+    finding_details_by_component: frozenDetails,
+    requirement_ids_by_component: frozenIds,
+  });
+  return Object.freeze(enriched);
 }
 
 function activeChecklistNameFromCheckpoint(
@@ -2825,20 +3025,89 @@ export function buildChecklistOnboardingConfig(_base: VisorConfig): VisorConfig 
 
 /** Load the direct-load continuation policy; it intentionally contains no
  * reserved governed-proof discovery/admission node. */
-export async function loadChecklistContinuationConfig(): Promise<VisorConfig> {
-  const raw = yaml.load(fs.readFileSync(CHECKLIST_CONTINUATION_CONFIG_PATH, 'utf8'));
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('checklist continuation YAML must be an object');
+function materializeChecklistContinuationConfig(raw: unknown, step: ChecklistContinuationStep): VisorConfig {
+  if (!isRecord(raw) || !isRecord(raw.subgraphs) || !isRecord(raw.subgraphs['continuation-project'])) {
+    throw new Error('checklist continuation YAML is missing the continuation project subgraph');
   }
-  return loadConfig(raw as VisorConfig, {strict: true});
+  const project = raw.subgraphs['continuation-project'];
+  if (!isRecord(project.checks)) throw new Error('checklist continuation YAML is missing continuation project checks');
+  const selectedIf = step === 'skeleton'
+    ? 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
+    : 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"';
+  const sharedCheckIds = new Set([
+    'materialize-retained-catalog',
+    'checklist-continuation-snapshot',
+    'component-promotions-complete',
+  ]);
+  const branchConditions: Record<string, string> = {
+    annotation_validity: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"',
+    orphan_code_clean: 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"',
+    'checklist-traces-light': 'env.NATIVE_CHECKLIST_CONTINUE_STEP != "skeleton"',
+    l0_stakeholder_complete: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"',
+    l1_system_complete: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"',
+    l2_software_complete: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"',
+    levels_connected: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"',
+    'checklist-skeleton': 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"',
+  };
+  const expectedBranchIds = step === 'skeleton'
+    ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected', 'checklist-skeleton']
+    : ['annotation_validity', 'orphan_code_clean', 'checklist-traces-light'];
+  const checks: Json = {};
+  const seen = new Set<string>();
+  for (const [checkId, rawCheck] of Object.entries(project.checks)) {
+    if (!isRecord(rawCheck)) throw new Error(`checklist continuation check ${checkId} is not an object`);
+    const condition = rawCheck.if;
+    if (sharedCheckIds.has(checkId)) {
+      if (condition !== undefined) throw new Error(`shared checklist continuation check ${checkId} must not be conditional`);
+      seen.add(checkId);
+    } else if (Object.prototype.hasOwnProperty.call(branchConditions, checkId)) {
+      if (condition !== branchConditions[checkId]) {
+        throw new Error(`checklist continuation check ${checkId} has an unexpected branch condition`);
+      }
+      seen.add(checkId);
+      if (condition !== selectedIf) continue;
+    } else if (condition !== undefined) {
+      throw new Error(`unknown checklist continuation check ${checkId} must not be conditional`);
+    }
+    const {if: _condition, ...selectedCheck} = rawCheck;
+    checks[checkId] = selectedCheck;
+  }
+  for (const checkId of expectedBranchIds) {
+    if (!seen.has(checkId)) throw new Error(`checklist continuation YAML is missing branch check ${checkId}`);
+  }
+  for (const checkId of sharedCheckIds) {
+    if (!seen.has(checkId)) throw new Error(`checklist continuation YAML is missing shared check ${checkId}`);
+  }
+  return {
+    ...raw,
+    subgraphs: {
+      ...raw.subgraphs,
+      'continuation-project': {
+        ...project,
+        checks,
+      },
+    },
+  } as VisorConfig;
 }
 
-export function buildChecklistContinuationConfig(): VisorConfig {
+export async function loadChecklistContinuationConfig(
+  step: ChecklistContinuationStep = 'traces-light',
+): Promise<VisorConfig> {
   const raw = yaml.load(fs.readFileSync(CHECKLIST_CONTINUATION_CONFIG_PATH, 'utf8'));
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('checklist continuation YAML must be an object');
   }
-  return raw as VisorConfig;
+  return loadConfig(materializeChecklistContinuationConfig(raw, step), {strict: true});
+}
+
+export function buildChecklistContinuationConfig(
+  step: ChecklistContinuationStep = 'traces-light',
+): VisorConfig {
+  const raw = yaml.load(fs.readFileSync(CHECKLIST_CONTINUATION_CONFIG_PATH, 'utf8'));
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('checklist continuation YAML must be an object');
+  }
+  return materializeChecklistContinuationConfig(raw, step);
 }
 
 type RetainedAuthorityFiles = Readonly<{
@@ -4601,6 +4870,10 @@ export type ChecklistAffectedBatches = Readonly<{
   batches: readonly Readonly<{component_id: string; paths: readonly string[]}>[];
   /** Exact native orphan detail strings keyed by their unique WorkItem owner. */
   orphanDetailsByComponent?: Readonly<Record<string, readonly string[]>>;
+  /** Exact native selected-policy finding details keyed by WorkItem owner. */
+  findingDetailsByComponent?: Readonly<Record<string, readonly string[]>>;
+  /** Native requirement IDs carried by selected-policy findings, keyed by owner. */
+  requirementIdsByComponent?: Readonly<Record<string, readonly string[]>>;
 }>;
 
 /** Map Proof orphan findings to exactly one retained WorkItem owner. */
@@ -5687,6 +5960,7 @@ async function main(): Promise<void> {
   diagnosticOutput = roots.output;
   const proof = executable(required(values, 'proof-bin'));
   const checklistOnboarding = values['checklist-onboarding'] === 'true' || checklistSkeletonResume !== undefined || checklistPrefixRetry !== undefined || checklistContinue !== undefined;
+  const checklistContinuationStep: ChecklistContinuationStep = checklistContinue?.step ?? 'traces-light';
   const governedCodexTransport = values['governed-codex-transport'];
   const codexBinArg = values['codex-bin'];
   const codexSha256Arg = values['codex-sha256'];
@@ -5784,6 +6058,7 @@ async function main(): Promise<void> {
   process.env.NATIVE_ONBOARDING_TS_NODE = fs.realpathSync(require.resolve('ts-node/register/transpile-only'));
   pinNativeOnboardingTsProject();
   process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = path.join(roots.output, 'worktrees');
+  if (checklistContinue) process.env.NATIVE_CHECKLIST_CONTINUE_STEP = checklistContinuationStep;
   fs.mkdirSync(process.env.NATIVE_ONBOARDING_WORKTREE_ROOT, {recursive: true});
   process.env.SUBJECT_BASELINE_REVISION = revision;
   process.env.USE_CODEX = 'true';
@@ -5944,10 +6219,10 @@ async function main(): Promise<void> {
     // authored result-schema sentinel/materialization pass runs here; graph
     // topology is read directly from the profile YAML.
     if (checklistContinueCheckpointPath) {
-      checklistContinuationEvidence = await validateChecklistContinuationCheckpoint(checklistContinueCheckpointPath);
+      checklistContinuationEvidence = await validateChecklistContinuationCheckpoint(checklistContinueCheckpointPath, checklistContinuationStep);
       config = checklistContinuationEvidence.mode === 'continuation-frontier'
         ? checklistContinuationEvidence.config
-        : await loadChecklistContinuationConfig();
+        : await loadChecklistContinuationConfig(checklistContinuationStep);
       if (checklistContinuationEvidence.mode === 'retained-skeleton') {
         const current = await validateCurrentRetainedCatalog(
           proof,
@@ -5975,6 +6250,7 @@ async function main(): Promise<void> {
           roots.output,
           timeout,
           current.workItems,
+          checklistContinuationStep,
         );
         const authority = buildChecklistContinuationAuthority(
           current,
@@ -5990,7 +6266,9 @@ async function main(): Promise<void> {
           affectedComponentIds: batches.affectedComponentIds,
           reusedComponentIds: batches.reusedComponentIds,
           affectedBatches: batches.batches,
-          affectedDetailsByComponent: batches.orphanDetailsByComponent,
+          affectedDetailsByComponent: checklistContinuationStep === 'skeleton'
+            ? batches.findingDetailsByComponent
+            : batches.orphanDetailsByComponent,
         });
       }
       const authority = checklistContinuationEvidence.authority
@@ -6008,16 +6286,24 @@ async function main(): Promise<void> {
           const batch = affectedBatches?.find(candidate => candidate.component_id === componentId);
           const details = detailByComponent[componentId];
           if (!batch || !details || details.length === 0) {
-            throw new Error(`checklist continuation has no exact orphan findings for affected WorkItem ${componentId}`);
+            throw new Error(`checklist continuation has no exact ${checklistContinuationStep} findings for affected WorkItem ${componentId}`);
           }
-          return {
-            ...item,
-            continuation_task: {
+          const task = checklistContinuationStep === 'skeleton'
+            ? {
+              step_id: 'skeleton',
+              role: 'onboard',
+              required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'],
+              l2_software_complete: {paths: [...batch.paths], details: [...details]},
+            }
+            : {
               step_id: 'traces-light',
               role: 'onboard',
               required_checks: ['annotation_validity', 'orphan_code_clean'],
               orphan_code_clean: {paths: [...batch.paths], details: [...details]},
-            },
+            };
+          return {
+            ...item,
+            continuation_task: task,
           } as Json;
         });
       if (graphWorkItems.length !== affected.size) throw new Error('checklist continuation affected WorkItems are incomplete');
@@ -6076,6 +6362,7 @@ async function main(): Promise<void> {
     const eligibility = validateChecklistContinuationEligibility(
       currentChecklist.show,
       checklistContinuationEvidence.mode === 'continuation-frontier',
+      checklistContinuationStep,
     );
     process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(currentChecklist.show);
     writeJson(path.join(roots.output, 'preflight', 'checklist-continuation.json'), {
@@ -6203,15 +6490,17 @@ async function main(): Promise<void> {
         timeout,
         checklistContinuationEvidence.affectedComponentIds ?? checklistContinuationEvidence.expectedComponentIds,
         continuationCheckpoint,
+        checklistContinuationStep,
       );
       result = continuationRun.result;
       checkpoint = continuationRun.checkpoint;
-      checklistPausedBeforeTraces = continuationRun.paused;
-      if (checklistPausedBeforeTraces) {
-        writeCheckpoint(path.join(roots.output, 'checklist-traces-light-frontier-checkpoint.json'), checkpoint);
-        writeJson(path.join(roots.output, 'preflight', 'checklist-traces-light-frontier.json'), {
-          status: 'checklist-traces-light-ready-paused',
-          checkpoint: 'checklist-traces-light-frontier-checkpoint.json',
+      checklistPausedBeforeTraces = continuationRun.paused && checklistContinuationStep === 'traces-light';
+      if (continuationRun.paused) {
+        const selectedFrontier = `checklist-${checklistContinuationStep}-frontier-checkpoint.json`;
+        writeCheckpoint(path.join(roots.output, selectedFrontier), checkpoint);
+        writeJson(path.join(roots.output, 'preflight', `${selectedFrontier.replace('.json', '')}.json`), {
+          status: `checklist-${checklistContinuationStep}-ready-paused`,
+          checkpoint: selectedFrontier,
           materialized_config: 'checklist-materialized-config.json',
           materialized_config_sha256: checklistContinuationMaterializedConfigPath
             ? sha256File(checklistContinuationMaterializedConfigPath)
@@ -6220,6 +6509,7 @@ async function main(): Promise<void> {
           resumed_from_retained_skeleton: checklistContinuationEvidence.mode === 'retained-skeleton',
           confirmation_replay: false,
         });
+        if (checklistContinuationStep === 'skeleton') checklistPausedBeforeSkeleton = true;
       }
     } else if (checklistOnboarding) {
       const checklistRun = checklistResumeCheckpointPath
@@ -6359,25 +6649,25 @@ async function main(): Promise<void> {
     const unresolved = checkpointObject ? currentUnresolvedGenerations(config, checkpointObject) : [];
     const checklistRecord = postflightValues.checklist && typeof postflightValues.checklist === 'object' && !Array.isArray(postflightValues.checklist)
       ? postflightValues.checklist as Json : undefined;
-    const traceRow = checklistRecord && Array.isArray(checklistRecord.steps)
-      ? checklistRecord.steps.find(value => isRecord(value) && value.step_id === 'traces-light') as Json | undefined
+    const selectedRow = checklistRecord && Array.isArray(checklistRecord.steps)
+      ? checklistRecord.steps.find(value => isRecord(value) && value.step_id === checklistContinuationStep) as Json | undefined
       : undefined;
-    const traceConfirmed = !!traceRow && hasExactChecklistConfirmationEvidence(traceRow);
+    const selectedConfirmed = !!selectedRow && hasExactChecklistConfirmationEvidence(selectedRow);
     const continuationDelta = checklistContinuationEvidence.mode === 'continuation-frontier' && checkpointObject
-      ? checklistContinuationResumeDeltaIsValid(config, checklistContinuationEvidence.checkpoint, checkpointObject) ||
-        checklistContinuationReadbackIsValid(config, checklistContinuationEvidence.checkpoint, checkpointObject)
+      ? checklistContinuationResumeDeltaIsValid(config, checklistContinuationEvidence.checkpoint, checkpointObject, checklistContinuationStep) ||
+        checklistContinuationReadbackIsValid(config, checklistContinuationEvidence.checkpoint, checkpointObject, checklistContinuationStep)
       : false;
-    const clean = failedExecutions === 0 && unresolved.length === 0 && traceConfirmed && continuationDelta;
+    const clean = failedExecutions === 0 && unresolved.length === 0 && selectedConfirmed && continuationDelta;
     const summary = {
       status: clean ? 'checklist-continuation-complete-with-later-proof-steps-pending' : 'checklist-continuation-incomplete',
       mode: 'checklist-continuation',
-      step: 'traces-light',
+      step: checklistContinuationStep,
       retained_component_ids: checklistContinuationEvidence.expectedComponentIds,
       retained_component_count: checklistContinuationEvidence.expectedComponentIds.length,
       affected_component_ids: checklistContinuationEvidence.affectedComponentIds ?? [],
       reused_component_ids: checklistContinuationEvidence.reusedComponentIds ?? [],
       affected_batches: checklistContinuationEvidence.affectedBatches ?? [],
-      execution: {failed_executions: failedExecutions, current_unresolved_failures: unresolved.length, trace_confirmed: traceConfirmed, continuation_resume_delta_valid: continuationDelta},
+      execution: {failed_executions: failedExecutions, current_unresolved_failures: unresolved.length, selected_step_confirmed: selectedConfirmed, continuation_resume_delta_valid: continuationDelta},
       later_proof_steps_pending: true,
       postflight,
       checkpoint: checkpointObject ? summarizeCheckpoint(checkpointObject, false) : {available: false},

@@ -140,7 +140,7 @@ function instanceProjection(claims: Record<string, unknown>[]): Record<string, u
 
 function continuationSnapshotClaim(
   payload: Record<string, unknown>,
-  producerCheckId: 'checklist-continuation-snapshot' | 'checklist-traces-light',
+  producerCheckId: 'checklist-continuation-snapshot' | 'checklist-traces-light' | 'checklist-skeleton',
 ): Record<string, unknown> {
   const authorityClaimId = 'a'.repeat(64);
   const claimId = 'c'.repeat(64);
@@ -180,6 +180,8 @@ function currentProofReadbackSnapshot(scopeKey = 'jsonparser'): Record<string, u
     step_id: 'traces-light',
     title: 'Trace links',
     stamp: 'confirm',
+    role: 'onboard',
+    requires: ['skeleton'],
     scope: 'package',
     scope_key: scopeKey,
     applicable: true,
@@ -226,6 +228,35 @@ function continuationProjectionWithTrace(
     ]),
     generationsById: { 'trace-generation': generation },
     activeGenerationIdByNode: { 'trace-node': 'trace-generation' },
+  };
+}
+
+function continuationProjectionWithSkeleton(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-skeleton');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'skeleton-generation',
+    nodeInstanceId: 'skeleton-node',
+    checkId: 'checklist-skeleton',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: {'skeleton-generation': generation},
+    activeGenerationIdByNode: {'skeleton-node': 'skeleton-generation'},
   };
 }
 
@@ -328,6 +359,79 @@ describe('native checklist progress projection', () => {
     )?.[1];
     expect(embedded).toBeDefined();
     expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('uses a current confirmed Proof readback for the completed scoped skeleton generation', () => {
+    const skeletonChecks = ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'];
+    const anchorSteps = (snapshot().steps as Record<string, unknown>[]).map(step => step.step_id === 'skeleton'
+      ? {...step, role: 'onboard', stamp: 'confirm', required_checks: skeletonChecks, eligible: true, stored_status: 'pending', effective_status: 'pending', unmet_requires: [], check_results: []}
+      : step.step_id === 'research'
+        ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', unmet_requires: [], check_results: []}
+        : step);
+    const traceStep = {
+      step_id: 'traces-light',
+      title: 'Trace links',
+      when: 'new_project',
+      requires: ['skeleton'],
+      role: 'onboard',
+      stamp: 'confirm',
+      scope: 'package',
+      notes_required: true,
+      invalidates: [],
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+      stored_status: 'pending',
+      effective_status: 'pending',
+      applicable: true,
+      eligible: false,
+      unmet_requires: ['skeleton'],
+      check_results: [],
+    };
+    const anchor = snapshot({
+      steps: [...anchorSteps, traceStep],
+      steps_total: 4,
+      steps_pending: 2,
+      counts: {confirmed: 2, skipped: 0, not_applicable: 0, pending: 1, blocked: 1},
+      eligible_step_ids: ['skeleton'],
+      next: {step_id: 'skeleton', title: 'Four-layer STK/SYS/SW/INT breadth skeleton', role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['research'], required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']},
+    });
+    const readbackSteps = (anchor.steps as Record<string, unknown>[]).map(step => step.step_id === 'skeleton'
+      ? {
+        ...step,
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        check_results: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
+          .map(id => ({id, status: 'pass', at: '2026-09-09T06:02:00Z'})),
+      }
+      : step.step_id === 'traces-light'
+        ? {...step, eligible: true, unmet_requires: [], effective_status: 'pending'}
+        : step);
+    const readback = snapshot({
+      steps: readbackSteps,
+      steps_total: 4,
+      steps_pending: 1,
+      counts: {confirmed: 3, skipped: 0, not_applicable: 0, pending: 1, blocked: 0},
+      eligible_step_ids: ['traces-light'],
+      next: {step_id: 'traces-light', title: 'Trace links', role: 'onboard', stamp: 'confirm', scope: 'package', requires: ['skeleton'], required_checks: ['annotation_validity', 'orphan_code_clean']},
+    });
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSkeleton(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['affected-component', 'reused-component'],
+      affectedComponentIds: ['affected-component'],
+    });
+    expect(progress.checklist.steps.find(step => step.id === 'skeleton')).toMatchObject({state: 'confirmed', eligible: false});
+    expect(progress.checklist.counts.confirmed).toBe(3);
+    expect(progress.checklist.eligible_step_ids).toEqual(['traces-light']);
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      generation_id: 'skeleton-generation',
+      digest: sha256Canonical(readback),
+    });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=3');
+    expect(rendered.html).toContain('confirmed=3');
   });
 
   it('rejects a current readback whose package key is not the continuation anchor key', () => {

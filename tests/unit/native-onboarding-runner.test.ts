@@ -44,6 +44,8 @@ import {
   executeChecklistContinuationEngine,
   deriveChecklistAffectedBatches,
   deriveCurrentChecklistAffectedBatches,
+  deriveCurrentChecklistSkeletonAffectedBatches,
+  validateChecklistContinuationEligibility,
   parseRecoveryArguments,
   readRetainedReviewExport,
   readRecoveryReviewPackets,
@@ -300,17 +302,106 @@ describe('native onboarding runner boundaries', () => {
     previousCodexHome = process.env.CODEX_HOME;
   });
 
-  it('accepts one shared traces-light continuation entry and rejects unsupported stages', () => {
+  it('accepts one shared native continuation entry for traces-light or skeleton and rejects unsupported stages', () => {
     expect(parseChecklistContinueArguments({'checklist-continue': '/tmp/checkpoint.json'})).toEqual({
       checkpoint: '/tmp/checkpoint.json',
       step: 'traces-light',
     });
+    expect(parseChecklistContinueArguments({
+      'checklist-continue': '/tmp/checkpoint.json',
+      'checklist-step': 'skeleton',
+    })).toEqual({checkpoint: '/tmp/checkpoint.json', step: 'skeleton'});
     expect(() => parseChecklistContinueArguments({
       'checklist-continue': '/tmp/checkpoint.json',
       'checklist-step': 'research',
-    })).toThrow(/only traces-light/);
+    })).toThrow(/only traces-light or skeleton/);
     expect(() => parseChecklistContinueArguments({'checklist-step': 'traces-light'}))
       .toThrow(/checklist-continue is required/);
+  });
+
+  it('materializes only the selected continuation branch before strict loading', async () => {
+    const checksFor = (step: 'traces-light' | 'skeleton') => {
+      const config = buildChecklistContinuationConfig(step) as any;
+      return config.subgraphs['continuation-project'].checks as Record<string, any>;
+    };
+    const shared = ['materialize-retained-catalog', 'checklist-continuation-snapshot', 'component-promotions-complete'];
+    const traces = checksFor('traces-light');
+    const skeleton = checksFor('skeleton');
+    expect(Object.keys(traces).sort()).toEqual([
+      ...shared, 'annotation_validity', 'orphan_code_clean', 'checklist-traces-light',
+    ].sort());
+    expect(Object.keys(skeleton).sort()).toEqual([
+      ...shared, 'l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete',
+      'levels_connected', 'checklist-skeleton',
+    ].sort());
+    expect(Object.values(traces).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
+    expect(Object.values(skeleton).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
+    await loadConfig(buildChecklistContinuationConfig('traces-light') as any, {strict: true});
+    await loadConfig(buildChecklistContinuationConfig('skeleton') as any, {strict: true});
+  });
+
+  it('binds continuation eligibility to one exact native pending frontier and preserves confirmed readback', () => {
+    const requiredChecks = ['annotation_validity', 'orphan_code_clean'];
+    const skeleton = {
+      step_id: 'skeleton', applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['research'], required_checks: [
+        'l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected',
+      ], check_results: [
+        {id: 'l0_stakeholder_complete', status: 'pass', at: '2026-09-09T00:00:00Z'},
+        {id: 'l1_system_complete', status: 'pass', at: '2026-09-09T00:00:00Z'},
+        {id: 'l2_software_complete', status: 'pass', at: '2026-09-09T00:00:00Z'},
+        {id: 'levels_connected', status: 'pass', at: '2026-09-09T00:00:00Z'},
+      ],
+    };
+    const pending = {
+      step_id: 'traces-light', applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending',
+      role: 'onboard', stamp: 'confirm', scope: 'package', requires: ['skeleton'], required_checks: requiredChecks,
+      check_results: [],
+    };
+    const next = {
+      step_id: 'traces-light', role: 'onboard', stamp: 'confirm', scope: 'package', requires: ['skeleton'],
+      required_checks: requiredChecks,
+    };
+    const show = {
+      schema_version: 'proof.checklist.show.v1', checklist: 'onboard_v1', active: true, new_project: true,
+      eligible_step_ids: ['traces-light'], next, steps: [skeleton, pending],
+    };
+    expect(validateChecklistContinuationEligibility(show, false, 'traces-light')).toMatchObject({
+      checklist: 'onboard_v1', step: 'traces-light', role: 'onboard', eligible: true,
+    });
+    expect(() => validateChecklistContinuationEligibility({
+      ...show, steps: [skeleton, pending, {...pending}],
+    }, false, 'traces-light')).toThrow(/exactly one traces-light step row/);
+    expect(() => validateChecklistContinuationEligibility({
+      ...show, eligible_step_ids: ['traces-light', 'traces-light'],
+    }, false, 'traces-light')).toThrow(/eligible traces-light/);
+    expect(() => validateChecklistContinuationEligibility({
+      ...show, next: {...next, requires: ['research']},
+    }, false, 'traces-light')).toThrow(/eligible traces-light/);
+
+    const confirmed = {
+      ...pending, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', scope_key: 'project-a',
+      check_results: requiredChecks.map((id, index) => ({id, status: 'pass', at: `2026-09-09T00:00:0${index}Z`})),
+    };
+    const confirmedShow = {...show, eligible_step_ids: [], next: null, steps: [skeleton, confirmed]};
+    expect(validateChecklistContinuationEligibility(confirmedShow, true, 'traces-light')).toMatchObject({
+      checklist: 'onboard_v1', step: 'traces-light', eligible: true,
+    });
+    expect(() => validateChecklistContinuationEligibility(confirmedShow, false, 'traces-light'))
+      .toThrow(/eligible traces-light/);
+
+    const skeletonPending = {
+      ...pending, step_id: 'skeleton', scope: 'repo', requires: ['research'], required_checks: skeleton.required_checks,
+    };
+    const skeletonShow = {
+      ...show, eligible_step_ids: ['skeleton'], next: {
+        step_id: 'skeleton', role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['research'],
+        required_checks: skeleton.required_checks,
+      }, steps: [skeletonPending],
+    };
+    expect(validateChecklistContinuationEligibility(skeletonShow, false, 'skeleton')).toMatchObject({
+      checklist: 'onboard_v1', step: 'skeleton', role: 'onboard', eligible: true,
+    });
   });
 
   it('derives affected batches from unique WorkItem path ownership and preserves reused components', () => {
@@ -378,6 +469,81 @@ describe('native onboarding runner boundaries', () => {
       reusedComponentIds: ['component-a'],
       batches: [],
     });
+  });
+
+  it('derives arbitrary skeleton owners from the native L2 JSONL and resolves each requirement through Proof', async () => {
+    const proof = path.join(root, 'skeleton-audit-proof');
+    const output = path.join(root, 'skeleton-audit-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      'if [ "$1" = req ] && [ "$2" = list ]; then',
+      '  printf \'%s\\n\' \'[{"id":"SW-REQ-A","component":"component-a","file_path":"specs/software/requirements/A.req.yaml"},{"id":"INT-REQ-B","component":"component-b","file_path":"specs/integration/requirements/B.req.yaml"}]\'',
+      '  exit 0',
+      'fi',
+      'if [ "$1" = req ] && [ "$2" = show ]; then',
+      '  if [ "$3" = SW-REQ-A ]; then printf \'%s\\n\' \'{"requirement":{"id":"SW-REQ-A","component":"component-a","_computed":{"file_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"file_path":"specs/software/requirements/A.req.yaml"}\'; else printf \'%s\\n\' \'{"requirement":{"id":"INT-REQ-B","component":"component-b","_computed":{"file_hash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},"file_path":"specs/integration/requirements/B.req.yaml"}\'; fi',
+      '  exit 0',
+      'fi',
+      'printf \'%s\\n\' \'{"event":"check_done","stage":"spec","check":"l2_software_complete","status":"error","details":["SW-REQ-A has no satisfies link","INT-REQ-B has no satisfies link"]}\'',
+      'exit 1',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    const result = await deriveCurrentChecklistSkeletonAffectedBatches(proof, root, output, 1000, [
+      {component_id: 'component-a', sorted_owned_paths: ['a.go', 'a_test.go']},
+      {component_id: 'component-b', sorted_owned_paths: ['b.go']},
+    ] as any);
+    expect(result).toMatchObject({
+      affectedComponentIds: ['component-a', 'component-b'],
+      reusedComponentIds: [],
+      batches: [
+        {component_id: 'component-a', paths: ['a.go', 'a_test.go']},
+        {component_id: 'component-b', paths: ['b.go']},
+      ],
+    });
+    expect(result.requirementIdsByComponent).toEqual({
+      'component-a': ['SW-REQ-A'],
+      'component-b': ['INT-REQ-B'],
+    });
+  });
+
+  it('keeps a zero-finding skeleton audit honest without inventing an affected owner', async () => {
+    const proof = path.join(root, 'skeleton-empty-proof');
+    const output = path.join(root, 'skeleton-empty-output');
+    fs.writeFileSync(proof, [
+      '#!/bin/sh',
+      "printf '%s\\n' '{\"event\":\"check_done\",\"stage\":\"spec\",\"check\":\"l2_software_complete\",\"status\":\"pass\",\"details\":[]}'",
+      'exit 0',
+      '',
+    ].join('\n'), {encoding: 'utf8', mode: 0o700});
+    await expect(deriveCurrentChecklistSkeletonAffectedBatches(proof, root, output, 1000, [
+      {component_id: 'component-a', sorted_owned_paths: ['a.go']},
+      {component_id: 'component-b', sorted_owned_paths: ['b.go']},
+    ] as any)).resolves.toMatchObject({
+      affectedComponentIds: [],
+      reusedComponentIds: ['component-a', 'component-b'],
+      batches: [],
+    });
+  });
+
+  it.each([
+    ['malformed detail', ['l2 finding has no native requirement identity'], /exactly one SW\/INT requirement ID/],
+    ['duplicate requirement identity', ['SW-REQ-A is missing a link', 'SW-REQ-A is missing another link'], /duplicate requirement IDs/],
+    ['unresolved requirement identity', ['SW-REQ-MISSING is missing a link'], /exact current row/],
+  ])('rejects a skeleton audit with a %s', async (_label, details, expected) => {
+    const proof = path.join(root, `skeleton-invalid-${String(_label).replace(/\s+/g, '-')}-proof`);
+    const output = path.join(root, `skeleton-invalid-${String(_label).replace(/\s+/g, '-')}-output`);
+    const receipt = JSON.stringify({
+      event: 'check_done', stage: 'spec', check: 'l2_software_complete', status: 'error', details,
+    });
+    const lines = ['#!/bin/sh'];
+    if (_label === 'unresolved requirement identity') {
+      lines.push('if [ "$1" = req ] && [ "$2" = list ]; then', "  printf '%s\\n' '[]'", '  exit 0', 'fi');
+    }
+    lines.push(`printf '%s\\n' '${receipt}'`, 'exit 1', '');
+    fs.writeFileSync(proof, lines.join('\n'), {encoding: 'utf8', mode: 0o700});
+    await expect(deriveCurrentChecklistSkeletonAffectedBatches(proof, root, output, 1000, [
+      {component_id: 'component-a', sorted_owned_paths: ['a.go']},
+    ] as any)).rejects.toThrow(expected);
   });
 
   it('rejects malformed nonblank orphan audit JSONL', async () => {
