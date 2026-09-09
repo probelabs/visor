@@ -130,7 +130,7 @@ export interface ExecutionContext {
     mockForStep?: (step: string) => unknown | undefined;
     /** Returns true if the mock for a step has been consumed (for loop termination) */
     isMockExhausted?: (step: string) => boolean;
-    /** Called when a check completes - useful for streaming TUI updates */
+    /** Called when a check reaches a terminal completed/errored state - useful for streaming TUI updates */
     onCheckComplete?: (info: {
       checkId: string;
       result: { output?: unknown; content?: string };

@@ -582,6 +582,58 @@ describe('native checklist progress projection', () => {
     });
   });
 
+  it('keeps failed and running component counts aligned across CLI, HTML, and JSON', () => {
+    const proofSnapshot = snapshot();
+    const componentGeneration = (id: string, status: string) => ({
+      status,
+      checkId: 'author-native-component',
+      scope: [
+        { kind: 'keyed', key: 'project' },
+        { kind: 'keyed', key: id },
+      ],
+    });
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: {
+        ...instanceProjection([]),
+        generationsById: {
+          alpha: componentGeneration('alpha', 'failed'),
+          beta: componentGeneration('beta', 'failed'),
+          gamma: componentGeneration('gamma', 'running'),
+        },
+      },
+    });
+    expect(progress.operational.components).toMatchObject({
+      known: true,
+      known_count: 3,
+      completed_count: 0,
+      running_count: 1,
+      failed_count: 2,
+      pending_count: 0,
+      unknown_count: 0,
+      unexpanded_count: 0,
+    });
+    expect(progress.operational.components.items).toEqual([
+      { id: 'alpha', state: 'failed', check_ids: ['author-native-component'] },
+      { id: 'beta', state: 'failed', check_ids: ['author-native-component'] },
+      { id: 'gamma', state: 'running', check_ids: ['author-native-component'] },
+    ]);
+
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain(
+      'operational components: state=3 discovered expanded completed=0,running=1,failed=2,pending=0,unknown=0,unexpanded=0'
+    );
+    expect(rendered.html).toContain('<b>running:</b> 1');
+    expect(rendered.html).toContain('<b>failed:</b> 2');
+    const json = JSON.parse(rendered.json);
+    expect(json.operational.components).toMatchObject({running_count: 1, failed_count: 2});
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
   it('selects research over the root bootstrap snapshot', () => {
     const proofSnapshot = snapshot();
     const research = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));

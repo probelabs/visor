@@ -315,15 +315,15 @@ export class StateMachineRunner {
       }
     } catch {}
 
-    // Call onCheckComplete hook for TUI streaming updates
-    if (eventForObservers.type === 'CheckCompleted') {
+    // Call onCheckComplete hook for terminal completed/errored TUI updates.
+    if (eventForObservers.type === 'CheckCompleted' || eventForObservers.type === 'CheckErrored') {
       try {
         const hook = this.context.executionContext?.hooks?.onCheckComplete;
         if (typeof hook === 'function') {
           const checkConfig = this.context.config?.checks?.[eventForObservers.checkId];
           hook({
             checkId: eventForObservers.checkId,
-            result: eventForObservers.result,
+            result: eventForObservers.type === 'CheckCompleted' ? eventForObservers.result : {},
             checkConfig: checkConfig
               ? {
                   type: checkConfig.type,

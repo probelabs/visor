@@ -388,6 +388,12 @@ describe('EXP-0123 managed graph-run ownership', () => {
   let activeHandles: number;
   let launchOrder: string[];
   let terminalVisibleAtCompletion: boolean[];
+  let checkCompleteObservations: Array<{
+    result: unknown;
+    events: readonly any[];
+    history: readonly any[];
+    generationStatuses: readonly string[];
+  }>;
   let timeoutCallCount: () => number;
   let intervalCallCount: () => number;
   let identityPosition: IdentityPosition | undefined;
@@ -664,6 +670,7 @@ describe('EXP-0123 managed graph-run ownership', () => {
     activeHandles = 0;
     launchOrder = [];
     terminalVisibleAtCompletion = [];
+    checkCompleteObservations = [];
     timeoutCallCount = () => 0;
     intervalCallCount = () => 0;
     identityPosition = undefined;
@@ -679,10 +686,21 @@ describe('EXP-0123 managed graph-run ownership', () => {
       hooks: {
         onCheckComplete: info => {
           if (info.checkId !== 'inspect') return;
-          const events = (engine as any)._lastContext.journal.readRuntimeEvents();
+          const journal = (engine as any)._lastContext.journal;
+          const events = journal.readRuntimeEvents();
+          const history = (engine as any)._lastRunner.getState().historyLog as readonly any[];
           terminalVisibleAtCompletion.push(
             events.some((event: any) => event.type === 'ManagedRunTerminated')
           );
+          const projection = journal.getInstanceProjection();
+          checkCompleteObservations.push({
+            result: info.result,
+            events: [...events],
+            history: [...history],
+            generationStatuses: Object.values(projection.generationsById)
+              .filter((generation: any) => generation.checkId === info.checkId)
+              .map((generation: any) => generation.status),
+          });
           observationLane?.push(`callback:${info.checkId}`);
         },
       },
@@ -2167,6 +2185,20 @@ describe('EXP-0123 managed graph-run ownership', () => {
       );
     }
     if (row.observer === 'completed') expect(terminalVisibleAtCompletion).toEqual([true]);
+    expect(checkCompleteObservations).toHaveLength(1);
+    if (row.observer === 'completed') {
+      const completedEvent = checkCompleteObservations[0].history.find(
+        event => event.type === 'CheckCompleted' && event.checkId === 'inspect'
+      );
+      expect(completedEvent).toBeDefined();
+      expect(checkCompleteObservations[0].result).toEqual(completedEvent.result);
+    } else {
+      const observation = checkCompleteObservations[0];
+      expect(observation.result).toEqual({});
+      expect(observation.events.some(event => event.type === 'ManagedRunTerminated')).toBe(true);
+      expect(observation.events.some(event => event.type === 'AttemptFailed')).toBe(true);
+      expect(observation.generationStatuses).toEqual(['failed']);
+    }
   });
 
   it('latches halt scheduling immediately after terminal when the routing effect throws', async () => {
