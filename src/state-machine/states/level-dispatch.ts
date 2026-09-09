@@ -1123,12 +1123,13 @@ async function handleClaimReadyDispatch(
           launchGenerated(generation);
           launched = true;
         }
-      } else if (running.size === 0) {
-        // Evaluate the complete immutable frontier before constructing any
-        // attempt.  A deferred generation remains ready and is revisited only
-        // after allowed work has drained; it is never marked failed/skipped.
+      } else if (running.size < maxParallelism) {
+        // Evaluate a frozen ready snapshot before constructing attempts.  A
+        // deferred generation remains ready and is revisited after allowed
+        // work drains; async gate calls are revalidated against the live
+        // frontier before any attempt is started.
         const readySnapshot = Object.freeze([...context.journal.queryReadyWork()]);
-        const dispatchable: NodeGenerationProjection[] = [];
+        const decisions = new Map<string, GeneratedDispatchGateDecision>();
         for (const generation of readySnapshot) {
           const decision = await context.generatedDispatchGate(generation);
           if (decision !== undefined && decision !== 'dispatch' && decision !== 'defer') {
@@ -1138,20 +1139,53 @@ async function handleClaimReadyDispatch(
             error.code = 'INVALID_GENERATED_DISPATCH_GATE_DECISION';
             throw error;
           }
-          if (decision !== 'defer') dispatchable.push(generation);
+          decisions.set(generation.nodeGenerationId, decision === 'defer' ? 'defer' : 'dispatch');
         }
-        if (readySnapshot.length > 0 && dispatchable.length === 0) {
-          generatedDispatchGateHalted = true;
-        }
-        for (const generation of dispatchable) {
+
+        // Gate evaluation can yield to work which changes the frontier.  Use
+        // the fresh ready set as the final launch authority: a generation that
+        // disappeared is skipped, while a newly-ready generation is revisited
+        // and evaluated on the next pass rather than implicitly deferred.
+        const freshReady = context.journal.queryReadyWork();
+        const freshReadyById = new Map(
+          freshReady.map(generation => [generation.nodeGenerationId, generation]),
+        );
+        for (const generation of readySnapshot) {
+          if (decisions.get(generation.nodeGenerationId) === 'defer') continue;
+          const current = freshReadyById.get(generation.nodeGenerationId);
+          if (!current) continue;
           const resourceGroup = resourceGroupForCheck(
-            context.journal.getGeneratedExecution(generation.nodeGenerationId).node.check,
+            context.journal.getGeneratedExecution(current.nodeGenerationId).node.check,
             'generated'
           );
           if (resourceGroup && activeResourceGroups.has(resourceGroup)) continue;
           if (running.size >= maxParallelism) break;
-          launchGenerated(generation);
+          launchGenerated(current);
           launched = true;
+        }
+
+        const currentReady = context.journal.queryReadyWork();
+        const frontierFullyEvaluated = currentReady.length > 0 && currentReady.every(generation =>
+          decisions.has(generation.nodeGenerationId)
+        );
+        const hasDispatchableReady = currentReady.some(generation =>
+          decisions.get(generation.nodeGenerationId) !== 'defer'
+        );
+        const hasResourceBlockedReady = currentReady.some(generation => {
+          if (decisions.get(generation.nodeGenerationId) === 'defer') return false;
+          const resourceGroup = resourceGroupForCheck(
+            context.journal.getGeneratedExecution(generation.nodeGenerationId).node.check,
+            'generated'
+          );
+          return resourceGroup !== undefined && activeResourceGroups.has(resourceGroup);
+        });
+        if (
+          running.size === 0 &&
+          frontierFullyEvaluated &&
+          !hasDispatchableReady &&
+          !hasResourceBlockedReady
+        ) {
+          generatedDispatchGateHalted = true;
         }
       }
       for (const checkId of [...pending]) {

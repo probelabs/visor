@@ -117,6 +117,32 @@ function recoveryConfig(): VisorConfig {
   } as VisorConfig;
 }
 
+function recoveryConfigWithSkeletonCandidate(): VisorConfig {
+  const config = recoveryConfig();
+  config.max_parallelism = 3;
+  config.claim_types = {
+    ...config.claim_types,
+    'checklist.skeleton@1': {schema: {type: 'object'}},
+  };
+  const component = config.subgraphs!.component as any;
+  config.subgraphs = {
+    ...config.subgraphs,
+    component: {
+      ...component,
+      checks: {
+        ...component.checks,
+        'checklist-skeleton': {
+          type: 'author-recovery-fixture',
+          depends_on: ['promote-native-component'],
+          consumes: [{claim: 'native.component.promoted@1', as: 'promotion'}],
+          emits: [{claim: 'checklist.skeleton@1', from: 'output'}],
+        },
+      },
+    },
+  };
+  return config;
+}
+
 function nativeReviewConfig(): VisorConfig {
   const config = recoveryConfig();
   const objectClaim = {schema: {type: 'object'}};
@@ -202,6 +228,20 @@ function nativeReviewConfig(): VisorConfig {
 
 function git(root: string, args: string[]): string {
   return String(execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' })).trim();
+}
+
+async function waitForFixture<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`fixture timed out waiting for ${label}`)), 1000);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 function rehashCheckpoint(checkpoint: any): any {
@@ -412,20 +452,55 @@ class AuthorRecoveryFixtureProvider extends CheckProvider {
   }
 }
 
+type MultiAuthorRecoveryFixtureOptions = Readonly<{
+  holdAuthor?: ComponentId;
+}>;
+
 class MultiAuthorRecoveryFixtureProvider extends CheckProvider {
   authorEntries = 0;
   activeAuthors = 0;
   maxConcurrentAuthors = 0;
   activePromotions = 0;
   maxConcurrentPromotions = 0;
+  heldAuthorReleased = false;
+  readonly heldAuthorEntered: Promise<void>;
+  readonly authorACompleted: Promise<void>;
+  readonly authorAPromotionStarted: Promise<void>;
+  private readonly heldAuthor?: ComponentId;
+  private readonly heldAuthorGate: Promise<void>;
+  private releaseHeldAuthorGate!: () => void;
+  private resolveHeldAuthorEntered!: () => void;
+  private resolveAuthorACompleted!: () => void;
+  private resolveAuthorAPromotionStarted!: () => void;
   private readonly authorOverlap: Promise<void>;
   private releaseAuthorOverlap!: () => void;
 
-  constructor(private readonly calls: string[]) {
+  constructor(
+    private readonly calls: string[],
+    options: MultiAuthorRecoveryFixtureOptions = {},
+  ) {
     super();
-    this.authorOverlap = new Promise<void>(resolve => {
-      this.releaseAuthorOverlap = resolve;
+    this.heldAuthor = options.holdAuthor;
+    this.heldAuthorGate = new Promise<void>(resolve => {
+      this.releaseHeldAuthorGate = resolve;
     });
+    this.heldAuthorEntered = new Promise<void>(resolve => {
+      this.resolveHeldAuthorEntered = resolve;
+    });
+    this.authorACompleted = new Promise<void>(resolve => {
+      this.resolveAuthorACompleted = resolve;
+    });
+    this.authorAPromotionStarted = new Promise<void>(resolve => {
+      this.resolveAuthorAPromotionStarted = resolve;
+    });
+    this.authorOverlap = this.heldAuthor === undefined
+      ? new Promise<void>(resolve => { this.releaseAuthorOverlap = resolve; })
+      : Promise.resolve();
+  }
+
+  releaseHeldAuthor(): void {
+    this.heldAuthorReleased = true;
+    this.releaseHeldAuthorGate();
   }
 
   getName(): string { return 'author-recovery-fixture'; }
@@ -450,24 +525,26 @@ class MultiAuthorRecoveryFixtureProvider extends CheckProvider {
       this.activeAuthors += 1;
       this.authorEntries += 1;
       this.maxConcurrentAuthors = Math.max(this.maxConcurrentAuthors, this.activeAuthors);
-      if (this.authorEntries === 2) this.releaseAuthorOverlap();
       try {
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        await Promise.race([
-          this.authorOverlap,
-          new Promise<void>((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('author recovery did not overlap')), 250);
-          }),
-        ]);
-        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        if (this.heldAuthor === component) {
+          this.resolveHeldAuthorEntered();
+          await this.heldAuthorGate;
+        } else if (this.heldAuthor !== undefined) {
+          await this.heldAuthorEntered;
+        } else if (this.heldAuthor === undefined) {
+          if (this.authorEntries === 2) this.releaseAuthorOverlap();
+          await this.authorOverlap;
+        }
       } finally {
         this.activeAuthors -= 1;
       }
+      if (component === 'A') this.resolveAuthorACompleted();
       return {issues: [], output: {component_id: component, replayed: true}};
     }
     if (checkId === 'promote-native-component') {
       this.activePromotions += 1;
       this.maxConcurrentPromotions = Math.max(this.maxConcurrentPromotions, this.activePromotions);
+      if (component === 'A') this.resolveAuthorAPromotionStarted();
       await new Promise<void>(resolve => setTimeout(resolve, 10));
       this.activePromotions -= 1;
       return {issues: [], output: {component_id: component, promoted: true}};
@@ -739,6 +816,111 @@ describe('native isolated author recovery', () => {
         claim.active === true && claim.claim === 'native.component.promoted@1'
       ).map((claim: any) => claim.scope.at(-1)?.key).sort()).toEqual(['A', 'B']);
     } finally {
+      registry.unregister('author-recovery-fixture');
+    }
+  });
+
+  it('does not hold a ready promotion behind a paused checklist skeleton', async () => {
+    const current = fixture!;
+    fs.writeFileSync(path.join(current.checkouts.A, 'owned-a.txt'), 'A retained draft\n');
+    const config = recoveryConfigWithSkeletonCandidate();
+    const plan = compileClaimPlan(config);
+    const prepared = failedAuthorCheckpoint(current, config);
+    const checkpoint = prepared.checkpoint;
+    const oldCheckpointBytes = JSON.stringify(checkpoint);
+    const selectedGenerationIds = prepared.failedGenerations
+      .map(generation => generation.nodeGenerationId)
+      .sort();
+    const inventory = {
+      authority: {
+        project_id: PROJECT_ID,
+        subject_fingerprint: PROOF_FINGERPRINT,
+      },
+    };
+    const roots = {
+      subject: fs.realpathSync(current.subject),
+      priorOutput: fs.realpathSync(current.priorOutput),
+    };
+    const selected = validateRecoverySelection(
+      config,
+      checkpoint,
+      selectedGenerationIds,
+      roots,
+      inventory,
+      'isolated_draft_replay',
+      [],
+      {allowEmptyAuthorDraft: true, expectedBaselineCommit: current.baselineCommit},
+    );
+    expect(selected.bindings).toHaveLength(2);
+
+    const calls: string[] = [];
+    const provider = new MultiAuthorRecoveryFixtureProvider(calls, {holdAuthor: 'B'});
+    registry.register(provider);
+    let retryPrefix: any;
+    const gateCalls: string[] = [];
+    const engine = new StateMachineExecutionEngine(current.subject);
+    const resumedPromise = engine.retryGraphCheckpoint({
+      checkpoint: JSON.parse(JSON.stringify(checkpoint)),
+      config,
+      prInfo,
+      retryGenerationIds: selectedGenerationIds,
+      externalSideEffects: 'isolated_draft_replay',
+      generatedDispatchGate: generation => {
+        const component = String(generation.scope.at(-1)?.key || '');
+        gateCalls.push(`${generation.checkId}:${component}`);
+        return generation.checkId === 'checklist-skeleton' ? 'defer' : 'dispatch';
+      },
+      onRetryCheckpoint: prefix => {
+        expect(calls).toEqual([]);
+        retryPrefix = prefix;
+      },
+      maxParallelism: 3,
+      failFast: false,
+    });
+    try {
+      await waitForFixture(provider.heldAuthorEntered, 'B author entry');
+      await waitForFixture(provider.authorACompleted, 'A author completion');
+      expect(provider.heldAuthorReleased).toBe(false);
+      expect(provider.activeAuthors).toBe(1);
+      await waitForFixture(provider.authorAPromotionStarted, 'A promotion dispatch while B is held');
+      expect(provider.heldAuthorReleased).toBe(false);
+      expect(provider.activePromotions).toBe(1);
+      provider.releaseHeldAuthor();
+      const resumed = await resumedPromise;
+
+      expect(JSON.stringify(checkpoint)).toBe(oldCheckpointBytes);
+      expect(retryPrefix.events.slice(0, checkpoint.events.length)).toEqual(checkpoint.events);
+      expect(retryPrefix.events.slice(checkpoint.events.length).map((event: any) => event.type)).toEqual([
+        'AttemptRetryRequested', 'AttemptRetryRequested',
+      ]);
+      expect(retryPrefix.events.slice(checkpoint.events.length).map((event: any) => event.nodeGenerationId)).toEqual(
+        selectedGenerationIds,
+      );
+      expect(provider.authorEntries).toBe(2);
+      expect(provider.maxConcurrentAuthors).toBe(2);
+      expect(provider.maxConcurrentPromotions).toBe(1);
+      expect(gateCalls.some(call => call.startsWith('checklist-skeleton:'))).toBe(true);
+
+      const projection = ExecutionJournal.restoreGraphCheckpoint(
+        plan,
+        JSON.parse(JSON.stringify(resumed.checkpoint)),
+      ).getInstanceProjection();
+      const skeletons = Object.values(projection.generationsById).filter(
+        generation => generation.checkId === 'checklist-skeleton'
+      );
+      expect(skeletons).toHaveLength(2);
+      expect(skeletons.every(generation => generation.status === 'ready')).toBe(true);
+      for (const event of resumed.checkpoint.events.filter(event =>
+        typeof event.nodeGenerationId === 'string' && selectedGenerationIds.includes(event.nodeGenerationId)
+      )) {
+        const expectedGeneration = prepared.failedGenerations.find(
+          generation => generation.nodeGenerationId === event.nodeGenerationId
+        );
+        expect(event.scope).toEqual(expectedGeneration?.scope);
+      }
+    } finally {
+      provider.releaseHeldAuthor();
+      await resumedPromise.catch(() => undefined);
       registry.unregister('author-recovery-fixture');
     }
   });
