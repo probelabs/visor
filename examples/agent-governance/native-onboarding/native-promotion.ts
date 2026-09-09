@@ -39,6 +39,8 @@ export interface NativePromotionInput {
   writerCheckout: VerifiedWriterCheckoutOutput;
   workItem: NativePromotionWorkItem;
   proofBin: string;
+  /** Optional bounded source policy for the traces-light continuation. */
+  sourceWritePolicy?: 'go-trace-annotations-only';
   /** Defaults to true. Set false only when the caller owns the commit boundary. */
   commitAcceptedArtifacts?: boolean;
   timeoutMs?: number;
@@ -125,6 +127,8 @@ export interface NativeChecklistRefreshInput {
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const TRACE_ANNOTATION_SCANNER_TIMEOUT_MS = 30_000;
+const TRACE_ANNOTATION_SCANNER_FILENAME = 'trace-annotation-scanner.go';
 const SHA256_FILE_HASH = /^sha256:[0-9a-f]{64}$/;
 const SAFE_CHECKLIST_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -349,6 +353,47 @@ function parseProofJson(result: CommandResult, label: string): unknown {
   }
 }
 
+/**
+ * Proof's scoped audit JSON output is a private JSONL receipt: progress is
+ * emitted as stage/check events and the check_done event is the authoritative
+ * result. Keep this parser strict so a status-only or malformed audit cannot
+ * open the canonical promotion boundary.
+ */
+function parseTraceAnnotationAuditReceipt(result: CommandResult): void {
+  if (result.status !== 0) {
+    throw new Error(`Proof staging annotation audit failed with exit ${result.status}: ${commandDetail(result)}`);
+  }
+  const lines = result.stdout.split(/\r?\n/).filter(line => line.length > 0);
+  if (!lines.length) throw new Error('Proof staging annotation audit returned an empty JSONL receipt');
+  const events: Json[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(lines[index]) as unknown;
+    } catch (error) {
+      throw new Error(`Proof staging annotation audit returned invalid JSONL at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!plainObject(parsed)) {
+      throw new Error(`Proof staging annotation audit JSONL line ${index + 1} is not an object`);
+    }
+    const event = parsed as Json;
+    if (event.event !== 'stage_start' && event.event !== 'check_start' && event.event !== 'check_done') {
+      throw new Error(`Proof staging annotation audit returned an unexpected event ${String(event.event)}`);
+    }
+    events.push(event);
+  }
+  const checkDone = events.filter(event => event.event === 'check_done');
+  if (checkDone.length === 0) throw new Error('Proof staging annotation audit returned no check_done event');
+  if (checkDone.length !== 1) throw new Error(`Proof staging annotation audit returned ${checkDone.length} check_done events; expected exactly one`);
+  const done = checkDone[0];
+  if (done.stage !== 'implement' || done.check !== 'annotation_validity') {
+    throw new Error('Proof staging annotation audit returned an unexpected check_done target');
+  }
+  if (done.status !== 'pass') {
+    throw new Error(`Proof staging annotation audit check_done is not pass: ${String(done.status)}`);
+  }
+}
+
 function commandDetail(result: CommandResult): string {
   return [result.stderr, result.stdout].filter(Boolean).join('\n').slice(0, 3000);
 }
@@ -520,6 +565,117 @@ function changedPaths(root: string, baselineCommit: string): ChangedPath[] {
   const unique = new Map<string, ChangedPath>();
   for (const entry of result) unique.set(`${entry.status}:${entry.path}:${entry.oldPath || ''}`, entry);
   return [...unique.values()];
+}
+
+interface TraceAnnotationScannerFile {
+  path: string;
+  baseline: string;
+  current: string;
+}
+
+interface TraceAnnotationScannerResult {
+  allowed?: boolean;
+  reason?: string;
+}
+
+function traceAnnotationScannerPath(): string {
+  const helperDirectory = fs.realpathSync(__dirname);
+  const expected = path.join(helperDirectory, TRACE_ANNOTATION_SCANNER_FILENAME);
+  const helperStat = lstatOrUndefined(expected);
+  if (!helperStat || !helperStat.isFile() || helperStat.isSymbolicLink()) {
+    throw new Error(`bounded trace annotation scanner is unavailable: ${expected}`);
+  }
+  const helper = fs.realpathSync(expected);
+  if (helper !== expected) {
+    throw new Error(`bounded trace annotation scanner is not the fixed helper: ${expected}`);
+  }
+  return helper;
+}
+
+function runTraceAnnotationScanner(
+  canonicalRoot: string,
+  baselineCommit: string,
+  writerRoot: string,
+  sourcePaths: readonly string[],
+  requirementRows: readonly Json[],
+  timeoutMs: number
+): void {
+  const helper = traceAnnotationScannerPath();
+  const requirementIds = [...new Set(requirementRows
+    .map(row => row.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  const files: TraceAnnotationScannerFile[] = sourcePaths.map(relativePath => {
+    const baseline = gitSnapshotAtCommit(canonicalRoot, baselineCommit, relativePath);
+    const current = fileSnapshot(writerRoot, relativePath);
+    if (!baseline || baseline.kind !== 'file' || !current || current.kind !== 'file' || !baseline.bytes || !current.bytes) {
+      throw new Error(`trace source ${relativePath} must remain an existing regular Go file at both baselines`);
+    }
+    return {
+      path: relativePath,
+      baseline: baseline.bytes.toString('base64'),
+      current: current.bytes.toString('base64'),
+    };
+  });
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-trace-annotation-go-'));
+  try {
+    const result = spawnSync('go', ['run', helper], {
+      cwd: canonicalRoot,
+      env: {
+        PATH: process.env.PATH || '',
+        HOME: cacheRoot,
+        TMPDIR: cacheRoot,
+        GOPATH: cacheRoot,
+        GOCACHE: path.join(cacheRoot, 'cache'),
+        GOMODCACHE: path.join(cacheRoot, 'mod'),
+        GO111MODULE: 'off',
+        GOTOOLCHAIN: 'local',
+        GOPROXY: 'off',
+        GOSUMDB: 'off',
+        CGO_ENABLED: '0',
+      },
+      input: JSON.stringify({requirement_ids: requirementIds, files}),
+      encoding: 'utf8',
+      timeout: Math.min(timeoutMs, TRACE_ANNOTATION_SCANNER_TIMEOUT_MS),
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) {
+      throw new Error(
+        `bounded trace annotation scanner failed with exit ${typeof result.status === 'number' ? result.status : 'unknown'}: ${
+          String(result.stderr || result.error?.message || result.stdout || '')
+        }`.trim()
+      );
+    }
+    let report: TraceAnnotationScannerResult;
+    try {
+      report = JSON.parse(String(result.stdout || '')) as TraceAnnotationScannerResult;
+    } catch (error) {
+      throw new Error(`bounded trace annotation scanner returned non-JSON output: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!report || report.allowed !== true) {
+      throw new Error(`trace source policy rejected the writer delta: ${report?.reason || 'scanner did not approve the source bytes'}`);
+    }
+  } finally {
+    fs.rmSync(cacheRoot, {recursive: true, force: true});
+  }
+}
+
+function traceSourceStatusViolation(
+  canonicalRoot: string,
+  baselineCommit: string,
+  writerRoot: string,
+  entry: ChangedPath
+): string | undefined {
+  if (entry.status !== 'M') return 'source changes must be an exact Git modification (M)';
+  const baseline = gitSnapshotAtCommit(canonicalRoot, baselineCommit, entry.path);
+  if (!baseline || baseline.kind !== 'file' || !baseline.bytes) {
+    return 'source baseline must be an existing regular Go file';
+  }
+  const currentPath = path.join(writerRoot, entry.path);
+  const currentStat = lstatOrUndefined(currentPath);
+  if (!currentStat?.isFile() || currentStat.isSymbolicLink()) {
+    return 'source current path must be an existing regular Go file';
+  }
+  return undefined;
 }
 
 function rows(value: unknown, label: string): Json[] {
@@ -894,6 +1050,9 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     if (!input.workItem.proof_component_subject || typeof input.workItem.proof_component_subject.fingerprint !== 'string' || !SHA256_FILE_HASH.test(input.workItem.proof_component_subject.fingerprint)) {
       throw new Error('native promotion requires the Proof component subject fingerprint');
     }
+    if (input.sourceWritePolicy !== undefined && input.sourceWritePolicy !== 'go-trace-annotations-only') {
+      throw new Error(`unsupported native source write policy: ${String(input.sourceWritePolicy)}`);
+    }
     if (!path.isAbsolute(input.proofBin) || !fs.existsSync(input.proofBin) || (fs.statSync(input.proofBin).mode & 0o111) === 0) {
       throw new Error('proofBin must be an absolute executable');
     }
@@ -916,6 +1075,7 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     const reqCandidates: string[] = [];
     const checklistRefreshRejections: string[] = [];
     const canonicalChecklistPaths = new Set<string>();
+    const sourcePolicyRejections: string[] = [];
     let activeChecklist: string | undefined;
     let checklistStatus: unknown;
     const classifyWriterChecklistPath = (relativePath: string, gitStatus: string): NativeChecklistRefreshClassification => {
@@ -947,6 +1107,20 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     };
     for (const entry of changed) {
       verifyExistingParent(writerRoot, entry.path, 'writer delta path');
+      const isProofNativeArtifact = entry.path.endsWith('.req.yaml') || entry.path.endsWith('.req.yml') || isVariablePath(entry.path);
+      if (input.sourceWritePolicy === 'go-trace-annotations-only' && workItemPaths.has(entry.path) && !isProofNativeArtifact && !entry.path.endsWith('.go')) {
+        rejectedPaths.push(entry.path);
+        sourcePolicyRejections.push(`${entry.path}: owned source changes must target a .go file`);
+        continue;
+      }
+      if (input.sourceWritePolicy === 'go-trace-annotations-only' && entry.path.endsWith('.go') && workItemPaths.has(entry.path)) {
+        const violation = traceSourceStatusViolation(canonicalRoot, input.baselineCommit, writerRoot, entry);
+        if (violation) {
+          rejectedPaths.push(entry.path);
+          sourcePolicyRejections.push(`${entry.path}: ${violation}`);
+          continue;
+        }
+      }
       if (entry.status.startsWith('D') || entry.status.startsWith('R') || entry.status.startsWith('C')) {
         rejectedPaths.push(entry.path);
         continue;
@@ -987,7 +1161,9 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       rejectedPaths.push(entry.path);
     }
     if (rejectedPaths.length) {
-      const reason = checklistRefreshRejections.length
+      const reason = sourcePolicyRejections.length
+        ? `writer delta violates the bounded Go trace source policy: ${sourcePolicyRejections.join('; ')}`
+        : checklistRefreshRejections.length
         ? `writer delta contains a rejected checklist refresh: ${checklistRefreshRejections.join('; ')}`
         : 'writer delta contains deleted, renamed, protected, sibling, or out-of-scope paths';
       return rejected(input, reason, [], ignoredPaths, rejectedPaths);
@@ -996,6 +1172,29 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
     const componentId = input.workItem.component_id;
     const writerSurface = collectNativeSurface(input.proofBin, writerRoot, componentId, timeoutMs).surface;
     const canonicalSurface = collectNativeSurface(input.proofBin, canonicalRoot, componentId, timeoutMs).surface;
+    const sourcePaths = changed
+      .filter(entry => entry.path.endsWith('.go') && workItemPaths.has(entry.path))
+      .map(entry => entry.path);
+    if (input.sourceWritePolicy === 'go-trace-annotations-only') {
+      try {
+        runTraceAnnotationScanner(
+          canonicalRoot,
+          input.baselineCommit,
+          writerRoot,
+          sourcePaths,
+          writerSurface.requirementRows,
+          timeoutMs
+        );
+      } catch (error) {
+        return rejected(
+          input,
+          error instanceof Error ? error.message : String(error),
+          [],
+          ignoredPaths,
+          sourcePaths
+        );
+      }
+    }
     for (const relativePath of reqCandidates) {
       const row = requirementRowForPath(writerSurface, relativePath, componentId);
       const show = proof(input.proofBin, writerRoot, ['req', 'show', String(row.id), '--with', 'file', '--format', 'json'], timeoutMs);
@@ -1099,6 +1298,25 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       };
       if (staged.validation.status !== 0) {
         return rejected(input, `Proof staging validation failed with exit ${staged.validation.status}: ${commandDetail(staged.validation)}`, [], ignoredPaths, [], validation);
+      }
+      if (input.sourceWritePolicy === 'go-trace-annotations-only') {
+        const audit = proof(
+          input.proofBin,
+          stagingRoot,
+          ['audit', '--no-cache', '--check', 'annotation_validity', '--format', 'json'],
+          timeoutMs
+        );
+        if (audit.status !== 0) {
+          return rejected(
+            input,
+            `Proof staging annotation audit failed with exit ${audit.status}: ${commandDetail(audit)}`,
+            [],
+            ignoredPaths,
+            [],
+            {status: audit.status, stdout: audit.stdout, stderr: audit.stderr}
+          );
+        }
+        parseTraceAnnotationAuditReceipt(audit);
       }
       // Capture central Proof state immediately before the only canonical write
       // boundary. The ignored state file is never part of the staged paths.

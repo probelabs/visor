@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {
   activeChecklistNameFromProofShow,
   classifyNonAuthoritativeChecklistRefresh,
@@ -239,6 +239,74 @@ function checklistState(updatedAt: string, resultAt: string, semantic = 'confirm
   ].join('\n') + '\n';
 }
 
+const TRACE_SCANNER = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/trace-annotation-scanner.go');
+const GO_AVAILABLE = spawnSync('go', ['version'], {stdio: 'ignore'}).status === 0;
+const describeTraceScanner = GO_AVAILABLE ? describe : describe.skip;
+
+describeTraceScanner('bounded Go trace annotation scanner', () => {
+  let cacheRoot: string;
+
+  beforeAll(() => {
+    cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-trace-annotation-scanner-test-'));
+  });
+
+  afterAll(() => {
+    fs.rmSync(cacheRoot, {recursive: true, force: true});
+  });
+
+  function scan(baseline: string, current: string, requirementIds = ['SYS-REQ-1']): {allowed?: boolean; reason?: string} {
+    const result = spawnSync('go', ['run', TRACE_SCANNER], {
+      cwd: path.resolve(__dirname, '../..'),
+      env: {
+        PATH: process.env.PATH || '',
+        HOME: cacheRoot,
+        TMPDIR: cacheRoot,
+        GOPATH: cacheRoot,
+        GOCACHE: path.join(cacheRoot, 'cache'),
+        GOMODCACHE: path.join(cacheRoot, 'mod'),
+        GO111MODULE: 'off',
+        GOTOOLCHAIN: 'local',
+        GOPROXY: 'off',
+        GOSUMDB: 'off',
+        CGO_ENABLED: '0',
+      },
+      input: JSON.stringify({
+        requirement_ids: requirementIds,
+        files: [{
+          path: 'b.go',
+          baseline: Buffer.from(baseline, 'utf8').toString('base64'),
+          current: Buffer.from(current, 'utf8').toString('base64'),
+        }],
+      }),
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    if (result.status !== 0) throw new Error(String(result.stderr || result.error?.message || 'Go scanner failed'));
+    return JSON.parse(String(result.stdout)) as {allowed?: boolean; reason?: string};
+  }
+
+  it('permits adding and removing grounded full-line annotations', () => {
+    const baseline = 'package native\nfunc B() int { return 2 }\n';
+    const annotated = 'package native\n// Implements: SYS-REQ-1\nfunc B() int { return 2 }\n';
+    expect(scan(baseline, annotated)).toMatchObject({allowed: true});
+    expect(scan(annotated, baseline)).toMatchObject({allowed: true});
+  });
+
+  it.each([
+    ['executable return change', 'package native\n// Implements: SYS-REQ-1\nfunc B() int { return 3 }\n'],
+    ['raw-string pseudo annotation', 'package native\nconst marker = "// Implements: SYS-REQ-1"\nfunc B() int { return 2 }\n'],
+    ['build tag', '//go:build native\n\npackage native\nfunc B() int { return 2 }\n'],
+    ['cgo directive', 'package native\n// #cgo CFLAGS: -Dchanged\nfunc B() int { return 2 }\n'],
+    ['arbitrary comment', 'package native\n// ordinary comment\nfunc B() int { return 2 }\n'],
+    ['inline annotation', 'package native\nfunc B() int { return 2 } // Implements: SYS-REQ-1\n'],
+    ['wrong requirement ID', 'package native\n// Implements: SYS-REQ-2\nfunc B() int { return 2 }\n'],
+  ])('rejects %s', (_label, current) => {
+    const baseline = 'package native\nfunc B() int { return 2 }\n';
+    expect(scan(baseline, current)).toMatchObject({allowed: false});
+  });
+});
+
 describe('non-authoritative Proof checklist refresh classifier', () => {
   const status = {
     schema_version: 'proof.checklist.show.v1',
@@ -334,6 +402,97 @@ describe('non-authoritative Proof checklist refresh classifier', () => {
 });
 
 describeNative('native onboarding promotion boundary', () => {
+  it.each([
+    ['executable source edit', 'package native\n// Implements: SYS-REQ-1\nfunc B() int { return 3 }\n'],
+    ['raw-string pseudo annotation', 'package native\nconst marker = "// Implements: SYS-REQ-1"\nfunc B() int { return 2 }\n'],
+    ['build tag', '//go:build native\n\npackage native\nfunc B() int { return 2 }\n'],
+    ['cgo directive', 'package native\n// #cgo CFLAGS: -Dchanged\nfunc B() int { return 2 }\n'],
+  ])('rejects %s under the opt-in Go trace source policy', (_label, source) => {
+    const fixture = createFixture();
+    try {
+      fs.writeFileSync(path.join(fixture.writerRoot, 'b.go'), source, 'utf8');
+      const before = canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths]);
+      const result = promoteNativeDelta({...promotionInput(fixture), sourceWritePolicy: 'go-trace-annotations-only'});
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/trace source policy|bounded trace annotation scanner/);
+      expect(canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths])).toEqual(before);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it.each([
+    ['deletion', (fixture: ReturnType<typeof createFixture>) => fs.rmSync(path.join(fixture.writerRoot, 'b.go'))],
+    ['symlink', (fixture: ReturnType<typeof createFixture>) => {
+      fs.rmSync(path.join(fixture.writerRoot, 'b.go'));
+      fs.symlinkSync('a.go', path.join(fixture.writerRoot, 'b.go'));
+    }],
+    ['new Go file', (fixture: ReturnType<typeof createFixture>) => {
+      fixture.workItem.sorted_owned_paths = ['c.go'];
+      fs.writeFileSync(path.join(fixture.writerRoot, 'c.go'), 'package native\nfunc C() int { return 2 }\n', 'utf8');
+    }],
+    ['renamed Go file', (fixture: ReturnType<typeof createFixture>) => {
+      fixture.workItem.sorted_owned_paths = ['c.go'];
+      fs.renameSync(path.join(fixture.writerRoot, 'b.go'), path.join(fixture.writerRoot, 'c.go'));
+    }],
+    ['non-Go owned source', (fixture: ReturnType<typeof createFixture>) => {
+      fixture.workItem.sorted_owned_paths = ['b.txt'];
+      fs.writeFileSync(path.join(fixture.writerRoot, 'b.txt'), 'owned non-Go source\n', 'utf8');
+    }],
+  ])('rejects %s source shape under the opt-in Go trace source policy', (_label, mutate) => {
+    const fixture = createFixture();
+    try {
+      mutate(fixture);
+      const result = promoteNativeDelta({...promotionInput(fixture), sourceWritePolicy: 'go-trace-annotations-only'});
+      expect(result.status).toBe('rejected');
+      expect(result.rejected_paths.length).toBeGreaterThan(0);
+      expect(result.reason).toMatch(/Go trace source policy|out-of-scope|deleted|symlink|regular/);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('promotes a grounded current component requirement annotation under the opt-in policy', () => {
+    const fixture = createFixture();
+    try {
+      const listed = JSON.parse(proof(fixture.writerRoot, ['req', 'list', '--component', 'component_b', '--format', 'json'])) as Array<{id?: string; file_path?: string}>;
+      const row = listed.find(candidate => candidate.file_path === fixture.componentBRequirementPath && typeof candidate.id === 'string');
+      if (!row?.id) throw new Error('fixture Proof req list did not return the current component_b requirement ID');
+      const source = `package native\n// Implements: ${row.id}\nfunc B() int { return 2 }\n`;
+      fs.writeFileSync(path.join(fixture.writerRoot, 'b.go'), source, 'utf8');
+      const headBefore = git(fixture.canonicalRoot, ['rev-parse', 'HEAD']);
+
+      const result = promoteNativeDelta({...promotionInput(fixture), sourceWritePolicy: 'go-trace-annotations-only'});
+
+      expect(result.status).toBe('promoted');
+      expect(result.accepted_paths).toEqual(['b.go']);
+      expect(fs.readFileSync(path.join(fixture.canonicalRoot, 'b.go'), 'utf8')).toBe(source);
+      expect(git(fixture.canonicalRoot, ['rev-parse', 'HEAD'])).not.toBe(headBefore);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects an unknown source-write policy before changing canonical state', () => {
+    const fixture = createFixture();
+    try {
+      const before = canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths]);
+      const result = promoteNativeDelta({
+        ...promotionInput(fixture),
+        sourceWritePolicy: 'bogus-policy',
+      } as unknown as NativePromotionInput);
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/unsupported native source write policy/);
+      expect(canonicalBytes(fixture.canonicalRoot, ['b.go', ...fixture.untouchedNativePaths])).toEqual(before);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it('promotes only the component-B native delta and preserves component A', () => {
     const fixture = createFixture();
     try {
