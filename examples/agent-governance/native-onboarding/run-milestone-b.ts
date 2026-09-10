@@ -1249,24 +1249,6 @@ function installZeroModelReviewAdjudicationMock(): void {
       citations: [citation],
     });
   };
-  const originalParse = serviceClass.prototype.parseAIResponse;
-  if (typeof originalParse !== 'function') throw new Error('zero-model review mock requires AIReviewService.parseAIResponse');
-  serviceClass.prototype.parseAIResponse = function (response: string, debugInfo: unknown, schema: unknown): unknown {
-    const parsed = originalParse.call(this, response, debugInfo, schema) as any;
-    const output = parsed?.output;
-    // AIReviewService adds a convenience text field to custom-schema output.
-    // The native claim is stricter; in this zero-model fixture retain only the
-    // adjudication tuple that the policy schema declares.
-    if (output && typeof output === 'object' && !Array.isArray(output) &&
-        typeof output.decision === 'string' && typeof output.comment === 'string' && Array.isArray(output.citations)) {
-      parsed.output = {
-        decision: output.decision,
-        comment: output.comment,
-        citations: output.citations,
-      };
-    }
-    return parsed;
-  };
 }
 
 async function configForSubject(

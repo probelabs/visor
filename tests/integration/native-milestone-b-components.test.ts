@@ -568,6 +568,13 @@ describeNative('native Milestone B component/spec progression', () => {
       const paused = json<any>(path.join(reviewOutput, 'paused', 'checkpoint.json'));
       const pausedEvents = paused.events || [];
       const pausedSummary = json<any>(path.join(reviewOutput, 'paused', 'summary.json'));
+      const adjudicationClaims = pausedEvents.filter((event: any) =>
+        event.type === 'ClaimPublished' && event.claim === 'native.review.adjudication@1',
+      );
+      expect(adjudicationClaims).toHaveLength(rows.length);
+      for (const event of adjudicationClaims) {
+        expect(Object.keys(event.payload || {}).sort()).toEqual(['citations', 'comment', 'decision']);
+      }
       expect(pausedSummary.held_scope).toBe('all-record-native-review');
       expect(pausedSummary.held_item_ids).toEqual(rows.map(row => row.id));
       expect(pausedSummary.pid).toBeGreaterThan(0);

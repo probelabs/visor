@@ -463,7 +463,16 @@ export function replayClaimEvents(
 
 function formatValidationErrors(validate: ValidateFunction): string {
   return (validate.errors || [])
-    .map(error => `${error.instancePath || '/'} ${error.message || 'is invalid'}`)
+    .map(error => {
+      const additionalProperty = error.keyword === 'additionalProperties' &&
+        typeof error.params?.additionalProperty === 'string'
+        ? error.params.additionalProperty
+        : undefined;
+      const propertyDetail = additionalProperty === undefined
+        ? ''
+        : ` (additional property ${JSON.stringify(additionalProperty)})`;
+      return `${error.instancePath || '/'} ${error.message || 'is invalid'}${propertyDetail}`;
+    })
     .join('; ');
 }
 

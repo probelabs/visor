@@ -32,7 +32,7 @@ function singleClaimPlan() {
 }
 
 describe('Graph v2 C1 claim kernel', () => {
-  function expectClaimError(run: () => unknown, code: string, message: string): void {
+  function expectClaimError(run: () => unknown, code: string, message: string): ClaimKernelError {
     try {
       run();
       throw new Error(`Expected ClaimKernelError ${code}`);
@@ -41,6 +41,7 @@ describe('Graph v2 C1 claim kernel', () => {
       if (!(error instanceof ClaimKernelError)) throw error;
       expect(error.code).toBe(code);
       expect(error.message).toContain(message);
+      return error;
     }
   }
 
@@ -57,6 +58,23 @@ describe('Graph v2 C1 claim kernel', () => {
       expect(() => canonicalJson(value)).toThrow(ClaimKernelError);
     }
   );
+
+  it('names additional payload properties without exposing their values', () => {
+    const plan = singleClaimPlan();
+    const journal = new ExecutionJournal(plan);
+    const attempt = journal.startAttempt({ sessionId: 's1', checkId: 'producer', scope: [] });
+    journal.scheduleCheck(attempt);
+
+    const error = expectClaimError(
+      () => journal.completeAttempt({
+        ...attempt,
+        payload: { value: 'ready', unexpected_key: 'secret-payload-value' },
+      }),
+      'CLAIM_SCHEMA_INVALID',
+      'unexpected_key'
+    );
+    expect(error.message).not.toContain('secret-payload-value');
+  });
 
   it('atomically commits ordered multi-emission completion and replays identically', () => {
     const plan = compileClaimPlan({

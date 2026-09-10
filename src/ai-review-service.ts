@@ -1305,6 +1305,7 @@ export class AIReviewService {
       const {
         response,
         effectiveSchema,
+        parseSchema,
         sessionId: usedSessionId,
       } = timeoutMs > 0
         ? await this.withTimeout(call, timeoutMs, 'AI review', sessionId, extender)
@@ -1317,7 +1318,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+      const result = this.parseAIResponse(response, debugInfo, parseSchema ?? effectiveSchema);
 
       // Expose the session ID used for this call so the engine can reuse it later
       try {
@@ -1491,7 +1492,7 @@ export class AIReviewService {
         extender
       );
       const timeoutMs = Math.max(0, this.config.timeout || 0);
-      const { response, effectiveSchema } =
+      const { response, effectiveSchema, parseSchema } =
         timeoutMs > 0
           ? await this.withTimeout(
               call,
@@ -1509,7 +1510,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+      const result = this.parseAIResponse(response, debugInfo, parseSchema ?? effectiveSchema);
 
       // Expose the session ID used for this call so the engine can clean it up
       try {
@@ -2410,12 +2411,12 @@ ${this.escapeXml(processedFallbackDiff)}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     extender?: TimeoutExtender
-  ): Promise<{ response: string; effectiveSchema?: string }> {
+  ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown> }> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing (session reuse)');
       const response = await this.generateMockResponse(prompt, _checkName, schema);
-      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
+      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema, parseSchema: schema };
     }
 
     log('🔄 Reusing existing ProbeAgent session for AI review...');
@@ -2462,6 +2463,7 @@ ${this.escapeXml(processedFallbackDiff)}
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
       let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
+      let parseSchema: string | Record<string, unknown> | undefined = schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -2472,6 +2474,7 @@ ${this.escapeXml(processedFallbackDiff)}
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
           effectiveSchema = undefined; // Schema loading failed, treat as no schema
+          parseSchema = undefined;
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -2807,7 +2810,7 @@ ${'='.repeat(60)}
         }
       }
 
-      return { response, effectiveSchema };
+      return { response, effectiveSchema, parseSchema };
     } catch (error) {
       logger.error(
         `❌ ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -2829,7 +2832,7 @@ ${'='.repeat(60)}
     providedSessionId?: string,
     extender?: TimeoutExtender,
     nodeGenerationId?: string
-  ): Promise<{ response: string; effectiveSchema?: string; sessionId: string }> {
+  ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown>; sessionId: string }> {
     // Derive a stable session ID for this call so the engine can reuse it later
     const sessionId =
       providedSessionId ||
@@ -2848,6 +2851,7 @@ ${'='.repeat(60)}
         return {
           response,
           effectiveSchema: typeof schema === 'object' ? 'custom' : schema,
+          parseSchema: schema,
           sessionId,
         };
       }
@@ -3249,6 +3253,7 @@ If you receive a message that the time limit has been reached or your operation 
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
       let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
+      let parseSchema: string | Record<string, unknown> | undefined = schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -3259,6 +3264,7 @@ If you receive a message that the time limit has been reached or your operation 
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
           effectiveSchema = undefined; // Schema loading failed, treat as no schema
+          parseSchema = undefined;
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -3599,7 +3605,7 @@ ${'='.repeat(60)}
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
 
-      return { response, effectiveSchema, sessionId };
+      return { response, effectiveSchema, parseSchema, sessionId };
     } catch (error) {
       const handledGovernedFailure = warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
       if (handledGovernedFailure) throw error;
@@ -3708,7 +3714,7 @@ ${'='.repeat(60)}
   private parseAIResponse(
     response: string,
     debugInfo?: AIDebugInfo,
-    _schema?: string
+    _schema?: string | Record<string, unknown>
   ): ReviewSummary & { output?: unknown } {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
@@ -3883,11 +3889,23 @@ ${'='.repeat(60)}
       //  - explicit custom schema
       //  - schema is any non code-review built-in like 'overview', 'issue-assistant', 'comment-assistant'
       //  - or schema is unknown/undefined but the payload clearly contains a text field
+      const isInlineSchema = !!_schema && typeof _schema === 'object';
       const isCustomSchema =
+        isInlineSchema ||
         _schema === 'custom' ||
-        (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
-        (_schema && _schema !== 'code-review' && !_schema.includes('output/')) ||
+        (typeof _schema === 'string' && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
+        (typeof _schema === 'string' && _schema !== 'code-review' && !_schema.includes('output/')) ||
         (!_schema && looksLikeTextOutput);
+
+      const inlineSchema = isInlineSchema ? _schema as Record<string, unknown> : undefined;
+      const inlineProperties = inlineSchema?.properties && typeof inlineSchema.properties === 'object' && !Array.isArray(inlineSchema.properties)
+        ? inlineSchema.properties as Record<string, unknown>
+        : undefined;
+      const allowsInlineProperty = (key: string): boolean => {
+        if (!inlineSchema) return true;
+        if (inlineProperties && Object.prototype.hasOwnProperty.call(inlineProperties, key)) return true;
+        return inlineSchema.additionalProperties !== false;
+      };
 
       const _debugSchemaLogging =
         this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
@@ -3926,7 +3944,7 @@ ${'='.repeat(60)}
 
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
-        if (!hasText) {
+        if (!hasText && allowsInlineProperty('text')) {
           // Build a fallback string from the raw response or issue messages if available
           let fallbackText = '';
           try {
@@ -3951,7 +3969,7 @@ ${'='.repeat(60)}
         }
 
         // Attach raw output blocks from DSL execute_plan so frontends can render them
-        if (rawOutputBlocks.length > 0) {
+        if (rawOutputBlocks.length > 0 && allowsInlineProperty('_rawOutput')) {
           (out as any)._rawOutput = rawOutputBlocks.join('\n\n');
         }
 

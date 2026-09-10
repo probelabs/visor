@@ -21,6 +21,7 @@ describe('Custom Schema Field Preservation', () => {
 
     const customSchema = {
       type: 'object',
+      additionalProperties: false,
       properties: {
         complexity: { type: 'string' },
         priority: { type: 'number' },
@@ -48,6 +49,7 @@ describe('Custom Schema Field Preservation', () => {
         estimated_hours: 24,
       }),
       effectiveSchema: 'custom',
+      parseSchema: customSchema,
     });
 
     const result = await service.executeReview(
@@ -62,9 +64,56 @@ describe('Custom Schema Field Preservation', () => {
     expect((result as any).output.complexity).toBe('high');
     expect((result as any).output.priority).toBe(8);
     expect((result as any).output.estimated_hours).toBe(24);
+    expect((result as any).output.text).toBeUndefined();
+    expect((result as any).output).toEqual({
+      complexity: 'high',
+      priority: 8,
+      estimated_hours: 24,
+    });
 
     // Should have empty issues array (no code review)
     expect(result.issues).toEqual([]);
+  });
+
+  it('preserves undeclared fields for closed inline schemas so validation can reject them', async () => {
+    const service = new AIReviewService({
+      provider: 'mock' as const,
+      model: 'mock',
+      apiKey: 'test-key',
+      debug: false,
+    });
+    const customSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        decision: { type: 'string' },
+      },
+    };
+    jest.spyOn(service as any, 'callProbeAgent').mockResolvedValue({
+      response: JSON.stringify({ decision: 'needs_changes', unexpected: 'keep-visible' }),
+      effectiveSchema: 'custom',
+      parseSchema: customSchema,
+    });
+
+    const result = await service.executeReview(
+      {
+        number: 123,
+        title: 'Test',
+        body: '',
+        author: 'test',
+        base: 'main',
+        head: 'feat',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+      },
+      'Analyze this',
+      customSchema,
+      'test-closed-check',
+    );
+
+    expect((result as any).output).toEqual({ decision: 'needs_changes', unexpected: 'keep-visible' });
+    expect((result as any).output.text).toBeUndefined();
   });
 
   it('should preserve all fields for file-based custom schemas', async () => {
@@ -111,6 +160,7 @@ describe('Custom Schema Field Preservation', () => {
     expect((result as any).output.temperature).toBe(72);
     expect((result as any).output.conditions).toBe('sunny');
     expect((result as any).output.forecast).toEqual(['clear', 'rain']);
+    expect((result as any).output.text).toContain('temperature');
 
     // Should have empty issues array
     expect(result.issues).toEqual([]);
@@ -208,6 +258,7 @@ describe('Custom Schema Field Preservation', () => {
         // notes field omitted
       }),
       effectiveSchema: 'custom',
+      parseSchema: customSchema,
     });
 
     const result = await service.executeReview(
