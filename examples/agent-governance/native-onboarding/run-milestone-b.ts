@@ -355,6 +355,22 @@ function contextDigest(bytes: string): string {
   return `sha256:${createHash('sha256').update(bytes, 'utf8').digest('hex')}`;
 }
 
+/**
+ * The prepared review envelope carries both the normalized context object and
+ * its canonical bytes for command-boundary diagnostics.  Keep those two
+ * representations bound: a caller must not be able to replace the object
+ * used for citation grounding while retaining an old digest/byte payload.
+ */
+function assertReviewItemContextBinding(item: ReviewItem, phase: string): void {
+  if (typeof item.current_context_bytes !== 'string' || typeof item.current_context_sha256 !== 'string') {
+    throw new Error(`${phase} review item ${item.id} has detached context bytes`);
+  }
+  const expectedBytes = canonicalJson(item.current_context);
+  if (item.current_context_bytes !== expectedBytes || contextDigest(expectedBytes) !== item.current_context_sha256) {
+    throw new Error(`${phase} review item ${item.id} has detached normalized Proof context`);
+  }
+}
+
 type ContextLocation = { path: string; start: number; end: number; symbol?: string };
 
 function contextLocations(context: Json, subject: string): ContextLocation[] {
@@ -641,6 +657,54 @@ async function readReaderPackets(
   return { catalogRows, selectedRows, checkpoint, packets };
 }
 
+/**
+ * Rebind every persisted adapter item to the immutable reader checkpoint on
+ * each later lifecycle process.  The review output is an operational cache,
+ * not a second source of candidate identity or lineage.
+ */
+async function assertReviewItemsReaderBindings(
+  subject: string,
+  readerOutput: string,
+  items: readonly ReviewItem[],
+  phase: string,
+): Promise<void> {
+  const reader = await readReaderPackets(subject, readerOutput);
+  if (reader.packets.length !== items.length) {
+    throw new Error(`${phase} review item set does not match the reader checkpoint`);
+  }
+  const packetsById = new Map(reader.packets.map(packet => [packet.row.id, packet]));
+  const expectedCheckpointId = String(reader.checkpoint.sessionId);
+  for (const item of items) {
+    const packet = packetsById.get(item.id);
+    if (!packet) throw new Error(`${phase} review item ${item.id} is absent from the reader checkpoint`);
+    const expectedPacket = {
+      ...packet.payload,
+      claim_id: packet.claimId,
+      payload_fingerprint: packet.payloadFingerprint,
+      candidate_claim: {
+        claim_id: packet.candidateClaimId,
+        payload_fingerprint: packet.candidatePayloadFingerprint,
+      },
+    };
+    if (canonicalJson(item.packet) !== canonicalJson(expectedPacket)) {
+      throw new Error(`${phase} review item ${item.id} packet is detached from the reader checkpoint`);
+    }
+    const lineage = objectValue(item.lineage, `${phase} review item ${item.id} lineage`);
+    const expectedLineage: Record<string, string> = {
+      packet_id: packet.claimId,
+      packet_fingerprint: packet.payloadFingerprint,
+      candidate_claim_id: packet.candidateClaimId,
+      candidate_payload_fingerprint: packet.candidatePayloadFingerprint,
+      checkpoint_id: expectedCheckpointId,
+    };
+    for (const [key, expected] of Object.entries(expectedLineage)) {
+      if (lineage[key] !== expected) {
+        throw new Error(`${phase} review item ${item.id} lineage field ${key} is detached from the reader checkpoint`);
+      }
+    }
+  }
+}
+
 function graphRequirementIds(graph: Json, itemId: string): string[] {
   if (!Array.isArray(graph.nodes)) throw new Error(`spec graph for ${itemId} has no nodes`);
   const ids = graph.nodes
@@ -748,10 +812,7 @@ function readReviewItems(output: string): ReviewItem[] {
         !Array.isArray(item.parent_bindings) || !item.lineage || typeof item.lineage !== 'object' || Array.isArray(item.lineage)) {
       throw new Error(`review item ${item.id} has an incomplete closed input envelope`);
     }
-    if (typeof item.current_context_bytes !== 'string' || typeof item.current_context_sha256 !== 'string' ||
-        contextDigest(item.current_context_bytes) !== item.current_context_sha256) {
-      throw new Error(`review item ${item.id} has a detached normalized Proof context`);
-    }
+    assertReviewItemContextBinding(item, 'review item input');
     return item;
   });
 }
@@ -775,6 +836,7 @@ function assertReviewItemsUnchanged(
   }
   const currentIds = new Set<string>();
   for (const item of items) {
+    assertReviewItemContextBinding(item, phase);
     const packet = objectValue(item.packet, `review item ${item.id} packet`);
     const currentShow = parseJson(runProof(proof, subject, output, `${phase}-${item.id}-show`, [
       'req', 'show', item.id, '--with', 'file', '--format', 'json',
@@ -852,10 +914,7 @@ function validateRecordItem(item: ReviewItem): void {
       typeof item.lineage.packet_id !== 'string' || !item.lineage.packet_id) {
     throw new Error(`record item ${item.id} has no completed checkpoint/packet lineage`);
   }
-  if (typeof item.current_context_bytes !== 'string' || typeof item.current_context_sha256 !== 'string' ||
-      contextDigest(item.current_context_bytes) !== item.current_context_sha256) {
-    throw new Error(`record item ${item.id} has detached context bytes`);
-  }
+  assertReviewItemContextBinding(item, 'record item');
 }
 
 function reviewRecordList(proof: string, subject: string, output: string, phase: string): Json[] {
@@ -1377,6 +1436,7 @@ async function recordPrepare(
     'record-prepare',
     String(reader.checkpoint.sessionId),
   ));
+  for (const item of items) assertReviewItemContextBinding(item, 'record-prepare output');
   writeJson(path.join(output, 'review', 'items.json'), { items });
   writeJson(path.join(output, 'review', 'summary.json'), {
     phase: 'record-prepare',
@@ -1418,6 +1478,7 @@ async function recordPause(
 ): Promise<void> {
   process.env.PROOF_BIN = proof;
   const items = readReviewItems(output);
+  await assertReviewItemsReaderBindings(subject, readerOutput, items, 'record-pause-input');
   const held = holdId || items[0].id;
   if (!items.some(item => item.id === held)) throw new Error(`--hold-id ${held} is not a prepared review item`);
   if (fs.existsSync(path.join(output, 'paused', 'checkpoint.json'))) throw new Error('review-record pause output already exists; use a fresh output');
@@ -1517,6 +1578,7 @@ async function recordResume(
   const items = readReviewItems(output);
   const held = String((Array.isArray(pausedSummary.held_item_ids) && pausedSummary.held_item_ids[0]) || items[0].id);
   if (!items.some(item => item.id === held)) throw new Error('paused review-record scope is not present in the prepared item set');
+  await assertReviewItemsReaderBindings(subject, readerOutput, items, 'record-resume-input');
   assertReviewItemsUnchanged(proof, subject, output, items, 'record-resume-input');
   setReviewEnvironment(output, readerOutput, reviewer);
   const { config, engine } = await configForSubject(subject, output, governedCodex, configPath);
@@ -1600,6 +1662,7 @@ async function recordRecover(
   if (failureSummary.pid === process.pid) throw new Error('review-record recovery must run in a fresh OS process');
   const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as any;
   const items = readReviewItems(output);
+  await assertReviewItemsReaderBindings(subject, readerOutput, items, 'record-recover-input');
   assertReviewItemsUnchanged(proof, subject, output, items, 'record-recover-input');
   setReviewEnvironment(output, readerOutput, reviewer);
   const { config, engine } = await configForSubject(subject, output, governedCodex, configPath);

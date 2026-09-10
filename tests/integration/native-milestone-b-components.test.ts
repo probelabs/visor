@@ -523,7 +523,42 @@ describeNative('native Milestone B component/spec progression', () => {
       expect(reviewItems.every((item: any) => item.reviewer === reviewer)).toBe(true);
       expect(reviewItems.every((item: any) => /^sha256:[0-9a-f]{64}$/.test(item.current_context_sha256))).toBe(true);
       expect(reviewItems.every((item: any) => item.lineage.candidate_claim_id && item.lineage.candidate_payload_fingerprint)).toBe(true);
+      expect(reviewItems.every((item: any) =>
+        item.parent_bindings.length > 0 &&
+        item.parent_bindings.every((binding: any) =>
+          binding.requirement_id && binding.file_path && /^sha256:[0-9a-f]{64}$/.test(binding.file_hash),
+        ) && item.parent_bindings.some((binding: any) => binding.requirement_id === item.id),
+      )).toBe(true);
       expect(JSON.stringify(reviewItems.map((item: any) => item.packet?.candidate))).not.toMatch(/401 Unauthorized|api\.openai\.com\/v1\/responses/);
+
+      const reviewItemsPath = path.join(reviewOutput, 'review', 'items.json');
+      const originalReviewItems = fs.readFileSync(reviewItemsPath, 'utf8');
+      const tamperedContext = JSON.parse(originalReviewItems);
+      tamperedContext.items[0].current_context = {
+        ...tamperedContext.items[0].current_context,
+        tampered_context_marker: 'must-fail-closed',
+      };
+      fs.writeFileSync(reviewItemsPath, JSON.stringify(tamperedContext), 'utf8');
+      const contextTamper = runRunnerResult(fixture, 'record-pause', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+        '--hold-id', rows[0].id,
+      ], false, reviewOutput);
+      expect(contextTamper.status).not.toBe(0);
+      expect(`${contextTamper.stdout || ''}${contextTamper.stderr || ''}`).toContain('detached normalized Proof context');
+      fs.writeFileSync(reviewItemsPath, originalReviewItems, 'utf8');
+
+      const tamperedLineage = JSON.parse(originalReviewItems);
+      tamperedLineage.items[0].lineage.packet_id = 'f'.repeat(64);
+      fs.writeFileSync(reviewItemsPath, JSON.stringify(tamperedLineage), 'utf8');
+      const lineageTamper = runRunnerResult(fixture, 'record-pause', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+        '--hold-id', rows[0].id,
+      ], false, reviewOutput);
+      expect(lineageTamper.status).not.toBe(0);
+      expect(`${lineageTamper.stdout || ''}${lineageTamper.stderr || ''}`).toContain('lineage field packet_id is detached');
+      fs.writeFileSync(reviewItemsPath, originalReviewItems, 'utf8');
 
       runRunner(fixture, 'record-pause', [
         '--reader-output', fixture.output,
@@ -551,14 +586,24 @@ describeNative('native Milestone B component/spec progression', () => {
       ], false, reviewOutput, { VISOR_NATIVE_B_CRASH_AFTER_NATIVE_WRITE: 'true' });
       expect(failedResume.status).not.toBe(0);
       const failedCheckpoint = json<any>(path.join(reviewOutput, 'resumed', 'failure-checkpoint.json'));
+      const failedSummary = json<any>(path.join(reviewOutput, 'resumed', 'failure-summary.json'));
       expect(failedCheckpoint.events.slice(0, pausedEvents.length)).toEqual(pausedEvents);
       expect(failedCheckpoint.events.filter((event: any) => event.type === 'AttemptFailed' && event.checkId === 'record-native-review').length).toBeGreaterThan(0);
+      expect(failedSummary.pid).toBeGreaterThan(0);
+      expect(failedSummary.pid).not.toBe(pausedSummary.pid);
+      expect(failedSummary.checkpoint_session_id).toBe(paused.sessionId);
+      expect(failedSummary.graph_semantic_digest).toBe(paused.graphSemanticDigest);
+      const crashedRecords = JSON.parse(proof(fixture.subject, ['review', 'list', '--kind', 'spec_conformance', '--format', 'json'])) as any[];
+      const crashedRecordIds = crashedRecords.map(record => record.id).sort();
+      expect(crashedRecords.length).toBe(rows.length);
+      expect(new Set(crashedRecordIds).size).toBe(crashedRecords.length);
 
       runRunner(fixture, 'record-recover', [
         '--reader-output', fixture.output,
         '--reviewer', reviewer,
       ], false, reviewOutput);
       const recovered = json<any>(path.join(reviewOutput, 'recovered', 'checkpoint.json'));
+      const recoveredSummary = json<any>(path.join(reviewOutput, 'recovered', 'summary.json'));
       const recoveredEvents = recovered.events || [];
       const retryPrefix = json<any>(path.join(reviewOutput, 'diagnostic', 'record-recover-retry-prefix.json'));
       const recoverySuffix = recoveredEvents.slice(retryPrefix.events.length);
@@ -568,6 +613,11 @@ describeNative('native Milestone B component/spec progression', () => {
       expect(recoverySuffix.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'record-native-review')).toHaveLength(rows.length);
       const records = JSON.parse(proof(fixture.subject, ['review', 'list', '--kind', 'spec_conformance', '--format', 'json'])) as any[];
       expect(records).toHaveLength(rows.length);
+      expect(recoveredSummary.pid).toBeGreaterThan(0);
+      expect(recoveredSummary.pid).not.toBe(failedSummary.pid);
+      expect(recoveredSummary.checkpoint_session_id).toBe(paused.sessionId);
+      expect(recoveredSummary.graph_semantic_digest).toBe(paused.graphSemanticDigest);
+      expect(records.map(record => record.id).sort()).toEqual(crashedRecordIds);
       expect(records.every(record => record.kind === 'spec_conformance' && record.reviewer === reviewer && record.decision === 'needs_changes')).toBe(true);
     } finally {
       fs.rmSync(fixture.parent, { recursive: true, force: true });
