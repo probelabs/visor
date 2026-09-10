@@ -1251,7 +1251,6 @@ function installZeroModelReviewAdjudicationMock(): void {
       decision: 'needs_changes',
       comment: 'The bounded native fixture requires follow-up evidence before conformance can be accepted.',
       citations: [citation],
-      reviewer: 'agent:model-echo',
     };
     if (process.env.VISOR_NATIVE_B_MISSING_CITATIONS_FOR === item?.id) delete response.citations;
     return JSON.stringify(response);

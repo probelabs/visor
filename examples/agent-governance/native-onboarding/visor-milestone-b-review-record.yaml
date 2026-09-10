@@ -146,7 +146,26 @@ subgraphs:
         type: ai
         timeout: 540000
         criticality: policy
-        schema: *native_review_adjudication_schema
+        # The model request is narrower than the historical claim envelope:
+        # native API responses must contain exactly the adjudication fields.
+        schema:
+          type: object
+          additionalProperties: false
+          required: [decision, comment, citations]
+          properties:
+            decision:
+              type: string
+              enum: [needs_changes, rejected, approved]
+            comment:
+              type: string
+              minLength: 1
+            citations:
+              type: array
+              minItems: 1
+              uniqueItems: true
+              items:
+                type: string
+                minLength: 1
         consumes:
           - {claim: native.review.controller.item@1, as: item}
         emits:

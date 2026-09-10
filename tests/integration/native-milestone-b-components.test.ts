@@ -633,8 +633,7 @@ describeNative('native Milestone B component/spec progression', () => {
       );
       expect(adjudicationClaims).toHaveLength(rows.length);
       for (const event of adjudicationClaims) {
-        expect(Object.keys(event.payload || {}).sort()).toEqual(['citations', 'comment', 'decision', 'reviewer']);
-        expect(event.payload.reviewer).toBe('agent:model-echo');
+        expect(Object.keys(event.payload || {}).sort()).toEqual(['citations', 'comment', 'decision']);
       }
       expect(pausedSummary.held_scope).toBe('all-record-native-review');
       expect(pausedSummary.held_item_ids).toEqual(rows.map(row => row.id));
