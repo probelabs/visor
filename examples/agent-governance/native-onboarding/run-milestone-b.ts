@@ -425,6 +425,10 @@ function citationPathVariants(value: string, subject?: string): string[] {
 
 function validateAdjudication(item: ReviewItem, adjudication: unknown): ReviewTuple {
   const value = objectValue(adjudication, `adjudication for ${item.id}`);
+  // A provider may echo reviewer metadata, but that field is untrusted and
+  // never participates in the native tuple. The controller item remains the
+  // sole authority for the recorded reviewer.
+  if (Object.prototype.hasOwnProperty.call(value, 'reviewer')) void value.reviewer;
   const decisions = new Set(['approved', 'rejected', 'needs_changes']);
   if (typeof value.decision !== 'string' || !decisions.has(value.decision)) {
     throw new Error(`adjudication for ${item.id} has an invalid decision`);
@@ -1247,6 +1251,7 @@ function installZeroModelReviewAdjudicationMock(): void {
       decision: 'needs_changes',
       comment: 'The bounded native fixture requires follow-up evidence before conformance can be accepted.',
       citations: [citation],
+      reviewer: 'agent:model-echo',
     });
   };
 }

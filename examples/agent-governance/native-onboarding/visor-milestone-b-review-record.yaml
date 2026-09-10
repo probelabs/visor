@@ -86,6 +86,8 @@ claim_types:
           items:
             type: string
             minLength: 1
+        reviewer:
+          type: string
 
   native.review.record.receipt@1:
     schema: &native_review_receipt_schema
@@ -178,9 +180,11 @@ subgraphs:
           incomplete or the semantics remain unresolved, choose `needs_changes`
           or `rejected` and explain why.  `approved` is valid only as an
           explicit conclusion grounded in the supplied context and targeted
-          reads.  Use reviewer identity
-          `agent:luna-xhigh-native-spec-review`; do not let model prose choose
-          another reviewer or invoke `proof review record` itself.
+          reads.  Reviewer identity is controller-owned.  Omit the optional
+          `reviewer` echo.  If returned anyway, that echo is informational
+          only and cannot choose another reviewer.  No other response keys
+          are accepted.  Do not invoke
+          `proof review record` yourself.
 
           Do not edit files, run Proof state mutators, confirm or reset a
           checklist, admit a candidate, promote status, or claim full-project

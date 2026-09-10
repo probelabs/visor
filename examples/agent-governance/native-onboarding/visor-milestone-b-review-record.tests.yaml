@@ -47,8 +47,8 @@ tests:
               spec_review_role: "role show spec-review --format agent"
               reviewer: agent:luna-xhigh-native-spec-review
         adjudicate-native-review[]:
-          - {decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:10@parseFixture"]}
-          - {decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:20@systemFixture"]}
+          - {decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:10@parseFixture"], reviewer: "agent:model-echo"}
+          - {decision: needs_changes, comment: "The supplied implementation slice does not establish the stated behavior; add a caller-backed test and clarify the contract.", citations: ["parser.go:20@systemFixture"], reviewer: "agent:model-echo"}
         record-native-review[]:
           - &receipt_a
             status: recorded
