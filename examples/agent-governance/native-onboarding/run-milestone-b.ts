@@ -1247,12 +1247,14 @@ function installZeroModelReviewAdjudicationMock(): void {
       firstPathLine(currentContext?.documentation) ||
       firstPathLine(currentContext);
     if (!citation) throw new Error('zero-model review mock found no path/line citation in serialized current_context');
-    return JSON.stringify({
+    const response: Record<string, unknown> = {
       decision: 'needs_changes',
       comment: 'The bounded native fixture requires follow-up evidence before conformance can be accepted.',
       citations: [citation],
       reviewer: 'agent:model-echo',
-    });
+    };
+    if (process.env.VISOR_NATIVE_B_MISSING_CITATIONS_FOR === item?.id) delete response.citations;
+    return JSON.stringify(response);
   };
 }
 
@@ -1453,6 +1455,137 @@ function assertRecordCheckpointProjection(config: any, checkpoint: any, label: s
   if (JSON.stringify(canonical) !== JSON.stringify(checkpoint)) throw new Error(`${label} checkpoint canonical re-export changed its bytes`);
 }
 
+function validateReadyRecordPauseCheckpoint(
+  config: any,
+  checkpoint: any,
+  items: readonly ReviewItem[],
+  observations: readonly Json[],
+  label: string,
+  historicalFailureGenerationIds: ReadonlySet<string> = new Set(),
+): { events: any[]; heldGenerationIds: Set<string> } {
+  const events = checkpointEvents(checkpoint);
+  const restored = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  const projection = restored.getInstanceProjection();
+  const generations = Object.values(projection.generationsById) as any[];
+  const recorderGenerations = generations.filter(generation => generation.checkId === 'record-native-review');
+  const adjudicationGenerations = generations.filter(generation => generation.checkId === 'adjudicate-native-review');
+  if (recorderGenerations.length !== items.length) {
+    throw new Error(`${label} expected one recorder generation per item, found ${recorderGenerations.length} for ${items.length} items`);
+  }
+  if (adjudicationGenerations.filter(generation => generation.status === 'completed').length !== items.length) {
+    throw new Error(`${label} did not complete every per-item adjudication before the recorder frontier`);
+  }
+  const generationForItem = (item: ReviewItem): any[] => recorderGenerations.filter(generation =>
+    (Array.isArray(generation.scope) && generation.scope.some((part: any) => part?.key === item.id)) ||
+    (Array.isArray(generation.activeInputClaimIds) && generation.activeInputClaimIds.some((claimId: string) => {
+      const claim = (projection as any).claimsById?.[claimId];
+      return nativeReviewItem(claim?.payload)?.id === item.id;
+    }))
+  );
+  for (const item of items) {
+    const matches = generationForItem(item);
+    if (matches.length !== 1 || matches[0].status !== 'ready') {
+      throw new Error(`${label} did not leave exactly one ready recorder for ${item.id}`);
+    }
+  }
+  if (recorderGenerations.some(generation => generation.status !== 'ready')) {
+    throw new Error(`${label} left a per-item recorder outside the ready frontier`);
+  }
+  const heldGenerationIds = new Set(recorderGenerations.map(generation => generation.nodeGenerationId));
+  if (events.some(event => heldGenerationIds.has(event.nodeGenerationId) && /^Attempt/.test(String(event.type)))) {
+    throw new Error(`${label} held review-record scope already has an attempt event`);
+  }
+  const observedRows = observations.filter(observation => observation.check_id === 'record-native-review');
+  if (observedRows.some(observation => observation.status !== 'ready')) {
+    throw new Error(`${label} observed a recorder outside the ready frontier`);
+  }
+  const unexpectedFailures = events.filter(event =>
+    (event?.type === 'AttemptFailed' || event?.type === 'CheckErrored') &&
+    !historicalFailureGenerationIds.has(event.nodeGenerationId),
+  );
+  if (unexpectedFailures.length) throw new Error(`${label} checkpoint contains ${unexpectedFailures.length} failed generated attempt(s)`);
+  if (generations.some(generation => generation.status === 'failed')) {
+    throw new Error(`${label} checkpoint has an unresolved failed generation`);
+  }
+  assertRecordCheckpointProjection(config, checkpoint, label);
+  return { events, heldGenerationIds };
+}
+
+function persistRecordPauseFailure(
+  config: any,
+  output: string,
+  checkpoint: any,
+  observations: readonly Json[],
+  result: unknown,
+  items: readonly ReviewItem[],
+  reviewer: string,
+  error: unknown,
+): void {
+  const failureCheckpointPath = path.join(output, 'paused', 'failure-checkpoint.json');
+  if (fs.existsSync(failureCheckpointPath)) throw new Error(`review-record pause failure output already exists; refusing to overwrite ${failureCheckpointPath}`);
+  const events = checkpointEvents(checkpoint);
+  const message = error instanceof Error ? error.message : String(error);
+  const generations = Object.values(ExecutionJournal.restoreGraphCheckpoint(
+    compileClaimPlan(config),
+    checkpoint,
+  ).getInstanceProjection().generationsById) as any[];
+  const failed = generations.filter(generation => generation.status === 'failed');
+  writeJson(failureCheckpointPath, checkpoint);
+  writeJson(path.join(output, 'paused', 'failure-observations.json'), observations);
+  writeJson(path.join(output, 'paused', 'failure-summary.json'), {
+    phase: 'record-pause',
+    status: 'partial-review-record-adjudication-failed',
+    pid: process.pid,
+    reviewer,
+    item_count: items.length,
+    item_ids: items.map(item => item.id),
+    checkpoint_session_id: checkpoint.sessionId,
+    graph_semantic_digest: checkpoint.graphSemanticDigest,
+    checkpoint_integrity_digest: checkpoint.integrity?.digest,
+    checkpoint_event_count: events.length,
+    failed_generation_ids: failed.map(generation => generation.nodeGenerationId),
+    failed_check_ids: failed.map(generation => generation.checkId),
+    result,
+    error: message,
+    note: 'The immutable Graph-v2 checkpoint preserves completed sibling adjudications for explicit failed-generation recovery; no recorder was dispatched.',
+  });
+}
+
+function persistRecordPauseSuccess(
+  output: string,
+  checkpoint: any,
+  observations: readonly Json[],
+  result: unknown,
+  items: readonly ReviewItem[],
+  reviewer: string,
+  heldGenerationIds: Set<string>,
+  phase: string,
+  status: string,
+  diagnosticPrefix: string,
+): void {
+  const events = checkpointEvents(checkpoint);
+  writeJson(path.join(output, 'diagnostic', `${diagnosticPrefix}-checkpoint.json`), checkpoint);
+  writeJson(path.join(output, 'diagnostic', `${diagnosticPrefix}-observations.json`), observations);
+  writeJson(path.join(output, 'diagnostic', `${diagnosticPrefix}-result.json`), result);
+  writeJson(path.join(output, 'paused', 'checkpoint.json'), checkpoint);
+  writeJson(path.join(output, 'paused', 'observations.json'), observations);
+  writeJson(path.join(output, 'paused', 'summary.json'), {
+    phase,
+    status,
+    held_scope: 'all-record-native-review',
+    held_item_ids: items.map(item => item.id),
+    held_generation_ids: [...heldGenerationIds],
+    checkpoint_session_id: checkpoint.sessionId,
+    graph_semantic_digest: checkpoint.graphSemanticDigest,
+    checkpoint_integrity_digest: checkpoint.integrity?.digest,
+    checkpoint_event_count: events.length,
+    pid: process.pid,
+    reviewer,
+    result,
+    note: 'The held scope is a ready per-item native recorder; no review record is implied until its exact Proof readback succeeds.',
+  });
+}
+
 async function recordPause(
   subject: string,
   proof: string,
@@ -1468,7 +1601,9 @@ async function recordPause(
   await assertReviewItemsReaderBindings(subject, readerOutput, items, 'record-pause-input');
   const held = holdId || items[0].id;
   if (!items.some(item => item.id === held)) throw new Error(`--hold-id ${held} is not a prepared review item`);
-  if (fs.existsSync(path.join(output, 'paused', 'checkpoint.json'))) throw new Error('review-record pause output already exists; use a fresh output');
+  if (fs.existsSync(path.join(output, 'paused', 'checkpoint.json')) || fs.existsSync(path.join(output, 'paused', 'failure-checkpoint.json'))) {
+    throw new Error('review-record pause output already exists; use a fresh output');
+  }
   assertReviewItemsUnchanged(proof, subject, output, items, 'record-pause-input');
   setReviewEnvironment(output, readerOutput, reviewer);
   const { config, engine } = await configForSubject(subject, output, governedCodex, configPath);
@@ -1488,63 +1623,37 @@ async function recordPause(
   const context = (engine as any)._lastContext;
   if (!context) throw new Error('Graph-v2 review-record engine did not expose a journal context');
   const checkpoint = JSON.parse(JSON.stringify(context.journal.exportGraphCheckpoint(context.sessionId)));
-  const events = checkpointEvents(checkpoint);
-  const projection = context.journal.getInstanceProjection();
-  const generations = Object.values(projection.generationsById) as any[];
-  const recorderGenerations = generations.filter(generation => generation.checkId === 'record-native-review');
-  const adjudicationGenerations = generations.filter(generation => generation.checkId === 'adjudicate-native-review');
-  if (recorderGenerations.length !== items.length) {
-    throw new Error(`review-record pause expected one recorder generation per item, found ${recorderGenerations.length} for ${items.length} items`);
-  }
-  if (adjudicationGenerations.filter(generation => generation.status === 'completed').length !== items.length) {
-    throw new Error('review-record pause did not complete every per-item adjudication before the recorder frontier');
-  }
-  const generationForItem = (item: ReviewItem): any[] => recorderGenerations.filter(generation =>
-    Array.isArray(generation.scope) && generation.scope.some((part: any) => part?.key === item.id) ||
-    (Array.isArray(generation.activeInputClaimIds) && generation.activeInputClaimIds.some((claimId: string) => {
-      const claim = (projection as any).claimsById?.[claimId];
-      return nativeReviewItem(claim?.payload)?.id === item.id;
-    }))
-  );
-  for (const item of items) {
-    const matches = generationForItem(item);
-    if (matches.length !== 1 || matches[0].status !== 'ready') {
-      throw new Error(`review-record pause did not leave exactly one ready recorder for ${item.id}`);
-    }
-  }
-  if (recorderGenerations.some(generation => generation.status !== 'ready')) {
-    throw new Error('review-record pause left a per-item recorder outside the ready frontier');
-  }
-  const heldGenerationIds = new Set(recorderGenerations.map(generation => generation.nodeGenerationId));
-  if (events.some(event => heldGenerationIds.has(event.nodeGenerationId) && /^Attempt/.test(String(event.type)))) {
-    throw new Error('held review-record scope already has an attempt event');
-  }
-  const observedRows = observations.filter(observation => observation.check_id === 'record-native-review');
-  if (observedRows.some(observation => observation.status !== 'ready')) {
-    throw new Error('review-record pause observed a recorder outside the ready frontier');
-  }
-  const dirtAtPause = gitDirtyPaths(subject);
-  if (dirtAtPause.length !== 0) throw new Error(`review-record pause found subject dirt despite deferring every recorder: ${dirtAtPause.join(', ')}`);
-  assertNoAttemptFailures(events, 'review-record paused checkpoint');
-  assertRecordCheckpointProjection(config, checkpoint, 'review-record paused');
+  // Persist the exact engine checkpoint before validating the expected ready
+  // frontier.  A failed adjudication must leave a recoverable public prefix.
   writeJson(path.join(output, 'diagnostic', 'record-pause-checkpoint.json'), checkpoint);
   writeJson(path.join(output, 'diagnostic', 'record-pause-observations.json'), observations);
   writeJson(path.join(output, 'diagnostic', 'record-pause-result.json'), result);
-  writeJson(path.join(output, 'paused', 'checkpoint.json'), checkpoint);
-  writeJson(path.join(output, 'paused', 'observations.json'), observations);
-  writeJson(path.join(output, 'paused', 'summary.json'), {
-    phase: 'record-pause',
-    status: 'quiescent-ready-review-record-frontier',
-    held_scope: 'all-record-native-review',
-    held_item_ids: items.map(item => item.id),
-    held_generation_ids: [...heldGenerationIds],
-    checkpoint_session_id: checkpoint.sessionId,
-    checkpoint_event_count: events.length,
-    pid: process.pid,
-    reviewer,
-    result,
-    note: 'The held scope is a ready per-item native recorder; no review record is implied until its exact Proof readback succeeds.',
-  });
+  try {
+    const { heldGenerationIds } = validateReadyRecordPauseCheckpoint(
+      config,
+      checkpoint,
+      items,
+      observations,
+      'review-record pause',
+    );
+    const dirtAtPause = gitDirtyPaths(subject);
+    if (dirtAtPause.length !== 0) throw new Error(`review-record pause found subject dirt despite deferring every recorder: ${dirtAtPause.join(', ')}`);
+    persistRecordPauseSuccess(
+      output,
+      checkpoint,
+      observations,
+      result,
+      items,
+      reviewer,
+      heldGenerationIds,
+      'record-pause',
+      'quiescent-ready-review-record-frontier',
+      'record-pause',
+    );
+  } catch (error) {
+    persistRecordPauseFailure(config, output, checkpoint, observations, result, items, reviewer, error);
+    throw error;
+  }
   console.log(JSON.stringify({ mode: 'record-pause', status: 'quiescent-ready-review-record-frontier', held_scope: 'all-record-native-review', held_item_ids: items.map(item => item.id), output }, null, 2));
 }
 
@@ -1630,6 +1739,210 @@ async function recordResume(
   console.log(JSON.stringify({ mode: 'record-resume', status: 'recorded-or-reused-exact-native-review-tuples', held_scope: 'all-record-native-review', held_item_ids: items.map(item => item.id), output }, null, 2));
 }
 
+async function recoverFailedReviewAdjudications(
+  subject: string,
+  proof: string,
+  output: string,
+  governedCodex: GovernedCodexExecution | undefined,
+  configPath: string,
+  readerOutput: string,
+  reviewer: string,
+  checkpointPath: string,
+  failureSummaryPath: string,
+): Promise<void> {
+  const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as any;
+  const failureSummary = JSON.parse(fs.readFileSync(failureSummaryPath, 'utf8')) as Json;
+  if (failureSummary.pid === process.pid) throw new Error('review-record recovery must run in a fresh OS process');
+  if (fs.existsSync(path.join(output, 'paused', 'checkpoint.json'))) throw new Error('review-record recovery already has a normal paused checkpoint');
+  if (fs.existsSync(path.join(output, 'recovered', 'checkpoint.json'))) throw new Error('review-record recovery output already exists; refusing to overwrite evidence');
+
+  const items = readReviewItems(output);
+  await assertReviewItemsReaderBindings(subject, readerOutput, items, 'record-recover-adjudication-input');
+  assertReviewItemsUnchanged(proof, subject, output, items, 'record-recover-adjudication-input');
+  setReviewEnvironment(output, readerOutput, reviewer);
+  const { config, engine } = await configForSubject(subject, output, governedCodex, configPath);
+  const plan = compileClaimPlan(config);
+  const failedJournal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  const beforeProjection = failedJournal.getInstanceProjection();
+  const itemById = new Map(items.map(item => [item.id, item]));
+  const generations = Object.values(beforeProjection.generationsById) as any[];
+  const failed = generations.filter(generation =>
+    generation.status === 'failed' && generation.checkId === 'adjudicate-native-review',
+  );
+  if (!failed.length) throw new Error('failed review-record checkpoint has no failed adjudicate-native-review generation');
+  const failedIds = failed.map(generation => generation.nodeGenerationId).sort();
+  const failedItemIds = new Set<string>();
+  for (const generation of failed) {
+    const claims = generation.activeInputClaimIds.map((id: string) => beforeProjection.claimsById[id]).filter(Boolean);
+    const itemClaims = claims.filter((claim: any) => claim.claim === 'native.review.controller.item@1');
+    if (itemClaims.length !== 1) throw new Error(`failed adjudicator ${generation.nodeGenerationId} has detached item intent`);
+    const checkpointItem = objectValue(itemClaims[0].payload, `failed adjudicator ${generation.nodeGenerationId} item`);
+    const itemId = checkpointItem.id;
+    if (typeof itemId !== 'string' || !itemById.has(itemId)) {
+      throw new Error(`failed adjudicator ${generation.nodeGenerationId} is outside the prepared review item set`);
+    }
+    const item = itemById.get(itemId)!;
+    if (canonicalJson(checkpointItem) !== canonicalJson(item)) {
+      throw new Error(`failed adjudicator ${generation.nodeGenerationId} item claim is not the exact prepared review item`);
+    }
+    failedItemIds.add(item.id);
+  }
+  if (failedItemIds.size !== failed.length) throw new Error('failed review-record checkpoint contains duplicate adjudication item intents');
+  const successfulSiblingIds = new Set(
+    generations
+      .filter(generation => generation.status === 'completed' && generation.checkId === 'adjudicate-native-review')
+      .map(generation => generation.nodeGenerationId),
+  );
+  const recordsBefore = reviewRecordList(proof, subject, output, 'record-recover-adjudication-list-before');
+  const beforeIds = recordsBefore.map(record => record.id).sort();
+  const observations: Json[] = [];
+  let retryPrefix: any;
+  let retried: { result: unknown; checkpoint: any; retryCheckpoint: any } | undefined;
+  const persistRetryFailure = (failedCheckpoint: any, error: unknown): void => {
+    const failurePath = path.join(output, 'recovered', 'failure-checkpoint.json');
+    if (fs.existsSync(failurePath)) return;
+    const message = error instanceof Error ? error.message : String(error);
+    const events = checkpointEvents(failedCheckpoint);
+    writeJson(failurePath, failedCheckpoint);
+    writeJson(path.join(output, 'recovered', 'failure-summary.json'), {
+      phase: 'record-recover',
+      status: 'partial-review-record-adjudication-retry-failed',
+      pid: process.pid,
+      prior_failure_pid: failureSummary.pid,
+      reviewer,
+      checkpoint_session_id: failedCheckpoint.sessionId,
+      graph_semantic_digest: failedCheckpoint.graphSemanticDigest,
+      checkpoint_integrity_digest: failedCheckpoint.integrity?.digest,
+      checkpoint_event_count: events.length,
+      failed_generation_ids: failedIds,
+      retry_prefix_event_count: retryPrefix ? checkpointEvents(retryPrefix).length : 0,
+      error: message,
+      note: 'The retry failure checkpoint and its durable prefix are retained; no recorder was dispatched.',
+    });
+  };
+
+  try {
+    retried = await engine.retryGraphCheckpoint({
+      checkpoint,
+      config,
+      prInfo,
+      retryGenerationIds: failedIds,
+      externalSideEffects: 'absent',
+      maxParallelism: config.max_parallelism,
+      onRetryCheckpoint: prefix => {
+        retryPrefix = JSON.parse(JSON.stringify(prefix));
+        writeJson(path.join(output, 'diagnostic', 'record-recover-retry-prefix.json'), retryPrefix);
+      },
+      generatedDispatchGate: generation => {
+        const observation = {
+          pid: process.pid,
+          mode: 'recover',
+          recorded_at: new Date().toISOString(),
+          generation_id: generation.nodeGenerationId,
+          check_id: generation.checkId,
+          template_node_key: generation.templateNodeKey,
+          scope: generation.scope,
+          status: generation.status,
+        };
+        observations.push(observation);
+        if (failedIds.includes(generation.nodeGenerationId) && generation.checkId === 'adjudicate-native-review') return 'dispatch';
+        if (generation.checkId === 'record-native-review') return 'defer';
+        throw new Error(`review-record recovery attempted to dispatch unselected ${generation.checkId}`);
+      },
+    });
+  } catch (error) {
+    persistRetryFailure(retryPrefix || checkpoint, error);
+    throw error;
+  }
+  if (!retried || !retryPrefix) {
+    const error = new Error('review-record recovery did not persist a retry prefix');
+    persistRetryFailure(retried?.checkpoint || checkpoint, error);
+    throw error;
+  }
+
+  const returned = JSON.parse(JSON.stringify(retried.checkpoint));
+  try {
+    const prefixEvents = checkpointEvents(retryPrefix);
+    const beforeEvents = checkpointEvents(checkpoint);
+    if (returned.sessionId !== checkpoint.sessionId || returned.graphSemanticDigest !== checkpoint.graphSemanticDigest) {
+      throw new Error('review-record recovery changed checkpoint session or graph semantic digest');
+    }
+    if (JSON.stringify(prefixEvents.slice(0, beforeEvents.length)) !== JSON.stringify(beforeEvents)) {
+      throw new Error('review-record recovery did not preserve the failed checkpoint event prefix');
+    }
+    const returnedEvents = checkpointEvents(returned);
+    const suffix = returnedEvents.slice(prefixEvents.length);
+    const retryStarts = suffix.filter(event => event?.type === 'AttemptStarted');
+    if (retryStarts.some(event => event?.checkId !== 'adjudicate-native-review' || !failedIds.includes(event.nodeGenerationId))) {
+      throw new Error('review-record recovery dispatched work outside the failed adjudication set');
+    }
+    if (retryStarts.some(event => event?.checkId === 'record-native-review')) {
+      throw new Error('review-record recovery dispatched a recorder before the recovered pause frontier');
+    }
+    if (suffix.some(event => successfulSiblingIds.has(event?.nodeGenerationId))) {
+      throw new Error('review-record recovery changed a completed sibling adjudication attempt');
+    }
+    const returnedJournal = ExecutionJournal.restoreGraphCheckpoint(plan, returned);
+    const afterProjection = returnedJournal.getInstanceProjection();
+    for (const generationId of successfulSiblingIds) {
+      if (JSON.stringify(afterProjection.generationsById[generationId]) !== JSON.stringify(beforeProjection.generationsById[generationId])) {
+        throw new Error(`review-record recovery changed completed sibling generation ${generationId}`);
+      }
+    }
+    const completedRetries = suffix.filter(event => event?.type === 'AttemptCompleted' && event?.checkId === 'adjudicate-native-review');
+    if (completedRetries.length !== failed.length || completedRetries.some(event => !failedIds.includes(event.nodeGenerationId))) {
+      throw new Error('review-record recovery did not complete every failed adjudication retry');
+    }
+    const recordsAfter = reviewRecordList(proof, subject, output, 'record-recover-adjudication-list-after');
+    if (recordsAfter.map(record => record.id).sort().join(',') !== beforeIds.join(',')) {
+      throw new Error('review-record recovery wrote native records before the paused recorder frontier');
+    }
+    const { heldGenerationIds } = validateReadyRecordPauseCheckpoint(
+      config,
+      returned,
+      items,
+      observations,
+      'review-record recovery',
+      new Set(failedIds),
+    );
+    persistRecordPauseSuccess(
+      output,
+      returned,
+      observations,
+      retried.result,
+      items,
+      reviewer,
+      heldGenerationIds,
+      'record-recover',
+      'quiescent-ready-review-record-frontier-after-adjudication-recovery',
+      'record-recover',
+    );
+    writeJson(path.join(output, 'recovered', 'checkpoint.json'), returned);
+    writeJson(path.join(output, 'recovered', 'observations.json'), observations);
+    writeJson(path.join(output, 'recovered', 'summary.json'), {
+      phase: 'record-recover',
+      status: 'quiescent-ready-review-record-frontier-after-adjudication-recovery',
+      pid: process.pid,
+      prior_failure_pid: failureSummary.pid,
+      checkpoint_session_id: returned.sessionId,
+      graph_semantic_digest: returned.graphSemanticDigest,
+      checkpoint_integrity_digest: returned.integrity?.digest,
+      failed_generation_ids: failedIds,
+      failed_item_ids: [...failedItemIds],
+      completed_sibling_generation_ids: [...successfulSiblingIds],
+      retry_prefix_event_count: prefixEvents.length,
+      recovered_event_count: returnedEvents.length,
+      held_generation_ids: [...heldGenerationIds],
+      external_side_effects: 'absent',
+      note: 'Only failed adjudication generations were retried; completed sibling adjudications were preserved and every native recorder remained deferred.',
+    });
+  } catch (error) {
+    persistRetryFailure(returned, error);
+    throw error;
+  }
+  console.log(JSON.stringify({ mode: 'record-recover', status: 'quiescent-ready-review-record-frontier-after-adjudication-recovery', output }, null, 2));
+}
+
 async function recordRecover(
   subject: string,
   proof: string,
@@ -1640,14 +1953,39 @@ async function recordRecover(
   reviewer: string,
 ): Promise<void> {
   process.env.PROOF_BIN = proof;
-  const checkpointPath = path.join(output, 'resumed', 'failure-checkpoint.json');
+  // A failed pause adjudication is recovered from the paused failure
+  // checkpoint.  If a later record-resume also failed, prefer that newer
+  // resumed checkpoint so the existing native-writer recovery remains intact.
+  const pausedFailureCheckpointPath = path.join(output, 'paused', 'failure-checkpoint.json');
+  const resumedFailureCheckpointPath = path.join(output, 'resumed', 'failure-checkpoint.json');
+  const checkpointPath = fs.existsSync(resumedFailureCheckpointPath)
+    ? resumedFailureCheckpointPath
+    : pausedFailureCheckpointPath;
   if (!fs.existsSync(checkpointPath)) throw new Error(`missing failed review-record checkpoint: ${checkpointPath}`);
   if (fs.existsSync(path.join(output, 'recovered', 'checkpoint.json'))) throw new Error('review-record recovery output already exists; refusing to overwrite evidence');
-  const failureSummaryPath = path.join(output, 'resumed', 'failure-summary.json');
+  const failureSummaryPath = checkpointPath === resumedFailureCheckpointPath
+    ? path.join(output, 'resumed', 'failure-summary.json')
+    : path.join(output, 'paused', 'failure-summary.json');
   if (!fs.existsSync(failureSummaryPath)) throw new Error(`missing failed review-record summary: ${failureSummaryPath}`);
   const failureSummary = JSON.parse(fs.readFileSync(failureSummaryPath, 'utf8')) as Json;
   if (failureSummary.pid === process.pid) throw new Error('review-record recovery must run in a fresh OS process');
   const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as any;
+  const failedAdjudication = checkpointEvents(checkpoint).some(event =>
+    event?.type === 'AttemptFailed' && event?.checkId === 'adjudicate-native-review',
+  );
+  if (failedAdjudication && checkpointPath === pausedFailureCheckpointPath) {
+    return recoverFailedReviewAdjudications(
+      subject,
+      proof,
+      output,
+      governedCodex,
+      configPath,
+      readerOutput,
+      reviewer,
+      checkpointPath,
+      failureSummaryPath,
+    );
+  }
   const items = readReviewItems(output);
   await assertReviewItemsReaderBindings(subject, readerOutput, items, 'record-recover-input');
   assertReviewItemsUnchanged(proof, subject, output, items, 'record-recover-input');

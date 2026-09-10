@@ -506,6 +506,7 @@ describeNative('native Milestone B component/spec progression', () => {
   it('reuses completed reader packets for per-item native review records with exact fresh resume', () => {
     const fixture = createFixture(2);
     const reviewOutput = path.join(fixture.parent, 'review-run');
+    const recoveryOutput = path.join(fixture.parent, 'review-recovery-run');
     const reviewer = 'agent:luna-xhigh-native-spec-review';
     try {
       runRunner(fixture, 'prepare');
@@ -518,6 +519,10 @@ describeNative('native Milestone B component/spec progression', () => {
         '--reader-output', fixture.output,
         '--reviewer', reviewer,
       ], false, reviewOutput);
+      runRunner(fixture, 'record-prepare', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+      ], false, recoveryOutput);
       const reviewItems = json<any>(path.join(reviewOutput, 'review', 'items.json')).items;
       expect(reviewItems).toHaveLength(rows.length);
       expect(reviewItems.every((item: any) => item.reviewer === reviewer)).toBe(true);
@@ -559,6 +564,61 @@ describeNative('native Milestone B component/spec progression', () => {
       expect(lineageTamper.status).not.toBe(0);
       expect(`${lineageTamper.stdout || ''}${lineageTamper.stderr || ''}`).toContain('lineage field packet_id is detached');
       fs.writeFileSync(reviewItemsPath, originalReviewItems, 'utf8');
+
+      const failedPause = runRunnerResult(fixture, 'record-pause', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+        '--hold-id', rows[0].id,
+      ], false, recoveryOutput, { VISOR_NATIVE_B_MISSING_CITATIONS_FOR: rows[1].id });
+      expect(failedPause.status).not.toBe(0);
+      expect(`${failedPause.stdout || ''}${failedPause.stderr || ''}`).toContain("required property 'citations'");
+      const adjudicationFailureCheckpoint = json<any>(path.join(recoveryOutput, 'paused', 'failure-checkpoint.json'));
+      const adjudicationFailureSummary = json<any>(path.join(recoveryOutput, 'paused', 'failure-summary.json'));
+      const adjudicationFailureEvents = adjudicationFailureCheckpoint.events || [];
+      const failedAdjudications = adjudicationFailureEvents.filter((event: any) => event.type === 'AttemptFailed' && event.checkId === 'adjudicate-native-review');
+      const completedAdjudications = adjudicationFailureEvents.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'adjudicate-native-review');
+      expect(failedAdjudications).toHaveLength(1);
+      expect(completedAdjudications).toHaveLength(1);
+      expect(adjudicationFailureEvents.filter((event: any) => event.checkId === 'record-native-review' && /^Attempt/.test(String(event.type)))).toHaveLength(0);
+      expect(adjudicationFailureSummary.pid).toBeGreaterThan(0);
+      expect(adjudicationFailureSummary.graph_semantic_digest).toBe(adjudicationFailureCheckpoint.graphSemanticDigest);
+      expect(adjudicationFailureSummary.checkpoint_integrity_digest).toBe(adjudicationFailureCheckpoint.integrity.digest);
+      expect(JSON.parse(proof(fixture.subject, ['review', 'list', '--kind', 'spec_conformance', '--format', 'json']))).toHaveLength(0);
+
+      runRunner(fixture, 'record-recover', [
+        '--reader-output', fixture.output,
+        '--reviewer', reviewer,
+      ], false, recoveryOutput);
+      const adjudicationRecovered = json<any>(path.join(recoveryOutput, 'recovered', 'checkpoint.json'));
+      const adjudicationRecoveredSummary = json<any>(path.join(recoveryOutput, 'recovered', 'summary.json'));
+      const adjudicationRecoveredEvents = adjudicationRecovered.events || [];
+      const adjudicationRetryPrefix = json<any>(path.join(recoveryOutput, 'diagnostic', 'record-recover-retry-prefix.json'));
+      const adjudicationRecoverySuffix = adjudicationRecoveredEvents.slice(adjudicationRetryPrefix.events.length);
+      expect(adjudicationRetryPrefix.events.slice(0, adjudicationFailureEvents.length)).toEqual(adjudicationFailureEvents);
+      expect(adjudicationRecovered.sessionId).toBe(adjudicationFailureCheckpoint.sessionId);
+      expect(adjudicationRecovered.graphSemanticDigest).toBe(adjudicationFailureCheckpoint.graphSemanticDigest);
+      expect(adjudicationRecoveredSummary.pid).toBeGreaterThan(0);
+      expect(adjudicationRecoveredSummary.pid).not.toBe(adjudicationFailureSummary.pid);
+      expect(adjudicationRecoveredSummary.checkpoint_session_id).toBe(adjudicationFailureCheckpoint.sessionId);
+      expect(adjudicationRecoveredSummary.graph_semantic_digest).toBe(adjudicationFailureCheckpoint.graphSemanticDigest);
+      expect(adjudicationRecoveredSummary.held_generation_ids).toHaveLength(rows.length);
+      const failedAdjudicationGenerationId = failedAdjudications[0].nodeGenerationId;
+      const completedSiblingGenerationId = completedAdjudications[0].nodeGenerationId;
+      const retryStarts = adjudicationRecoverySuffix.filter((event: any) => event.type === 'AttemptStarted');
+      expect(retryStarts).toHaveLength(1);
+      expect(retryStarts[0].checkId).toBe('adjudicate-native-review');
+      expect(retryStarts[0].nodeGenerationId).toBe(failedAdjudicationGenerationId);
+      expect(adjudicationRecoverySuffix.filter((event: any) => event.type === 'AttemptStarted' && event.checkId === 'record-native-review')).toHaveLength(0);
+      expect(adjudicationRecoverySuffix.filter((event: any) => event.type === 'AttemptStarted' && event.nodeGenerationId === completedSiblingGenerationId)).toHaveLength(0);
+      expect(adjudicationRecoverySuffix.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'adjudicate-native-review')).toHaveLength(1);
+      expect(adjudicationRecoverySuffix.filter((event: any) => event.type === 'AttemptCompleted' && event.checkId === 'record-native-review')).toHaveLength(0);
+      expect(JSON.parse(proof(fixture.subject, ['review', 'list', '--kind', 'spec_conformance', '--format', 'json']))).toHaveLength(0);
+      expect(fs.existsSync(path.join(recoveryOutput, 'paused', 'checkpoint.json'))).toBe(true);
+      const recoveredPaused = json<any>(path.join(recoveryOutput, 'paused', 'checkpoint.json'));
+      const recoveredAdjudicationClaims = (recoveredPaused.events || []).filter((event: any) =>
+        event.type === 'ClaimPublished' && event.claim === 'native.review.adjudication@1',
+      );
+      expect(recoveredAdjudicationClaims).toHaveLength(rows.length);
 
       runRunner(fixture, 'record-pause', [
         '--reader-output', fixture.output,
