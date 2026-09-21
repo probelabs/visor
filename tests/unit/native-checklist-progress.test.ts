@@ -1277,6 +1277,54 @@ describe('native checklist progress projection', () => {
     expect(staleComponent?.conditions?.[0].evidence.component_generation_id).toBeUndefined();
     expect(staleComponent?.check_ids).toEqual([]);
     expect(stale.operational.components.stale_count).toBe(1);
+
+    const conditionOnlyProjection = {
+      ...projection,
+      claimsById: {
+        ...projection.claimsById,
+        [`r`.repeat(64)]: {...retained, nodeGenerationId: 'missing-generation'},
+      },
+      generationsById: {},
+      activeGenerationIdByNode: {},
+    };
+    const conditionOnly = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: conditionOnlyProjection,
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+      currentProofInputs: [{id: 'REQ-1', component: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'2'.repeat(64)}`}],
+    });
+    expect(conditionOnly.operational.specifications.items.find(item => item.id === 'REQ-1')?.state).toBe('unknown');
+
+    const readyProjection = {
+      ...conditionOnlyProjection,
+      generationsById: {
+        'ready-generation': {
+          nodeGenerationId: 'ready-generation',
+          nodeInstanceId: 'review-node',
+          templateNodeKey: 'review',
+          status: 'ready',
+          checkId: 'review',
+          scope,
+        },
+      },
+      activeGenerationIdByNode: {
+        'review-node': 'ready-generation',
+      },
+    };
+    const readyStale = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: readyProjection,
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+      currentProofInputs: [{id: 'REQ-1', component: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'2'.repeat(64)}`}],
+    });
+    const readyStaleItem = readyStale.operational.specifications.items.find(item => item.id === 'REQ-1');
+    expect(readyStaleItem?.state).toBe('pending');
+    expect(readyStaleItem?.conditions?.[0]).toMatchObject({state: 'stale', kind: 'changed_input'});
+
     expect(stale.evidence.journal.provenance).toBe('checkpoint');
     const rendered = renderNativeChecklistProgress(stale);
     expect(JSON.parse(rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1] as string)).toEqual(JSON.parse(rendered.json));

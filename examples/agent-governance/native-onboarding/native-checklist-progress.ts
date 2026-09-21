@@ -1087,6 +1087,8 @@ type OperationalItem = Readonly<{
   checkId?: string;
   kind?: OperationalKind;
   condition?: NativeChecklistOperationalCondition;
+  /** A condition-only row must not override an authoritative execution row. */
+  conditionOnly?: boolean;
 }>;
 
 function conditionKey(condition: NativeChecklistOperationalCondition): string {
@@ -1101,7 +1103,7 @@ function collection(
   const grouped = new Map<string, { statuses: string[]; checks: string[]; conditions: NativeChecklistOperationalCondition[] }>();
   for (const item of items) {
     const group = grouped.get(item.id) ?? { statuses: [], checks: [], conditions: [] };
-    group.statuses.push(item.status);
+    if (!item.conditionOnly) group.statuses.push(item.status);
     if (item.checkId && !group.checks.includes(item.checkId)) group.checks.push(item.checkId);
     if (item.condition && !group.conditions.some(existing => conditionKey(existing) === conditionKey(item.condition!))) {
       group.conditions.push(item.condition);
@@ -1505,14 +1507,20 @@ function nativeConditionEntries(
         source_claim_id: claim.claimId,
         ...(typeof node.nodeInstanceId === 'string' ? {node_instance_id: node.nodeInstanceId} : {}),
       };
+      const retainedStatus = isRecord(generation) &&
+        typeof generation.status === 'string' &&
+        generation.status !== 'inactive'
+        ? generation.status
+        : undefined;
       items.push({
         id: retained.id,
         // A stale condition is orthogonal to the execution state.  Reuse the
         // retained generation state when it is available instead of turning a
         // completed or failed execution into synthetic pending work.
-        status: isRecord(generation) && typeof generation.status === 'string' ? generation.status : 'unknown',
+        status: retainedStatus ?? 'unknown',
         checkId: isRecord(generation) && typeof generation.checkId === 'string' ? generation.checkId : claim.producerCheckId,
         kind: 'specification',
+        ...(retainedStatus === undefined ? {conditionOnly: true} : {}),
         condition: {
           state: 'stale',
           kind: 'changed_input',
@@ -1531,6 +1539,7 @@ function nativeConditionEntries(
             : optionalString(component.node.templateNodeKey),
         } : {}),
         kind: 'component',
+        ...(component ? {} : {conditionOnly: true}),
         condition: {
           state: 'stale',
           kind: 'changed_input',
