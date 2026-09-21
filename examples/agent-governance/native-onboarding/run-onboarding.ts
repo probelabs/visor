@@ -373,6 +373,7 @@ export type ChecklistPrefixRetryArguments = Readonly<{
   checkpoint: string;
   priorOutput: string;
   retryGenerationId: string;
+  proofSha256?: string;
 }>;
 
 export type ChecklistContinuationStep = 'traces-light' | 'skeleton' | 'variables';
@@ -422,16 +423,25 @@ export function parseChecklistPrefixRetryArguments(values: Record<string, string
   const checkpoint = values['checklist-prefix-retry-checkpoint'];
   const priorOutput = values['checklist-prefix-retry-prior-output'];
   const retryGenerationId = values['checklist-prefix-retry-generation'];
+  const proofSha256 = values['checklist-prefix-retry-proof-sha256'];
   const sideEffects = values['external-side-effects'];
   const prefixPresent = [checkpoint, priorOutput, retryGenerationId].filter(value => value !== undefined).length;
-  if (prefixPresent === 0) return undefined;
+  if (prefixPresent === 0) {
+    if (proofSha256 !== undefined) {
+      throw new Error('--checklist-prefix-retry-proof-sha256 requires checklist prefix retry arguments');
+    }
+    return undefined;
+  }
   if (prefixPresent !== 3 || !checkpoint || !priorOutput || !retryGenerationId || sideEffects !== 'absent') {
     throw new Error('--checklist-prefix-retry-checkpoint, --checklist-prefix-retry-prior-output, --checklist-prefix-retry-generation, and --external-side-effects absent are required together');
   }
   if (!/^[0-9a-f]{64}$/.test(retryGenerationId)) {
     throw new Error('--checklist-prefix-retry-generation must be a lowercase 64-character generation ID');
   }
-  return Object.freeze({checkpoint, priorOutput, retryGenerationId});
+  if (proofSha256 !== undefined && !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(proofSha256)) {
+    throw new Error('--checklist-prefix-retry-proof-sha256 must be a lowercase 64-character SHA-256 digest (optionally sha256:-prefixed)');
+  }
+  return Object.freeze({checkpoint, priorOutput, retryGenerationId, ...(proofSha256 === undefined ? {} : {proofSha256})});
 }
 
 function assertDisjointCheckoutRoots(subject: string, original: string): void {
@@ -1030,6 +1040,72 @@ const CONTINUATION_WORK_ITEM_KEYS = [
 
 function sha256File(file: string): string {
   return `sha256:${createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
+}
+
+export type ChecklistPrefixRetryProofBinding = Readonly<{
+  retryCheckId: string;
+  retainedRealpath: string;
+  retainedSha256: string;
+  selectedRealpath: string;
+  selectedSha256: string;
+  proofBinaryChanged: boolean;
+}>;
+
+/** Bind an optional proof-admission retry binary before any journal mutation. */
+export function validateChecklistPrefixRetryProofBinding(
+  proof: string,
+  priorOutput: string,
+  retryCheckId: string,
+  suppliedSha256?: string,
+): ChecklistPrefixRetryProofBinding {
+  if (retryCheckId !== 'inspect' && retryCheckId !== 'proof_admit') {
+    throw new Error('checklist prefix retry Proof binary binding requires inspect or proof_admit');
+  }
+  const currentProof = fs.realpathSync(proof);
+  const preflightPath = path.join(fs.realpathSync(priorOutput), 'preflight.json');
+  if (!fs.existsSync(preflightPath) || !fs.statSync(preflightPath).isFile()) {
+    throw new Error('checklist prefix retry retained preflight.json is missing');
+  }
+  let retained: Json;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(preflightPath, 'utf8')) as unknown;
+    if (!isRecord(parsed)) throw new Error('not an object');
+    retained = parsed;
+  } catch (error) {
+    throw new Error('checklist prefix retry retained preflight.json is invalid: ' + String(error));
+  }
+  const retainedProofValue = retained.proof_binary;
+  if (typeof retainedProofValue !== 'string' || retainedProofValue.length === 0) {
+    throw new Error('checklist prefix retry retained preflight is missing proof_binary');
+  }
+  let retainedProof: string;
+  try { retainedProof = fs.realpathSync(retainedProofValue); } catch {
+    throw new Error('checklist prefix retry retained preflight proof_binary is not a real path');
+  }
+  const proofBinaryChanged = retainedProof !== currentProof;
+  if (proofBinaryChanged) {
+    if (retryCheckId !== 'proof_admit') {
+      throw new Error('checklist prefix retry may change the Proof binary only for proof_admit');
+    }
+    if (suppliedSha256 === undefined) {
+      throw new Error('--checklist-prefix-retry-proof-sha256 is required when changing the Proof binary for proof_admit');
+    }
+    const normalized = suppliedSha256.startsWith('sha256:') ? suppliedSha256.slice('sha256:'.length) : suppliedSha256;
+    const actual = sha256File(currentProof);
+    if (actual !== `sha256:${normalized}`) {
+      throw new Error('--checklist-prefix-retry-proof-sha256 does not match --proof-bin bytes');
+    }
+  } else if (suppliedSha256 !== undefined) {
+    throw new Error('--checklist-prefix-retry-proof-sha256 cannot be supplied when --proof-bin is unchanged');
+  }
+  return Object.freeze({
+    retryCheckId,
+    retainedRealpath: retainedProof,
+    retainedSha256: sha256File(retainedProof),
+    selectedRealpath: currentProof,
+    selectedSha256: sha256File(currentProof),
+    proofBinaryChanged,
+  });
 }
 
 function uniqueSortedStrings(value: unknown, label: string, allowEmpty = false): string[] {
@@ -1680,24 +1756,54 @@ export function validateChecklistPrefixRetrySelection(
   const journal = ExecutionJournal.restoreGraphCheckpoint(plan, validated);
   const projection = journal.getInstanceProjection();
   const generation = projection.generationsById[retryGenerationId];
-  if (!generation || generation.checkId !== 'inspect' || generation.scope.length > 1 ||
+  const retryCheckId = generation?.checkId;
+  if (!generation || (retryCheckId !== 'inspect' && retryCheckId !== 'proof_admit') || generation.scope.length > 1 ||
       projection.activeGenerationIdByNode[generation.nodeInstanceId] !== retryGenerationId ||
       generation.status !== 'failed' || !generation.scheduled ||
       typeof generation.attemptId !== 'string' || typeof generation.fence !== 'number' ||
       typeof generation.reason !== 'string' || generation.completedOutputClaimIds.length !== 0) {
-    throw new Error('checklist prefix retry requires the selected failed inspect generation before component release');
+    throw new Error('checklist prefix retry requires the selected failed inspect or proof_admit generation before component release');
   }
   const events = validated.events as unknown as readonly Json[];
   const failedAttempts = events.filter(event =>
-    event.type === 'AttemptFailed' && event.nodeGenerationId === retryGenerationId && event.checkId === 'inspect',
+    event.type === 'AttemptFailed' && event.nodeGenerationId === retryGenerationId && event.checkId === retryCheckId,
   );
   const lastFailed = failedAttempts[failedAttempts.length - 1];
   if (!lastFailed || lastFailed.attemptId !== generation.attemptId ||
       lastFailed.fence !== generation.fence || lastFailed.reason !== generation.reason) {
-    throw new Error('checklist prefix retry generation is not bound to its retained failed inspect attempt');
+    throw new Error(`checklist prefix retry generation is not bound to its retained failed ${retryCheckId} attempt`);
   }
   if (events.some(event => event.type === 'AttemptStarted' && Array.isArray(event.scope) && event.scope.length > 1)) {
     throw new Error('checklist prefix retry requires a prefix with no component attempt release');
+  }
+  if (retryCheckId === 'proof_admit') {
+    const inputClaims = generation.activeInputClaimIds
+      .map(id => projection.claimsById[id])
+      .filter((claim): claim is InstanceClaimProjection => claim !== undefined);
+    const candidates = inputClaims.filter(claim =>
+      claim.active && claim.kind === 'generated-output' && claim.claim === 'proof.candidate@1' &&
+      claim.producerCheckId === 'inspect' && claim.nodeGenerationId !== undefined &&
+      typeof claim.payloadFingerprint === 'string' && claim.payloadFingerprint.length > 0 &&
+      claim.proofCandidateEvidence !== undefined &&
+      typeof claim.proofCandidateEvidenceFingerprint === 'string' &&
+      claim.proofCandidateEvidenceFingerprint.length > 0 &&
+      claim.subgraphInstanceId === generation.subgraphInstanceId &&
+      sameJson(claim.scope, generation.scope),
+    );
+    if (generation.activeInputClaimIds.length !== 1 || inputClaims.length !== 1 || candidates.length !== 1) {
+      throw new Error('checklist proof_admit retry requires exactly one active retained proof candidate input');
+    }
+    const candidate = candidates[0];
+    const inspectGeneration = projection.generationsById[candidate.nodeGenerationId as string];
+    if (!inspectGeneration || inspectGeneration.checkId !== 'inspect' || inspectGeneration.status !== 'completed' ||
+        projection.activeGenerationIdByNode[inspectGeneration.nodeInstanceId] !== inspectGeneration.nodeGenerationId ||
+        inspectGeneration.subgraphInstanceId !== generation.subgraphInstanceId ||
+        !sameJson(inspectGeneration.scope, generation.scope) ||
+        inspectGeneration.completedOutputClaimIds.indexOf(candidate.claimId) < 0 ||
+        typeof inspectGeneration.attemptId !== 'string' || typeof inspectGeneration.fence !== 'number' ||
+        candidate.producerAttemptId !== inspectGeneration.attemptId || candidate.producerFence !== inspectGeneration.fence) {
+      throw new Error('checklist proof_admit retry requires an active candidate from a completed inspect generation');
+    }
   }
   return Object.freeze({journal, generation, prefixEventCount: validated.events.length});
 }
@@ -1712,6 +1818,7 @@ export type ChecklistBootstrapRetrySubjectGuard = Readonly<{
   checkpoint: GraphJournalCheckpointV1;
   governedCodexTransport: string;
   timeout: number;
+  proofBinaryBinding?: ChecklistPrefixRetryProofBinding;
 }>;
 
 /**
@@ -1726,7 +1833,7 @@ export function assertChecklistBootstrapRetrySubject(
 ): string {
   const {
     proof, subject, protectedOriginal, priorOutput, output, config, checkpoint,
-    governedCodexTransport, timeout,
+    governedCodexTransport, timeout, proofBinaryBinding,
   } = input;
   if (!path.isAbsolute(output) || !path.isAbsolute(priorOutput)) {
     throw new Error('checklist prefix retry subject guard requires absolute output roots');
@@ -1761,8 +1868,19 @@ export function assertChecklistBootstrapRetrySubject(
     throw new Error('checklist prefix retry subject roots do not match retained preflight');
   }
   const retainedProof = retainedPath('proof_binary');
-  if (retainedProof !== currentProof) {
+  if (!proofBinaryBinding && retainedProof !== currentProof) {
     throw new Error('checklist prefix retry Proof binary does not match retained preflight');
+  }
+  if (proofBinaryBinding) {
+    const actualChanged = retainedProof !== currentProof;
+    if (proofBinaryBinding.proofBinaryChanged !== actualChanged ||
+        proofBinaryBinding.retainedRealpath !== retainedProof ||
+        proofBinaryBinding.selectedRealpath !== currentProof ||
+        proofBinaryBinding.retainedSha256 !== sha256File(retainedProof) ||
+        proofBinaryBinding.selectedSha256 !== sha256File(currentProof) ||
+        (actualChanged && proofBinaryBinding.retryCheckId !== 'proof_admit')) {
+      throw new Error('checklist prefix retry Proof binary binding is not the measured retained selection');
+    }
   }
   if (retained.governed_codex_transport !== governedCodexTransport) {
     throw new Error('checklist prefix retry governed transport does not match retained preflight');
@@ -1854,7 +1972,7 @@ export async function executeChecklistPrefixRetryEngine(
   skeletonFrontier: RetainedContinuationFrontier;
 }> {
   if (!Number.isSafeInteger(timeout) || timeout < 1000) throw new Error('checklist prefix retry timeout is invalid');
-  validateChecklistPrefixRetrySelection(config, checkpoint, retryGenerationId);
+  const selection = validateChecklistPrefixRetrySelection(config, checkpoint, retryGenerationId);
   const retried = await engine.retryGraphCheckpoint({
     checkpoint,
     config,
@@ -1874,6 +1992,10 @@ export async function executeChecklistPrefixRetryEngine(
     throw new Error('checklist prefix retry changed the retained event prefix');
   }
   const retryEvents = retried.checkpoint.events.slice(checkpoint.events.length);
+  if (selection.generation.checkId === 'proof_admit' && retryEvents.some(event =>
+    event.type === 'AttemptStarted' && event.checkId === 'inspect')) {
+    throw new Error('checklist proof_admit retry must not replay inspect');
+  }
   if (retryEvents.some(event =>
     event.type === 'AttemptStarted' &&
     (event.checkId === 'checklist-bootstrap' || event.checkId === 'project' || event.checkId === 'structural_inventory'))) {
@@ -1954,11 +2076,15 @@ async function runChecklistPrefixRetry(
   // Retain the operator-supplied bytes before any strict config or selection
   // validation can fail, so a failed retry never hides its input authority.
   writeText(path.join(retryDirectory, 'prior-checkpoint.json'), checkpointBytes);
-  const registry = CheckProviderRegistry.getInstance();
-  registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
   const {prepared} = onboardingConfigTemplate(CHECKLIST_CONFIG_PATH);
   const config = await loadConfig(prepared as unknown as VisorConfig, {strict: true});
   const selection = validateChecklistPrefixRetrySelection(config, parsedCheckpoint, retry.retryGenerationId);
+  const proofBinding = validateChecklistPrefixRetryProofBinding(
+    proof,
+    roots.priorOutput,
+    selection.generation.checkId,
+    retry.proofSha256,
+  );
   const subjectRevision = assertChecklistBootstrapRetrySubject({
     proof,
     subject: roots.subject,
@@ -1969,7 +2095,10 @@ async function runChecklistPrefixRetry(
     checkpoint: selection.journal.exportGraphCheckpoint(parsedCheckpoint.sessionId),
     governedCodexTransport,
     timeout,
+    proofBinaryBinding: proofBinding,
   });
+  const registry = CheckProviderRegistry.getInstance();
+  registry.bootstrapProofAdmission(createProofAdmissionCapability(proof));
   let latestRetryCheckpoint = selection.journal.exportGraphCheckpoint(parsedCheckpoint.sessionId);
   const configPlan = compileClaimPlan(config);
   const materialized = persistChecklistMaterializedConfig(roots.output, config);
@@ -2012,6 +2141,7 @@ async function runChecklistPrefixRetry(
     materialized_config: path.relative(roots.output, materialized.path),
     materialized_config_sha256: materialized.digest,
     proof_binary: proof,
+    proof_binary_binding: proofBinding,
     request_timeout_ms: requestTimeout,
     outer_timeout_ms: timeout,
     governed_codex_transport: governedCodexTransport,
@@ -2022,7 +2152,7 @@ async function runChecklistPrefixRetry(
     codex_user_config_ignored: true,
     codex_rules_ignored: true,
     no_bootstrap_project_or_structural_inventory_repeat: true,
-    note: 'Restores the retained checklist project prefix and retries only its failed inspect generation; bootstrap, project, and structural_inventory are not rerun.',
+    note: `Restores the retained checklist project prefix and retries only its failed ${selection.generation.checkId} generation; bootstrap, project, and structural_inventory are not rerun.`,
   });
 
   const engine = new StateMachineExecutionEngine(roots.subject);
@@ -2072,6 +2202,7 @@ async function runChecklistPrefixRetry(
           graph_semantic_digest: retryCheckpoint.graphSemanticDigest,
           materialized_config: path.relative(roots.output, materialized.path),
           materialized_config_sha256: materialized.digest,
+          proof_binary_binding: proofBinding,
           persisted_before_dispatch: true,
         });
         persistRetryProgress();

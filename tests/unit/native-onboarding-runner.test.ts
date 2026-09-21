@@ -17,6 +17,7 @@ import {
   assertCurrentProofRequirementHash,
   assertRecoveryRoots,
   assertChecklistBootstrapRetrySubject,
+  validateChecklistPrefixRetryProofBinding,
   commitInitializedProofBaseline,
   collectNativeComponentOpenChecks,
   configurePublicPromptCapture,
@@ -1864,6 +1865,28 @@ describe('native onboarding runner boundaries', () => {
       priorOutput: '/tmp/prior',
       retryGenerationId: 'a'.repeat(64),
     });
+    expect(parseChecklistPrefixRetryArguments({
+      'checklist-prefix-retry-checkpoint': '/tmp/checkpoint.partial.json',
+      'checklist-prefix-retry-prior-output': '/tmp/prior',
+      'checklist-prefix-retry-generation': 'a'.repeat(64),
+      'checklist-prefix-retry-proof-sha256': 'sha256:' + 'b'.repeat(64),
+      'external-side-effects': 'absent',
+    })).toEqual({
+      checkpoint: '/tmp/checkpoint.partial.json',
+      priorOutput: '/tmp/prior',
+      retryGenerationId: 'a'.repeat(64),
+      proofSha256: 'sha256:' + 'b'.repeat(64),
+    });
+    expect(() => parseChecklistPrefixRetryArguments({
+      'checklist-prefix-retry-proof-sha256': 'b'.repeat(63),
+    })).toThrow(/requires checklist prefix retry arguments/);
+    expect(() => parseChecklistPrefixRetryArguments({
+      'checklist-prefix-retry-checkpoint': '/tmp/checkpoint.partial.json',
+      'checklist-prefix-retry-prior-output': '/tmp/prior',
+      'checklist-prefix-retry-generation': 'a'.repeat(64),
+      'checklist-prefix-retry-proof-sha256': 'B'.repeat(64),
+      'external-side-effects': 'absent',
+    })).toThrow(/proof-sha256 must be/);
   });
 
   it('rejects a checklist prefix retry before checkpoint restore on graph digest mismatch', () => {
@@ -1928,6 +1951,99 @@ describe('native onboarding runner boundaries', () => {
       validate.mockReturnValue(withComponentAttempt as any);
       expect(() => validateChecklistPrefixRetrySelection(config, withComponentAttempt as any, generationId))
         .toThrow(/component attempt release/);
+    } finally {
+      validate.mockRestore();
+      restore.mockRestore();
+    }
+  });
+
+  it('selects a failed proof_admit only with its active retained inspect candidate', async () => {
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const digest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+    const proofGenerationId = 'a'.repeat(64);
+    const inspectGenerationId = 'b'.repeat(64);
+    const candidateId = 'c'.repeat(64);
+    const scope = [{kind: 'keyed', expansionOwnerCheck: 'project', key: 'project', subgraphInstanceId: 'd'.repeat(64)}];
+    const inspectGeneration = {
+      nodeGenerationId: inspectGenerationId,
+      nodeInstanceId: 'inspect-node',
+      subgraphInstanceId: scope[0].subgraphInstanceId,
+      templateNodeKey: 'inspect', checkId: 'inspect', scope,
+      status: 'completed', attemptId: 'e'.repeat(64), fence: 6,
+      activeInputClaimIds: [], completedOutputClaimIds: [candidateId], scheduled: true,
+    };
+    const proofGeneration = {
+      nodeGenerationId: proofGenerationId,
+      nodeInstanceId: 'proof-admit-node',
+      subgraphInstanceId: scope[0].subgraphInstanceId,
+      templateNodeKey: 'proof_admit', checkId: 'proof_admit', scope,
+      status: 'failed', attemptId: 'f'.repeat(64), fence: 7,
+      activeInputClaimIds: [candidateId], completedOutputClaimIds: [], scheduled: true,
+      reason: 'MANAGED_OUTCOME_FAILED',
+    };
+    const candidate = {
+      claimId: candidateId, claim: 'proof.candidate@1', payload: {version: 'candidate'},
+      payloadFingerprint: '1'.repeat(64), producerCheckId: 'inspect',
+      producerAttemptId: inspectGeneration.attemptId, producerFence: inspectGeneration.fence,
+      parentClaimIds: [], wireMode: 'proof', scope, active: true, kind: 'generated-output',
+      subgraphInstanceId: scope[0].subgraphInstanceId, incarnation: 0,
+      nodeGenerationId: inspectGenerationId, proofCandidateEvidence: {version: 'evidence'},
+      proofCandidateEvidenceFingerprint: '2'.repeat(64),
+    };
+    const checkpoint = {
+      graphSemanticDigest: digest,
+      events: [...Array.from({length: 46}, () => ({})), {
+        type: 'AttemptFailed', nodeGenerationId: proofGenerationId, checkId: 'proof_admit',
+        attemptId: proofGeneration.attemptId, fence: proofGeneration.fence, reason: proofGeneration.reason,
+      }],
+    } as any;
+    const validate = jest.spyOn(ExecutionJournal, 'validateGraphCheckpointIntegrity').mockReturnValue(checkpoint);
+    let claimsById: Record<string, any> = {[candidateId]: candidate};
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockReturnValue({
+      getInstanceProjection: () => ({
+        generationsById: {[proofGenerationId]: proofGeneration, [inspectGenerationId]: inspectGeneration},
+        activeGenerationIdByNode: {
+          [proofGeneration.nodeInstanceId]: proofGenerationId,
+          [inspectGeneration.nodeInstanceId]: inspectGenerationId,
+        },
+        claimsById,
+      }),
+    } as any);
+    try {
+      const selection = validateChecklistPrefixRetrySelection(config, checkpoint, proofGenerationId);
+      expect(selection.prefixEventCount).toBe(checkpoint.events.length);
+      expect(selection.generation.checkId).toBe('proof_admit');
+
+      claimsById = {};
+      expect(() => validateChecklistPrefixRetrySelection(config, checkpoint, proofGenerationId))
+        .toThrow(/exactly one active retained proof candidate/);
+      claimsById = {[candidateId]: candidate};
+      candidate.active = false;
+      expect(() => validateChecklistPrefixRetrySelection(config, checkpoint, proofGenerationId))
+        .toThrow(/exactly one active retained proof candidate/);
+      candidate.active = true;
+      candidate.producerAttemptId = '0'.repeat(64);
+      expect(() => validateChecklistPrefixRetrySelection(config, checkpoint, proofGenerationId))
+        .toThrow(/completed inspect generation/);
+      candidate.producerAttemptId = inspectGeneration.attemptId;
+      const retryGraphCheckpoint = jest.fn().mockRejectedValue(new Error('proof-admit retry sentinel'));
+      await expect(executeChecklistPrefixRetryEngine(
+        {retryGraphCheckpoint} as any,
+        config,
+        checkpoint,
+        proofGenerationId,
+        2_000,
+        jest.fn(),
+      )).rejects.toThrow('proof-admit retry sentinel');
+      expect(retryGraphCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+        retryGenerationIds: [proofGenerationId],
+        externalSideEffects: 'absent',
+      }));
+      expect(() => validateChecklistPrefixRetrySelection(config, checkpoint, proofGenerationId, 'safely_idempotent'))
+        .toThrow(/external-side-effects absent/);
+      proofGeneration.checkId = 'unrelated';
+      expect(() => validateChecklistPrefixRetrySelection(config, checkpoint, proofGenerationId))
+        .toThrow(/failed inspect or proof_admit generation/);
     } finally {
       validate.mockRestore();
       restore.mockRestore();
@@ -2066,6 +2182,20 @@ describe('native onboarding runner boundaries', () => {
         config, checkpoint, governedCodexTransport: 'exec-jsonl-default-auth-v1', timeout: 120000,
       })).toBe(head);
       expect(fs.readFileSync(path.join(output, 'commands/checklist-prefix-retry-subject-guard/checklist-show-onboard_v1---format-json.stdout'), 'utf8')).toContain('proof.checklist.show.v1');
+      const changedProof = path.join(root, 'guard-proof-changed');
+      fs.copyFileSync(proof, changedProof);
+      const changedProofSha = createHash('sha256').update(fs.readFileSync(changedProof)).digest('hex');
+      const proofBinding = validateChecklistPrefixRetryProofBinding(changedProof, prior, 'proof_admit', changedProofSha);
+      expect(assertChecklistBootstrapRetrySubject({
+        proof: changedProof, subject, protectedOriginal: original, priorOutput: prior, output,
+        config, checkpoint, governedCodexTransport: 'exec-jsonl-default-auth-v1', timeout: 120000,
+        proofBinaryBinding: proofBinding,
+      })).toBe(head);
+      expect(() => assertChecklistBootstrapRetrySubject({
+        proof: changedProof, subject, protectedOriginal: original, priorOutput: prior, output,
+        config, checkpoint, governedCodexTransport: 'exec-jsonl-default-auth-v1', timeout: 120000,
+        proofBinaryBinding: {...proofBinding, selectedSha256: 'sha256:' + '0'.repeat(64)},
+      })).toThrow(/Proof binary binding/);
       fs.writeFileSync(path.join(subject, 'unrelated.txt'), 'must be rejected\n', 'utf8');
       expect(() => assertChecklistBootstrapRetrySubject({
         proof, subject, protectedOriginal: original, priorOutput: prior, output,
@@ -2081,6 +2211,38 @@ describe('native onboarding runner boundaries', () => {
       validate.mockRestore();
       restore.mockRestore();
     }
+  });
+
+  it('requires an explicit measured Proof SHA only for a changed proof_admit binary', () => {
+    const prior = path.join(root, 'proof-binding-prior');
+    const oldProof = path.join(root, 'proof-old');
+    const newProof = path.join(root, 'proof-new');
+    fs.mkdirSync(prior, {recursive: true});
+    fs.writeFileSync(oldProof, 'old-proof\n', 'utf8');
+    fs.writeFileSync(newProof, 'new-proof\n', 'utf8');
+    fs.writeFileSync(path.join(prior, 'preflight.json'), JSON.stringify({proof_binary: oldProof}) + '\n', 'utf8');
+    const newSha = createHash('sha256').update(fs.readFileSync(newProof)).digest('hex');
+    expect(validateChecklistPrefixRetryProofBinding(oldProof, prior, 'inspect')).toMatchObject({
+      proofBinaryChanged: false,
+      retainedRealpath: fs.realpathSync(oldProof),
+      selectedRealpath: fs.realpathSync(oldProof),
+    });
+    expect(() => validateChecklistPrefixRetryProofBinding(oldProof, prior, 'proof_admit', newSha))
+      .toThrow(/cannot be supplied when --proof-bin is unchanged/);
+    expect(() => validateChecklistPrefixRetryProofBinding(newProof, prior, 'inspect', newSha))
+      .toThrow(/only for proof_admit/);
+    expect(() => validateChecklistPrefixRetryProofBinding(newProof, prior, 'proof_admit'))
+      .toThrow(/is required when changing/);
+    expect(() => validateChecklistPrefixRetryProofBinding(newProof, prior, 'proof_admit', '0'.repeat(64)))
+      .toThrow(/does not match/);
+    expect(validateChecklistPrefixRetryProofBinding(newProof, prior, 'proof_admit', `sha256:${newSha}`)).toEqual({
+      retryCheckId: 'proof_admit',
+      retainedRealpath: fs.realpathSync(oldProof),
+      retainedSha256: `sha256:${createHash('sha256').update(fs.readFileSync(oldProof)).digest('hex')}`,
+      selectedRealpath: fs.realpathSync(newProof),
+      selectedSha256: `sha256:${newSha}`,
+      proofBinaryChanged: true,
+    });
   });
 
   it('allows an initialized recovery subject but keeps checkpoint and output roots bounded', () => {
