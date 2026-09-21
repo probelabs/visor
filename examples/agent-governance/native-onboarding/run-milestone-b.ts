@@ -15,6 +15,7 @@ import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
 import type { PRInfo } from '../../../src/pr-analyzer';
 import type { GeneratedDispatchGate } from '../../../src/types/engine';
+import type { PublicPromptCaptureInfo } from './run-onboarding';
 import { assertCodexHomeAbsent, pinNativeOnboardingTsProject, verifyCodexBinarySha256 } from './run-onboarding';
 import {
   buildNativeChecklistProgressFromMilestoneBProjections,
@@ -29,6 +30,9 @@ type GovernedCodexExecution = {
   codexBin: string;
   codexSha256: string;
 };
+type MilestoneBExecutionHooks = Readonly<{
+  onPromptCaptured?: (info: PublicPromptCaptureInfo) => void;
+}>;
 type ReviewTuple = {
   kind: 'spec_conformance';
   subject: string;
@@ -1266,6 +1270,7 @@ async function configForSubject(
   output: string,
   governedCodex?: GovernedCodexExecution,
   configPath: string = CONFIG_PATH,
+  hooks?: MilestoneBExecutionHooks,
 ) {
   const config = await loadConfig(configPath, { strict: true });
   if (zeroModelTestEnabled()) {
@@ -1290,9 +1295,14 @@ async function configForSubject(
   // Zero-model fixtures intentionally replace the governed reviewer with the
   // existing mock provider.  Keep their private-config path isolated from a
   // governed transport context; production reviewers receive the exact pins.
-  if (governedCodex && !zeroModelTestEnabled()) {
-    engine.setExecutionContext(governedCodex);
-    writeJson(path.join(output, 'diagnostic', 'execution-context.json'), governedCodex);
+  if ((governedCodex && !zeroModelTestEnabled()) || hooks) {
+    engine.setExecutionContext({
+      ...(governedCodex && !zeroModelTestEnabled() ? governedCodex : {}),
+      ...(hooks ? {hooks} : {}),
+    });
+    if (governedCodex && !zeroModelTestEnabled()) {
+      writeJson(path.join(output, 'diagnostic', 'execution-context.json'), governedCodex);
+    }
   }
   return { config, engine };
 }
@@ -2217,7 +2227,7 @@ function assertUnchangedSiblingGenerations(before: any, after: any, heldId: stri
  */
 function writeMilestoneBChecklistProgress(
   output: string,
-  phase: 'paused' | 'resumed',
+  phase: 'paused' | 'running' | 'resumed',
   projection: unknown,
   checkpoint: unknown,
   catalogRows: readonly ProofRow[],
@@ -2389,7 +2399,7 @@ async function resume(
       catalogRows,
       rows,
       false,
-      true,
+      false,
       compileClaimPlan(staleConfig).expansionPlan,
       rows.map(row => ({id: row.id, component: row.component, file_path: row.file_path, proof_file_hash: currentHashes[row.id]})),
     );
@@ -2397,7 +2407,39 @@ async function resume(
   }
 
   process.env.PROOF_BIN = proof;
-  const { config, engine } = await configForSubject(subject, output, governedCodex);
+  const durablePauseCheckpoint = checkpoint;
+  const runningProgressPath = path.join(output, 'running', 'progress.json');
+  let liveEngine: StateMachineExecutionEngine | undefined;
+  let liveExpansionPlan: unknown;
+  const runningProgressHook = (info: PublicPromptCaptureInfo): void => {
+    if (info.step !== 'review-native-item' || fs.existsSync(runningProgressPath) || !liveEngine) return;
+    try {
+      writeMilestoneBChecklistProgress(
+        output,
+        'running',
+        liveEngine.getInstanceProjection(),
+        durablePauseCheckpoint,
+        catalogRows,
+        rows,
+        false,
+        true,
+        liveExpansionPlan,
+        rows.map(row => ({id: row.id, component: row.component, file_path: row.file_path, proof_file_hash: currentHashes[row.id]})),
+      );
+    } catch {
+      // A live progress render is observational; the durable journal and
+      // terminal resumed report remain the execution authority.
+    }
+  };
+  const { config, engine } = await configForSubject(
+    subject,
+    output,
+    governedCodex,
+    CONFIG_PATH,
+    {onPromptCaptured: runningProgressHook},
+  );
+  liveEngine = engine;
+  liveExpansionPlan = compileClaimPlan(config).expansionPlan;
   const observations: Json[] = [];
   const resumed = await engine.resumeGraphCheckpoint({
     checkpoint,

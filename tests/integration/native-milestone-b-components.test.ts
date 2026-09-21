@@ -332,6 +332,32 @@ function runFlow(componentCount: 1 | 2): void {
     }
 
     runRunner(fixture, 'resume');
+    const runningProgressPath = path.join(fixture.output, 'running', 'progress.json');
+    expect(fs.existsSync(runningProgressPath)).toBe(componentCount === 2);
+    if (componentCount === 2) {
+      const runningProgress = json<any>(runningProgressPath);
+      expect(runningProgress.evidence.journal.event_count).toBe(pauseEvents.length);
+      expect(runningProgress.evidence.journal.provenance).toBe('live_projection');
+      expect(runningProgress.evidence.journal.durable_through_event_id).toBe(pauseEvents.length);
+      expect(runningProgress.operational.components.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({id: 'jsonparser-benchmark-suite', state: 'completed'}),
+        expect.objectContaining({
+          id: 'jsonparser-core',
+          state: 'pending',
+          condition: expect.objectContaining({
+            state: 'blocked',
+            evidence: expect.objectContaining({prerequisite_status: 'running'}),
+          }),
+        }),
+      ]));
+      expect(runningProgress.operational.specifications.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({id: rows.find(row => row.component === 'jsonparser-benchmark-suite')?.id, state: 'completed'}),
+        expect.objectContaining({id: held.id, state: 'running'}),
+      ]));
+      const runningHtml = fs.readFileSync(path.join(fixture.output, 'running', 'progress.html'), 'utf8');
+      const runningEmbedded = runningHtml.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
+      expect(JSON.parse(runningEmbedded as string)).toEqual(runningProgress);
+    }
     const resumed = json<any>(path.join(fixture.output, 'resumed', 'checkpoint.json'));
     const resumedSummary = json<any>(path.join(fixture.output, 'resumed', 'summary.json'));
     const resumeObservations = json<any[]>(path.join(fixture.output, 'resumed', 'observations.json'));
@@ -465,7 +491,8 @@ describeNative('native Milestone B component/spec progression', () => {
     const codexBin = process.execPath;
     const codexSha256 = sha256(codexBin);
     const runner = fs.readFileSync(RUNNER, 'utf8');
-    expect(runner).toContain('engine.setExecutionContext(governedCodex);');
+    expect(runner).toContain('engine.setExecutionContext({');
+    expect(runner).toContain('...(governedCodex && !zeroModelTestEnabled() ? governedCodex : {}),');
     const governedArgs = [
       '--governed-codex-transport', 'exec-jsonl-default-auth-v1',
       '--codex-bin', codexBin,
@@ -535,6 +562,9 @@ describeNative('native Milestone B component/spec progression', () => {
       expect(result.status).not.toBe(0);
       expect(`${result.stdout || ''}${result.stderr || ''}`).toContain(`Proof inputs changed since prepare (${held.id})`);
       const progress = json<any>(path.join(fixture.output, 'resumed', 'progress.json'));
+      expect(progress.paused).toBe(false);
+      expect(progress.resumed).toBe(false);
+      expect(progress.operational.specifications.items.find((item: any) => item.id === held.id)?.state).toBe('pending');
       expect(progress.operational.components.stale_count).toBeGreaterThan(0);
       expect(progress.operational.specifications.stale_count).toBeGreaterThan(0);
       expect(progress.operational.components.blocked_count).toBeGreaterThan(0);
