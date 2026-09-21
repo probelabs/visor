@@ -1176,7 +1176,7 @@ export async function loadChecklistMaterializedConfig(
 }
 
 type ChecklistContinuationEvidence = Readonly<{
-  mode: 'retained-skeleton' | 'continuation-frontier' | 'completed-prerequisite';
+  mode: 'retained-skeleton' | 'continuation-frontier' | 'completed-prerequisite' | 'failed-promotion-recovery';
   step?: ChecklistContinuationStep;
   /** The completed checklist generation whose authority seeds a fresh next-stage graph. */
   checkpointStage?: string;
@@ -1195,10 +1195,11 @@ type ChecklistContinuationEvidence = Readonly<{
   reusedComponentIds?: readonly string[];
   affectedBatches?: readonly Readonly<{component_id: string; paths: readonly string[]}>[];
   affectedDetailsByComponent?: Readonly<Record<string, readonly string[]>>;
+  promotionRecoverySelections?: readonly SpecReviewPromotionRecoverySelection[];
 }>;
 
 type ChecklistContinuationCheckpointClassification = Readonly<{
-  mode: 'continuation-frontier' | 'completed-prerequisite';
+  mode: 'continuation-frontier' | 'completed-prerequisite' | 'failed-promotion-recovery';
   checkpointStage?: string;
   checkpointStatus?: 'ready' | 'completed';
 }>;
@@ -1925,7 +1926,12 @@ export async function validateChecklistContinuationCheckpoint(
   if (fs.existsSync(directMaterializedConfig)) {
     const restored = await loadChecklistMaterializedConfig(target);
     if (Object.prototype.hasOwnProperty.call(restored.config.checks || {}, 'continue-retained-catalog')) {
-      const classification = classifyChecklistContinuationCheckpoint(restored.config, checkpoint, step);
+      const promotionRecoverySelections = step === 'spec-review-1' && path.basename(target) === 'checkpoint.partial.json'
+        ? selectFailedSpecReviewPromotionRecovery(restored.config, checkpoint, path.dirname(target), step)
+        : undefined;
+      const classification = promotionRecoverySelections
+        ? Object.freeze({mode: 'failed-promotion-recovery' as const})
+        : classifyChecklistContinuationCheckpoint(restored.config, checkpoint, step);
       let transitionPriorCheckpointPath: string | undefined;
       let transitionPriorCheckpoint: GraphJournalCheckpointV1 | undefined;
       if (classification.mode === 'completed-prerequisite' || classification.checkpointStatus === 'completed') {
@@ -1976,6 +1982,7 @@ export async function validateChecklistContinuationCheckpoint(
         materializedConfigPath: restored.materializedConfigPath, expectedComponentIds: Object.freeze(workItems.map(item => item.component_id as string)), workItems,
         authority, affectedComponentIds: Object.freeze(uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true)),
         reusedComponentIds: Object.freeze(uniqueSortedStrings(authority.reused_component_ids, 'journaled reused component IDs', true)),
+        ...(promotionRecoverySelections ? {promotionRecoverySelections} : {}),
         ...(taskObservation ? {
           affectedBatches: taskObservation.batches,
           affectedDetailsByComponent: taskObservation.detailsByComponent,
@@ -2845,6 +2852,163 @@ type SpecReviewRepairSelection = Readonly<{
   receiptPath: string;
 }>;
 
+export type SpecReviewPromotionRecoverySelection = Readonly<{
+  generationId: string;
+  componentId: string;
+  checkout: Json;
+  workItem: Json;
+  author: Json;
+  auditGenerationId: string;
+  auditReceipt: FocusedSpecReviewAuditReceipt;
+  auditReceiptPath: string;
+  promotion: Json;
+  promotionRecordPath: string;
+}>;
+
+/**
+ * Select the only safe retry boundary for a failed spec-review promotion.
+ * This is deliberately narrower than generic recovery: the checkpoint must
+ * contain only current failed promotion leaves, each with its same-scope
+ * completed focused audit and immutable pass receipt.  Authors, audits, and
+ * completed sibling promotions are never selected or replayed here.
+ */
+export function selectFailedSpecReviewPromotionRecovery(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  priorOutput: string,
+  step: ChecklistContinuationStep,
+): readonly SpecReviewPromotionRecoverySelection[] {
+  if (step !== 'spec-review-1') {
+    throw new Error('failed promotion recovery is supported only for spec-review-1');
+  }
+  const checkpointRoot = realDirectory(priorOutput, 'failed promotion recovery output');
+  const checkpointPath = fs.realpathSync(path.join(checkpointRoot, 'checkpoint.partial.json'));
+  const retainedCheckpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as GraphJournalCheckpointV1;
+  if (canonicalJson(retainedCheckpoint) !== canonicalJson(checkpoint)) {
+    throw new Error('failed promotion recovery checkpoint bytes do not match the retained partial checkpoint');
+  }
+  if (checkpoint.graphSemanticDigest !== compileClaimPlan(config).expansionPlan.graphSemanticDigest) {
+    throw new Error('failed promotion recovery checkpoint graph semantic digest does not match materialized configuration');
+  }
+  const projectChecks = (config.subgraphs as any)?.['continuation-project']?.checks;
+  if (!projectChecks || !projectChecks['checklist-spec-review-1']) {
+    throw new Error('failed promotion recovery configuration is not the spec-review-1 continuation graph');
+  }
+  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  const projection = journal.getInstanceProjection() as any;
+  const active = new Set(Object.values(projection.activeGenerationIdByNode || {}));
+  const activeGenerations = Object.values(projection.generationsById || {})
+    .filter((generation: any) => generation && generation.status !== 'inactive' && active.has(generation.nodeGenerationId)) as any[];
+  const activeFailures = activeGenerations.filter(generation => generation.status === 'failed' || generation.status === 'running');
+  const failedPromotions = activeFailures.filter(generation => generation.checkId === 'promote-native-component');
+  if (activeFailures.length === 0 || failedPromotions.length !== activeFailures.length) {
+    throw new Error('failed promotion recovery requires only active current failed promotion leaves');
+  }
+  if (checkpoint.events.some(event => (event.type === 'AttemptStarted' || event.type === 'AttemptCompleted') && event.checkId === 'checklist-spec-review-1')) {
+    throw new Error('failed promotion recovery checkpoint already dispatched spec-review confirmation');
+  }
+  const selections: SpecReviewPromotionRecoverySelection[] = [];
+  for (const generation of failedPromotions) {
+    if (generation.scope.length <= 1 || !isCurrentFailedRetryAttempt(checkpoint, generation) ||
+        generation.scheduled !== true || generation.completedOutputClaimIds.length !== 0 ||
+        checkpoint.events.some(event => event.type === 'AttemptRetryRequested' && event.nodeGenerationId === generation.nodeGenerationId)) {
+      throw new Error(`failed promotion recovery generation ${generation.nodeGenerationId} is not a current retryable promotion`);
+    }
+    const keyed = generation.scope[generation.scope.length - 1];
+    if (!keyed || keyed.kind !== 'keyed' || typeof keyed.key !== 'string' ||
+        typeof keyed.subgraphInstanceId !== 'string' || keyed.subgraphInstanceId !== generation.subgraphInstanceId) {
+      throw new Error(`failed promotion recovery generation ${generation.nodeGenerationId} has an unbound component scope`);
+    }
+    const componentId = keyed.key;
+    const execution = (journal as any).getGeneratedExecution(generation.nodeGenerationId);
+    const aliases = execution?.claims;
+    const componentClaim = aliases?.component;
+    const checkoutClaim = aliases?.checkout;
+    const authorClaim = aliases?.author;
+    const component = componentClaim?.payload;
+    const checkout = checkoutClaim?.payload;
+    const author = authorClaim?.payload;
+    if (!componentClaim || !checkoutClaim || !authorClaim ||
+        componentClaim.claim !== 'native.continuation.work_item@1' ||
+        checkoutClaim.claim !== 'native.continuation.checkout@1' ||
+        authorClaim.claim !== 'native.continuation.author@1' ||
+        !isRecord(component) || component.component_id !== componentId ||
+        typeof component.baseline_commit !== 'string' ||
+        !isRecord(checkout) || checkout.success !== true || checkout.is_worktree !== true ||
+        typeof checkout.path !== 'string' || !path.isAbsolute(checkout.path) ||
+        typeof checkout.commit !== 'string' || checkout.commit !== component.baseline_commit ||
+        typeof checkout.ref !== 'string' || checkout.ref !== component.baseline_commit ||
+        typeof checkout.repository !== 'string' || typeof checkout.worktree_id !== 'string' ||
+        !isRecord(author) || typeof author.content !== 'string' || author.content.length === 0 ||
+        !sameJson(componentClaim.scope, generation.scope) ||
+        !sameJson(checkoutClaim.scope, generation.scope) || !sameJson(authorClaim.scope, generation.scope)) {
+      throw new Error(`failed promotion recovery generation ${generation.nodeGenerationId} has unbound component inputs`);
+    }
+    const checkoutPath = fs.realpathSync(checkout.path as string);
+    assertCleanGit(checkoutPath, `failed promotion recovery checkout for ${componentId}`);
+    if (gitScalar(checkoutPath, ['rev-parse', '--verify', 'HEAD^{commit}'], `failed promotion recovery checkout for ${componentId}`) !== component.baseline_commit) {
+      throw new Error(`failed promotion recovery checkout for ${componentId} is not pinned to its WorkItem baseline`);
+    }
+    const audits = activeGenerations.filter(candidate => candidate.checkId === 'spec-review-audit' &&
+      candidate.status === 'completed' && candidate.subgraphInstanceId === generation.subgraphInstanceId &&
+      sameJson(candidate.scope, generation.scope));
+    if (audits.length !== 1) {
+      throw new Error(`failed promotion recovery requires exactly one same-scope completed audit for ${componentId}`);
+    }
+    const auditGeneration = audits[0];
+    const requirementIds = exactSortedStringArray(
+      (component.continuation_task as Json)?.spec_review?.details,
+      `failed promotion recovery ${componentId} requirement IDs`,
+    );
+    const auditAttempt = checkpoint.events.filter(event => event.type === 'AttemptStarted' && event.nodeGenerationId === auditGeneration.nodeGenerationId).length;
+    if (auditAttempt !== 1) throw new Error(`failed promotion recovery audit for ${componentId} is not the initial completed audit`);
+    const auditReceiptPath = path.join(priorOutput, 'spec-review', 'focused-audit', componentId, `attempt-${auditAttempt}.json`);
+    if (!fs.existsSync(auditReceiptPath)) throw new Error(`failed promotion recovery pass receipt is missing for ${componentId}`);
+    const auditReceipt = JSON.parse(fs.readFileSync(auditReceiptPath, 'utf8')) as FocusedSpecReviewAuditReceipt;
+    const reportScope = isRecord(auditReceipt.report) ? auditReceipt.report.only_scope : undefined;
+    if (auditReceipt.schema !== 'native.spec-review.focused-audit-receipt/v1' ||
+        auditReceipt.component_id !== componentId || auditReceipt.attempt !== auditAttempt || auditReceipt.status !== 'pass' ||
+        auditReceipt.exit_code !== 0 || auditReceipt.source !== 'continuation-component' ||
+        canonicalJson(auditReceipt.requirement_ids) !== canonicalJson(requirementIds) ||
+        !isRecord(reportScope) || canonicalJson(reportScope.requirement_ids) !== canonicalJson(requirementIds)) {
+      throw new Error(`failed promotion recovery pass receipt is not bound to the completed audit for ${componentId}`);
+    }
+    try {
+      validateFocusedSpecReviewAudit(auditReceipt.report, requirementIds);
+    } catch {
+      throw new Error(`failed promotion recovery pass receipt report is invalid for ${componentId}`);
+    }
+    const promotionRecordPath = path.join(priorOutput, 'promotion-results', recoveryToken(componentId) + '.json');
+    if (!fs.existsSync(promotionRecordPath)) throw new Error(`failed promotion recovery rejection record is missing for ${componentId}`);
+    const promotion = JSON.parse(fs.readFileSync(promotionRecordPath, 'utf8')) as Json;
+    const empty = (value: unknown): boolean => Array.isArray(value) && value.length === 0;
+    const promotionCheckpoint = isRecord(promotion.checkpoint) ? promotion.checkpoint : undefined;
+    if (promotion.status !== 'rejected' || promotion.component_id !== componentId ||
+        promotion.baseline_commit !== component.baseline_commit ||
+        promotion.reason !== 'writer delta contains no promotable native authored files' ||
+        !empty(promotion.accepted_paths) || !empty(promotion.ignored_paths) || !empty(promotion.rejected_paths) ||
+        !promotionCheckpoint || promotionCheckpoint.status !== 'rejected' ||
+        promotionCheckpoint.component_id !== componentId || promotionCheckpoint.baseline_commit !== component.baseline_commit ||
+        !empty(promotionCheckpoint.accepted_paths) || !empty(promotionCheckpoint.ignored_paths) ||
+        Object.prototype.hasOwnProperty.call(promotion, 'promoted_commit')) {
+      throw new Error(`failed promotion recovery rejection record is not the exact empty record for ${componentId}`);
+    }
+    selections.push(Object.freeze({
+      generationId: generation.nodeGenerationId,
+      componentId,
+      checkout,
+      workItem: component,
+      author,
+      auditGenerationId: auditGeneration.nodeGenerationId,
+      auditReceipt,
+      auditReceiptPath,
+      promotion,
+      promotionRecordPath,
+    }));
+  }
+  return Object.freeze(selections.sort((left, right) => left.generationId.localeCompare(right.generationId)));
+}
+
 function failedSpecReviewAuditSelections(
   config: VisorConfig,
   checkpoint: GraphJournalCheckpointV1,
@@ -3045,6 +3209,124 @@ async function executeSpecReviewRepairBridge(
   // Replace the pre-dispatch retry checkpoint with the clean, persisted
   // pre-confirmation frontier only after the bounded bridge has converged.
   writeCheckpoint(path.join(output, 'spec-review', 'on-retry-checkpoint.json'), retried.checkpoint);
+  return retried;
+}
+
+/** Retry only the failed no-op promotions from a same-stage partial checkpoint. */
+export async function executeSpecReviewPromotionRecovery(
+  engine: StateMachineExecutionEngine,
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  timeout: number,
+  selections: readonly SpecReviewPromotionRecoverySelection[],
+): Promise<Awaited<ReturnType<StateMachineExecutionEngine['retryGraphCheckpoint']>>> {
+  if (selections.length === 0) throw new Error('spec-review promotion recovery requires selected failed promotions');
+  const generationIds = selections.map(selection => selection.generationId).sort();
+  const selectedComponents = new Set(selections.map(selection => selection.componentId));
+  const priorEvents = checkpoint.events;
+  const output = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+  if (!output || !path.isAbsolute(output)) throw new Error('spec-review promotion recovery requires an absolute output directory');
+  const attemptRoots = new Map<string, string>();
+  for (const selection of selections) {
+    const attemptRoot = path.join(output, 'promotion-results', recoveryToken(selection.componentId));
+    fs.mkdirSync(attemptRoot, {recursive: true, mode: 0o700});
+    const attemptOne = path.join(attemptRoot, 'attempt-1.json');
+    fs.copyFileSync(selection.promotionRecordPath, attemptOne);
+    fs.chmodSync(attemptOne, 0o600);
+    if (canonicalJson(JSON.parse(fs.readFileSync(attemptOne, 'utf8'))) !== canonicalJson(selection.promotion)) {
+      throw new Error(`spec-review promotion recovery did not preserve the attempt-1 rejection record for ${selection.componentId}`);
+    }
+    attemptRoots.set(selection.componentId, attemptRoot);
+  }
+  const retried = await engine.retryGraphCheckpoint({
+    checkpoint,
+    config,
+    prInfo: PR,
+    retryGenerationIds: generationIds,
+    externalSideEffects: 'absent',
+    onRetryCheckpoint: retryCheckpoint => {
+      if (output && path.isAbsolute(output)) writeCheckpoint(path.join(output, 'spec-review', 'promotion-recovery-checkpoint.json'), retryCheckpoint);
+    },
+    generatedDispatchGate: checklistContinuationPauseGateFor('spec-review-1'),
+    maxParallelism: config.max_parallelism,
+    failFast: false,
+  });
+  if (retried.checkpoint.events.length <= priorEvents.length ||
+      canonicalGraphCheckpointJson(retried.checkpoint.events.slice(0, priorEvents.length)) !== canonicalGraphCheckpointJson(priorEvents)) {
+    throw new Error('spec-review promotion recovery changed the retained event prefix');
+  }
+  const suffix = retried.checkpoint.events.slice(priorEvents.length);
+  const retryRequests = suffix.filter(event => event.type === 'AttemptRetryRequested');
+  if (retryRequests.length !== generationIds.length ||
+      retryRequests.map(event => event.nodeGenerationId).sort().join('\n') !== generationIds.join('\n')) {
+    throw new Error('spec-review promotion recovery did not record exactly the selected retry generation IDs');
+  }
+  const retryStarts = suffix.filter(event => event.type === 'AttemptStarted' && event.checkId === 'promote-native-component');
+  if (retryStarts.length !== generationIds.length ||
+      retryStarts.some(event => {
+        const keyed = event.scope[event.scope.length - 1];
+        return !keyed || keyed.kind !== 'keyed' || typeof keyed.key !== 'string' || !selectedComponents.has(keyed.key);
+      }) || new Set(retryStarts.map(event => event.scope[event.scope.length - 1]?.key)).size !== generationIds.length) {
+    throw new Error('spec-review promotion recovery retried anything other than the selected promotion leaves');
+  }
+  if (suffix.some(event => event.type === 'AttemptStarted' &&
+      (event.checkId === 'author-native-component' || event.checkId === 'spec-review-audit' ||
+       (event.checkId === 'promote-native-component' && !selectedComponents.has(event.scope[event.scope.length - 1]?.key as string))))) {
+    throw new Error('spec-review promotion recovery replayed an author, focused audit, or sibling promotion');
+  }
+  const finalJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), retried.checkpoint);
+  const projection = finalJournal.getInstanceProjection() as any;
+  const active = new Set(Object.values(projection.activeGenerationIdByNode || {}));
+  const activeGenerations = Object.values(projection.generationsById || {})
+    .filter((generation: any) => generation && generation.status !== 'inactive' && active.has(generation.nodeGenerationId)) as any[];
+  if (activeGenerations.some(generation => generation.status === 'failed' || generation.status === 'running')) {
+    throw new Error('spec-review promotion recovery left an active failed or running generation');
+  }
+  for (const selection of selections) {
+    const promotions = activeGenerations.filter(generation => generation.checkId === 'promote-native-component' &&
+      generation.status === 'completed' && generation.scope[generation.scope.length - 1]?.key === selection.componentId);
+    if (promotions.length !== 1) throw new Error(`spec-review promotion recovery did not complete ${selection.componentId}`);
+    const claims = promotions[0].completedOutputClaimIds.map((id: string) => projection.claimsById[id]).filter(Boolean);
+    const promotionClaim = claims.find((claim: any) => claim.claim === 'native.continuation.promotion@1');
+    if (!promotionClaim || !isRecord(promotionClaim.payload) || promotionClaim.payload.status !== 'promoted' ||
+        promotionClaim.payload.component_id !== selection.componentId ||
+        promotionClaim.payload.baseline_commit !== selection.workItem.baseline_commit ||
+        !Array.isArray(promotionClaim.payload.accepted_paths) || promotionClaim.payload.accepted_paths.length !== 0 ||
+        !Array.isArray(promotionClaim.payload.ignored_paths) || promotionClaim.payload.ignored_paths.length !== 0 ||
+        !Array.isArray(promotionClaim.payload.rejected_paths) || promotionClaim.payload.rejected_paths.length !== 0 ||
+        Object.prototype.hasOwnProperty.call(promotionClaim.payload, 'promoted_commit') ||
+        promotionClaim.payload.reason !== 'reviewed-no-change; zero authored files; no commit') {
+      throw new Error(`spec-review promotion recovery no-op claim is not bound for ${selection.componentId}`);
+    }
+    const recordPath = path.join(output, 'promotion-results', recoveryToken(selection.componentId) + '.json');
+    if (!fs.existsSync(recordPath)) throw new Error(`spec-review promotion recovery attempt-2 record is missing for ${selection.componentId}`);
+    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8')) as Json;
+    if (record.status !== 'promoted' || record.component_id !== selection.componentId ||
+        record.baseline_commit !== selection.workItem.baseline_commit ||
+        !Array.isArray(record.accepted_paths) || record.accepted_paths.length !== 0 ||
+        !Array.isArray(record.ignored_paths) || record.ignored_paths.length !== 0 ||
+        !Array.isArray(record.rejected_paths) || record.rejected_paths.length !== 0 ||
+        Object.prototype.hasOwnProperty.call(record, 'promoted_commit') ||
+        record.reason !== 'reviewed-no-change; zero authored files; no commit') {
+      throw new Error(`spec-review promotion recovery attempt-2 record is invalid for ${selection.componentId}`);
+    }
+    const attemptTwo = path.join(attemptRoots.get(selection.componentId) as string, 'attempt-2.json');
+    fs.copyFileSync(recordPath, attemptTwo);
+    fs.chmodSync(attemptTwo, 0o600);
+    const attemptTwoRecord = JSON.parse(fs.readFileSync(attemptTwo, 'utf8')) as Json;
+    if (canonicalJson(attemptTwoRecord) !== canonicalJson(record)) {
+      throw new Error(`spec-review promotion recovery did not preserve the attempt-2 promotion record for ${selection.componentId}`);
+    }
+  }
+  const finalAudit = activeGenerations.filter(generation => generation.checkId === 'spec-review-1-audit' && generation.scope.length === 1 && generation.status === 'completed');
+  if (finalAudit.length !== 1 || suffix.filter(event => event.type === 'AttemptStarted' && event.checkId === 'spec-review-1-audit').length !== 1) {
+    throw new Error('spec-review promotion recovery did not complete the final unscoped audit exactly once');
+  }
+  const checklist = activeGenerations.filter(generation => generation.checkId === 'checklist-spec-review-1');
+  if (checklist.length !== 1 || checklist[0].status !== 'ready' ||
+      retried.checkpoint.events.some(event => event.type === 'AttemptStarted' && event.checkId === 'checklist-spec-review-1')) {
+    throw new Error('spec-review promotion recovery did not stop at the ready confirmation frontier');
+  }
   return retried;
 }
 
@@ -6929,8 +7211,9 @@ async function main(): Promise<void> {
   }
   if (checklistContinue !== undefined) {
     const checkpoint = fs.realpathSync(path.resolve(checklistContinue.checkpoint));
-    if (!fs.statSync(checkpoint).isFile() || path.basename(checkpoint) !== 'checkpoint.json') {
-      throw new Error('--checklist-continue must name a retained checkpoint.json file');
+    if (!fs.statSync(checkpoint).isFile() ||
+        !['checkpoint.json', 'checkpoint.partial.json'].includes(path.basename(checkpoint))) {
+      throw new Error('--checklist-continue must name a retained checkpoint.json or exact checkpoint.partial.json file');
     }
     if (inside(checkpoint, roots.subject) || inside(checkpoint, roots.original)) {
       throw new Error('checklist continuation checkpoint must be outside subject and protected original roots');
@@ -7120,7 +7403,8 @@ async function main(): Promise<void> {
         checklistContinuationCurrentShow.show,
         checklistContinuationStep,
       );
-      config = checklistContinuationEvidence.mode === 'continuation-frontier'
+      config = checklistContinuationEvidence.mode === 'continuation-frontier' ||
+          checklistContinuationEvidence.mode === 'failed-promotion-recovery'
         ? checklistContinuationEvidence.config
         : await loadChecklistContinuationConfig(checklistContinuationStep);
       if (checklistContinuationEvidence.mode === 'retained-skeleton' ||
@@ -7201,11 +7485,12 @@ async function main(): Promise<void> {
         ? validateContinuationAuthority(checklistContinuationEvidence.authority)
         : undefined;
       if (!authority) throw new Error('checklist continuation is missing one closed current authority envelope');
-      const continuationEvidence = checklistContinuationEvidence;
-      const affected = new Set(continuationEvidence.affectedComponentIds ?? authority.affected_component_ids as string[]);
-      const detailByComponent = continuationEvidence.affectedDetailsByComponent ?? {};
-      const affectedBatches = continuationEvidence.affectedBatches;
-      const graphWorkItems = continuationEvidence.workItems
+      if (checklistContinuationEvidence.mode !== 'failed-promotion-recovery') {
+        const continuationEvidence = checklistContinuationEvidence;
+        const affected = new Set(continuationEvidence.affectedComponentIds ?? authority.affected_component_ids as string[]);
+        const detailByComponent = continuationEvidence.affectedDetailsByComponent ?? {};
+        const affectedBatches = continuationEvidence.affectedBatches;
+        const graphWorkItems = continuationEvidence.workItems
         .filter(item => affected.has(String(item.component_id)))
         .map(item => {
           const componentId = String(item.component_id);
@@ -7239,18 +7524,19 @@ async function main(): Promise<void> {
             continuation_task: task,
           } as Json;
         });
-      if (graphWorkItems.length !== affected.size) throw new Error('checklist continuation affected WorkItems are incomplete');
-      const catalog = {
-        components: graphWorkItems,
-        full_components: authority.current_work_items,
-        affected_component_ids: authority.affected_component_ids,
-        reused_component_ids: authority.reused_component_ids,
-        retained_receipt_identities: continuationAuthorityReceiptStrings(authority),
-        current_receipt_identities: continuationAuthorityReceiptStrings(authority),
-        authority,
-      };
-      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify(catalog);
-      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG_FULL = JSON.stringify(catalog);
+        if (graphWorkItems.length !== affected.size) throw new Error('checklist continuation affected WorkItems are incomplete');
+        const catalog = {
+          components: graphWorkItems,
+          full_components: authority.current_work_items,
+          affected_component_ids: authority.affected_component_ids,
+          reused_component_ids: authority.reused_component_ids,
+          retained_receipt_identities: continuationAuthorityReceiptStrings(authority),
+          current_receipt_identities: continuationAuthorityReceiptStrings(authority),
+          authority,
+        };
+        process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify(catalog);
+        process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG_FULL = JSON.stringify(catalog);
+      }
     } else if (checklistResumeCheckpointPath) {
       const restored = await loadChecklistMaterializedConfig(checklistResumeCheckpointPath);
       config = restored.config;
@@ -7290,6 +7576,10 @@ async function main(): Promise<void> {
             ? checklistContinuationEvidence.authority.retained.prefix_checkpoint_path
             : undefined,
         } : {}),
+        ...(checklistContinuationEvidence.mode === 'failed-promotion-recovery' ? {
+          promotion_recovery_generation_ids: checklistContinuationEvidence.promotionRecoverySelections?.map(selection => selection.generationId),
+          promotion_recovery_component_ids: checklistContinuationEvidence.promotionRecoverySelections?.map(selection => selection.componentId),
+        } : {}),
       } : {}),
     });
   }
@@ -7325,6 +7615,12 @@ async function main(): Promise<void> {
         : undefined,
       transition_prior_frontier_checkpoint: checklistContinuationEvidence.mode === 'completed-prerequisite'
         ? checklistContinuationEvidence.transitionPriorCheckpointPath
+        : undefined,
+      promotion_recovery_generation_ids: checklistContinuationEvidence.mode === 'failed-promotion-recovery'
+        ? checklistContinuationEvidence.promotionRecoverySelections?.map(selection => selection.generationId)
+        : undefined,
+      promotion_recovery_component_ids: checklistContinuationEvidence.mode === 'failed-promotion-recovery'
+        ? checklistContinuationEvidence.promotionRecoverySelections?.map(selection => selection.componentId)
         : undefined,
       original_retained_checkpoint: checklistContinuationEvidence.mode === 'completed-prerequisite'
         ? checklistContinuationEvidence.authority && isRecord(checklistContinuationEvidence.authority.retained)
@@ -7374,6 +7670,10 @@ async function main(): Promise<void> {
         ...(checklistContinuationEvidence.mode === 'completed-prerequisite' ? {
           transition_checkpoint: checklistContinuationEvidence.checkpointPath,
           transition_checkpoint_stage: checklistContinuationEvidence.checkpointStage,
+        } : {}),
+        ...(checklistContinuationEvidence.mode === 'failed-promotion-recovery' ? {
+          promotion_recovery_generation_ids: checklistContinuationEvidence.promotionRecoverySelections?.map(selection => selection.generationId),
+          promotion_recovery_component_ids: checklistContinuationEvidence.promotionRecoverySelections?.map(selection => selection.componentId),
         } : {}),
         current_catalog: {
           status: 'validated',
@@ -7425,7 +7725,9 @@ async function main(): Promise<void> {
   };
   const checklistProgressObservation: ChecklistProgressRefreshOptions = checklistContinuationEvidence
     ? {
-      ...(checklistContinuationEvidence.mode === 'continuation-frontier' ? {resumed: true} : {}),
+      ...(checklistContinuationEvidence.mode === 'continuation-frontier' || checklistContinuationEvidence.mode === 'failed-promotion-recovery'
+        ? {resumed: true}
+        : {}),
       retainedCatalogComponentIds: checklistContinuationEvidence?.expectedComponentIds,
       affectedComponentIds: checklistContinuationEvidence?.affectedComponentIds,
     }
@@ -7455,17 +7757,28 @@ async function main(): Promise<void> {
   let checklistPausedBeforeSelected = false;
   try {
     if (checklistContinuationEvidence) {
-      const continuationCheckpoint = checklistContinuationEvidence.mode === 'continuation-frontier'
-        ? checklistContinuationEvidence.checkpoint
-        : undefined;
-      const continuationRun = await executeChecklistContinuationEngine(
-        engine,
-        config,
-        timeout,
-        checklistContinuationEvidence.affectedComponentIds ?? checklistContinuationEvidence.expectedComponentIds,
-        continuationCheckpoint,
-        checklistContinuationStep,
-      );
+      const continuationRun = checklistContinuationEvidence.mode === 'failed-promotion-recovery'
+        ? await executeSpecReviewPromotionRecovery(
+          engine,
+          config,
+          checklistContinuationEvidence.checkpoint,
+          timeout,
+          checklistContinuationEvidence.promotionRecoverySelections ?? [],
+        ).then(recovered => ({
+          result: recovered.result,
+          checkpoint: recovered.checkpoint,
+          paused: true,
+        }))
+        : await executeChecklistContinuationEngine(
+          engine,
+          config,
+          timeout,
+          checklistContinuationEvidence.affectedComponentIds ?? checklistContinuationEvidence.expectedComponentIds,
+          checklistContinuationEvidence.mode === 'continuation-frontier'
+            ? checklistContinuationEvidence.checkpoint
+            : undefined,
+          checklistContinuationStep,
+        );
       result = continuationRun.result;
       checkpoint = continuationRun.checkpoint;
       checklistPausedBeforeSelected = continuationRun.paused;
