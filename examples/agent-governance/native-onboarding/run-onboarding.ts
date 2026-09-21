@@ -279,6 +279,7 @@ export function nativeOnboardingCountsAreConsistent(counts: NativeOnboardingComp
 const CONFIG_PATH = path.resolve(__dirname, 'visor-onboarding.yaml');
 const CHECKLIST_CONFIG_PATH = path.resolve(__dirname, 'visor-checklist-onboarding.yaml');
 const CHECKLIST_CONTINUATION_CONFIG_PATH = path.resolve(__dirname, 'visor-checklist-continuation.yaml');
+const SPEC_REVIEW_REPAIR_CONFIG_PATH = path.resolve(__dirname, 'visor-spec-review-repair.yaml');
 const REPO_ROOT = path.resolve(__dirname, '../../../');
 // A natural component catalog can contain many independent review items after
 // each editable author/promotion. Keep the outer campaign budget bounded, but
@@ -381,7 +382,26 @@ export type ChecklistPrefixRetryArguments = Readonly<{
   proofSha256?: string;
 }>;
 
-export type ChecklistContinuationStep = 'traces-light' | 'skeleton' | 'variables';
+export type ChecklistContinuationStep = 'traces-light' | 'skeleton' | 'variables' | 'spec-review-1';
+
+export const SPEC_REVIEW_CHECKS = Object.freeze([
+  'spec_lint_decomposition_adds_refinement',
+  'spec_lint_formalization_quality',
+  'solver_modeling_opportunity',
+  'under_modeled_requirements_clean',
+] as const);
+const SPEC_REVIEW_FOCUSED_RUNNABLE_CHECKS = Object.freeze([
+  'spec_lint_decomposition_adds_refinement',
+  'spec_lint_formalization_quality',
+  'under_modeled_requirements_clean',
+] as const);
+const SPEC_REVIEW_FOCUSED_SKIPPED_CHECKS = Object.freeze(['solver_modeling_opportunity'] as const);
+const SPEC_REVIEW_UNSCOPED_STAGES: Readonly<Record<string, string>> = Object.freeze({
+  spec_lint_decomposition_adds_refinement: 'spec',
+  spec_lint_formalization_quality: 'spec',
+  solver_modeling_opportunity: 'spec',
+  under_modeled_requirements_clean: 'verify',
+});
 
 export type ChecklistContinueArguments = Readonly<{
   checkpoint: string;
@@ -396,10 +416,147 @@ export function parseChecklistContinueArguments(
   const step = values['checklist-step'];
   if (checkpoint === undefined && step === undefined) return undefined;
   if (!checkpoint) throw new Error('--checklist-continue is required for checklist continuation');
-  if (step !== undefined && step !== 'traces-light' && step !== 'skeleton' && step !== 'variables') {
-    throw new Error(`unsupported checklist continuation step: ${step}; only traces-light, skeleton, or variables is supported`);
+  if (step !== undefined && step !== 'traces-light' && step !== 'skeleton' && step !== 'variables' && step !== 'spec-review-1') {
+    throw new Error(`unsupported checklist continuation step: ${step}; only traces-light, skeleton, variables, or spec-review-1 is supported`);
   }
   return Object.freeze({checkpoint, step: (step ?? 'traces-light') as ChecklistContinuationStep});
+}
+
+function exactSortedStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.length === 0)) {
+    throw new Error(`${label} must be a string array`);
+  }
+  const sorted = utf8Sorted(value as string[]);
+  if (sorted.length !== value.length || new Set(sorted).size !== sorted.length || canonicalJson(value) !== canonicalJson(sorted)) {
+    throw new Error(`${label} must be sorted and unique`);
+  }
+  return sorted;
+}
+
+/** Validate the single-document, requirement-scoped Proof spec-review report. */
+export function validateFocusedSpecReviewAudit(report: unknown, requirementIds: readonly string[]): Json {
+  if (!isRecord(report) || !isRecord(report.only_scope) || !Array.isArray(report.categories)) {
+    throw new Error('focused spec-review audit must be one JSON report with categories and only_scope');
+  }
+  const denominator = utf8Sorted([...requirementIds]);
+  const scoped = exactSortedStringArray(report.only_scope.requirement_ids, 'focused audit requirement_ids');
+  if (canonicalJson(scoped) !== canonicalJson(denominator)) {
+    throw new Error('focused spec-review audit requirement denominator is detached from the component');
+  }
+  const filtered = exactSortedStringArray(report.only_scope.filtered_checks, 'focused audit filtered_checks');
+  const scopedChecks = report.only_scope.scoped_checks === undefined
+    ? []
+    : exactSortedStringArray(report.only_scope.scoped_checks, 'focused audit scoped_checks');
+  const skipped = report.only_scope.skipped_checks;
+  const runnable = utf8Sorted([...SPEC_REVIEW_FOCUSED_RUNNABLE_CHECKS]);
+  if (canonicalJson([...new Set([...scopedChecks, ...filtered])].sort()) !== canonicalJson(runnable)) {
+    throw new Error('focused spec-review audit does not report exactly the three runnable checks');
+  }
+  if (canonicalJson(skipped) !== canonicalJson([...SPEC_REVIEW_FOCUSED_SKIPPED_CHECKS])) {
+    throw new Error('focused spec-review audit must explicitly skip only the corpus solver check');
+  }
+  const checks: Json[] = [];
+  for (const category of report.categories) {
+    if (!isRecord(category) || !Array.isArray(category.checks)) throw new Error('focused audit category is malformed');
+    for (const check of category.checks) {
+      if (!isRecord(check) || typeof check.name !== 'string' || typeof check.status !== 'string') {
+        throw new Error('focused audit check record is malformed');
+      }
+      checks.push(check);
+    }
+  }
+  const expected = new Set<string>(SPEC_REVIEW_FOCUSED_RUNNABLE_CHECKS);
+  const seen = new Set<string>();
+  for (const check of checks) {
+    const name = check.name as string;
+    if (!expected.has(name) || seen.has(name)) throw new Error(`focused spec-review audit has unexpected or duplicate check ${name}`);
+    seen.add(name);
+    if (check.status !== 'pass') throw new Error(`focused spec-review audit check ${name} did not pass`);
+  }
+  if (seen.size !== expected.size) throw new Error('focused spec-review audit omitted a runnable check');
+  return report as Json;
+}
+
+/** Validate the final canonical audit's four JSONL check_done tuples. */
+export function validateUnscopedSpecReviewAudit(stdout: string): Json[] {
+  const events: Json[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { throw new Error('unscoped spec-review audit emitted malformed JSONL'); }
+    if (!isRecord(value)) throw new Error('unscoped spec-review audit emitted a non-object JSONL record');
+    events.push(value);
+  }
+  const done = events.filter(event => event.event === 'check_done');
+  if (done.length !== SPEC_REVIEW_CHECKS.length) throw new Error('unscoped spec-review audit must emit exactly four check_done tuples');
+  const seen = new Set<string>();
+  for (const event of done) {
+    if (typeof event.check !== 'string' || seen.has(event.check) || !Object.prototype.hasOwnProperty.call(SPEC_REVIEW_UNSCOPED_STAGES, event.check)) {
+      throw new Error('unscoped spec-review audit has an unexpected or duplicate check_done tuple');
+    }
+    seen.add(event.check);
+    if (event.stage !== SPEC_REVIEW_UNSCOPED_STAGES[event.check] || event.status !== 'pass') {
+      throw new Error(`unscoped spec-review audit check ${event.check} is not a passing native tuple`);
+    }
+  }
+  if (seen.size !== SPEC_REVIEW_CHECKS.length) throw new Error('unscoped spec-review audit omitted a native check');
+  return events;
+}
+
+export type FocusedSpecReviewAuditReceipt = Readonly<{
+  schema: 'native.spec-review.focused-audit-receipt/v1';
+  component_id: string;
+  requirement_ids: readonly string[];
+  attempt: number;
+  exit_code: number;
+  status: 'pass' | 'failed';
+  report: Json | null;
+  stdout: string;
+  stderr: string;
+  failure?: string;
+  source: 'continuation-component' | 'spec-review-repair';
+}>;
+
+/**
+ * Persist one public focused-audit receipt.  The filename is an explicit
+ * component/attempt binding; an existing file is never overwritten.
+ */
+export function writeFocusedSpecReviewAuditReceipt(input: {
+  output: string;
+  componentId: string;
+  requirementIds: readonly string[];
+  attempt: number;
+  run: CommandResult;
+  report: Json | null;
+  failure?: string;
+  source: FocusedSpecReviewAuditReceipt['source'];
+  receiptNamespace?: string;
+}): string {
+  if (!path.isAbsolute(input.output) || input.componentId.length === 0) {
+    throw new Error('focused spec-review receipt requires a component and absolute output directory');
+  }
+  if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) throw new Error('focused spec-review receipt attempt is invalid');
+  const componentId = input.componentId.replace(/[^A-Za-z0-9_.-]+/g, '_');
+  const ids = exactSortedStringArray([...input.requirementIds], 'focused receipt requirement_ids');
+  const namespace = input.receiptNamespace === undefined ? [] : input.receiptNamespace.split('/').filter(Boolean).map(part => part.replace(/[^A-Za-z0-9_.-]+/g, '_'));
+  const relative = path.join('spec-review', 'focused-audit', ...namespace, componentId, `attempt-${input.attempt}.json`);
+  const file = path.join(input.output, relative);
+  if (fs.existsSync(file)) throw new Error(`focused spec-review receipt already exists: ${relative}`);
+  const receipt: FocusedSpecReviewAuditReceipt = {
+    schema: 'native.spec-review.focused-audit-receipt/v1',
+    component_id: input.componentId,
+    requirement_ids: ids,
+    attempt: input.attempt,
+    exit_code: input.run.status,
+    status: input.failure ? 'failed' : 'pass',
+    report: input.report,
+    stdout: input.run.stdout,
+    stderr: input.run.stderr,
+    ...(input.failure ? {failure: input.failure} : {}),
+    source: input.source,
+  };
+  writeJson(file, receipt);
+  return relative;
 }
 
 /** Parse the explicit, closed recovery mode instead of inferring failed work. */
@@ -1169,13 +1326,13 @@ function continuationTaskObservation(
     const item = components.find(candidate => candidate.component_id === componentId);
     const authorityItem = authorityById.get(componentId);
     const task = item && isRecord(item.continuation_task) ? item.continuation_task : undefined;
-    const findingKey = step === 'skeleton' ? 'l2_software_complete' : 'orphan_code_clean';
+    const findingKey = step === 'skeleton' ? 'l2_software_complete' : step === 'spec-review-1' ? 'spec_review' : 'orphan_code_clean';
     const requiredChecks = step === 'skeleton'
       ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
-      : ['annotation_validity', 'orphan_code_clean'];
+      : step === 'spec-review-1' ? [...SPEC_REVIEW_CHECKS] : ['annotation_validity', 'orphan_code_clean'];
     const finding = task && isRecord(task[findingKey]) ? task[findingKey] : undefined;
     if (!item || !authorityItem || !task || !finding || !hasExactKeys(task, ['step_id', 'role', 'required_checks', findingKey]) ||
-        task.step_id !== step || task.role !== 'onboard' ||
+        task.step_id !== step || task.role !== (step === 'spec-review-1' ? 'spec-review' : 'onboard') ||
         canonicalJson(task.required_checks) !== canonicalJson(requiredChecks) ||
         !hasExactKeys(finding, ['paths', 'details'])) {
       throw new Error(`affected WorkItem ${componentId} has an invalid closed continuation task`);
@@ -1194,6 +1351,10 @@ function continuationTaskObservation(
       throw new Error(`continuation task ${componentId} details are incomplete`);
     }
     const details = Object.freeze((finding.details as string[]).slice());
+    if (step === 'spec-review-1') {
+      const requirementIds = exactSortedStringArray(finding.details, `continuation task ${componentId} requirement IDs`);
+      if (requirementIds.length === 0) throw new Error(`continuation task ${componentId} has no current Proof requirements`);
+    }
     if (step === 'traces-light' && details.some(detail => {
       const match = /^([^:]+):[0-9]+(?:\s|$)/.exec(detail);
       return !match || !paths.includes(match[1]);
@@ -1580,7 +1741,9 @@ export function validateChecklistContinuationEligibility(
     throw new Error(`checklist continuation requires exactly one ${step} step row`);
   }
   const selected = selectedRows[0];
-  const prerequisiteStep = step === 'skeleton' ? undefined : step === 'traces-light' ? 'skeleton' : 'traces-light';
+  const prerequisiteStep = step === 'skeleton' ? undefined
+    : step === 'traces-light' ? 'skeleton'
+      : step === 'variables' ? 'traces-light' : 'variables';
   const prerequisiteRows = prerequisiteStep
     ? steps.filter(candidate => candidate.step_id === prerequisiteStep)
     : [];
@@ -1592,25 +1755,33 @@ export function validateChecklistContinuationEligibility(
     ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
     : step === 'traces-light'
       ? ['annotation_validity', 'orphan_code_clean']
-      : ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
-  const expectedScope = step === 'skeleton' || step === 'variables' ? 'repo' : 'package';
-  const expectedRequires = step === 'skeleton' ? ['research'] : step === 'traces-light' ? ['skeleton'] : ['traces-light'];
+      : step === 'variables'
+        ? ['variable_orphans_clean', 'variables_declared', 'variable_drift']
+        : [...SPEC_REVIEW_CHECKS];
+  const expectedScope = step === 'traces-light' ? 'package' : 'repo';
+  const expectedRequires = step === 'skeleton' ? ['research'] : step === 'traces-light' ? ['skeleton'] : step === 'variables' ? ['traces-light'] : ['variables'];
   if (prerequisiteStep && prerequisite) {
     const prerequisiteChecks = prerequisiteStep === 'skeleton'
       ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
-      : ['annotation_validity', 'orphan_code_clean'];
-    const prerequisiteScope = prerequisiteStep === 'skeleton' ? 'repo' : 'package';
-    const prerequisiteRequires = prerequisiteStep === 'skeleton' ? ['research'] : ['skeleton'];
-    if (prerequisite.role !== 'onboard' || prerequisite.scope !== prerequisiteScope ||
+      : prerequisiteStep === 'traces-light'
+        ? ['annotation_validity', 'orphan_code_clean']
+        : prerequisiteStep === 'variables'
+          ? ['variable_orphans_clean', 'variables_declared', 'variable_drift']
+          : [...SPEC_REVIEW_CHECKS];
+    const prerequisiteScope = prerequisiteStep === 'traces-light' ? 'package' : 'repo';
+    const prerequisiteRequires = prerequisiteStep === 'skeleton' ? ['research'] : prerequisiteStep === 'traces-light' ? ['skeleton'] : prerequisiteStep === 'variables' ? ['traces-light'] : ['variables'];
+    const prerequisiteRole = prerequisiteStep === 'spec-review-1' ? 'spec-review' : 'onboard';
+    if (prerequisite.role !== prerequisiteRole || prerequisite.scope !== prerequisiteScope ||
         prerequisite.stamp !== 'confirm' ||
         canonicalJson(prerequisite.requires) !== canonicalJson(prerequisiteRequires) ||
         canonicalJson(prerequisite.required_checks) !== canonicalJson(prerequisiteChecks) ||
-        (prerequisiteStep === 'traces-light' &&
+          (prerequisiteStep === 'traces-light' &&
           (typeof prerequisite.scope_key !== 'string' || prerequisite.scope_key.length === 0))) {
       throw new Error(`checklist continuation prerequisite ${prerequisiteStep} does not match the native policy`);
     }
   }
-  const selectedPolicyMatches = selected && selected.role === 'onboard' &&
+  const selectedRole = step === 'spec-review-1' ? 'spec-review' : 'onboard';
+  const selectedPolicyMatches = selected && selected.role === selectedRole &&
     selected.scope === expectedScope && selected.stamp === 'confirm' &&
     canonicalJson(selected.requires) === canonicalJson(expectedRequires) &&
     canonicalJson(selected.required_checks) === canonicalJson(expectedChecks);
@@ -1620,7 +1791,7 @@ export function validateChecklistContinuationEligibility(
     new Set(eligibleIds as string[]).size === eligibleIds.length;
   const next = isRecord(value.next) ? value.next : undefined;
   const nextPolicyMatches = next !== undefined && next.step_id === step &&
-    next.role === 'onboard' && next.scope === expectedScope && next.stamp === 'confirm' &&
+    next.role === selectedRole && next.scope === expectedScope && next.stamp === 'confirm' &&
     canonicalJson(next.requires) === canonicalJson(expectedRequires) &&
     canonicalJson(next.required_checks) === canonicalJson(expectedChecks);
   const pendingPolicyMatches = selectedPolicyMatches && eligibleIdsValid &&
@@ -1637,7 +1808,7 @@ export function validateChecklistContinuationEligibility(
       ? {[prerequisiteStep]: 'confirmed'}
       : {}),
     step,
-    role: 'onboard',
+    role: selectedRole,
     eligible: true,
   });
 }
@@ -2470,7 +2641,8 @@ export function checklistContinuationResumeDispatchIsValid(
     const started = suffix.filter(event => event.type === 'AttemptStarted');
     return started.length === 1 && started[0].checkId === `checklist-${step}` &&
       !suffix.some(event => event.type === 'AttemptStarted' &&
-        (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component'));
+        (event.checkId === 'author-native-component' || event.checkId === 'promote-native-component' ||
+          event.checkId === 'spec-review-audit' || event.checkId === 'spec-review-1-audit'));
   } catch {
     return false;
   }
@@ -2522,6 +2694,227 @@ function checklistContinuationResumeCompleted(
   } catch {
     return false;
   }
+}
+
+type SpecReviewRepairSelection = Readonly<{
+  generationId: string;
+  componentId: string;
+  checkout: Readonly<{
+    success: true;
+    path: string;
+    ref: string;
+    commit: string;
+    worktree_id: string;
+    repository: string;
+    is_worktree: true;
+  }>;
+  requirementIds: readonly string[];
+  roleText: string;
+  receipt: FocusedSpecReviewAuditReceipt;
+  receiptPath: string;
+}>;
+
+function failedSpecReviewAuditSelections(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  output: string,
+): SpecReviewRepairSelection[] {
+  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  const projection = journal.getInstanceProjection() as any;
+  const active = new Set(Object.values(projection.activeGenerationIdByNode || {}));
+  const failed = Object.values(projection.generationsById || {})
+    .filter((generation: any) => generation && active.has(generation.nodeGenerationId) &&
+      generation.checkId === 'spec-review-audit' && generation.status === 'failed') as any[];
+  const selections: SpecReviewRepairSelection[] = [];
+  for (const generation of failed) {
+    const keyed = Array.isArray(generation.scope) ? generation.scope[generation.scope.length - 1] : undefined;
+    if (!keyed || keyed.kind !== 'keyed' || typeof keyed.key !== 'string' || typeof keyed.subgraphInstanceId !== 'string' ||
+        keyed.subgraphInstanceId !== generation.subgraphInstanceId) {
+      throw new Error('spec-review failed audit has an unbound component scope');
+    }
+    const componentId = keyed.key;
+    const execution = (journal as any).getGeneratedExecution(generation.nodeGenerationId);
+    const aliases = execution?.claims;
+    const componentClaim = aliases?.component;
+    const checkoutClaim = aliases?.checkout;
+    const roleClaim = aliases?.role;
+    const authorClaim = aliases?.author;
+    const component = componentClaim?.payload;
+    const checkout = checkoutClaim?.payload;
+    const role = roleClaim?.payload;
+    const ids = component?.continuation_task?.spec_review?.details;
+    if (!componentClaim || !checkoutClaim || !roleClaim || !authorClaim ||
+        componentClaim.claim !== 'native.continuation.work_item@1' ||
+        checkoutClaim.claim !== 'native.continuation.checkout@1' ||
+        roleClaim.claim !== 'native.continuation.role@1' ||
+        authorClaim.claim !== 'native.continuation.author@1' ||
+        component.component_id !== componentId ||
+        !checkout || checkout.success !== true || checkout.is_worktree !== true ||
+        typeof checkout.path !== 'string' || !path.isAbsolute(checkout.path) ||
+        typeof checkout.commit !== 'string' || checkout.commit.length === 0 ||
+        typeof checkout.worktree_id !== 'string' || checkout.worktree_id.length === 0 ||
+        !role || typeof role.text !== 'string' || !Array.isArray(ids)) {
+      throw new Error(`spec-review failed audit ${generation.nodeGenerationId} is missing bound component inputs`);
+    }
+    const requirementIds = exactSortedStringArray(ids, `spec-review ${componentId} requirement IDs`);
+    const attempt = checkpoint.events.filter((event: any) => event.type === 'AttemptStarted' &&
+      event.nodeGenerationId === generation.nodeGenerationId).length;
+    if (attempt < 1) throw new Error(`spec-review failed audit ${generation.nodeGenerationId} has no attempt`);
+    const receiptPath = path.join(output, 'spec-review', 'focused-audit', componentId, `attempt-${attempt}.json`);
+    if (!fs.existsSync(receiptPath)) throw new Error(`spec-review failed audit ${generation.nodeGenerationId} has no bound public receipt`);
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as FocusedSpecReviewAuditReceipt;
+    if (!receipt || receipt.schema !== 'native.spec-review.focused-audit-receipt/v1' || receipt.component_id !== componentId ||
+        receipt.attempt !== attempt || canonicalJson(receipt.requirement_ids) !== canonicalJson(requirementIds) ||
+        receipt.status !== 'failed') {
+      throw new Error(`spec-review receipt is not bound to failed audit generation ${generation.nodeGenerationId}`);
+    }
+    selections.push(Object.freeze({generationId: generation.nodeGenerationId, componentId, checkout, requirementIds, roleText: role.text, receipt, receiptPath}));
+  }
+  if (new Set(selections.map(selection => selection.componentId)).size !== selections.length) {
+    throw new Error('spec-review failed audit selection is ambiguous per component');
+  }
+  return selections.sort((left, right) => left.generationId.localeCompare(right.generationId));
+}
+
+async function executeSpecReviewRepairWorkflow(
+  selection: SpecReviewRepairSelection,
+  output: string,
+  timeout: number,
+  governedCodexTransport?: string,
+  governedCodexBin?: string,
+  governedCodexSha256?: string,
+): Promise<void> {
+  const repairRoot = path.join(output, 'spec-review', 'repair');
+  const manifestPath = path.join(repairRoot, `${selection.componentId}-${selection.generationId}.json`);
+  if (fs.existsSync(manifestPath)) throw new Error(`spec-review repair manifest already exists for ${selection.componentId}`);
+  const repairRunId = `repair-${selection.generationId}`;
+  const manifest = {
+    schema: 'native.spec-review.repair-input/v1',
+    repair_run_id: repairRunId,
+    component_id: selection.componentId,
+    requirement_ids: selection.requirementIds,
+    checkout: selection.checkout,
+    role_text: selection.roleText,
+    prior_audit_receipt: selection.receipt,
+    prior_audit_receipt_path: selection.receiptPath,
+  };
+  writeJson(manifestPath, manifest);
+  const config = await loadConfig(SPEC_REVIEW_REPAIR_CONFIG_PATH, {strict: true});
+  (config as any).workflow_inputs = {
+    manifest_path: manifestPath,
+    component_id: selection.componentId,
+    requirement_ids: [...selection.requirementIds],
+    checkout: selection.checkout,
+    role_text: selection.roleText,
+    prior_audit_receipt: selection.receipt,
+    repair_run_id: repairRunId,
+  };
+  (config as any).workspace = {enabled: false, cleanup_on_exit: false};
+  const childRoot = process.env.VISOR_WORKSPACE_MAIN_PROJECT;
+  if (typeof childRoot !== 'string' || !path.isAbsolute(childRoot)) {
+    throw new Error('spec-review ordinary repair requires an absolute canonical subject root');
+  }
+  const child = new StateMachineExecutionEngine(childRoot);
+  const parentContext = (child as any).getExecutionContext?.();
+  child.setExecutionContext({
+    ...(parentContext || {}),
+    ...(governedCodexTransport === 'exec-jsonl-default-auth-v1' ? {governedCodexTransport, codexBin: governedCodexBin, codexSha256: governedCodexSha256} : {}),
+  } as any);
+  const result = await child.executeGroupedChecks(PR, ['audit'], timeout, config, 'json', false, 1, false);
+  const grouped = (result as any)?.results;
+  const rows = grouped && typeof grouped === 'object'
+    ? Object.values(grouped).flatMap((value: any) => Array.isArray(value) ? value : [value])
+    : [];
+  const row = [...rows].reverse().find((value: any) => value?.checkName === 'audit');
+  const outputValue = row?.output;
+  let refreshedRequirementIds: string[] | undefined;
+  try {
+    if (outputValue && Array.isArray(outputValue.requirement_ids)) {
+      refreshedRequirementIds = exactSortedStringArray(outputValue.requirement_ids, `ordinary repair ${selection.componentId} requirement_ids`);
+    }
+  } catch {}
+  const retainedRequirementIds = refreshedRequirementIds && selection.requirementIds.every(id => refreshedRequirementIds!.includes(id));
+  const rowIssues = Array.isArray((row as any)?.issues) ? (row as any).issues : [];
+  const fatalRowIssues = rowIssues.filter((issue: any) => issue && (issue.severity === 'critical' || issue.severity === 'error'));
+  if (!row || !outputValue || outputValue.status !== 'pass' ||
+      outputValue.component_id !== selection.componentId || !retainedRequirementIds ||
+      outputValue.exit_code !== 0 || typeof outputValue.receipt_path !== 'string' || fatalRowIssues.length > 0) {
+    const detail = JSON.stringify({statistics: (result as any)?.statistics, row: row || null, fatalRowIssues});
+    throw new Error(`spec-review ordinary repair workflow did not converge for ${selection.componentId}: ${detail.slice(0, 2000)}`);
+  }
+  const receiptPath = path.join(output, outputValue.receipt_path);
+  if (!fs.existsSync(receiptPath)) throw new Error(`spec-review repair pass receipt is missing for ${selection.componentId}`);
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as FocusedSpecReviewAuditReceipt;
+  if (receipt.status !== 'pass' || receipt.component_id !== selection.componentId ||
+      !refreshedRequirementIds || canonicalJson(receipt.requirement_ids) !== canonicalJson(refreshedRequirementIds)) {
+    throw new Error(`spec-review repair pass receipt is not bound to ${selection.componentId}`);
+  }
+}
+
+async function executeSpecReviewRepairBridge(
+  engine: StateMachineExecutionEngine,
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  timeout: number,
+): Promise<Awaited<ReturnType<StateMachineExecutionEngine['retryGraphCheckpoint']>>> {
+  const output = process.env.NATIVE_ONBOARDING_OUTPUT_DIR;
+  if (!output || !path.isAbsolute(output)) throw new Error('spec-review repair bridge requires an absolute output directory');
+  const selections = failedSpecReviewAuditSelections(config, checkpoint, output);
+  if (selections.length === 0) throw new Error('spec-review continuation has no failed focused audit leaves to repair');
+  const context = (engine as any).getExecutionContext?.() || {};
+  await Promise.all(selections.map(selection => executeSpecReviewRepairWorkflow(
+    selection,
+    output,
+    timeout,
+    context.governedCodexTransport,
+    context.codexBin,
+    context.codexSha256,
+  )));
+  const generationIds = selections.map(selection => selection.generationId).sort();
+  const retryAttempts = Object.fromEntries(selections.map(selection => [
+    selection.componentId,
+    checkpoint.events.filter((event: any) => event.type === 'AttemptStarted' && event.nodeGenerationId === selection.generationId).length + 1,
+  ]));
+  const previousRetryAttempts = process.env.NATIVE_CHECKLIST_SPEC_REVIEW_AUDIT_ATTEMPTS;
+  process.env.NATIVE_CHECKLIST_SPEC_REVIEW_AUDIT_ATTEMPTS = JSON.stringify(retryAttempts);
+  let retried;
+  try {
+    retried = await engine.retryGraphCheckpoint({
+      checkpoint,
+      config,
+      prInfo: PR,
+      retryGenerationIds: generationIds,
+      externalSideEffects: 'isolated_draft_replay',
+      onRetryCheckpoint: retryCheckpoint => writeCheckpoint(path.join(output, 'spec-review', 'on-retry-checkpoint.json'), retryCheckpoint),
+      generatedDispatchGate: checklistContinuationPauseGateFor('spec-review-1'),
+      maxParallelism: config.max_parallelism,
+      failFast: false,
+    });
+  } finally {
+    if (previousRetryAttempts === undefined) delete process.env.NATIVE_CHECKLIST_SPEC_REVIEW_AUDIT_ATTEMPTS;
+    else process.env.NATIVE_CHECKLIST_SPEC_REVIEW_AUDIT_ATTEMPTS = previousRetryAttempts;
+  }
+  if (retried.retryCheckpoint.events.length <= checkpoint.events.length ||
+      canonicalGraphCheckpointJson(retried.retryCheckpoint.events.slice(0, checkpoint.events.length)) !== canonicalGraphCheckpointJson(checkpoint.events)) {
+    throw new Error('spec-review repair retry changed the retained graph event prefix');
+  }
+  const retryJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), retried.checkpoint);
+  const retryProjection = retryJournal.getInstanceProjection() as any;
+  const retryActive = new Set(Object.values(retryProjection.activeGenerationIdByNode || {}));
+  const unresolved = currentUnresolvedGenerations(config, retried.checkpoint);
+  if (unresolved.length > 0) {
+    throw new Error(`spec-review ordinary repair left unresolved generations: ${JSON.stringify(unresolved).slice(0, 2000)}`);
+  }
+  const incomplete = generationIds.map(generationId => retryProjection.generationsById?.[generationId]).filter((generation: any) =>
+    !generation || generation.checkId !== 'spec-review-audit' || generation.status !== 'completed' ||
+    !retryActive.has(generation.nodeGenerationId));
+  if (incomplete.length > 0) {
+    throw new Error(`spec-review ordinary repair did not complete selected audit generations: ${JSON.stringify(incomplete).slice(0, 2000)}`);
+  }
+  // Replace the pre-dispatch retry checkpoint with the clean, persisted
+  // pre-confirmation frontier only after the bounded bridge has converged.
+  writeCheckpoint(path.join(output, 'spec-review', 'on-retry-checkpoint.json'), retried.checkpoint);
+  return retried;
 }
 
 function checklistContinuationResumeFailureMessage(result: unknown): string {
@@ -2586,6 +2979,13 @@ export async function executeChecklistContinuationEngine(
     undefined, checklistContinuationPauseGateFor(step),
   );
   const current = engine.exportGraphCheckpoint();
+  if (first.statistics.failedExecutions > 0 && step === 'spec-review-1') {
+    const repaired = await executeSpecReviewRepairBridge(engine, config, current, timeout);
+    if (!checklistContinuationPauseIsValid(config, repaired.checkpoint, expectedComponentIds, step)) {
+      throw new Error('spec-review repair retry did not reach a clean continuation frontier');
+    }
+    return {result: repaired.result, checkpoint: repaired.checkpoint, paused: true};
+  }
   if (first.statistics.failedExecutions > 0) throw new Error(`checklist continuation failed before ${step} frontier`);
   if (!checklistContinuationPauseIsValid(config, current, expectedComponentIds, step)) {
     let diagnostic = '';
@@ -2857,6 +3257,37 @@ export async function deriveCurrentChecklistAffectedBatches(
       finding_details_by_component: {},
     });
     return Object.freeze(batches);
+  }
+  if (step === 'spec-review-1') {
+    const requirements = await loadCurrentProofRequirementHashes(proof, subject, output, timeout, [], true);
+    const workItemIds = new Set(workItems.map(item => item.component_id));
+    const requirementIdsByComponent: Record<string, string[]> = {};
+    for (const requirement of requirements) {
+      if (!workItemIds.has(requirement.componentId)) {
+        throw new Error(`current Proof requirement ${requirement.id} has no unique retained WorkItem owner`);
+      }
+      (requirementIdsByComponent[requirement.componentId] ??= []).push(requirement.id);
+    }
+    const missing = workItems
+      .map(item => item.component_id)
+      .filter((componentId): componentId is string => typeof componentId === 'string' && (!requirementIdsByComponent[componentId] || requirementIdsByComponent[componentId].length === 0));
+    if (missing.length > 0) throw new Error(`spec-review-1 has no current Proof requirements for ${missing.join(',')}`);
+    const affectedPaths = workItems.flatMap(item => Array.isArray(item.sorted_owned_paths) ? item.sorted_owned_paths as string[] : []);
+    const batches = deriveChecklistAffectedBatches(workItems, affectedPaths);
+    const frozenIds = Object.freeze(Object.fromEntries(
+      Object.entries(requirementIdsByComponent).map(([componentId, ids]) => [componentId, Object.freeze(utf8Sorted(ids))]),
+    ));
+    const enriched = {...batches};
+    Object.defineProperty(enriched, 'requirementIdsByComponent', {value: frozenIds, enumerable: false});
+    writeJson(path.join(output, 'preflight', 'current-affected-batches.json'), {
+      status: 'current-proof-spec-review-ownership-derived',
+      requirement_ids: requirements.map(requirement => requirement.id),
+      affected_component_ids: batches.affectedComponentIds,
+      reused_component_ids: batches.reusedComponentIds,
+      batches: batches.batches,
+      requirement_ids_by_component: frozenIds,
+    });
+    return Object.freeze(enriched);
   }
   const result = runProof(
     proof,
@@ -3276,7 +3707,9 @@ function materializeChecklistContinuationConfig(raw: unknown, step: ChecklistCon
     ? 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "skeleton"'
     : step === 'traces-light'
       ? 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "traces-light"'
-      : 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"';
+      : step === 'variables'
+        ? 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"'
+        : 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "spec-review-1"';
   const sharedCheckIds = new Set([
     'materialize-retained-catalog',
     'checklist-continuation-snapshot',
@@ -3295,16 +3728,21 @@ function materializeChecklistContinuationConfig(raw: unknown, step: ChecklistCon
     variables_declared: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"',
     variable_drift: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"',
     'checklist-variables': 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "variables"',
+    'spec-review-1-audit': 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "spec-review-1"',
+    'checklist-spec-review-1': 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "spec-review-1"',
   };
   const expectedBranchIds = step === 'skeleton'
     ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected', 'checklist-skeleton']
     : step === 'traces-light'
       ? ['annotation_validity', 'orphan_code_clean', 'checklist-traces-light']
-      : ['variable_orphans_clean', 'variables_declared', 'variable_drift', 'checklist-variables'];
+      : step === 'variables'
+        ? ['variable_orphans_clean', 'variables_declared', 'variable_drift', 'checklist-variables']
+        : ['spec-review-1-audit', 'checklist-spec-review-1'];
   const checks: Json = {};
   const seen = new Set<string>();
   for (const [checkId, rawCheck] of Object.entries(project.checks)) {
     if (!isRecord(rawCheck)) throw new Error(`checklist continuation check ${checkId} is not an object`);
+    if (checkId === 'spec-review-audit' && step !== 'spec-review-1') continue;
     const condition = rawCheck.if;
     if (sharedCheckIds.has(checkId)) {
       if (condition !== undefined) throw new Error(`shared checklist continuation check ${checkId} must not be conditional`);
@@ -3319,13 +3757,36 @@ function materializeChecklistContinuationConfig(raw: unknown, step: ChecklistCon
       throw new Error(`unknown checklist continuation check ${checkId} must not be conditional`);
     }
     const {if: _condition, ...selectedCheck} = rawCheck;
-    checks[checkId] = selectedCheck;
+    if (checkId === 'promote-native-component' && step !== 'spec-review-1' && Array.isArray(selectedCheck.depends_on)) {
+      checks[checkId] = {
+        ...selectedCheck,
+        depends_on: selectedCheck.depends_on.filter(dependency => dependency !== 'spec-review-audit'),
+      };
+    } else {
+      checks[checkId] = selectedCheck;
+    }
   }
   for (const checkId of expectedBranchIds) {
     if (!seen.has(checkId)) throw new Error(`checklist continuation YAML is missing branch check ${checkId}`);
   }
   for (const checkId of sharedCheckIds) {
     if (!seen.has(checkId)) throw new Error(`checklist continuation YAML is missing shared check ${checkId}`);
+  }
+  const componentSubgraph = raw.subgraphs['continuation-component'];
+  if (!isRecord(componentSubgraph) || !isRecord(componentSubgraph.checks)) {
+    throw new Error('checklist continuation YAML is missing continuation component checks');
+  }
+  const componentChecks: Json = {};
+  for (const [checkId, rawCheck] of Object.entries(componentSubgraph.checks)) {
+    if (checkId === 'spec-review-audit' && step !== 'spec-review-1') continue;
+    if (checkId === 'promote-native-component' && step !== 'spec-review-1' && isRecord(rawCheck) && Array.isArray(rawCheck.depends_on)) {
+      componentChecks[checkId] = {
+        ...rawCheck,
+        depends_on: rawCheck.depends_on.filter(dependency => dependency !== 'spec-review-audit'),
+      };
+    } else {
+      componentChecks[checkId] = rawCheck;
+    }
   }
   return {
     ...raw,
@@ -3334,6 +3795,10 @@ function materializeChecklistContinuationConfig(raw: unknown, step: ChecklistCon
       'continuation-project': {
         ...project,
         checks,
+      },
+      'continuation-component': {
+        ...componentSubgraph,
+        checks: componentChecks,
       },
     },
   } as VisorConfig;
@@ -4408,6 +4873,55 @@ async function loadCurrentProofRequirementHashes(
     }
     return {id, componentId: row.component, filePath: row.file_path, proofFileHash: fileHash};
   });
+}
+
+/**
+ * Refresh one component's native Proof requirement denominator in its bound
+ * checkout.  A repair may add same-component requirements, but it may not
+ * drop a retained ID or admit a row owned by another component.
+ */
+export function loadCurrentProofComponentRequirementIds(
+  proof: string,
+  checkout: string,
+  output: string,
+  timeout: number,
+  componentId: string,
+  priorRequirementIds: readonly string[],
+): readonly string[] {
+  if (typeof componentId !== 'string' || componentId.length === 0 || !path.isAbsolute(checkout)) {
+    throw new Error('current Proof component requirement refresh requires a component and absolute checkout');
+  }
+  const prior = exactSortedStringArray([...priorRequirementIds], `prior Proof requirements for ${componentId}`);
+  const run = runProof(
+    proof,
+    checkout,
+    output,
+    `component-requirements-${componentId}`,
+    ['req', 'list', '--component', componentId, '--format', 'json'],
+    timeout,
+  );
+  if (run.status !== 0) throw new Error(`current Proof req list failed for ${componentId} with exit ${run.status}`);
+  const listed = parseJson(run, `Proof req list for ${componentId}`);
+  if (!Array.isArray(listed) || listed.length === 0) {
+    throw new Error(`Proof req list for ${componentId} must return a nonempty JSON array`);
+  }
+  const ids: string[] = [];
+  for (const row of listed) {
+    if (!isRecord(row) || typeof row.id !== 'string' || row.id.length === 0 ||
+        row.component !== componentId || typeof row.file_path !== 'string' || row.file_path.length === 0 ||
+        path.isAbsolute(row.file_path) || row.file_path.split('/').includes('..')) {
+      throw new Error(`Proof req list for ${componentId} contains an invalid or foreign requirement row`);
+    }
+    if (ids.includes(row.id)) throw new Error(`Proof req list for ${componentId} contains duplicate requirement ID ${row.id}`);
+    ids.push(row.id);
+  }
+  const refreshed = utf8Sorted(ids);
+  const refreshedSet = new Set(refreshed);
+  const missing = prior.filter(id => !refreshedSet.has(id));
+  if (missing.length > 0) {
+    throw new Error(`Proof req list for ${componentId} dropped retained requirement IDs: ${missing.join(',')}`);
+  }
+  return Object.freeze(refreshed);
 }
 
 function recoveryToken(value: string): string {
@@ -6517,7 +7031,9 @@ async function main(): Promise<void> {
           affectedBatches: batches.batches,
           affectedDetailsByComponent: checklistContinuationStep === 'skeleton'
             ? batches.findingDetailsByComponent
-            : batches.orphanDetailsByComponent,
+            : checklistContinuationStep === 'spec-review-1'
+              ? batches.requirementIdsByComponent
+              : batches.orphanDetailsByComponent,
         });
       }
       const authority = checklistContinuationEvidence.authority
@@ -6544,7 +7060,14 @@ async function main(): Promise<void> {
               required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'],
               l2_software_complete: {paths: [...batch.paths], details: [...details]},
             }
-            : {
+            : checklistContinuationStep === 'spec-review-1'
+              ? {
+                step_id: 'spec-review-1',
+                role: 'spec-review',
+                required_checks: [...SPEC_REVIEW_CHECKS],
+                spec_review: {paths: [...batch.paths], details: [...details]},
+              }
+              : {
               step_id: 'traces-light',
               role: 'onboard',
               required_checks: ['annotation_validity', 'orphan_code_clean'],

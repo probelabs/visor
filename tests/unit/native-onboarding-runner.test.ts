@@ -43,6 +43,9 @@ import {
   loadChecklistMaterializedConfig,
   parseChecklistPrefixRetryArguments,
   parseChecklistContinueArguments,
+  SPEC_REVIEW_CHECKS,
+  validateFocusedSpecReviewAudit,
+  validateUnscopedSpecReviewAudit,
   executeChecklistContinuationEngine,
   deriveChecklistAffectedBatches,
   deriveCurrentChecklistAffectedBatches,
@@ -304,7 +307,7 @@ describe('native onboarding runner boundaries', () => {
     previousCodexHome = process.env.CODEX_HOME;
   });
 
-  it('accepts one shared native continuation entry for traces-light, skeleton, or variables and rejects unsupported stages', () => {
+  it('accepts one shared native continuation entry for traces-light, skeleton, variables, or spec-review-1 and rejects unsupported stages', () => {
     expect(parseChecklistContinueArguments({'checklist-continue': '/tmp/checkpoint.json'})).toEqual({
       checkpoint: '/tmp/checkpoint.json',
       step: 'traces-light',
@@ -317,16 +320,57 @@ describe('native onboarding runner boundaries', () => {
       'checklist-continue': '/tmp/checkpoint.json',
       'checklist-step': 'variables',
     })).toEqual({checkpoint: '/tmp/checkpoint.json', step: 'variables'});
+    expect(parseChecklistContinueArguments({
+      'checklist-continue': '/tmp/checkpoint.json',
+      'checklist-step': 'spec-review-1',
+    })).toEqual({checkpoint: '/tmp/checkpoint.json', step: 'spec-review-1'});
     expect(() => parseChecklistContinueArguments({
       'checklist-continue': '/tmp/checkpoint.json',
       'checklist-step': 'research',
-    })).toThrow(/only traces-light, skeleton, or variables/);
+    })).toThrow(/only traces-light, skeleton, variables, or spec-review-1/);
     expect(() => parseChecklistContinueArguments({'checklist-step': 'traces-light'}))
       .toThrow(/checklist-continue is required/);
   });
 
+  it('fails closed on the native focused single-document audit and mixed-stage canonical audit', () => {
+    const ids = ['SW-REQ-B', 'SW-REQ-A'];
+    const report = {
+      only_scope: {
+        requirement_ids: ['SW-REQ-A', 'SW-REQ-B'],
+        scoped_checks: [],
+        filtered_checks: [
+          'spec_lint_decomposition_adds_refinement',
+          'spec_lint_formalization_quality',
+          'under_modeled_requirements_clean',
+        ],
+        skipped_checks: ['solver_modeling_opportunity'],
+      },
+      categories: [
+        {name: 'Specification', checks: [
+          {name: 'spec_lint_decomposition_adds_refinement', status: 'pass'},
+          {name: 'spec_lint_formalization_quality', status: 'pass'},
+        ]},
+        {name: 'Verification', checks: [{name: 'under_modeled_requirements_clean', status: 'pass'}]},
+      ],
+    };
+    expect(validateFocusedSpecReviewAudit(report, ids)).toBe(report);
+    expect(() => validateFocusedSpecReviewAudit({...report, only_scope: {...report.only_scope, skipped_checks: []}}, ids)).toThrow(/skip/);
+    expect(() => validateFocusedSpecReviewAudit({...report, categories: [{name: 'Specification', checks: report.categories[0].checks}]}, ids)).toThrow(/omitted/);
+    expect(() => validateFocusedSpecReviewAudit({...report, only_scope: {...report.only_scope, requirement_ids: ['SW-REQ-A']}}, ids)).toThrow(/denominator/);
+
+    const stdout = [
+      {event: 'check_done', check: SPEC_REVIEW_CHECKS[0], stage: 'spec', status: 'pass'},
+      {event: 'check_done', check: SPEC_REVIEW_CHECKS[1], stage: 'spec', status: 'pass'},
+      {event: 'check_done', check: SPEC_REVIEW_CHECKS[2], stage: 'spec', status: 'pass'},
+      {event: 'check_done', check: SPEC_REVIEW_CHECKS[3], stage: 'verify', status: 'pass'},
+    ].map(value => JSON.stringify(value)).join('\n');
+    expect(validateUnscopedSpecReviewAudit(stdout)).toHaveLength(4);
+    expect(() => validateUnscopedSpecReviewAudit(stdout.replace('"stage":"verify"', '"stage":"spec"'))).toThrow(/native tuple/);
+    expect(() => validateUnscopedSpecReviewAudit(stdout + '\n' + JSON.stringify({event: 'check_done', check: 'extra', stage: 'spec', status: 'pass'}))).toThrow(/exactly four/);
+  });
+
   it('materializes only the selected continuation branch before strict loading', async () => {
-    const checksFor = (step: 'traces-light' | 'skeleton' | 'variables') => {
+    const checksFor = (step: 'traces-light' | 'skeleton' | 'variables' | 'spec-review-1') => {
       const config = buildChecklistContinuationConfig(step) as any;
       return config.subgraphs['continuation-project'].checks as Record<string, any>;
     };
@@ -334,6 +378,7 @@ describe('native onboarding runner boundaries', () => {
     const traces = checksFor('traces-light');
     const skeleton = checksFor('skeleton');
     const variables = checksFor('variables');
+    const specReview = checksFor('spec-review-1');
     expect(Object.keys(traces).sort()).toEqual([
       ...shared, 'annotation_validity', 'orphan_code_clean', 'checklist-traces-light',
     ].sort());
@@ -344,12 +389,16 @@ describe('native onboarding runner boundaries', () => {
     expect(Object.keys(variables).sort()).toEqual([
       ...shared, 'variable_orphans_clean', 'variables_declared', 'variable_drift', 'checklist-variables',
     ].sort());
+    expect(Object.keys(specReview).sort()).toEqual([
+      ...shared, 'spec-review-1-audit', 'checklist-spec-review-1',
+    ].sort());
     expect(Object.values(traces).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
     expect(Object.values(skeleton).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
     expect(Object.values(variables).every(check => !Object.prototype.hasOwnProperty.call(check, 'if'))).toBe(true);
     await loadConfig(buildChecklistContinuationConfig('traces-light') as any, {strict: true});
     await loadConfig(buildChecklistContinuationConfig('skeleton') as any, {strict: true});
     await loadConfig(buildChecklistContinuationConfig('variables') as any, {strict: true});
+    await loadConfig(buildChecklistContinuationConfig('spec-review-1') as any, {strict: true});
   });
 
   it('binds continuation eligibility to one exact native pending frontier and preserves confirmed readback', () => {
@@ -421,6 +470,35 @@ describe('native onboarding runner boundaries', () => {
     expect(() => validateChecklistContinuationEligibility({
       ...variablesShow, next: {...variablesShow.next, scope: 'package'},
     }, false, 'variables')).toThrow(/eligible variables/);
+
+    const variablesConfirmed = {
+      ...variablesPending,
+      eligible: false,
+      stored_status: 'confirmed',
+      effective_status: 'confirmed',
+      check_results: variablesChecks.map((id, index) => ({id, status: 'pass', at: `2026-09-09T00:00:1${index}Z`})),
+    };
+    const specChecks = [
+      'spec_lint_decomposition_adds_refinement',
+      'spec_lint_formalization_quality',
+      'solver_modeling_opportunity',
+      'under_modeled_requirements_clean',
+    ];
+    const specPending = {
+      step_id: 'spec-review-1', applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending',
+      role: 'spec-review', stamp: 'confirm', scope: 'repo', requires: ['variables'], required_checks: specChecks,
+      check_results: [],
+    };
+    const specShow = {
+      ...variablesShow,
+      eligible_step_ids: ['spec-review-1'],
+      next: {step_id: 'spec-review-1', role: 'spec-review', stamp: 'confirm', scope: 'repo', requires: ['variables'], required_checks: specChecks},
+      steps: [skeleton, confirmed, variablesConfirmed, specPending],
+    };
+    expect(validateChecklistContinuationEligibility(specShow, false, 'spec-review-1')).toMatchObject({
+      checklist: 'onboard_v1', step: 'spec-review-1', role: 'spec-review', eligible: true, variables: 'confirmed',
+    });
+    expect(() => validateChecklistContinuationEligibility({...specShow, next: {...specShow.next, role: 'onboard'}}, false, 'spec-review-1')).toThrow(/eligible spec-review-1/);
 
     const skeletonPending = {
       ...pending, step_id: 'skeleton', scope: 'repo', requires: ['research'], required_checks: skeleton.required_checks,

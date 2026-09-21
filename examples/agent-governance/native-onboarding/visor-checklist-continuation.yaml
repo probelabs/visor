@@ -81,6 +81,7 @@ claim_types:
                   required_checks: {type: array, minItems: 1, items: {type: string, minLength: 1}}
                   orphan_code_clean: {type: object}
                   l2_software_complete: {type: object}
+                  spec_review: {type: object}
                 oneOf:
                   - required: [step_id, role, required_checks, orphan_code_clean]
                     properties:
@@ -106,6 +107,18 @@ claim_types:
                         properties:
                           paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
                           details: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+                  - required: [step_id, role, required_checks, spec_review]
+                    properties:
+                      step_id: {const: spec-review-1}
+                      role: {const: spec-review}
+                      required_checks: {const: [spec_lint_decomposition_adds_refinement, spec_lint_formalization_quality, solver_modeling_opportunity, under_modeled_requirements_clean]}
+                      spec_review:
+                        type: object
+                        additionalProperties: false
+                        required: [paths, details]
+                        properties:
+                          paths: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+                          details: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
         full_components:
           type: array
           minItems: 0
@@ -413,11 +426,16 @@ subgraphs:
         exec: |
           set -eu
           : "${PROOF_BIN:?PROOF_BIN is required}"
-          "$PROOF_BIN" role show onboard --format agent
+          if [ "${NATIVE_CHECKLIST_CONTINUE_STEP:-}" = "spec-review-1" ]; then
+            "$PROOF_BIN" role show spec-review --format agent
+          else
+            "$PROOF_BIN" role show onboard --format agent
+          fi
 
       author-native-component:
         type: ai
         depends_on: [role-onboard-component, checkout-worktree]
+        max_runs: 2
         timeout: 1800000
         criticality: internal
         schema: plain
@@ -428,9 +446,9 @@ subgraphs:
         emits:
           - {claim: native.continuation.author@1, from: output}
         prompt: |
-          You are the editable native Proof onboarding author for exactly the
+          You are the editable native Proof author for exactly the
           supplied retained WorkItem and isolated checkout.  Use the built-in
-          onboard role and current Proof CLI.  First inspect the supplied Proof
+          role shown below and current Proof CLI.  First inspect the supplied Proof
           definition and the scoped code evidence for this WorkItem, including
           definitions plus callers and references in tests, fuzz targets, and
           build scripts.  Follow those references before deciding whether a
@@ -449,15 +467,28 @@ subgraphs:
           this component and identifies the selected checklist policy. Repair
           only those component-owned findings for that selected policy, then
           return one disposition for every supplied detail.
+          For spec-review-1, use the built-in spec-review role to make the
+          smallest evidence-grounded repair in component-owned requirements
+          and variables.  The component requirement IDs in continuation_task
+          are the complete denominator for this author.  A focused audit may
+          have failed immediately before a retry; when supplied below, treat
+          its raw report as authoritative feedback and address only its
+          reported findings.  Do not claim that this bounded four-check gate
+          is a full corpus spec-review.
           Emit unsupported_mapping only after checking both an existing fit and
           a legitimate evidence-grounded new requirement; keep the unresolved
           gap and its evidence visible when neither is possible.
           Do not invent IDs, edit checklist state, run broad audits/builds, or
-          change executable behavior.  Source comments and component-owned
-          Proof specification files are the only allowed edits.
+          change executable behavior.  For spec-review-1, source comments are
+          forbidden and only component-owned Proof requirements or variables
+          YAML may change.  Other continuation stages may use source comments
+          and component-owned Proof specification files as their edit surface.
           WorkItem: {{ outputs.component | json }}
           Checkout: {{ outputs.checkout | json }}
           Built-in role: {{ outputs.role.text | json }}
+          A separate ordinary repair workflow may retry a failed focused audit.
+          This generated author is never routed back to itself and does not
+          treat generated output history as repair authority.
         ai:
           model: gpt-5.6-luna
           codex_execution_profile: luna-xhigh-isolated-writer-v1
@@ -468,9 +499,89 @@ subgraphs:
           max_iterations: 80
           timeout: 1500000
 
+      spec-review-audit:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "spec-review-1"'
+        depends_on: [author-native-component]
+        max_runs: 2
+        timeout: 900000
+        criticality: internal
+        schema: &spec_review_audit_output_schema
+          type: object
+          additionalProperties: false
+          required: [status, component_id, requirement_ids, report, exit_code, receipt_path]
+          properties:
+            status: {type: string, enum: [pass, failed]}
+            component_id: {type: string, minLength: 1}
+            requirement_ids: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+            report: {type: [object, 'null']}
+            exit_code: {type: integer}
+            receipt_path: {type: string, minLength: 1}
+            failure: {type: string, minLength: 1}
+        consumes:
+          - {claim: native.continuation.work_item@1, as: component}
+          - {claim: native.continuation.checkout@1, as: checkout}
+          - {claim: native.continuation.role@1, as: role}
+          - {claim: native.continuation.author@1, as: author}
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          : "${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const path = require('node:path');
+          const {runProof, loadCurrentProofComponentRequirementIds, validateFocusedSpecReviewAudit, writeFocusedSpecReviewAuditReceipt} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          const proof = process.argv[2];
+          const deps = {{ outputs | json }};
+          const step = process.env.NATIVE_CHECKLIST_CONTINUE_STEP;
+          if (step === 'spec-review-1') {
+            const component = deps.component;
+            const author = deps.author;
+            const priorIds = component && component.continuation_task && component.continuation_task.spec_review && component.continuation_task.spec_review.details;
+            if (!Array.isArray(priorIds) || priorIds.length === 0 || priorIds.some(id => typeof id !== 'string')) throw new Error('spec-review focused audit is missing the retained requirement denominator');
+            const checkout = deps.checkout;
+            if (!checkout || typeof checkout.path !== 'string' || !path.isAbsolute(checkout.path)) throw new Error('spec-review focused audit is missing the persistent author checkout');
+            if (!author || typeof author !== 'object') throw new Error('spec-review focused audit is missing the author receipt');
+            const ids = loadCurrentProofComponentRequirementIds(proof, checkout.path, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, Number(process.env.REQUEST_TIMEOUT), component.component_id, priorIds);
+            const previous = deps.history && Array.isArray(deps.history['spec-review-audit']) ? deps.history['spec-review-audit'].length : 0;
+            let retryAttempts = {};
+            try { retryAttempts = JSON.parse(process.env.NATIVE_CHECKLIST_SPEC_REVIEW_AUDIT_ATTEMPTS || '{}'); } catch {}
+            const attempt = Number(retryAttempts[component.component_id] || (previous + 1));
+            const run = runProof(proof, checkout.path, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, `continuation-spec-review-focused-${component.component_id}-attempt-${attempt}`, [
+              'audit', '--no-cache',
+              '--check', 'spec_lint_decomposition_adds_refinement',
+              '--check', 'spec_lint_formalization_quality',
+              '--check', 'solver_modeling_opportunity',
+              '--check', 'under_modeled_requirements_clean',
+              '--only', ids.join(','), '--format', 'json',
+            ], Number(process.env.REQUEST_TIMEOUT));
+            let report;
+            let failure;
+            try { report = JSON.parse(run.stdout); } catch (error) { failure = `focused audit returned malformed JSON: ${error instanceof Error ? error.message : String(error)}`; }
+            if (!failure && run.status !== 0) failure = `focused audit exited ${run.status}`;
+            if (!failure) {
+              try { validateFocusedSpecReviewAudit(report, ids); } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+            }
+            const receipt_path = writeFocusedSpecReviewAuditReceipt({
+              output: process.env.NATIVE_ONBOARDING_OUTPUT_DIR,
+              componentId: component.component_id,
+              requirementIds: ids,
+              attempt,
+              run,
+              report: report || null,
+              failure,
+              source: 'continuation-component',
+            });
+            const output = {status: failure ? 'failed' : 'pass', component_id: component.component_id, requirement_ids: ids, report: report || null, exit_code: run.status, failure: failure || undefined, receipt_path};
+            process.stdout.write(JSON.stringify(output));
+            if (failure) process.exitCode = 1;
+          }
+          NODE
+
       promote-native-component:
         type: command
-        depends_on: [author-native-component]
+        depends_on: [spec-review-audit]
         timeout: 900000
         criticality: internal
         resource_group: proof-workspace-mutation
@@ -510,6 +621,7 @@ subgraphs:
           node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
           const fs = require('node:fs');
           const path = require('node:path');
+          const {execFileSync} = require('node:child_process');
           const {promoteNativeDelta} = require(path.join(
             process.env.NATIVE_ONBOARDING_REPO_ROOT,
             'examples/agent-governance/native-onboarding/native-promotion.ts',
@@ -545,6 +657,12 @@ subgraphs:
             const checkout = deps.checkout;
             if (!workItem || typeof workItem !== 'object' || typeof workItem.component_id !== 'string' || workItem.component_id.length === 0 || Buffer.byteLength(workItem.component_id, 'utf8') > 180 || typeof workItem.baseline_commit !== 'string') throw new Error('promotion is missing the prepared WorkItem');
             if (!checkout || typeof checkout !== 'object' || checkout.success !== true || checkout.is_worktree !== true || typeof checkout.path !== 'string' || typeof checkout.commit !== 'string' || typeof checkout.worktree_id !== 'string') throw new Error('promotion is missing the verified writer checkout');
+            if (process.env.NATIVE_CHECKLIST_CONTINUE_STEP === 'spec-review-1') {
+              const status = execFileSync('git', ['-C', checkout.path, 'status', '--porcelain=v1', '--untracked-files=all'], {encoding: 'utf8'});
+              const changed = status.split(/\r?\n/).filter(Boolean).map(line => line.length > 3 ? line.slice(3) : '');
+              const invalid = changed.filter(relativePath => !/^specs\/.*\/(?:requirements|variables)\/[^/]+\.ya?ml$/.test(relativePath));
+              if (invalid.length > 0) throw new Error(`spec-review author changed paths outside component-owned Proof requirements/variables: ${invalid.join(',')}`);
+            }
             const {continuation_task: _continuationTask, ...proofWorkItem} = workItem;
             const result = promoteNativeDelta({canonicalRoot: process.env.VISOR_WORKSPACE_MAIN_PROJECT, baselineCommit: proofWorkItem.baseline_commit, writerCheckout: checkout, workItem: proofWorkItem, proofBin, sourceWritePolicy: 'go-trace-annotations-only', commitAcceptedArtifacts: true, timeoutMs: Number(process.env.REQUEST_TIMEOUT)});
             const output = {...result, component_id: workItem.component_id, baseline_commit: result.checkpoint.baseline_commit};
@@ -829,6 +947,55 @@ subgraphs:
         env: {NATIVE_CHECKLIST_AUDIT: variable_drift}
         schema: {type: object}
         exec: *variables_audit_exec
+
+      spec-review-1-audit:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "spec-review-1"'
+        depends_on: [component-promotions-complete]
+        timeout: 900000
+        criticality: internal
+        schema: plain
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          : "${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+          const path = require('node:path');
+          const {runProof, validateUnscopedSpecReviewAudit} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          const proof = process.argv[2];
+          const run = runProof(proof, process.env.VISOR_WORKSPACE_MAIN_PROJECT, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, 'continuation-spec-review-final', [
+            'audit', '--no-cache',
+            '--check', 'spec_lint_decomposition_adds_refinement',
+            '--check', 'spec_lint_formalization_quality',
+            '--check', 'solver_modeling_opportunity',
+            '--check', 'under_modeled_requirements_clean',
+            '--format', 'json',
+          ], Number(process.env.REQUEST_TIMEOUT));
+          if (run.status !== 0) throw new Error(`canonical spec-review audit failed with exit ${run.status}`);
+          const events = validateUnscopedSpecReviewAudit(run.stdout);
+          process.stdout.write(JSON.stringify({status: 'pass', events}));
+          NODE
+
+      checklist-spec-review-1:
+        type: command
+        if: 'env.NATIVE_CHECKLIST_CONTINUE_STEP == "spec-review-1"'
+        depends_on: [spec-review-1-audit, checklist-continuation-snapshot]
+        timeout: 120000
+        resource_group: proof-workspace-mutation
+        schema: {type: object}
+        consumes:
+          - {claim: native.continuation.catalog@1, as: authority}
+        exec: |
+          set -eu
+          : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+          : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+          node -r "$NATIVE_ONBOARDING_TS_NODE" - <<'NODE'
+          const path = require('node:path');
+          const {executeJournaledChecklistStep} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+          process.stdout.write(JSON.stringify(executeJournaledChecklistStep('spec-review-1', 'Confirmed the bounded native spec-review-1 repair and exact canonical audit gate.', true)));
+          NODE
 
       checklist-traces-light:
         type: command

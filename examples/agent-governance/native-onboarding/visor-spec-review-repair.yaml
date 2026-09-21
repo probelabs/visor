@@ -1,0 +1,111 @@
+# Ordinary, serial repair workflow for one failed spec-review component.
+# The parent runner supplies a closed manifest; this workflow never selects a
+# component, broadens scope beyond that component, or edits outside its isolated checkout.
+# One bounded goto retry permits two repair/audit attempts in total.
+version: "1.0"
+routing:
+  max_loops: 1
+limits:
+  max_runs_per_check: 2
+max_parallelism: 1
+fail_fast: false
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+
+checks:
+  repair:
+    type: ai
+    timeout: 1800000
+    criticality: internal
+    assume: "true"
+    schema: plain
+    ai:
+      model: gpt-5.6-luna
+      codex_execution_profile: luna-xhigh-isolated-writer-v1
+      codex_working_directory_from: repair-input
+      prompt_type: engineer
+      allowEdit: true
+      allowedTools: [search, extract, listFiles]
+    depends_on: [repair-input]
+    prompt: |
+      You are the bounded editable native Proof spec-review repair author.
+      Work only in the supplied persistent isolated checkout and only in
+      component-owned Proof requirements or variables YAML. Do not edit source,
+      checklist state, policy, waivers, ignores, approvals, or metadata.
+      Use the built-in role text and exact prior focused audit receipt below.
+      Repair only the reported component-owned findings, preserving existing
+      requirements when they fit. Return one disposition for every finding.
+
+      Component: {{ inputs.component_id | json }}
+      Requirement denominator: {{ inputs.requirement_ids | json }}
+      Checkout: {{ inputs.checkout | json }}
+      Built-in role: {{ inputs.role_text | json }}
+      Prior focused-audit receipt: {{ inputs.prior_audit_receipt | json }}
+      Feedback from the immediately preceding audit attempt (empty initially):
+      {{ outputs_history['audit'] | json }}
+
+  repair-input:
+    type: command
+    exec: |
+      set -eu
+      node - <<'NODE'
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const value = JSON.parse(fs.readFileSync({{ inputs.manifest_path | json }}, 'utf8'));
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('repair manifest must be an object');
+      if (value.component_id !== {{ inputs.component_id | json }}) throw new Error('repair manifest component mismatch');
+      if (JSON.stringify(value.checkout) !== JSON.stringify({{ inputs.checkout | json }}) || !value.checkout || !path.isAbsolute(value.checkout.path)) throw new Error('repair manifest checkout mismatch');
+      if (!Array.isArray(value.requirement_ids) || JSON.stringify(value.requirement_ids) !== JSON.stringify({{ inputs.requirement_ids | json }})) throw new Error('repair manifest denominator mismatch');
+      process.stdout.write(JSON.stringify(value.checkout));
+      NODE
+
+  audit:
+    type: command
+    depends_on: [repair]
+    timeout: 900000
+    criticality: internal
+    assume: "true"
+    schema:
+      type: object
+      additionalProperties: false
+      required: [status, component_id, requirement_ids, report, exit_code, receipt_path]
+      properties:
+        status: {type: string, enum: [pass, failed]}
+        component_id: {type: string, minLength: 1}
+        requirement_ids: {type: array, minItems: 1, uniqueItems: true, items: {type: string, minLength: 1}}
+        report: {type: [object, 'null']}
+        exit_code: {type: integer}
+        receipt_path: {type: string, minLength: 1}
+        failure: {type: string, minLength: 1}
+    on_fail:
+      goto: repair
+    exec: |
+      set -eu
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      : "${NATIVE_ONBOARDING_REPO_ROOT:?NATIVE_ONBOARDING_REPO_ROOT is required}"
+      : "${NATIVE_ONBOARDING_OUTPUT_DIR:?NATIVE_ONBOARDING_OUTPUT_DIR is required}"
+      : "${NATIVE_ONBOARDING_TS_NODE:?NATIVE_ONBOARDING_TS_NODE is required}"
+      node -r "$NATIVE_ONBOARDING_TS_NODE" - "$PROOF_BIN" <<'NODE'
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const {runProof, loadCurrentProofComponentRequirementIds, validateFocusedSpecReviewAudit, writeFocusedSpecReviewAuditReceipt} = require(path.join(process.env.NATIVE_ONBOARDING_REPO_ROOT, 'examples/agent-governance/native-onboarding/run-onboarding.ts'));
+      const proof = process.argv[2];
+      const manifest = JSON.parse(fs.readFileSync({{ inputs.manifest_path | json }}, 'utf8'));
+      const ids = loadCurrentProofComponentRequirementIds(proof, manifest.checkout.path, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, Number(process.env.REQUEST_TIMEOUT), manifest.component_id, manifest.requirement_ids);
+      const prior = {% if outputs_history['audit'] %}{{ outputs_history['audit'] | json }}{% else %}[]{% endif %};
+      const attempt = Array.isArray(prior) ? prior.length + 1 : 1;
+      const run = runProof(proof, manifest.checkout.path, process.env.NATIVE_ONBOARDING_OUTPUT_DIR, `spec-review-repair-${manifest.component_id}-attempt-${attempt}`, [
+        'audit', '--no-cache', '--check', 'spec_lint_decomposition_adds_refinement',
+        '--check', 'spec_lint_formalization_quality', '--check', 'solver_modeling_opportunity',
+        '--check', 'under_modeled_requirements_clean', '--only', ids.join(','), '--format', 'json',
+      ], Number(process.env.REQUEST_TIMEOUT));
+      let report = null;
+      let failure;
+      try { report = JSON.parse(run.stdout); } catch (error) { failure = `focused audit returned malformed JSON: ${error instanceof Error ? error.message : String(error)}`; }
+      if (!failure && run.status !== 0) failure = `focused audit exited ${run.status}`;
+      if (!failure) { try { validateFocusedSpecReviewAudit(report, ids); } catch (error) { failure = error instanceof Error ? error.message : String(error); } }
+      const receipt_path = writeFocusedSpecReviewAuditReceipt({output: process.env.NATIVE_ONBOARDING_OUTPUT_DIR, componentId: manifest.component_id, requirementIds: ids, attempt, run, report, failure, source: 'spec-review-repair', receiptNamespace: ['repair', manifest.repair_run_id].join('/')});
+      process.stdout.write(JSON.stringify({status: failure ? 'failed' : 'pass', component_id: manifest.component_id, requirement_ids: ids, exit_code: run.status, receipt_path, report, failure: failure || undefined}));
+      if (failure) process.exitCode = 1;
+      NODE

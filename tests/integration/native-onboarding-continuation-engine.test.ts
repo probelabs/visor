@@ -52,6 +52,13 @@ type VariablesContinuationTask = {
   required_checks: ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
 };
 
+type SpecReviewContinuationTask = {
+  step_id: 'spec-review-1';
+  role: 'spec-review';
+  required_checks: ['spec_lint_decomposition_adds_refinement', 'spec_lint_formalization_quality', 'solver_modeling_opportunity', 'under_modeled_requirements_clean'];
+  spec_review: {paths: string[]; details: string[]};
+};
+
 type OperationalWorkItem = WorkItem & {continuation_task: ContinuationTask};
 
 function operationalWorkItem(
@@ -82,6 +89,22 @@ function operationalSkeletonWorkItem(
       role: 'onboard',
       required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'],
       l2_software_complete: {paths, details},
+    },
+  };
+}
+
+function operationalSpecReviewWorkItem(
+  workItem: WorkItem,
+  paths: string[],
+  details: string[],
+): WorkItem & {continuation_task: SpecReviewContinuationTask} {
+  return {
+    ...workItem,
+    continuation_task: {
+      step_id: 'spec-review-1',
+      role: 'spec-review',
+      required_checks: ['spec_lint_decomposition_adds_refinement', 'spec_lint_formalization_quality', 'solver_modeling_opportunity', 'under_modeled_requirements_clean'],
+      spec_review: {paths, details},
     },
   };
 }
@@ -240,6 +263,37 @@ function variablesContinuationSnapshot(): Record<string, unknown> {
   };
 }
 
+function specReviewContinuationSnapshot(): Record<string, unknown> {
+  const snapshot = variablesContinuationSnapshot();
+  const steps = (snapshot.steps as Array<Record<string, unknown>>).map(step => {
+    if (step.step_id === 'variables') {
+      return {
+        ...step,
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        check_results: ['variable_orphans_clean', 'variables_declared', 'variable_drift']
+          .map(id => ({id, status: 'pass', at: '2026-09-09T06:03:00Z'})),
+      };
+    }
+    if (step.step_id === 'spec-review-1') return {...step, eligible: true, unmet_requires: []};
+    return step;
+  });
+  const specReview = steps.find(step => step.step_id === 'spec-review-1') as Record<string, unknown>;
+  return {
+    ...snapshot,
+    steps_pending: 1,
+    counts: {...(snapshot.counts as Record<string, number>), confirmed: 5, pending: 1, blocked: 9},
+    eligible_step_ids: ['spec-review-1'],
+    next: {
+      step_id: 'spec-review-1', title: specReview.title, role: specReview.role, stamp: specReview.stamp,
+      scope: specReview.scope, notes_required: specReview.notes_required, requires: specReview.requires,
+      required_checks: specReview.required_checks,
+    },
+    steps,
+  };
+}
+
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', ['-C', cwd, ...args], {encoding: 'utf8'}).trim();
 }
@@ -255,9 +309,15 @@ function makeGitFixture(): {root: string; writerParent: string; output: string; 
   fs.writeFileSync(path.join(root, 'source.go'), 'package fixture\n\nfunc Source() {}\n', 'utf8');
   fs.writeFileSync(path.join(root, 'second.go'), 'package fixture\n\nfunc Second() {}\n', 'utf8');
   fs.writeFileSync(path.join(root, 'reused.go'), 'package fixture\n\nfunc Reused() {}\n', 'utf8');
+  fs.mkdirSync(path.join(root, 'specs', 'component-a', 'requirements'), {recursive: true});
+  fs.writeFileSync(path.join(root, 'specs', 'component-a', 'requirements', 'REQ-1.req.yaml'), 'id: REQ-1\ncomponent: component-a\ntitle: Fixture requirement\n', 'utf8');
+  fs.mkdirSync(path.join(root, 'specs', 'component-c', 'requirements'), {recursive: true});
+  fs.writeFileSync(path.join(root, 'specs', 'component-c', 'requirements', 'REQ-2.req.yaml'), 'id: REQ-2\ncomponent: component-c\ntitle: Fixture second requirement\n', 'utf8');
   git(root, ['add', 'source.go']);
   git(root, ['add', 'second.go']);
   git(root, ['add', 'reused.go']);
+  git(root, ['add', 'specs/component-a/requirements/REQ-1.req.yaml']);
+  git(root, ['add', 'specs/component-c/requirements/REQ-2.req.yaml']);
   git(root, ['commit', '--quiet', '-m', 'baseline']);
   const commit = git(root, ['rev-parse', 'HEAD']);
   const proof = path.join(helperRoot, 'proof-fixture.js');
@@ -276,6 +336,8 @@ const checklistSnapshot = () => {
     ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
     : completionStep === 'traces-light'
       ? ['annotation_validity', 'orphan_code_clean']
+      : completionStep === 'spec-review-1'
+        ? ['spec_lint_decomposition_adds_refinement', 'spec_lint_formalization_quality', 'solver_modeling_opportunity', 'under_modeled_requirements_clean']
       : ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
   if (!confirmed) return snapshot;
   const steps = Array.isArray(snapshot.steps) ? snapshot.steps.map(step => step && step.step_id === completionStep
@@ -320,17 +382,61 @@ else if (args[0] === 'checklist' && args[1] === 'confirm') {
   }
   fs.writeFileSync(process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE, JSON.stringify({status: 'confirmed'}));
 }
-else if (args[0] === 'role' && args[1] === 'show') process.stdout.write('onboard role\\n');
+else if (args[0] === 'role' && args[1] === 'show') process.stdout.write(args[2] === 'spec-review' ? 'spec-review role\\n' : 'onboard role\\n');
 else if (args[0] === 'req' && args[1] === 'list') {
   const component = args[args.indexOf('--component') + 1];
   const row = component === 'component-c'
-    ? {id: 'REQ-2', file_path: 'specs/REQ-2.req.yaml', component: 'component-c'}
-    : {id: 'REQ-1', file_path: 'specs/REQ-1.req.yaml', component: 'component-a'};
-  process.stdout.write(JSON.stringify([row]));
+    ? {id: 'REQ-2', file_path: 'specs/component-c/requirements/REQ-2.req.yaml', component: 'component-c'}
+    : {id: 'REQ-1', file_path: 'specs/component-a/requirements/REQ-1.req.yaml', component: 'component-a'};
+  const rows = [row];
+  const childPath = path.join(process.cwd(), 'specs/component-a/requirements/REQ-1-CHILD.req.yaml');
+  if (component === 'component-a' && fs.existsSync(childPath)) rows.push({id: 'REQ-1-CHILD', file_path: 'specs/component-a/requirements/REQ-1-CHILD.req.yaml', component: 'component-a'});
+  process.stdout.write(JSON.stringify(rows));
+}
+else if (args[0] === 'req' && args[1] === 'show') {
+  const id = args[2];
+  const filePath = id === 'REQ-2'
+    ? 'specs/component-c/requirements/REQ-2.req.yaml'
+    : id === 'REQ-1-CHILD'
+      ? 'specs/component-a/requirements/REQ-1-CHILD.req.yaml'
+      : 'specs/component-a/requirements/REQ-1.req.yaml';
+  const bytes = fs.readFileSync(path.join(process.cwd(), filePath));
+  const component = id === 'REQ-2' ? 'component-c' : 'component-a';
+  process.stdout.write(JSON.stringify({file_path: filePath, requirement: {id, component, _computed: {file_hash: 'sha256:' + require('node:crypto').createHash('sha256').update(bytes).digest('hex')}}}));
 }
 else if (args[0] === 'var' && args[1] === 'list') process.stdout.write('[]');
 else if (args[0] === 'var' && args[1] === 'diagnose') process.stdout.write(JSON.stringify({variables: []}));
 else if (args[0] === 'audit') {
+  const focused = args.includes('--only') && args.includes('spec_lint_decomposition_adds_refinement');
+  const unscopedSpecReview = ['spec_lint_decomposition_adds_refinement', 'spec_lint_formalization_quality', 'solver_modeling_opportunity', 'under_modeled_requirements_clean'].every(check => args.includes(check));
+  if (focused) {
+    const only = args[args.indexOf('--only') + 1].split(',').sort();
+    const repairMarkerPath = path.join(process.cwd(), 'specs/component-a/requirements/REQ-1.req.yaml');
+    const repaired = fs.existsSync(repairMarkerPath) && fs.readFileSync(repairMarkerPath, 'utf8').includes('reviewed-by-repair: component-a');
+    const failed = !repaired && only.includes('REQ-1');
+    const categories = [
+      {name: 'Specification', checks: [
+        {name: 'spec_lint_decomposition_adds_refinement', status: failed ? 'warn' : 'pass', ...(failed ? {details: ['SPEC_REVIEW_RETRY_TOKEN_COMPONENT_A_ATTEMPT_1']} : {})},
+        {name: 'spec_lint_formalization_quality', status: 'pass'},
+      ]},
+      {name: 'Verification', checks: [{name: 'under_modeled_requirements_clean', status: 'pass'}]},
+    ];
+    process.stdout.write(JSON.stringify({only_scope: {requirement_ids: only, filtered_checks: ['spec_lint_decomposition_adds_refinement', 'spec_lint_formalization_quality', 'under_modeled_requirements_clean'], scoped_checks: [], skipped_checks: ['solver_modeling_opportunity']}, categories}));
+    if (failed) process.exitCode = 1;
+  } else if (unscopedSpecReview) {
+    const repaired = fs.existsSync(path.join(process.cwd(), 'specs/component-a/requirements/REQ-1.req.yaml')) && fs.readFileSync(path.join(process.cwd(), 'specs/component-a/requirements/REQ-1.req.yaml'), 'utf8').includes('reviewed-by-repair: component-a');
+    if (!repaired) {
+      process.stderr.write('canonical spec-review fixture did not receive the component repair' + String.fromCharCode(10));
+      process.exit(1);
+    }
+    const events = [
+      {event: 'check_done', stage: 'spec', check: 'spec_lint_decomposition_adds_refinement', status: 'pass'},
+      {event: 'check_done', stage: 'spec', check: 'spec_lint_formalization_quality', status: 'pass'},
+      {event: 'check_done', stage: 'spec', check: 'solver_modeling_opportunity', status: 'pass'},
+      {event: 'check_done', stage: 'verify', check: 'under_modeled_requirements_clean', status: 'pass'},
+    ];
+    process.stdout.write(events.map(event => JSON.stringify(event)).join(String.fromCharCode(10)) + String.fromCharCode(10));
+  } else {
   const requested = args[args.indexOf('--check') + 1];
   const check = process.env.CONTINUATION_FIXTURE_AUDIT_MODE === 'mismatch' && requested === 'orphan_code_clean'
     ? 'annotation_validity'
@@ -353,6 +459,7 @@ else if (args[0] === 'audit') {
       : undefined;
   process.stdout.write(JSON.stringify({event: 'stage_start', stage}) + '\\n' + JSON.stringify({event: 'check_done', stage, check, status, ...(details ? {details} : {})}) + '\\n');
   if (failedSkeleton || failedVariables || canonicalPromotionMissing) process.exitCode = 1;
+  }
 }
 else process.stdout.write(JSON.stringify({status: 'pass'}));
 `, {encoding: 'utf8', mode: 0o700});
@@ -412,6 +519,152 @@ else process.stdout.write(JSON.stringify({status: 'pass'}));
 
 describe('production traces-light continuation graph', () => {
   jest.setTimeout(60000);
+
+  it('materializes spec-review-1 with the native role, focused gate, and mixed-stage final gate', async () => {
+    const config = await loadConfig(buildChecklistContinuationConfig('spec-review-1') as any, {strict: true}) as any;
+    const projectChecks = config.subgraphs['continuation-project'].checks;
+    const componentChecks = config.subgraphs['continuation-component'].checks;
+    expect(projectChecks['spec-review-1-audit']).toBeDefined();
+    expect(projectChecks['checklist-spec-review-1'].depends_on).toEqual(['spec-review-1-audit', 'checklist-continuation-snapshot']);
+    expect(componentChecks['role-onboard-component'].exec).toContain('role show spec-review --format agent');
+    expect(componentChecks['author-native-component'].prompt).toContain('focused audit');
+    expect(componentChecks['spec-review-audit'].max_runs).toBe(2);
+    expect(componentChecks['spec-review-audit'].exec).toContain('validateFocusedSpecReviewAudit');
+    expect(componentChecks['promote-native-component'].depends_on).toEqual(['spec-review-audit']);
+  });
+
+  it('executes ordinary spec-review repair feedback and retries only the failed audit', async () => {
+    const fixture = makeGitFixture();
+    const previous = new Map<string, string | undefined>([
+      ['PROOF_BIN', process.env.PROOF_BIN],
+      ['VISOR_WORKSPACE_MAIN_PROJECT', process.env.VISOR_WORKSPACE_MAIN_PROJECT],
+      ['NATIVE_ONBOARDING_WORKTREE_ROOT', process.env.NATIVE_ONBOARDING_WORKTREE_ROOT],
+      ['NATIVE_CHECKLIST_CONTINUE_STEP', process.env.NATIVE_CHECKLIST_CONTINUE_STEP],
+      ['NATIVE_CHECKLIST_CONTINUE_CATALOG', process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG],
+      ['NATIVE_CHECKLIST_CONTINUE_SNAPSHOT', process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT],
+      ['NATIVE_ONBOARDING_OUTPUT_DIR', process.env.NATIVE_ONBOARDING_OUTPUT_DIR],
+      ['NATIVE_ONBOARDING_REPO_ROOT', process.env.NATIVE_ONBOARDING_REPO_ROOT],
+      ['NATIVE_ONBOARDING_TS_NODE', process.env.NATIVE_ONBOARDING_TS_NODE],
+      ['REQUEST_TIMEOUT', process.env.REQUEST_TIMEOUT],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STATE', process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STEP', process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP],
+    ]);
+    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async function (_prInfo: any, prompt: string) {
+      const componentId = ['component-a', 'component-c'].find(id => prompt.includes(id));
+      if (!componentId) throw new Error('spec-review mock prompt omitted component');
+      const checkoutStart = prompt.indexOf('Checkout: ');
+      const checkoutEnd = prompt.indexOf('Built-in role:', checkoutStart);
+      if (checkoutStart < 0 || checkoutEnd < 0) throw new Error('spec-review mock prompt omitted bound checkout');
+      const checkoutPayload = JSON.parse(prompt.slice(checkoutStart + 'Checkout: '.length, checkoutEnd).trim()) as {path?: unknown};
+      const checkout = checkoutPayload.path;
+      if (typeof checkout !== 'string' || !path.isAbsolute(checkout)) throw new Error('spec-review mock prompt has invalid bound checkout');
+      expect(fs.realpathSync(checkout)).not.toBe(fs.realpathSync(fixture.root));
+      if (prompt.includes('bounded editable native Proof spec-review repair author')) {
+        expect(prompt).toContain('SPEC_REVIEW_RETRY_TOKEN_COMPONENT_A_ATTEMPT_1');
+        if (componentId === 'component-a') fs.writeFileSync(path.join(checkout, 'specs/component-a/requirements/REQ-1-CHILD.req.yaml'), 'id: REQ-1-CHILD\ncomponent: component-a\ntitle: Repair-created child requirement\n', 'utf8');
+        fs.appendFileSync(path.join(checkout, componentId === 'component-a'
+          ? 'specs/component-a/requirements/REQ-1.req.yaml'
+          : 'specs/component-c/requirements/REQ-2.req.yaml'), `reviewed-by-repair: ${componentId}\n`, 'utf8');
+      } else if (componentId === 'component-c') {
+        fs.appendFileSync(path.join(checkout, 'specs/component-c/requirements/REQ-2.req.yaml'), 'reviewed-by-author: component-c\n', 'utf8');
+      }
+      return {issues: [], output: {status: 'spec-review-mock', component_id: componentId}} as any;
+    });
+    try {
+      process.env.PROOF_BIN = fixture.proof;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
+      process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
+      process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'spec-review-1';
+      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
+        components: [
+          operationalSpecReviewWorkItem(fixture.workItem, ['specs/component-a/requirements/REQ-1.req.yaml'], ['REQ-1']),
+          operationalSpecReviewWorkItem(fixture.secondWorkItem, ['specs/component-c/requirements/REQ-2.req.yaml'], ['REQ-2']),
+        ],
+        full_components: [fixture.workItem, fixture.secondWorkItem],
+        affected_component_ids: ['component-a', 'component-c'],
+        reused_component_ids: [],
+        retained_receipt_identities: [],
+        current_receipt_identities: [],
+        authority: continuationAuthority([fixture.workItem, fixture.secondWorkItem], ['component-a', 'component-c'], []),
+      });
+      process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(specReviewContinuationSnapshot());
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE = fixture.checklistState;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP = 'spec-review-1';
+      process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+      process.env.NATIVE_ONBOARDING_REPO_ROOT = process.cwd();
+      process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
+      process.env.REQUEST_TIMEOUT = '120000';
+      const config = buildChecklistContinuationConfig('spec-review-1') as any;
+      const engine = new StateMachineExecutionEngine(fixture.root);
+      const result = await executeChecklistContinuationEngine(engine, config, 120000, ['component-a', 'component-c'], undefined, 'spec-review-1');
+      expect(result.paused).toBe(true);
+      expect(ai).toHaveBeenCalledTimes(3);
+      const authorAttempts = result.checkpoint.events.filter(event => event.type === 'AttemptStarted' && event.checkId === 'author-native-component');
+      const auditAttempts = result.checkpoint.events.filter(event => event.type === 'AttemptStarted' && event.checkId === 'spec-review-audit');
+      const promotionAttempts = result.checkpoint.events.filter(event => event.type === 'AttemptCompleted' && event.checkId === 'promote-native-component');
+      expect(authorAttempts).toHaveLength(2);
+      expect(auditAttempts.filter(event => event.scope[event.scope.length - 1]?.key === 'component-a')).toHaveLength(2);
+      expect(auditAttempts.filter(event => event.scope[event.scope.length - 1]?.key === 'component-c')).toHaveLength(1);
+      expect(promotionAttempts).toHaveLength(2);
+      expect(result.checkpoint.events.filter(event => event.type === 'AttemptStarted' && event.checkId === 'checklist-spec-review-1')).toHaveLength(0);
+      const receipts = fs.readdirSync(path.join(fixture.output, 'spec-review', 'focused-audit', 'component-a')).sort();
+      expect(receipts).toEqual(['attempt-1.json', 'attempt-2.json']);
+      const firstReceipt = JSON.parse(fs.readFileSync(path.join(fixture.output, 'spec-review', 'focused-audit', 'component-a', 'attempt-1.json'), 'utf8'));
+      const secondReceipt = JSON.parse(fs.readFileSync(path.join(fixture.output, 'spec-review', 'focused-audit', 'component-a', 'attempt-2.json'), 'utf8'));
+      expect(firstReceipt.status).toBe('failed');
+      expect(firstReceipt.failure).toBe('focused audit exited 1');
+      expect(firstReceipt.report.only_scope.requirement_ids).toEqual(['REQ-1']);
+      expect(firstReceipt.report.categories[0].checks[0].details).toContain('SPEC_REVIEW_RETRY_TOKEN_COMPONENT_A_ATTEMPT_1');
+      expect(secondReceipt.status).toBe('pass');
+      expect(secondReceipt.requirement_ids).toEqual(['REQ-1', 'REQ-1-CHILD']);
+      expect(secondReceipt.report.only_scope.requirement_ids).toEqual(['REQ-1', 'REQ-1-CHILD']);
+      const ordinaryRepairRoot = path.join(fixture.output, 'spec-review', 'focused-audit', 'repair');
+      const ordinaryRepairRuns = fs.readdirSync(ordinaryRepairRoot).sort();
+      expect(ordinaryRepairRuns).toHaveLength(1);
+      const ordinarySecondReceiptPath = (fs.readdirSync(ordinaryRepairRoot, {recursive: true}) as string[])
+        .map(file => path.join(ordinaryRepairRoot, file))
+        .find(file => file.endsWith(`${path.sep}component-a${path.sep}attempt-1.json`) && fs.existsSync(file));
+      expect(ordinarySecondReceiptPath).toBeDefined();
+      const ordinarySecondReceipt = JSON.parse(fs.readFileSync(
+        ordinarySecondReceiptPath!,
+        'utf8',
+      ));
+      expect(ordinarySecondReceipt.status).toBe('pass');
+      expect(ordinarySecondReceipt.requirement_ids).toEqual(['REQ-1', 'REQ-1-CHILD']);
+      expect(result.checkpoint.events.filter(event => event.type === 'AttemptStarted' && event.checkId === 'author-native-component' && event.scope[event.scope.length - 1]?.key === 'component-c')).toHaveLength(1);
+
+      const persistedCheckpointPath = path.join(fixture.output, 'spec-review', 'on-retry-checkpoint.json');
+      expect(fs.existsSync(persistedCheckpointPath)).toBe(true);
+      const persistedCheckpoint = JSON.parse(fs.readFileSync(persistedCheckpointPath, 'utf8'));
+      expect(canonicalGraphCheckpointJson(persistedCheckpoint)).toBe(canonicalGraphCheckpointJson(result.checkpoint));
+      const resumedEngine = new StateMachineExecutionEngine(fixture.root);
+      const resumed = await executeChecklistContinuationEngine(
+        resumedEngine,
+        config,
+        120000,
+        ['component-a', 'component-c'],
+        persistedCheckpoint,
+        'spec-review-1',
+      );
+      expect(resumed.paused).toBe(false);
+      expect(canonicalGraphCheckpointJson(resumed.checkpoint.events.slice(0, result.checkpoint.events.length)))
+        .toBe(canonicalGraphCheckpointJson(result.checkpoint.events));
+      const resumeSuffix = resumed.checkpoint.events.slice(result.checkpoint.events.length);
+      const resumeStarts = resumeSuffix.filter(event => event.type === 'AttemptStarted');
+      expect(resumeStarts).toHaveLength(1);
+      expect(resumeStarts[0].checkId).toBe('checklist-spec-review-1');
+      expect(resumeSuffix.filter(event => event.type === 'AttemptStarted' && event.checkId !== 'checklist-spec-review-1')).toHaveLength(0);
+      expect(ai).toHaveBeenCalledTimes(3);
+    } finally {
+      ai.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fixture.cleanup();
+    }
+  });
+
   it('reaches a paused traces-light frontier with no model dispatch', async () => {
     const fixture = makeGitFixture();
     const previous = new Map<string, string | undefined>([
