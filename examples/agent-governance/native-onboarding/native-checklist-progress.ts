@@ -1344,10 +1344,16 @@ function nativeConditionEntries(
   };
   const itemKindFor = (node: Json, checkId: string): OperationalKind => {
     const scope = Array.isArray(node.scope) ? node.scope.filter(isRecord) : [];
-    const owner = scope.length ? optionalString(scope[scope.length - 1].expansionOwnerCheck) : undefined;
+    const keyed = scope.filter(part => part.kind === 'keyed');
+    const owner = keyed.length ? optionalString(keyed[keyed.length - 1].expansionOwnerCheck) : undefined;
+    // The continuation project's fan-in target is an absent node in the
+    // project instance.  Its exact compiled one-segment project scope is
+    // authoritative; do not let the generic component fallback fabricate a
+    // component with the project key.
+    if (keyed.length === 1 && owner === 'project') return 'project';
     if (owner === 'discover-native-components') return 'component';
     if (owner === 'enumerate-native-specs' || owner === '["native-component","enumerate-native-specs"]' || checkId === 'review-native-item' || checkId === 'collect-proof-evidence') return 'specification';
-    if (scope.filter(part => part.kind === 'keyed').length > 3) return 'batch';
+    if (keyed.length > 3) return 'batch';
     return 'component';
   };
   const componentGenerationFor = (componentId: string): {generation: Json; node: Json} | undefined => {
@@ -1677,6 +1683,14 @@ function operationalProjection(
     }
     unknownGenerationCount++;
     unknownReasons.push(`operational generation at scope depth ${depth} is unexpanded`);
+  }
+  // Condition-only project rows (notably the absent component-promotion
+  // fan-in target) still carry an authoritative pending execution/check ID.
+  // Fold them into the project work before deriving its aggregate state.
+  for (const item of conditionResult.items) {
+    if (item.kind !== 'project') continue;
+    projectStatuses.push(item.status);
+    if (item.checkId) projectChecks.push(item.checkId);
   }
   const project = {
     state: operationalState(projectStatuses),

@@ -1417,6 +1417,97 @@ describe('native checklist progress projection', () => {
     expect(inactive.operational.specifications.blocked_count).toBe(0);
   });
 
+  it('keeps the absent project fan-in target in project work without fabricating a component', () => {
+    const projectScope = [{kind: 'keyed', expansionOwnerCheck: 'project', key: 'jsonparser', subgraphInstanceId: 'p'.repeat(64)}];
+    const componentScope = (id: string) => [
+      ...projectScope,
+      {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: id, subgraphInstanceId: `${id === 'alpha' ? 'a' : id === 'beta' ? 'b' : 'c'}`.repeat(64)},
+    ];
+    const plan = {
+      graphSemanticDigest: 'graph',
+      templatesByName: {
+        project: {templateDigest: 'project-template', nodesByKey: {
+          prerequisite: {check: {}, dependencyNodeKeys: []},
+          'component-promotions-complete': {
+            check: {}, dependencyNodeKeys: ['prerequisite'],
+            waitForExpansion: {owner: 'materialize-retained-catalog', terminal_node: 'promote-native-component'},
+          },
+        }},
+        component: {templateDigest: 'component-template', nodesByKey: {
+          'author-native-component': {check: {}, dependencyNodeKeys: []},
+          'promote-native-component': {check: {}, dependencyNodeKeys: ['author-native-component']},
+        }},
+      },
+    };
+    const componentIds = ['alpha', 'beta', 'gamma'];
+    const projectInstanceId = 'p'.repeat(64);
+    const generationsById: Record<string, Record<string, unknown>> = {
+      'project-prerequisite-generation': {
+        nodeGenerationId: 'project-prerequisite-generation', nodeInstanceId: 'project-prerequisite',
+        templateNodeKey: 'prerequisite', checkId: 'prerequisite', status: 'completed', scope: projectScope,
+      },
+    };
+    const activeGenerationIdByNode: Record<string, string> = {'project-prerequisite': 'project-prerequisite-generation'};
+    const componentInstances: Record<string, Record<string, unknown>> = {};
+    const nodesById: Record<string, Record<string, unknown>> = {
+      'project-prerequisite': {nodeInstanceId: 'project-prerequisite', templateNodeKey: 'prerequisite', scope: projectScope},
+    };
+    for (const id of componentIds) {
+      const generationId = `${id}-generation`;
+      const nodeInstanceId = `${id}-node`;
+      const scope = componentScope(id);
+      generationsById[generationId] = {
+        nodeGenerationId: generationId, nodeInstanceId,
+        templateNodeKey: 'author-native-component', checkId: 'author-native-component',
+        operational_kind: 'component', unit_id: id, status: 'running', scope,
+      };
+      activeGenerationIdByNode[nodeInstanceId] = generationId;
+      nodesById[nodeInstanceId] = {nodeInstanceId, templateNodeKey: 'author-native-component', scope};
+      componentInstances[id] = {
+        status: 'active', graphSemanticDigest: 'graph', templateDigest: 'component-template',
+        subgraphInstanceId: scope[1].subgraphInstanceId, parentSubgraphInstanceId: projectInstanceId,
+        expansionOwnerCheck: 'materialize-retained-catalog', scope,
+        nodeInstanceIdsByTemplateNode: {
+          'author-native-component': nodeInstanceId,
+          'promote-native-component': `${id}-promote-node`,
+        },
+      };
+    }
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      proofSnapshotClaim: {...rootClaim(snapshot()), active: true},
+      instanceProjection: {
+        lastEventId: 8,
+        graphSemanticDigest: 'graph',
+        instancesById: {
+          project: {
+            status: 'active', graphSemanticDigest: 'graph', templateDigest: 'project-template',
+            subgraphInstanceId: projectInstanceId, scope: projectScope,
+            nodeInstanceIdsByTemplateNode: {prerequisite: 'project-prerequisite', 'component-promotions-complete': 'project-promotions'},
+          },
+          ...componentInstances,
+        },
+        nodesById,
+        generationsById,
+        activeGenerationIdByNode,
+        claimsById: {},
+      },
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+    });
+    expect(progress.operational.project).toEqual({
+      state: 'pending', known: true, check_ids: ['component-promotions-complete', 'prerequisite'],
+    });
+    expect(progress.operational.components).toMatchObject({
+      known_count: 3, running_count: 3, pending_count: 0, blocked_count: 3,
+    });
+    expect(progress.operational.components.items.map(item => item.id)).toEqual(componentIds);
+    expect(progress.operational.components.items.every(item =>
+      item.condition?.state === 'blocked' && item.condition.kind === 'waiting'
+    )).toBe(true);
+    expect(progress.operational.components.items.some(item => item.id === 'jsonparser')).toBe(false);
+  });
+
   it('selects research over the root bootstrap snapshot', () => {
     const proofSnapshot = snapshot();
     const research = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));
