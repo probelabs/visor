@@ -76,6 +76,15 @@ const GOVERNED_CODEX_EXEC_STDERR_VERSION = 'codex-exec-stderr/v1';
 const GOVERNED_CODEX_EXEC_SAFE_MESSAGES = ['access_token_refresh_revoked'] as const;
 const GOVERNED_CODEX_EXEC_STDERR_MAX_BYTES = 1024 * 1024;
 const GOVERNED_CODEX_EXEC_EVENT_VERSION = 'codex-exec-rejected-item/v1';
+const GOVERNED_CODEX_EXEC_FAILURE_EVENT_VERSION = 'codex-exec-rejected-failure/v1';
+const GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES = ['error', 'turn.failed'] as const;
+const GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR = Object.freeze({
+  type: 'invalid_request_error' as const,
+  status: 400 as const,
+  code: 'invalid_json_schema' as const,
+  param: 'text.format.schema' as const,
+  schemaKeyword: 'uniqueItems' as const,
+});
 const GOVERNED_CODEX_EXEC_EVENT_PREDICATES = [
   'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
   'item_command', 'item_aggregated_output', 'item_exit_code', 'item_status', 'item_error',
@@ -91,6 +100,13 @@ const GOVERNED_CANDIDATE_BOUNDARY_KEYS = [
 const GOVERNED_CANDIDATE_KEYS = ['version', 'text', 'boundary'] as const;
 
 type GovernedProbeFailureStage = typeof ANSWER_FAILURE_STAGES[number];
+type GovernedCodexExecFailureEvent = Readonly<{
+  source: typeof GOVERNED_CODEX_EXEC_FAILURE_EVENT_VERSION;
+  category: 'failure';
+  eventType: typeof GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES[number];
+  eventFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
+  providerError?: typeof GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR;
+}>;
 type GovernedProbeFailureDiagnostic = Readonly<{
   version: typeof GOVERNED_CODEX_EXEC_FAILURE_DIAGNOSTIC_VERSION;
   code: typeof GOVERNED_CODEX_EXEC_FAILURE_CODES[number];
@@ -108,7 +124,7 @@ type GovernedProbeFailureDiagnostic = Readonly<{
     itemStatus?: 'failed' | 'declined';
     eventFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
     itemFields: readonly Readonly<{name: string; type: typeof GOVERNED_CODEX_EXEC_EVENT_TYPES[number]; size?: number}>[];
-  }>;
+  }> | GovernedCodexExecFailureEvent;
 }>;
 type GovernedProbeFailureProjection = Readonly<Record<string, GovernedProbeFailureStage | string | null | GovernedProbeFailureDiagnostic>>;
 export type GovernedProbeFailurePhase = 'acquire' | 'preview' | 'initialize' | 'answer';
@@ -291,7 +307,7 @@ function governedCodexExecEventFields(value: unknown): readonly GovernedCodexExe
   return Object.freeze(fields);
 }
 
-function governedCodexExecEvent(value: unknown): GovernedProbeFailureDiagnostic['event'] | null {
+function governedCodexExecItemEvent(value: unknown): Exclude<GovernedProbeFailureDiagnostic['event'], GovernedCodexExecFailureEvent> | null {
   if (!value || typeof value !== 'object') return null;
   let keys: PropertyKey[];
   try { keys = Reflect.ownKeys(value); } catch { return null; }
@@ -319,6 +335,41 @@ function governedCodexExecEvent(value: unknown): GovernedProbeFailureDiagnostic[
     eventFields,
     itemFields,
   });
+}
+
+function governedCodexExecFailureEvent(value: unknown): GovernedCodexExecFailureEvent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  let keys: PropertyKey[];
+  try { keys = Reflect.ownKeys(value); } catch { return null; }
+  const hasProviderError = keys.includes('providerError');
+  const event = closedDataObject(value, hasProviderError
+    ? ['source', 'category', 'eventType', 'eventFields', 'providerError']
+    : ['source', 'category', 'eventType', 'eventFields']);
+  const eventType = event && enumValue(event.eventType, GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES);
+  const eventFields = event && governedCodexExecEventFields(event.eventFields);
+  if (!event || event.source !== GOVERNED_CODEX_EXEC_FAILURE_EVENT_VERSION ||
+      event.category !== 'failure' || !eventType || !eventFields) return null;
+  let providerError: typeof GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR | undefined;
+  if (hasProviderError) {
+    const candidate = closedDataObject(event.providerError, ['type', 'status', 'code', 'param', 'schemaKeyword']);
+    if (!candidate || candidate.type !== GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR.type ||
+        candidate.status !== GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR.status ||
+        candidate.code !== GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR.code ||
+        candidate.param !== GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR.param ||
+        candidate.schemaKeyword !== GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR.schemaKeyword) return null;
+    providerError = GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR;
+  }
+  return Object.freeze({
+    source: GOVERNED_CODEX_EXEC_FAILURE_EVENT_VERSION,
+    category: 'failure' as const,
+    eventType,
+    eventFields,
+    ...(providerError ? {providerError} : {}),
+  });
+}
+
+function governedCodexExecEvent(value: unknown): GovernedProbeFailureDiagnostic['event'] | null {
+  return governedCodexExecItemEvent(value) ?? governedCodexExecFailureEvent(value);
 }
 
 function governedCodexExecDiagnostic(value: unknown): GovernedProbeFailureDiagnostic | null {

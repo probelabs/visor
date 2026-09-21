@@ -252,6 +252,177 @@ describe('private governed Probe runner', () => {
     });
   });
 
+  it('preserves the closed structural rejected-failure event and provider error metadata', async () => {
+    const providerError = {
+      type: 'invalid_request_error',
+      status: 400,
+      code: 'invalid_json_schema',
+      param: 'text.format.schema',
+      schemaKeyword: 'uniqueItems',
+    };
+    const baseEvent = {
+      source: 'codex-exec-rejected-failure/v1',
+      category: 'failure',
+      eventType: 'turn.failed',
+      eventFields: [
+        {name: 'error', type: 'object'},
+        {name: 'type', type: 'string', size: 10},
+      ],
+      providerError,
+    };
+    const failure = governedFailure({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        stderr: {
+          source: 'codex-exec-stderr/v1',
+          bytes: 4,
+          digest: `sha256:${'a'.repeat(64)}`,
+          safeMessage: 'access_token_refresh_revoked',
+        },
+        event: baseEvent,
+      },
+    });
+    const projection = sanitizeGovernedAnswerFailure(failure);
+    expect(projection).toEqual({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        stderr: {
+          source: 'codex-exec-stderr/v1',
+          bytes: 4,
+          digest: `sha256:${'a'.repeat(64)}`,
+          safeMessage: 'access_token_refresh_revoked',
+        },
+        event: baseEvent,
+      },
+    });
+    expect(Object.isFrozen((projection as any).providerEngineDiagnostic.event)).toBe(true);
+    expect(Object.isFrozen((projection as any).providerEngineDiagnostic.event.providerError)).toBe(true);
+
+    const errorEvent = {...baseEvent, eventType: 'error', eventFields: [
+      {name: 'message', type: 'string', size: 12},
+      {name: 'type', type: 'string', size: 5},
+    ]};
+    expect(sanitizeGovernedAnswerFailure(governedFailure({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        event: errorEvent,
+      },
+    }))).toEqual({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        event: errorEvent,
+      },
+    });
+    const noProviderErrorEvent = {
+      source: 'codex-exec-rejected-failure/v1',
+      category: 'failure',
+      eventType: 'turn.failed',
+      eventFields: [{name: 'error', type: 'object'}, {name: 'type', type: 'string', size: 10}],
+    };
+    expect(sanitizeGovernedAnswerFailure(governedFailure({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        event: noProviderErrorEvent,
+      },
+    }))).toEqual({
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        event: noProviderErrorEvent,
+      },
+    });
+
+    answerGoverned.mockRejectedValueOnce(failure);
+    const writes: string[] = [];
+    const stderr = jest.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => { writes.push(String(chunk)); return true; }) as any);
+    try {
+      const runner = new GovernedProbeAgentRunner(request());
+      await expect(runner.answer(request())).rejects.toBe(failure);
+      expect(JSON.parse(writes[0]).failure.providerEngineDiagnostic.event).toEqual(baseEvent);
+      expect(writes[0]).not.toContain('private');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('rejects malformed or accessor-backed rejected-failure events without widening the failure record', () => {
+    const base = {
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+    };
+    const providerError = {
+      type: 'invalid_request_error',
+      status: 400,
+      code: 'invalid_json_schema',
+      param: 'text.format.schema',
+      schemaKeyword: 'uniqueItems',
+    };
+    const event = {
+      source: 'codex-exec-rejected-failure/v1',
+      category: 'failure',
+      eventType: 'error',
+      eventFields: [
+        {name: 'message', type: 'string', size: 12},
+        {name: 'type', type: 'string', size: 5},
+      ],
+      providerError,
+    };
+    for (const malformed of [
+      {...event, category: 'other'},
+      {...event, eventType: 'item.completed'},
+      {...event, eventFields: [...event.eventFields].reverse()},
+      {...event, providerError: {...providerError, extra: 'secret'}},
+      {...event, providerError: {...providerError, schemaKeyword: 'type'}},
+      {...event, extra: 'secret'},
+    ]) {
+      expect(sanitizeGovernedAnswerFailure(governedFailure({
+        ...base,
+        providerEngineDiagnostic: {
+          version: 'probe.governed-codex-exec-failure/v1',
+          code: 'GOVERNED_CODEX_EXEC_EXIT',
+          event: malformed,
+        },
+      }))).toEqual(base);
+    }
+    const accessorEvent = {...event};
+    Object.defineProperty(accessorEvent, 'eventFields', {enumerable: true, get: () => event.eventFields});
+    expect(sanitizeGovernedAnswerFailure(governedFailure({
+      ...base,
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        event: accessorEvent,
+      },
+    }))).toEqual(base);
+    const accessorProviderError = {...event};
+    Object.defineProperty(accessorProviderError, 'providerError', {enumerable: true, get: () => providerError});
+    expect(sanitizeGovernedAnswerFailure(governedFailure({
+      ...base,
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_EXIT',
+        event: accessorProviderError,
+      },
+    }))).toEqual(base);
+  });
+
   it('preserves the value-free projection for item error and start-payload predicates', () => {
     const baseEvent = {
       source: 'codex-exec-rejected-item/v1',
