@@ -25,6 +25,16 @@ import {
 type Json = Record<string, unknown>;
 type ProofRow = { id: string; component: string; file_path: string } & Json;
 type CommandResult = { status: number; stdout: string; stderr: string };
+type ProofCatalogDrift = Readonly<{
+  retained_ids: readonly string[];
+  current_ids: readonly string[];
+  added_ids: readonly string[];
+  removed_ids: readonly string[];
+}>;
+type ProofInputVerification = Readonly<{
+  currentHashes: Readonly<Record<string, string>>;
+  catalogDrift?: ProofCatalogDrift;
+}>;
 type GovernedCodexExecution = {
   governedCodexTransport: 'exec-jsonl-default-auth-v1';
   codexBin: string;
@@ -550,25 +560,51 @@ function verifyCurrentProofInputs(
   catalogRows: ProofRow[],
   selectedRows: ProofRow[],
   phase: string,
-): Record<string, string> {
+): ProofInputVerification {
   const currentList = runProof(proof, subject, output, `${phase}-catalog`, ['req', 'list', '--format', 'json']);
   const currentRows = nativeRows(parseJson(currentList, 'Proof req list') as ProofRow[]);
   const expectedIds = catalogRows.map(row => row.id).sort();
   const currentIds = currentRows.map(row => row.id).sort();
-  if (JSON.stringify(expectedIds) !== JSON.stringify(currentIds)) throw new Error(`Proof requirement ID set changed during ${phase}`);
+  const expectedSet = new Set(expectedIds);
+  const currentSet = new Set(currentIds);
+  const addedIds = currentIds.filter(id => !expectedSet.has(id));
+  const removedIds = expectedIds.filter(id => !currentSet.has(id));
+  const catalogDrift = addedIds.length || removedIds.length
+    ? {retained_ids: expectedIds, current_ids: currentIds, added_ids: addedIds, removed_ids: removedIds}
+    : undefined;
   const hashes: Record<string, string> = {};
   for (const row of catalogRows) {
     const currentRow = currentRows.find(item => item.id === row.id);
-    if (!currentRow || currentRow.component !== row.component || currentRow.file_path !== row.file_path) throw new Error(`Proof requirement component/path changed during ${phase} for ${row.id}`);
+    if (!currentRow) {
+      if (selectedRows.some(selected => selected.id === row.id)) {
+        throw new Error(`Proof requirement ${row.id} selected for ${phase} is missing from the current catalog`);
+      }
+      continue;
+    }
+    if (currentRow.component !== row.component || currentRow.file_path !== row.file_path) {
+      throw new Error(`Proof requirement component/path changed during ${phase} for ${row.id}`);
+    }
   }
   for (const row of selectedRows) {
+    const currentRow = currentRows.find(item => item.id === row.id);
+    if (!currentRow) throw new Error(`Proof requirement ${row.id} selected for ${phase} is missing from the current catalog`);
     const shown = runProof(proof, subject, output, `${phase}-${row.id}`, ['req', 'show', row.id, '--with', 'file', '--format', 'json']);
     const value = parseJson(shown, `Proof req show ${row.id}`) as Json;
     const requirement = value.requirement as Json | undefined;
     if (!requirement || requirement.id !== row.id || requirement.component !== row.component || value.file_path !== row.file_path) throw new Error(`Proof req show ${row.id} does not match the ${phase} catalog row`);
     hashes[row.id] = proofFileHash(requirement, row.id);
   }
-  return hashes;
+  return {currentHashes: hashes, ...(catalogDrift ? {catalogDrift} : {})};
+}
+
+function requireStableProofCatalog(
+  verification: ProofInputVerification,
+  phase: string,
+): Readonly<Record<string, string>> {
+  if (verification.catalogDrift) {
+    throw new Error(`Proof requirement ID set changed during ${phase}`);
+  }
+  return verification.currentHashes;
 }
 
 function baselineCatalogRows(output: string): ProofRow[] {
@@ -1421,7 +1457,10 @@ async function recordPrepare(
   ]);
   if (roleResult.status !== 0 || !roleResult.stdout.trim()) throw new Error(`built-in spec-review role failed with exit ${roleResult.status}`);
   const role = roleResult.stdout.trim();
-  const hashes = verifyCurrentProofInputs(proof, subject, output, reader.catalogRows, reader.selectedRows, 'record-prepare');
+  const hashes = requireStableProofCatalog(
+    verifyCurrentProofInputs(proof, subject, output, reader.catalogRows, reader.selectedRows, 'record-prepare'),
+    'record-prepare',
+  );
   for (const row of reader.selectedRows) {
     const baseline = JSON.parse(fs.readFileSync(path.join(readerOutput, 'prepare', 'items', row.id, 'req-show.json'), 'utf8')) as Json;
     if (hashes[row.id] !== proofFileHash(objectValue(baseline.requirement, `reader ${row.id} req_show requirement`), row.id)) {
@@ -2236,6 +2275,7 @@ function writeMilestoneBChecklistProgress(
   resumed: boolean,
   expansionPlan?: unknown,
   currentProofInputs?: unknown,
+  proofCatalogDrift?: unknown,
 ): void {
   let progress;
   try {
@@ -2248,6 +2288,7 @@ function writeMilestoneBChecklistProgress(
       affectedComponentIds: [...new Set(selectedRows.map(row => row.component))],
       expansionPlan,
       currentProofInputs,
+      proofCatalogDrift,
     });
   } catch (error) {
     // Milestone B can legitimately finish a graph frontier before a
@@ -2278,7 +2319,10 @@ async function pause(
   if (fs.existsSync(path.join(output, 'paused', 'checkpoint.json')) || fs.existsSync(path.join(output, 'commands', 'pause-catalog'))) {
     throw new Error('pause output already exists; use a fresh run output');
   }
-  const pauseHashes = verifyCurrentProofInputs(proof, subject, output, catalogRows, rows, 'pause');
+  const pauseHashes = requireStableProofCatalog(
+    verifyCurrentProofInputs(proof, subject, output, catalogRows, rows, 'pause'),
+    'pause',
+  );
   for (const row of rows) {
     const baseline = JSON.parse(fs.readFileSync(path.join(output, 'prepare', 'items', row.id, 'req-show.json'), 'utf8')) as Json;
     if (pauseHashes[row.id] !== proofFileHash(baseline.requirement as Json, row.id)) throw new Error(`Proof input changed before pause for ${row.id}`);
@@ -2374,7 +2418,9 @@ async function resume(
   const rows = baselineSelectedRows(output);
   const heldId = String(pausedSummary.held_scope || '');
   if (!rows.some(row => row.id === heldId)) throw new Error('paused held scope is not present in the prepared catalog');
-  const currentHashes = verifyCurrentProofInputs(proof, subject, output, catalogRows, rows, 'resume');
+  const verification = verifyCurrentProofInputs(proof, subject, output, catalogRows, rows, 'resume');
+  const currentHashes = verification.currentHashes;
+  const catalogDrift = verification.catalogDrift;
   const stale: Json[] = [];
   for (const row of rows) {
     const baseline = JSON.parse(fs.readFileSync(path.join(output, 'prepare', 'items', row.id, 'req-show.json'), 'utf8')) as Json;
@@ -2382,8 +2428,14 @@ async function resume(
     const after = currentHashes[row.id];
     if (before !== after) stale.push({ id: row.id, baseline_hash: before, current_hash: after });
   }
-  if (stale.length) {
-    writeJson(path.join(output, 'resume', 'stale-inputs.json'), stale);
+  if (catalogDrift) {
+    writeJson(path.join(output, 'resume', 'catalog-drift.json'), {
+      ...catalogDrift,
+      selected_current_hashes: currentHashes,
+    });
+  }
+  if (catalogDrift || stale.length) {
+    if (stale.length) writeJson(path.join(output, 'resume', 'stale-inputs.json'), stale);
     // Use the same zero-model/config normalization as the live resume path so
     // the restored checkpoint is checked against the exact compiled graph.
     const {config: staleConfig} = await configForSubject(subject, output);
@@ -2402,8 +2454,13 @@ async function resume(
       false,
       compileClaimPlan(staleConfig).expansionPlan,
       rows.map(row => ({id: row.id, component: row.component, file_path: row.file_path, proof_file_hash: currentHashes[row.id]})),
+      catalogDrift,
     );
-    throw new Error(`Proof inputs changed since prepare (${stale.map(item => String(item.id)).join(', ')})`);
+    const reasons = [
+      ...(catalogDrift ? [`Proof catalog changed during resume (added: ${catalogDrift.added_ids.join(',') || 'none'}; removed: ${catalogDrift.removed_ids.join(',') || 'none'})`] : []),
+      ...(stale.length ? [`Proof inputs changed since prepare (${stale.map(item => String(item.id)).join(', ')})`] : []),
+    ];
+    throw new Error(reasons.join('; '));
   }
 
   process.env.PROOF_BIN = proof;

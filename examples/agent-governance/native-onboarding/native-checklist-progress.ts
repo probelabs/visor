@@ -61,6 +61,8 @@ export type NativeChecklistProgressInput = Readonly<{
   expansionPlan?: ExpansionPlan | unknown;
   /** Current Proof req-list/req-show identity tuples, when a stale check is requested. */
   currentProofInputs?: unknown;
+  /** Validated Proof catalog drift observed before a refused continuation resume. */
+  proofCatalogDrift?: unknown;
 }>;
 
 export type NativeChecklistProgressState =
@@ -149,6 +151,7 @@ export type NativeChecklistProgress = Readonly<{
       provenance?: 'checkpoint' | 'live_projection';
       durable_through_event_id?: number;
     }>;
+    catalog_drift?: NativeChecklistCatalogDrift;
   }>;
   paused: boolean;
   resumed: boolean;
@@ -225,6 +228,13 @@ export type NativeChecklistCatalogCoverage = Readonly<{
   }>[];
 }>;
 
+export type NativeChecklistCatalogDrift = Readonly<{
+  retained_ids: readonly string[];
+  current_ids: readonly string[];
+  added_ids: readonly string[];
+  removed_ids: readonly string[];
+}>;
+
 function isRecord(value: unknown): value is Json {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -252,6 +262,37 @@ function stringArray(value: unknown, label: string): string[] {
     throw new Error(`${label} must be an array of strings`);
   }
   return [...value];
+}
+
+function normalizeCatalogDrift(value: unknown): NativeChecklistCatalogDrift | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !hasExactKeys(value, ['retained_ids', 'current_ids', 'added_ids', 'removed_ids'])) {
+    throw new Error('catalog drift must contain exactly retained_ids, current_ids, added_ids, and removed_ids');
+  }
+  const retainedIds = stringArray(value.retained_ids, 'catalog drift retained_ids');
+  const currentIds = stringArray(value.current_ids, 'catalog drift current_ids');
+  const addedIds = stringArray(value.added_ids, 'catalog drift added_ids');
+  const removedIds = stringArray(value.removed_ids, 'catalog drift removed_ids');
+  const isSortedUnique = (ids: readonly string[]): boolean =>
+    new Set(ids).size === ids.length &&
+    ids.every((id, index) => index === 0 || Buffer.from(ids[index - 1]).compare(Buffer.from(id)) <= 0);
+  if (![retainedIds, currentIds, addedIds, removedIds].every(isSortedUnique)) {
+    throw new Error('catalog drift IDs must be sorted and unique');
+  }
+  const retained = new Set(retainedIds);
+  const current = new Set(currentIds);
+  const expectedAdded = currentIds.filter(id => !retained.has(id));
+  const expectedRemoved = retainedIds.filter(id => !current.has(id));
+  if (canonicalJson(addedIds) !== canonicalJson(expectedAdded) ||
+      canonicalJson(removedIds) !== canonicalJson(expectedRemoved)) {
+    throw new Error('catalog drift added_ids/removed_ids do not match retained_ids and current_ids');
+  }
+  return {
+    retained_ids: retainedIds,
+    current_ids: currentIds,
+    added_ids: addedIds,
+    removed_ids: removedIds,
+  };
 }
 
 function objectArray(value: unknown, label: string): Json[] {
@@ -767,6 +808,7 @@ export type NativeChecklistProjectionInput = Readonly<{
   currentProofSnapshot?: unknown;
   expansionPlan?: ExpansionPlan | unknown;
   currentProofInputs?: unknown;
+  proofCatalogDrift?: unknown;
 }>;
 
 const MILESTONE_B_COMPONENT_SUMMARY_CLAIM = 'native.component.summary@1';
@@ -896,6 +938,7 @@ export type NativeMilestoneBChecklistProjectionInput = Readonly<{
   affectedComponentIds?: readonly string[];
   expansionPlan?: ExpansionPlan | unknown;
   currentProofInputs?: unknown;
+  proofCatalogDrift?: unknown;
 }>;
 
 export function buildNativeChecklistProgressFromMilestoneBProjections(
@@ -920,6 +963,7 @@ export function buildNativeChecklistProgressFromMilestoneBProjections(
     affectedComponentIds: input.affectedComponentIds,
     expansionPlan: input.expansionPlan,
     currentProofInputs: input.currentProofInputs,
+    proofCatalogDrift: input.proofCatalogDrift,
   });
 }
 
@@ -988,6 +1032,7 @@ export function buildNativeChecklistProgressFromProjections(
     affectedComponentIds: input.affectedComponentIds,
     expansionPlan: input.expansionPlan,
     currentProofInputs: input.currentProofInputs,
+    proofCatalogDrift: input.proofCatalogDrift,
   });
 }
 
@@ -1797,6 +1842,7 @@ export function buildNativeChecklistProgress(
 ): NativeChecklistProgress {
   if (!isRecord(input.proofSnapshot)) throw new Error('proof checklist snapshot must be an object');
   const snapshot = input.proofSnapshot;
+  const catalogDrift = normalizeCatalogDrift(input.proofCatalogDrift);
   const steps = snapshotSteps(snapshot);
   const requireLiveClaim = input.requireProofSnapshotClaim === true;
   if (
@@ -1895,6 +1941,11 @@ export function buildNativeChecklistProgress(
     input.checkpoint,
   );
   unknown.push(...operationalResult.unknown);
+  if (catalogDrift) {
+    unknown.push(
+      `Proof catalog changed during resume (added: ${catalogDrift.added_ids.join(',') || 'none'}; removed: ${catalogDrift.removed_ids.join(',') || 'none'})`,
+    );
+  }
   const checklistName = requiredString(snapshot.checklist, 'proof checklist checklist');
   const proofStepsPending =
     typeof snapshot.steps_pending === 'number' &&
@@ -1952,6 +2003,7 @@ export function buildNativeChecklistProgress(
           : {}),
       },
       journal,
+      ...(catalogDrift ? {catalog_drift: catalogDrift} : {}),
     },
     paused,
     resumed,

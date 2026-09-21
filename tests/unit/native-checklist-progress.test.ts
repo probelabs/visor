@@ -1663,6 +1663,45 @@ describe('native checklist progress projection', () => {
     expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
   });
 
+  it('renders validated Proof catalog drift as unknown without synthetic stale work', () => {
+    const drift = {
+      retained_ids: ['REQ-A', 'REQ-B'],
+      current_ids: ['REQ-A', 'REQ-C'],
+      added_ids: ['REQ-C'],
+      removed_ids: ['REQ-B'],
+    };
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      proofCatalogDrift: drift,
+    });
+    expect(progress.evidence.catalog_drift).toEqual(drift);
+    expect(progress.unknown).toContain(
+      'Proof catalog changed during resume (added: REQ-C; removed: REQ-B)',
+    );
+    expect(progress.operational.components.items).toEqual([]);
+    expect(progress.operational.specifications.items).toEqual([]);
+    expect(progress.operational.components.stale_count).toBe(0);
+    expect(progress.operational.specifications.stale_count).toBe(0);
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('Proof catalog changed during resume (added: REQ-C; removed: REQ-B)');
+    expect(rendered.html).toContain('Proof catalog changed during resume (added: REQ-C; removed: REQ-B)');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+
+    for (const malformed of [
+      {...drift, added_ids: ['REQ-C', 'REQ-C']},
+      {...drift, retained_ids: ['REQ-B', 'REQ-A']},
+      {...drift, added_ids: []},
+    ]) {
+      expect(() => buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        proofCatalogDrift: malformed,
+      })).toThrow(/catalog drift/i);
+    }
+  });
+
   it('rejects an unversioned or malformed Proof snapshot', () => {
     expect(() =>
       buildNativeChecklistProgress({ proofSnapshot: { schema_version: 'old' } })

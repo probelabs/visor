@@ -171,6 +171,20 @@ function sha256(file: string): string {
   return `sha256:${createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
 }
 
+function artifactInventory(root: string): string[] {
+  if (!fs.existsSync(root)) return [];
+  const files: string[] = [];
+  const visit = (current: string): void => {
+    for (const entry of fs.readdirSync(current, {withFileTypes: true})) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else files.push(`${path.relative(root, full)}:${sha256(full)}`);
+    }
+  };
+  visit(root);
+  return files.sort();
+}
+
 function attemptEventsForGeneration(checkpoint: any, generationIds: Set<string>): any[] {
   const events = Array.isArray(checkpoint?.events) ? checkpoint.events : [];
   return events.filter((event: any) => generationIds.has(event?.nodeGenerationId) && /^Attempt/.test(String(event?.type)));
@@ -590,6 +604,116 @@ describeNative('native Milestone B component/spec progression', () => {
       expect(JSON.parse(embedded as string)).toEqual(progress);
     } finally {
       fs.rmSync(fixture.parent, { recursive: true, force: true });
+    }
+  });
+
+  it('renders catalog drift before refusing resume without synthetic stale work or dispatch', () => {
+    const fixture = createFixture(2);
+    try {
+      runRunner(fixture, 'prepare');
+      const rows = nativeCatalog(fixture).rows;
+      const held = rows[0];
+      runRunner(fixture, 'pause', ['--hold-id', held.id]);
+      const pausedCheckpointPath = path.join(fixture.output, 'paused', 'checkpoint.json');
+      const pausedCheckpointBytes = fs.readFileSync(pausedCheckpointPath);
+      const promptInventoryBefore = artifactInventory(path.join(fixture.output, 'diagnostic', 'zero-model-prompts'));
+
+      proof(fixture.subject, [
+        'req', 'new', 'specs/system', '--component', held.component,
+        '--fretish', `the ${held.component.replace(/-/g, '_')}_catalog_drift shall always satisfy catalog_drift_state > 0`,
+        '--variables', 'catalog_drift_state', '--priority-level', 'major', '--format', 'json',
+      ]);
+      const current = JSON.parse(proof(fixture.subject, ['req', 'list', '--format', 'json'])) as ProofRow[];
+      const result = runRunnerResult(fixture, 'resume');
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout || ''}${result.stderr || ''}`).toContain('Proof catalog changed during resume');
+
+      const drift = json<any>(path.join(fixture.output, 'resume', 'catalog-drift.json'));
+      expect(drift.retained_ids).toEqual(rows.map(row => row.id).sort());
+      expect(drift.current_ids).toEqual(current.map(row => row.id).sort());
+      expect(drift.added_ids).toEqual(current.map(row => row.id).filter(id => !rows.some(row => row.id === id)).sort());
+      expect(drift.removed_ids).toEqual([]);
+      expect(drift.selected_current_hashes[held.id]).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(fs.existsSync(path.join(fixture.output, 'resume', 'stale-inputs.json'))).toBe(false);
+
+      const progress = json<any>(path.join(fixture.output, 'resumed', 'progress.json'));
+      expect(progress.paused).toBe(false);
+      expect(progress.resumed).toBe(false);
+      expect(progress.evidence.catalog_drift).toEqual({
+        retained_ids: drift.retained_ids,
+        current_ids: drift.current_ids,
+        added_ids: drift.added_ids,
+        removed_ids: drift.removed_ids,
+      });
+      expect(progress.unknown).toContain(
+        `Proof catalog changed during resume (added: ${drift.added_ids.join(',') || 'none'}; removed: none)`,
+      );
+      expect(progress.operational.components.stale_count).toBe(0);
+      expect(progress.operational.specifications.stale_count).toBe(0);
+      expect(progress.operational.components.items.every((item: any) => !item.conditions?.some((condition: any) => condition.state === 'stale'))).toBe(true);
+      expect(progress.operational.specifications.items.every((item: any) => !item.conditions?.some((condition: any) => condition.state === 'stale'))).toBe(true);
+      expect(fs.readFileSync(pausedCheckpointPath)).toEqual(pausedCheckpointBytes);
+      expect(artifactInventory(path.join(fixture.output, 'diagnostic', 'zero-model-prompts'))).toEqual(promptInventoryBefore);
+      for (const artifact of [
+        'resumed/checkpoint.json',
+        'resumed/observations.json',
+        'diagnostic/resume-checkpoint.json',
+        'diagnostic/resume-observations.json',
+        'diagnostic/resume-result.json',
+      ]) expect(fs.existsSync(path.join(fixture.output, artifact))).toBe(false);
+      const text = fs.readFileSync(path.join(fixture.output, 'resumed', 'progress.txt'), 'utf8');
+      const html = fs.readFileSync(path.join(fixture.output, 'resumed', 'progress.html'), 'utf8');
+      expect(text).toContain('Proof catalog changed during resume');
+      const embedded = html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
+      expect(JSON.parse(embedded as string)).toEqual(progress);
+    } finally {
+      fs.rmSync(fixture.parent, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects catalog drift before pause and review-record preparation', () => {
+    const pauseFixture = createFixture(2);
+    try {
+      runRunner(pauseFixture, 'prepare');
+      const rows = nativeCatalog(pauseFixture).rows;
+      const promptInventoryBefore = artifactInventory(path.join(pauseFixture.output, 'diagnostic', 'zero-model-prompts'));
+      proof(pauseFixture.subject, [
+        'req', 'new', 'specs/system', '--component', rows[0].component,
+        '--fretish', `the ${rows[0].component.replace(/-/g, '_')}_pause_drift shall always satisfy pause_drift_state > 0`,
+        '--variables', 'pause_drift_state', '--priority-level', 'major', '--format', 'json',
+      ]);
+      const result = runRunnerResult(pauseFixture, 'pause', ['--hold-id', rows[0].id]);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout || ''}${result.stderr || ''}`).toContain('Proof requirement ID set changed during pause');
+      expect(fs.existsSync(path.join(pauseFixture.output, 'paused', 'checkpoint.json'))).toBe(false);
+      expect(artifactInventory(path.join(pauseFixture.output, 'diagnostic', 'zero-model-prompts'))).toEqual(promptInventoryBefore);
+    } finally {
+      fs.rmSync(pauseFixture.parent, {recursive: true, force: true});
+    }
+
+    const recordFixture = createFixture(2);
+    const reviewOutput = path.join(recordFixture.parent, 'record-drift-review');
+    try {
+      runRunner(recordFixture, 'prepare');
+      const rows = nativeCatalog(recordFixture).rows;
+      runRunner(recordFixture, 'pause', ['--hold-id', rows[0].id]);
+      runRunner(recordFixture, 'resume');
+      const promptInventoryBefore = artifactInventory(path.join(reviewOutput, 'diagnostic', 'zero-model-prompts'));
+      proof(recordFixture.subject, [
+        'req', 'new', 'specs/system', '--component', rows[0].component,
+        '--fretish', `the ${rows[0].component.replace(/-/g, '_')}_record_drift shall always satisfy record_drift_state > 0`,
+        '--variables', 'record_drift_state', '--priority-level', 'major', '--format', 'json',
+      ]);
+      const result = runRunnerResult(recordFixture, 'record-prepare', [
+        '--reader-output', recordFixture.output,
+        '--reviewer', 'agent:luna-xhigh-native-spec-review',
+      ], false, reviewOutput);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout || ''}${result.stderr || ''}`).toContain('Proof requirement ID set changed during record-prepare');
+      expect(fs.existsSync(path.join(reviewOutput, 'review', 'items.json'))).toBe(false);
+      expect(artifactInventory(path.join(reviewOutput, 'diagnostic', 'zero-model-prompts'))).toEqual(promptInventoryBefore);
+    } finally {
+      fs.rmSync(recordFixture.parent, {recursive: true, force: true});
     }
   });
 
