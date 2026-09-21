@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {jest} from '@jest/globals';
 import {AIReviewService} from '../../src/ai-review-service';
 import {loadConfig, StateMachineExecutionEngine} from '../../src/sdk';
@@ -12,7 +12,10 @@ import {canonicalJson} from '../../src/state-machine/graph/claim-kernel';
 import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
 import {
   buildChecklistContinuationConfig,
+  classifyChecklistContinuationCheckpoint,
   executeChecklistContinuationEngine,
+  validateRecordedPriorFrontierSuffix,
+  validateChecklistContinuationCheckpoint,
   validateJournaledContinuationAuthority,
 } from '../../examples/agent-governance/native-onboarding/run-onboarding';
 import {
@@ -1051,6 +1054,37 @@ describe('production traces-light continuation graph', () => {
       expect(suffix.filter(event => event.type === 'AttemptStarted').map(event => event.checkId))
         .toEqual(['checklist-variables']);
       expect(ai).not.toHaveBeenCalled();
+      const transitionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-stage-transition-hermetic-'));
+      try {
+        const priorRoot = path.join(transitionRoot, 'variables-frontier');
+        const completedRoot = path.join(transitionRoot, 'variables-completed');
+        const wrongRoot = path.join(transitionRoot, 'wrong-completed');
+        for (const rootPath of [priorRoot, completedRoot, wrongRoot]) fs.mkdirSync(path.join(rootPath, 'preflight'), {recursive: true});
+        const configBytes = canonicalJson(config) + '\n';
+        fs.writeFileSync(path.join(priorRoot, 'checklist-materialized-config.json'), configBytes, {encoding: 'utf8', mode: 0o600});
+        fs.writeFileSync(path.join(completedRoot, 'checklist-materialized-config.json'), configBytes, {encoding: 'utf8', mode: 0o600});
+        fs.writeFileSync(path.join(wrongRoot, 'checklist-materialized-config.json'), configBytes, {encoding: 'utf8', mode: 0o600});
+        const priorPath = path.join(priorRoot, 'checkpoint.json');
+        const completedPath = path.join(completedRoot, 'checkpoint.json');
+        const wrongPath = path.join(wrongRoot, 'checkpoint.json');
+        fs.writeFileSync(priorPath, canonicalGraphCheckpointJson(paused.checkpoint) + '\n', {encoding: 'utf8', mode: 0o600});
+        fs.writeFileSync(completedPath, canonicalGraphCheckpointJson(resumed.checkpoint) + '\n', {encoding: 'utf8', mode: 0o600});
+        fs.writeFileSync(wrongPath, canonicalGraphCheckpointJson(resumed.checkpoint) + '\n', {encoding: 'utf8', mode: 0o600});
+        const transitionRecord = {status: 'checklist-continuation-input-validated', step: 'variables', retained_checkpoint: priorPath};
+        fs.writeFileSync(path.join(completedRoot, 'preflight', 'checklist-continuation.json'), JSON.stringify(transitionRecord));
+        const classified = classifyChecklistContinuationCheckpoint(config, resumed.checkpoint, 'spec-review-1');
+        expect(classified).toMatchObject({mode: 'completed-prerequisite', checkpointStage: 'variables'});
+        await expect(validateRecordedPriorFrontierSuffix(completedPath, resumed.checkpoint, 'variables'))
+          .resolves.toMatchObject({path: fs.realpathSync(priorPath)});
+        fs.writeFileSync(path.join(completedRoot, 'preflight', 'checklist-continuation.json'), JSON.stringify({
+          ...transitionRecord,
+          retained_checkpoint: wrongPath,
+        }));
+        await expect(validateRecordedPriorFrontierSuffix(completedPath, resumed.checkpoint, 'variables'))
+          .rejects.toThrow(/exact recorded prior-frontier suffix/);
+      } finally {
+        fs.rmSync(transitionRoot, {recursive: true, force: true});
+      }
       const calls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean)
         .map(line => JSON.parse(line).args as string[]);
       expect(calls.map(args => args.slice(0, 2))).toEqual([
@@ -1602,6 +1636,81 @@ describe('production traces-light continuation graph', () => {
       const detached = JSON.parse(JSON.stringify(authority)) as Record<string, any>;
       mutate(detached.current_work_items[0]);
       await expect(validateJournaledContinuationAuthority(detached)).rejects.toThrow(/current Proof authority bytes are invalid|detached/i);
+    }
+  });
+
+  const stageTransitionLiveTest = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_ROOT ? it : it.skip;
+  stageTransitionLiveTest('classifies a retained completed variables checkpoint through the real CLI loader before spec-review dispatch', async () => {
+    const evidenceRoot = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_ROOT as string;
+    const checkpointPath = path.join(evidenceRoot, 'variables-resume-01', 'checkpoint.json');
+    const continuationRecordPath = path.join(evidenceRoot, 'variables-resume-01', 'preflight', 'checklist-continuation.json');
+    const materializedConfigPath = path.join(evidenceRoot, 'variables-resume-01', 'checklist-materialized-config.json');
+    const subject = path.join(evidenceRoot, 'subject');
+    const proof = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_PROOF;
+    const original = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_ORIGINAL_ROOT;
+    const codex = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_CODEX_BIN;
+    const codexSha256 = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_CODEX_SHA256;
+    if (!proof || !original || !codex || !codexSha256) throw new Error('stage-transition live fixture requires proof/original/codex/codex SHA environment variables');
+    if (![checkpointPath, continuationRecordPath, materializedConfigPath, subject, proof, original, codex].every(file => fs.existsSync(file))) {
+      throw new Error('stage-transition live fixture is incomplete');
+    }
+    const probeModule = require('@probelabs/probe') as {validateGovernedCodexExecAttestation?: unknown};
+    const probeActual = require(path.resolve(process.cwd(), 'node_modules/@probelabs/probe/cjs/index.cjs')) as {validateGovernedCodexExecAttestation?: unknown};
+    if (typeof probeActual.validateGovernedCodexExecAttestation === 'function') {
+      Object.defineProperty(probeModule, 'validateGovernedCodexExecAttestation', {
+        value: probeActual.validateGovernedCodexExecAttestation,
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+    }
+    const show = JSON.parse(execFileSync(proof, ['checklist', 'show', '--format', 'json'], {cwd: subject, encoding: 'utf8'}));
+    const evidence = await validateChecklistContinuationCheckpoint(checkpointPath, show, 'spec-review-1');
+    expect(evidence.mode).toBe('completed-prerequisite');
+    expect(evidence.checkpointStage).toBe('variables');
+    expect(evidence.transitionPriorCheckpointPath).toContain('/variables-01/checkpoint.json');
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-stage-transition-cli-'));
+    const output = path.join(tempRoot, 'output');
+    const env = {...process.env, REQUEST_TIMEOUT: '1710000'};
+    delete env.CODEX_HOME;
+    const runner = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/run-onboarding.ts');
+    const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner,
+      '--checklist-continue', checkpointPath, '--checklist-step', 'spec-review-1',
+      '--governed-codex-transport', 'exec-jsonl-default-auth-v1', '--codex-bin', codex,
+      '--codex-sha256', codexSha256,
+      '--subject-root', subject, '--original-root', original, '--proof-bin', proof,
+      '--output', output, '--timeout', '1800000', '--preflight-only'], {encoding: 'utf8', env});
+    try {
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      const summary = JSON.parse(fs.readFileSync(path.join(output, 'preflight', 'summary.json'), 'utf8'));
+      expect(summary).toMatchObject({
+        status: 'preflight-only-complete',
+        checkpoint_classification: 'completed-prerequisite',
+        transition_checkpoint_stage: 'variables',
+        no_engine_dispatch: true,
+        current_catalog: {status: 'validated'},
+      });
+      expect(summary.current_catalog.affected_component_count).toBeGreaterThan(0);
+      const selectedConfig = JSON.parse(fs.readFileSync(path.join(output, 'checklist-materialized-config.json'), 'utf8'));
+      expect(Object.keys(selectedConfig.subgraphs['continuation-project'].checks)).toContain('checklist-spec-review-1');
+
+      const tamperedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-stage-transition-tampered-'));
+      try {
+        fs.mkdirSync(path.join(tamperedRoot, 'preflight'), {recursive: true});
+        fs.copyFileSync(checkpointPath, path.join(tamperedRoot, 'checkpoint.json'));
+        fs.copyFileSync(materializedConfigPath, path.join(tamperedRoot, 'checklist-materialized-config.json'));
+        const tamperedRecord = JSON.parse(fs.readFileSync(continuationRecordPath, 'utf8'));
+        tamperedRecord.step = 'spec-review-1';
+        fs.writeFileSync(path.join(tamperedRoot, 'preflight', 'checklist-continuation.json'), JSON.stringify(tamperedRecord));
+        await expect(validateChecklistContinuationCheckpoint(path.join(tamperedRoot, 'checkpoint.json'), show, 'spec-review-1'))
+          .rejects.toThrow(/prior frontier pointer does not match/);
+      } finally {
+        fs.rmSync(tamperedRoot, {recursive: true, force: true});
+      }
+    } finally {
+      fs.rmSync(tempRoot, {recursive: true, force: true});
     }
   });
 });

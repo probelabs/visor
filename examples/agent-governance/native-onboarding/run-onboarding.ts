@@ -1176,10 +1176,14 @@ export async function loadChecklistMaterializedConfig(
 }
 
 type ChecklistContinuationEvidence = Readonly<{
-  mode: 'retained-skeleton' | 'continuation-frontier';
+  mode: 'retained-skeleton' | 'continuation-frontier' | 'completed-prerequisite';
   step?: ChecklistContinuationStep;
+  /** The completed checklist generation whose authority seeds a fresh next-stage graph. */
+  checkpointStage?: string;
   checkpoint: GraphJournalCheckpointV1;
   checkpointPath: string;
+  transitionPriorCheckpointPath?: string;
+  transitionPriorCheckpoint?: GraphJournalCheckpointV1;
   config: VisorConfig;
   materializedConfigPath: string;
   prefixCheckpoint?: GraphJournalCheckpointV1;
@@ -1192,6 +1196,98 @@ type ChecklistContinuationEvidence = Readonly<{
   affectedBatches?: readonly Readonly<{component_id: string; paths: readonly string[]}>[];
   affectedDetailsByComponent?: Readonly<Record<string, readonly string[]>>;
 }>;
+
+type ChecklistContinuationCheckpointClassification = Readonly<{
+  mode: 'continuation-frontier' | 'completed-prerequisite';
+  checkpointStage?: string;
+  checkpointStatus?: 'ready' | 'completed';
+}>;
+
+/**
+ * Classify a directly materialized continuation checkpoint from its exact
+ * active checklist generation.  A completed prior generation is authority
+ * for a fresh next-stage graph; it is never passed to graph resume.
+ */
+export function classifyChecklistContinuationCheckpoint(
+  config: VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  requestedStep: ChecklistContinuationStep,
+): ChecklistContinuationCheckpointClassification {
+  const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint).getInstanceProjection();
+  const active = new Set(Object.values(projection.activeGenerationIdByNode));
+  const generations = Object.values(projection.generationsById).filter(generation =>
+    generation.status !== 'inactive' && active.has(generation.nodeGenerationId) &&
+    generation.checkId.startsWith('checklist-') && generation.checkId !== 'checklist-continuation-snapshot',
+  );
+  const requestedCheckId = `checklist-${requestedStep}`;
+  const requested = generations.filter(generation => generation.checkId === requestedCheckId);
+  if (requested.length === 1) {
+    const selected = requested[0];
+    const hasActiveFailure = generations.some(generation => generation.status === 'failed' || generation.status === 'running');
+    const cleanReady = selected.status === 'ready' && !hasActiveFailure;
+    const completedReadback = selected.status === 'completed' && !hasActiveFailure &&
+      checklistContinuationResumeCompleted(config, checkpoint, requestedStep);
+    if (!cleanReady && !completedReadback) {
+      throw new Error(`checklist continuation checkpoint does not contain a clean ${requestedStep} frontier`);
+    }
+    return Object.freeze({mode: 'continuation-frontier', checkpointStage: requestedStep, checkpointStatus: selected.status as 'ready' | 'completed'});
+  }
+  if (requested.length > 1) {
+    throw new Error(`checklist continuation checkpoint has multiple active ${requestedCheckId} generations`);
+  }
+  const completed = generations.filter(generation => generation.status === 'completed');
+  if (completed.length !== 1) {
+    throw new Error(`checklist continuation checkpoint has no exact active ${requestedCheckId} generation or single completed prerequisite`);
+  }
+  if (generations.some(generation => generation.status === 'failed' || generation.status === 'running')) {
+    throw new Error('checklist continuation prerequisite checkpoint has an active failed or running generation');
+  }
+  const checkpointStage = completed[0].checkId.slice('checklist-'.length);
+  if (!checkpointStage) {
+    throw new Error('checklist continuation checkpoint completed generation has no stage identity');
+  }
+  return Object.freeze({mode: 'completed-prerequisite', checkpointStage});
+}
+
+export async function validateRecordedPriorFrontierSuffix(
+  checkpointPath: string,
+  checkpoint: GraphJournalCheckpointV1,
+  stage: string,
+  allowReadback = false,
+): Promise<{path: string; checkpoint: GraphJournalCheckpointV1}> {
+  const priorRecordPath = path.join(path.dirname(checkpointPath), 'preflight', 'checklist-continuation.json');
+  if (!fs.existsSync(priorRecordPath)) {
+    throw new Error('completed checklist checkpoint has no recorded prior frontier pointer');
+  }
+  let priorRecord: Json;
+  try { priorRecord = JSON.parse(fs.readFileSync(priorRecordPath, 'utf8')) as Json; } catch {
+    throw new Error('completed checklist checkpoint prior frontier pointer is not valid JSON');
+  }
+  if (priorRecord.step !== stage || typeof priorRecord.retained_checkpoint !== 'string') {
+    throw new Error('completed checklist checkpoint prior frontier pointer does not match its completed stage');
+  }
+  const priorPath = fs.realpathSync(path.resolve(path.dirname(priorRecordPath), '..', priorRecord.retained_checkpoint));
+  if (path.basename(priorPath) !== 'checkpoint.json') {
+    throw new Error('completed checklist prior frontier pointer must name checkpoint.json');
+  }
+  const priorMaterialized = await loadChecklistMaterializedConfig(priorPath);
+  const predecessor = stage as ChecklistContinuationStep;
+  const exactSuffix = checklistContinuationResumeDeltaIsValid(
+    priorMaterialized.config,
+    priorMaterialized.checkpoint,
+    checkpoint,
+    predecessor,
+  ) || (allowReadback && checklistContinuationReadbackIsValid(
+    priorMaterialized.config,
+    priorMaterialized.checkpoint,
+    checkpoint,
+    predecessor,
+  ));
+  if (!exactSuffix) {
+    throw new Error('completed checklist checkpoint does not contain the exact recorded prior-frontier suffix');
+  }
+  return {path: priorPath, checkpoint: priorMaterialized.checkpoint};
+}
 
 const CONTINUATION_AUTHORITY_VERSION = 'native.checklist-continuation-authority/v1';
 const CONTINUATION_WORK_ITEM_KEYS = [
@@ -1804,6 +1900,7 @@ export function validateChecklistContinuationEligibility(
   }
   return Object.freeze({
     checklist: typeof value.checklist === 'string' ? value.checklist : undefined,
+    prerequisite_step: prerequisiteStep,
     ...(prerequisiteStep && prerequisite && hasExactChecklistConfirmationEvidence(prerequisite)
       ? {[prerequisiteStep]: 'confirmed'}
       : {}),
@@ -1816,6 +1913,7 @@ export function validateChecklistContinuationEligibility(
 /** Validate CP255's exact CP251→CP255 skeleton-only suffix before any fresh graph is built. */
 export async function validateChecklistContinuationCheckpoint(
   checkpointPath: string,
+  currentChecklistShow: unknown,
   step: ChecklistContinuationStep = 'traces-light',
 ): Promise<ChecklistContinuationEvidence> {
   const target = fs.realpathSync(path.resolve(checkpointPath));
@@ -1827,28 +1925,61 @@ export async function validateChecklistContinuationCheckpoint(
   if (fs.existsSync(directMaterializedConfig)) {
     const restored = await loadChecklistMaterializedConfig(target);
     if (Object.prototype.hasOwnProperty.call(restored.config.checks || {}, 'continue-retained-catalog')) {
+      const classification = classifyChecklistContinuationCheckpoint(restored.config, checkpoint, step);
+      let transitionPriorCheckpointPath: string | undefined;
+      let transitionPriorCheckpoint: GraphJournalCheckpointV1 | undefined;
+      if (classification.mode === 'completed-prerequisite' || classification.checkpointStatus === 'completed') {
+        if (classification.mode === 'completed-prerequisite') {
+          const eligibility = validateChecklistContinuationEligibility(currentChecklistShow, false, step);
+          if (eligibility.prerequisite_step !== classification.checkpointStage) {
+            throw new Error(`checklist continuation checkpoint completed ${classification.checkpointStage} but Proof requires ${String(eligibility.prerequisite_step)}`);
+          }
+        }
+        const prior = await validateRecordedPriorFrontierSuffix(
+          target,
+          checkpoint,
+          classification.checkpointStage as string,
+          classification.checkpointStatus === 'completed',
+        );
+        transitionPriorCheckpointPath = prior.path;
+        transitionPriorCheckpoint = prior.checkpoint;
+      }
       const authority = await validateJournaledContinuationAuthority(
         continuationGraphAuthority(restored.config, restored.checkpoint),
       );
       const workItems = continuationGraphWorkItems(restored.config, restored.checkpoint);
+      if (classification.mode === 'continuation-frontier' && classification.checkpointStatus === 'ready' &&
+          !checklistContinuationPauseIsValid(
+            restored.config,
+            checkpoint,
+            uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true),
+            step,
+          )) {
+        throw new Error(`checklist continuation checkpoint does not contain the exact clean ${step} frontier`);
+      }
       const projection = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(restored.config), restored.checkpoint).getInstanceProjection();
       const catalogs = Object.values(projection.claimsById)
         .filter(claim => claim.active && claim.claim === 'native.continuation.catalog@1');
       if (catalogs.length !== 1 || !isRecord(catalogs[0].payload)) {
         throw new Error('continuation checkpoint must contain exactly one catalog authority envelope');
       }
-      const taskObservation = continuationTaskObservation(
-        catalogs[0].payload,
-        uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true),
-        Array.isArray(authority.current_work_items) ? authority.current_work_items : [],
-        step,
-      );
-      return Object.freeze({mode: 'continuation-frontier', step, checkpoint, checkpointPath: target, config: restored.config,
+      const taskObservation = classification.mode === 'continuation-frontier'
+        ? continuationTaskObservation(
+          catalogs[0].payload,
+          uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true),
+          Array.isArray(authority.current_work_items) ? authority.current_work_items : [],
+          step,
+        )
+        : undefined;
+      return Object.freeze({mode: classification.mode, checkpointStage: classification.checkpointStage, step, checkpoint, checkpointPath: target,
+        ...(transitionPriorCheckpointPath ? {transitionPriorCheckpointPath, transitionPriorCheckpoint} : {}), config: restored.config,
         materializedConfigPath: restored.materializedConfigPath, expectedComponentIds: Object.freeze(workItems.map(item => item.component_id as string)), workItems,
         authority, affectedComponentIds: Object.freeze(uniqueSortedStrings(authority.affected_component_ids, 'journaled affected component IDs', true)),
         reusedComponentIds: Object.freeze(uniqueSortedStrings(authority.reused_component_ids, 'journaled reused component IDs', true)),
-        affectedBatches: taskObservation.batches,
-        affectedDetailsByComponent: taskObservation.detailsByComponent,
+        ...(taskObservation ? {
+          affectedBatches: taskObservation.batches,
+          affectedDetailsByComponent: taskObservation.detailsByComponent,
+        } : {}),
       });
     }
   }
@@ -6977,23 +7108,51 @@ async function main(): Promise<void> {
   let checklistResumeMaterializedConfigPath: string | undefined;
   let checklistContinuationMaterializedConfigPath: string | undefined;
   let checklistContinuationEvidence: ChecklistContinuationEvidence | undefined;
+  let checklistContinuationCurrentShow: {name: string; show: unknown} | undefined;
   if (checklistOnboarding) {
     // The checklist profile is a standalone native Visor graph.  Only the
     // authored result-schema sentinel/materialization pass runs here; graph
     // topology is read directly from the profile YAML.
     if (checklistContinueCheckpointPath) {
-      checklistContinuationEvidence = await validateChecklistContinuationCheckpoint(checklistContinueCheckpointPath, checklistContinuationStep);
+      checklistContinuationCurrentShow = await loadCurrentChecklistShow(proof, roots.subject, roots.output, timeout);
+      checklistContinuationEvidence = await validateChecklistContinuationCheckpoint(
+        checklistContinueCheckpointPath,
+        checklistContinuationCurrentShow.show,
+        checklistContinuationStep,
+      );
       config = checklistContinuationEvidence.mode === 'continuation-frontier'
         ? checklistContinuationEvidence.config
         : await loadChecklistContinuationConfig(checklistContinuationStep);
-      if (checklistContinuationEvidence.mode === 'retained-skeleton') {
+      if (checklistContinuationEvidence.mode === 'retained-skeleton' ||
+          checklistContinuationEvidence.mode === 'completed-prerequisite') {
+        const journaledAuthority = checklistContinuationEvidence.authority
+          ? validateContinuationAuthority(checklistContinuationEvidence.authority)
+          : undefined;
+        if (!journaledAuthority) throw new Error('checklist continuation is missing one closed current authority envelope');
+        const retainedCheckpointPath = checklistContinuationEvidence.mode === 'completed-prerequisite'
+          ? isRecord(journaledAuthority.retained) && typeof journaledAuthority.retained.checkpoint_path === 'string'
+            ? fs.realpathSync(journaledAuthority.retained.checkpoint_path)
+            : undefined
+          : checklistContinuationEvidence.checkpointPath;
+        const retainedPrefixCheckpointPath = checklistContinuationEvidence.mode === 'completed-prerequisite'
+          ? isRecord(journaledAuthority.retained) && typeof journaledAuthority.retained.prefix_checkpoint_path === 'string'
+            ? fs.realpathSync(journaledAuthority.retained.prefix_checkpoint_path)
+            : undefined
+          : checklistContinuationEvidence.prefixCheckpointPath;
+        if (!retainedCheckpointPath || !retainedPrefixCheckpointPath) {
+          throw new Error('checklist continuation authority has no original retained checkpoint pointers');
+        }
+        const retainedPrefix = readValidatedCheckpoint(retainedPrefixCheckpointPath, 'retained checklist prefix checkpoint');
+        // The original CP255 may be a bare promoted checkpoint; CP251 carries
+        // the authenticated materialized graph beside its checkpoint.
+        const retainedMaterialized = await loadChecklistMaterializedConfig(retainedPrefixCheckpointPath);
         const current = await validateCurrentRetainedCatalog(
           proof,
           roots.subject,
           roots.output,
           timeout,
-          checklistContinuationEvidence.config,
-          checklistContinuationEvidence.prefixCheckpoint as GraphJournalCheckpointV1,
+          retainedMaterialized.config,
+          retainedPrefix,
         );
         const expectedById = new Map(checklistContinuationEvidence.workItems.map(item => [
           String(item.component_id),
@@ -7017,13 +7176,15 @@ async function main(): Promise<void> {
         );
         const authority = buildChecklistContinuationAuthority(
           current,
-          checklistContinuationEvidence.checkpointPath,
-          checklistContinuationEvidence.prefixCheckpointPath,
+          retainedCheckpointPath,
+          retainedPrefixCheckpointPath,
           batches.affectedComponentIds,
           batches.reusedComponentIds,
         );
         checklistContinuationEvidence = Object.freeze({
           ...checklistContinuationEvidence,
+          prefixCheckpoint: retainedPrefix,
+          prefixCheckpointPath: retainedPrefixCheckpointPath,
           workItems: current.workItems,
           authority,
           affectedComponentIds: batches.affectedComponentIds,
@@ -7119,11 +7280,21 @@ async function main(): Promise<void> {
         retained_checkpoint: checklistContinuationEvidence.checkpointPath,
         retained_prefix_checkpoint: checklistContinuationEvidence.prefixCheckpointPath,
         retained_component_ids: checklistContinuationEvidence.expectedComponentIds,
+        checkpoint_classification: checklistContinuationEvidence.mode,
+        ...(checklistContinuationEvidence.mode === 'completed-prerequisite' ? {
+          transition_checkpoint_stage: checklistContinuationEvidence.checkpointStage,
+          original_retained_checkpoint: checklistContinuationEvidence.authority && isRecord(checklistContinuationEvidence.authority.retained)
+            ? checklistContinuationEvidence.authority.retained.checkpoint_path
+            : undefined,
+          original_retained_prefix_checkpoint: checklistContinuationEvidence.authority && isRecord(checklistContinuationEvidence.authority.retained)
+            ? checklistContinuationEvidence.authority.retained.prefix_checkpoint_path
+            : undefined,
+        } : {}),
       } : {}),
     });
   }
   if (checklistContinuationEvidence) {
-    const currentChecklist = await loadCurrentChecklistShow(proof, roots.subject, roots.output, timeout);
+    const currentChecklist = checklistContinuationCurrentShow ?? await loadCurrentChecklistShow(proof, roots.subject, roots.output, timeout);
     const expectedChecklist = activeChecklistNameFromCheckpoint(
       checklistContinuationEvidence.config,
       checklistContinuationEvidence.checkpoint,
@@ -7133,13 +7304,38 @@ async function main(): Promise<void> {
     }
     const eligibility = validateChecklistContinuationEligibility(
       currentChecklist.show,
-      checklistContinuationEvidence.mode === 'continuation-frontier',
+      checklistContinuationEvidence.mode === 'continuation-frontier' && checklistContinuationEvidence.checkpointStage === checklistContinuationStep &&
+        checklistContinuationResumeCompleted(checklistContinuationEvidence.config, checklistContinuationEvidence.checkpoint, checklistContinuationStep),
       checklistContinuationStep,
     );
+    if (checklistContinuationEvidence.mode === 'completed-prerequisite' &&
+        eligibility.prerequisite_step !== checklistContinuationEvidence.checkpointStage) {
+      throw new Error(`checklist continuation Proof requires ${String(eligibility.prerequisite_step)} but retained checkpoint completed ${String(checklistContinuationEvidence.checkpointStage)}`);
+    }
     process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(currentChecklist.show);
     writeJson(path.join(roots.output, 'preflight', 'checklist-continuation.json'), {
       status: 'checklist-continuation-input-validated',
       step: checklistContinue?.step,
+      checkpoint_classification: checklistContinuationEvidence.mode,
+      transition_checkpoint: checklistContinuationEvidence.mode === 'completed-prerequisite'
+        ? checklistContinuationEvidence.checkpointPath
+        : undefined,
+      transition_checkpoint_stage: checklistContinuationEvidence.mode === 'completed-prerequisite'
+        ? checklistContinuationEvidence.checkpointStage
+        : undefined,
+      transition_prior_frontier_checkpoint: checklistContinuationEvidence.mode === 'completed-prerequisite'
+        ? checklistContinuationEvidence.transitionPriorCheckpointPath
+        : undefined,
+      original_retained_checkpoint: checklistContinuationEvidence.mode === 'completed-prerequisite'
+        ? checklistContinuationEvidence.authority && isRecord(checklistContinuationEvidence.authority.retained)
+          ? checklistContinuationEvidence.authority.retained.checkpoint_path
+          : undefined
+        : undefined,
+      original_retained_prefix_checkpoint: checklistContinuationEvidence.mode === 'completed-prerequisite'
+        ? checklistContinuationEvidence.authority && isRecord(checklistContinuationEvidence.authority.retained)
+          ? checklistContinuationEvidence.authority.retained.prefix_checkpoint_path
+          : undefined
+        : undefined,
       current_checklist: eligibility,
       retained_checkpoint: checklistContinuationEvidence.checkpointPath,
       retained_prefix_checkpoint: checklistContinuationEvidence.prefixCheckpointPath,
@@ -7174,6 +7370,11 @@ async function main(): Promise<void> {
       checklist_overlay: checklistOnboarding,
       ...(checklistContinuationEvidence ? {
         continuation_mode: 'current-authority-preflight',
+        checkpoint_classification: checklistContinuationEvidence.mode,
+        ...(checklistContinuationEvidence.mode === 'completed-prerequisite' ? {
+          transition_checkpoint: checklistContinuationEvidence.checkpointPath,
+          transition_checkpoint_stage: checklistContinuationEvidence.checkpointStage,
+        } : {}),
         current_catalog: {
           status: 'validated',
           full_component_count: continuationWorkItems,
