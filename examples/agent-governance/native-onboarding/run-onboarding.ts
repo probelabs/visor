@@ -1842,6 +1842,10 @@ export async function executeChecklistPrefixRetryEngine(
   timeout: number,
   onRetryCheckpoint: (checkpoint: GraphJournalCheckpointV1) => void | Promise<void>,
   options: {
+    onProjectPrefix?: (evidence: {
+      initialResult: Awaited<ReturnType<StateMachineExecutionEngine['retryGraphCheckpoint']>>['result'];
+      checkpoint: GraphJournalCheckpointV1;
+    }) => void | Promise<void>;
     onFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>;
     onSkeletonFrontier?: (frontier: RetainedContinuationFrontier) => void | Promise<void>;
   } = {},
@@ -1874,6 +1878,12 @@ export async function executeChecklistPrefixRetryEngine(
     event.type === 'AttemptStarted' &&
     (event.checkId === 'checklist-bootstrap' || event.checkId === 'project' || event.checkId === 'structural_inventory'))) {
     throw new Error('checklist prefix retry repeated bootstrap, project, or structural_inventory');
+  }
+  if (options.onProjectPrefix) {
+    await options.onProjectPrefix({initialResult: retried.result, checkpoint: retried.checkpoint});
+  }
+  if (retried.result.statistics.failedExecutions > 0) {
+    throw new Error(`checklist project prefix retry failed before component release (${retried.result.statistics.failedExecutions} failed executions)`);
   }
   const materialized = materializedComponentIds(config, retried.checkpoint);
   const componentAttemptsStarted = retried.checkpoint.events.filter(event =>
@@ -2067,6 +2077,18 @@ async function runChecklistPrefixRetry(
         persistRetryProgress();
       },
       {
+        onProjectPrefix: ({initialResult: projectPrefixResult, checkpoint: projectPrefixCheckpoint}) => {
+          latestRetryCheckpoint = projectPrefixCheckpoint;
+          writeJson(path.join(roots.output, 'preflight', 'checklist-project-prefix-result.json'), projectPrefixResult);
+          writeCheckpoint(path.join(roots.output, 'preflight', 'checklist-project-prefix-checkpoint.json'), projectPrefixCheckpoint);
+          writeJson(path.join(roots.output, 'preflight', 'checklist-project-prefix.json'), {
+            status: 'checklist-project-prefix-exported',
+            result: 'checklist-project-prefix-result.json',
+            checkpoint: 'checklist-project-prefix-checkpoint.json',
+            graph_semantic_digest: projectPrefixCheckpoint.graphSemanticDigest,
+          });
+          persistRetryProgress();
+        },
         onFrontier: frontier => {
           latestRetryCheckpoint = frontier.checkpoint;
           writeCheckpoint(path.join(roots.output, 'checklist-prefix-frontier-checkpoint.json'), frontier.checkpoint);
@@ -2103,7 +2125,6 @@ async function runChecklistPrefixRetry(
     );
   } catch (error) {
     try {
-      latestRetryCheckpoint = engine.exportGraphCheckpoint();
       writeCheckpoint(path.join(roots.output, 'checkpoint.partial.json'), latestRetryCheckpoint);
     } catch {
       // Preserve the original retry error even if the provider failed before a

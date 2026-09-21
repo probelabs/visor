@@ -29,6 +29,7 @@ import {
   encodeRetainedReviewedAggregateMap,
   materializeRetainedContinuationConfig,
   executeRetainedContinuationEngine,
+  executeChecklistPrefixRetryEngine,
   retainedProjectPrefixDispatchGate,
   buildRetainedReviewedAggregate,
   buildChecklistOnboardingConfig,
@@ -1927,6 +1928,79 @@ describe('native onboarding runner boundaries', () => {
       validate.mockReturnValue(withComponentAttempt as any);
       expect(() => validateChecklistPrefixRetrySelection(config, withComponentAttempt as any, generationId))
         .toThrow(/component attempt release/);
+    } finally {
+      validate.mockRestore();
+      restore.mockRestore();
+    }
+  });
+
+  it('records a failed immutable-prefix retry before catalog lookup or resume', async () => {
+    const config = buildChecklistOnboardingConfig(shippedPreparedConfig() as any) as any;
+    const digest = compileClaimPlan(config).expansionPlan.graphSemanticDigest;
+    const generationId = 'a'.repeat(64);
+    const generation = {
+      nodeGenerationId: generationId,
+      nodeInstanceId: 'inspect-node',
+      subgraphInstanceId: 'project-instance',
+      templateNodeKey: 'inspect',
+      checkId: 'inspect',
+      scope: [{kind: 'keyed', expansionOwnerCheck: 'project', key: 'project', subgraphInstanceId: 'project-instance'}],
+      incarnation: 0,
+      itemFingerprint: 'b'.repeat(64),
+      executionConfigDigest: 'c'.repeat(64),
+      activeInputClaimIds: [],
+      status: 'failed',
+      attemptId: 'd'.repeat(64),
+      fence: 7,
+      scheduled: true,
+      completedOutputClaimIds: [],
+      reason: 'provider failed',
+    };
+    const checkpoint = {
+      graphSemanticDigest: digest,
+      events: [
+        ...Array.from({length: 24}, (_, eventId) => ({eventId})),
+        {eventId: 24, type: 'AttemptFailed', nodeGenerationId: generationId, checkId: 'inspect', attemptId: generation.attemptId, fence: generation.fence, reason: generation.reason},
+      ],
+    } as any;
+    const retryCheckpoint = {
+      ...checkpoint,
+      events: [...checkpoint.events, {eventId: 25, type: 'AttemptRetryRequested', checkId: 'inspect'}],
+    } as any;
+    const failedCheckpoint = {
+      ...retryCheckpoint,
+      events: [...retryCheckpoint.events, {eventId: 26, type: 'AttemptFailed', nodeGenerationId: generationId, checkId: 'inspect', reason: 'retry failed'}],
+    } as any;
+    const failedResult = {statistics: {failedExecutions: 1}, checks: [{checkName: 'inspect', failedRuns: 1}]} as any;
+    const validate = jest.spyOn(ExecutionJournal, 'validateGraphCheckpointIntegrity').mockReturnValue(checkpoint);
+    const restore = jest.spyOn(ExecutionJournal, 'restoreGraphCheckpoint').mockReturnValue({
+      getInstanceProjection: () => ({
+        generationsById: {[generationId]: generation},
+        activeGenerationIdByNode: {[generation.nodeInstanceId]: generationId},
+      }),
+    } as any);
+    const retryGraphCheckpoint = jest.fn().mockResolvedValue({
+      retryCheckpoint,
+      checkpoint: failedCheckpoint,
+      result: failedResult,
+    });
+    const resumeGraphCheckpoint = jest.fn();
+    const onProjectPrefix = jest.fn();
+    try {
+      await expect(executeChecklistPrefixRetryEngine(
+        {retryGraphCheckpoint, resumeGraphCheckpoint} as any,
+        config,
+        checkpoint,
+        generationId,
+        2_000,
+        jest.fn(),
+        {onProjectPrefix},
+      )).rejects.toThrow('checklist project prefix retry failed before component release (1 failed executions)');
+      expect(onProjectPrefix).toHaveBeenCalledTimes(1);
+      expect(onProjectPrefix).toHaveBeenCalledWith({initialResult: failedResult, checkpoint: failedCheckpoint});
+      expect(canonicalJson(failedCheckpoint.events.slice(0, 25))).toBe(canonicalJson(checkpoint.events));
+      expect(resumeGraphCheckpoint).not.toHaveBeenCalled();
+      expect(restore).toHaveBeenCalledTimes(1);
     } finally {
       validate.mockRestore();
       restore.mockRestore();
