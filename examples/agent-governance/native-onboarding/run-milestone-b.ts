@@ -16,6 +16,10 @@ import { canonicalJson } from '../../../src/state-machine/graph/claim-kernel';
 import type { PRInfo } from '../../../src/pr-analyzer';
 import type { GeneratedDispatchGate } from '../../../src/types/engine';
 import { assertCodexHomeAbsent, pinNativeOnboardingTsProject, verifyCodexBinarySha256 } from './run-onboarding';
+import {
+  buildNativeChecklistProgressFromMilestoneBProjections,
+  renderNativeChecklistProgress,
+} from './native-checklist-progress';
 
 type Json = Record<string, unknown>;
 type ProofRow = { id: string; component: string; file_path: string } & Json;
@@ -2205,6 +2209,47 @@ function assertUnchangedSiblingGenerations(before: any, after: any, heldId: stri
   }
 }
 
+/**
+ * Emit the same dependency-free progress render used by onboarding, but only
+ * from the journaled Milestone B component fan-in summaries.  A pause before
+ * any component fan-in has completed intentionally has no progress artifact;
+ * there is no safe Proof snapshot to render in that case.
+ */
+function writeMilestoneBChecklistProgress(
+  output: string,
+  phase: 'paused' | 'resumed',
+  projection: unknown,
+  checkpoint: unknown,
+  catalogRows: readonly ProofRow[],
+  selectedRows: readonly ProofRow[],
+  paused: boolean,
+  resumed: boolean,
+): void {
+  let progress;
+  try {
+    progress = buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: projection,
+      checkpoint,
+      paused,
+      resumed,
+      retainedCatalogComponentIds: [...new Set(catalogRows.map(row => row.component))],
+      affectedComponentIds: [...new Set(selectedRows.map(row => row.component))],
+    });
+  } catch (error) {
+    // Milestone B can legitimately finish a graph frontier before a
+    // component fan-in has captured a valid Proof checklist snapshot (for
+    // example, an older Proof CLI may return a pre-v1 checklist envelope).
+    // Keep the checkpoint and nested operational state authoritative, but do
+    // not manufacture an unlinked progress artifact from that frontier.
+    if (error instanceof Error && error.message === 'Milestone B journal has no active completed component fan-in checklist summary') return;
+    throw error;
+  }
+  const rendered = renderNativeChecklistProgress(progress);
+  writeText(path.join(output, phase, 'progress.json'), rendered.json);
+  writeText(path.join(output, phase, 'progress.txt'), rendered.text);
+  writeText(path.join(output, phase, 'progress.html'), `${rendered.html}\n`);
+}
+
 async function pause(
   subject: string,
   proof: string,
@@ -2280,6 +2325,16 @@ async function pause(
     zero_model_test: zeroModelTestEnabled(),
     note: 'This holds a ready generated scope; it is not evidence of in-flight overlap or recovery.',
   });
+  writeMilestoneBChecklistProgress(
+    output,
+    'paused',
+    restored.getInstanceProjection(),
+    checkpoint,
+    catalogRows,
+    rows,
+    true,
+    false,
+  );
   console.log(JSON.stringify({ mode: 'pause', status: 'quiescent-ready-frontier', held_scope: held, output }, null, 2));
 }
 
@@ -2381,6 +2436,16 @@ async function resume(
     zero_model_test: zeroModelTestEnabled(),
     note: 'Execution completion does not imply Proof validation, review, or admission.',
   });
+  writeMilestoneBChecklistProgress(
+    output,
+    'resumed',
+    restored.getInstanceProjection(),
+    returned,
+    catalogRows,
+    rows,
+    false,
+    true,
+  );
   console.log(JSON.stringify({ mode: 'resume', status: 'completed-or-reviewed-state-recorded', output }, null, 2));
 }
 

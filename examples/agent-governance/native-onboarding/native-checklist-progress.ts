@@ -19,7 +19,10 @@ const CHECKLIST_SNAPSHOT_CLAIMS = {
   'native.continuation.checklist_snapshot@1': 'continuation',
 } as const;
 type ChecklistSnapshotClaim = keyof typeof CHECKLIST_SNAPSHOT_CLAIMS;
-type ChecklistSnapshotEvidenceSource = ChecklistSnapshotClaim | 'current-proof-readback';
+type ChecklistSnapshotEvidenceSource =
+  | ChecklistSnapshotClaim
+  | 'current-proof-readback'
+  | 'native.component.summary@1';
 
 export type NativeChecklistProgressInput = Readonly<{
   proofSnapshot: unknown;
@@ -34,6 +37,12 @@ export type NativeChecklistProgressInput = Readonly<{
   proofSnapshotReadback?: Readonly<{
     anchorClaimId: string;
     generationId: string;
+  }>;
+  /** Journal-validated Milestone B fan-in evidence. */
+  proofSnapshotEvidence?: Readonly<{
+    source: 'native.component.summary@1';
+    claimIds: readonly string[];
+    componentIds: readonly string[];
   }>;
   instanceProjection?: InstanceProjection | unknown;
   checkpoint?: unknown;
@@ -118,6 +127,8 @@ export type NativeChecklistProgress = Readonly<{
       source?: ChecklistSnapshotEvidenceSource;
       stage?: 'research' | 'skeleton';
       claim_id?: string;
+      claim_ids?: readonly string[];
+      component_ids?: readonly string[];
       anchor_claim_id?: string;
       generation_id?: string;
       updated_at?: string;
@@ -738,6 +749,156 @@ export type NativeChecklistProjectionInput = Readonly<{
   currentProofSnapshot?: unknown;
 }>;
 
+const MILESTONE_B_COMPONENT_SUMMARY_CLAIM = 'native.component.summary@1';
+const MILESTONE_B_COMPONENT_FAN_IN_CHECK = 'wait-for-native-items';
+
+type MilestoneBChecklistBundle = Readonly<{
+  claimId: string;
+  componentId: string;
+  snapshot: Json;
+}>;
+
+function activeCompletedMilestoneBChecklistBundles(
+  projection: unknown,
+): MilestoneBChecklistBundle[] {
+  if (!isRecord(projection) || !isRecord(projection.claimsById) ||
+      !isRecord(projection.generationsById) || !isRecord(projection.activeGenerationIdByNode)) {
+    throw new Error('Milestone B checklist projection is malformed');
+  }
+  const activeGenerationIds = new Set(
+    Object.values(projection.activeGenerationIdByNode).filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    ),
+  );
+  const bundles: MilestoneBChecklistBundle[] = [];
+  for (const [claimIdKey, value] of Object.entries(projection.claimsById)) {
+    if (!isRecord(value) || value.active !== true || value.claim !== MILESTONE_B_COMPONENT_SUMMARY_CLAIM) {
+      continue;
+    }
+    const claimId = requireClaimId(value.claimId ?? claimIdKey, 'Milestone B component summary claim ID');
+    validateCandidateShape(value, claimId, 'Milestone B component summary claim');
+    if (value.producerCheckId !== MILESTONE_B_COMPONENT_FAN_IN_CHECK) {
+      throw new Error('Milestone B component summary claim has an invalid producer');
+    }
+    const claimSubgraphInstanceId = requireClaimId(
+      value.subgraphInstanceId,
+      'Milestone B component summary subgraph instance ID',
+    );
+    const generationId = requiredString(value.nodeGenerationId, 'Milestone B component summary generation ID');
+    if (!activeGenerationIds.has(generationId)) {
+      throw new Error('Milestone B component summary claim is not bound to an active generation');
+    }
+    const generation = projection.generationsById[generationId];
+    if (!isRecord(generation) || generation.nodeGenerationId !== generationId ||
+        generation.checkId !== MILESTONE_B_COMPONENT_FAN_IN_CHECK ||
+        generation.status !== 'completed') {
+      throw new Error('Milestone B component summary claim is not bound to a completed fan-in generation');
+    }
+    if (generation.subgraphInstanceId !== claimSubgraphInstanceId) {
+      throw new Error('Milestone B component summary claim subgraph instance is detached from its generation');
+    }
+    if (!isRecord(value.payload)) {
+      throw new Error('Milestone B component summary claim payload must be an object');
+    }
+    const payload = value.payload;
+    if (!hasExactKeys(payload, ['component', 'freshness', 'validation', 'audit', 'checklist', 'status'])) {
+      throw new Error('Milestone B component summary payload has an unexpected shape');
+    }
+    const componentId = requiredString(payload.component, 'Milestone B component summary component');
+    if (!Array.isArray(payload.freshness) || !isRecord(payload.validation) ||
+        !isRecord(payload.audit) || !isRecord(payload.status) || !isRecord(payload.checklist)) {
+      throw new Error(`Milestone B component summary ${componentId} is malformed`);
+    }
+    const checklist = payload.checklist;
+    if (!hasExactKeys(checklist, ['exit_code', 'value']) || checklist.exit_code !== 0 ||
+        !isRecord(checklist.value) || checklist.value.schema_version !== 'proof.checklist.show.v1') {
+      throw new Error(`Milestone B component summary ${componentId} has no successful Proof checklist snapshot`);
+    }
+    if (!Array.isArray(value.scope) || value.scope.length !== 1 ||
+        !isRecord(value.scope[0]) || value.scope[0].kind !== 'keyed' ||
+        value.scope[0].key !== componentId ||
+        value.scope[0].expansionOwnerCheck !== 'discover-native-components' ||
+        typeof value.scope[0].subgraphInstanceId !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(value.scope[0].subgraphInstanceId) ||
+        !hasExactKeys(value.scope[0], ['kind', 'expansionOwnerCheck', 'key', 'subgraphInstanceId'])) {
+      throw new Error(`Milestone B component summary ${componentId} scope is detached from its claim`);
+    }
+    if (value.scope[0].subgraphInstanceId !== claimSubgraphInstanceId) {
+      throw new Error(`Milestone B component summary ${componentId} scope is detached from its subgraph`);
+    }
+    if (canonicalJson(generation.scope) !== canonicalJson(value.scope) ||
+        !isRecord(generation.scope?.[0]) ||
+        generation.scope[0].subgraphInstanceId !== value.scope[0].subgraphInstanceId) {
+      throw new Error(`Milestone B component summary ${componentId} generation scope is detached from its claim`);
+    }
+    if (checklist.value.checklist !== 'onboard_v1' ||
+        typeof checklist.value.active !== 'boolean' ||
+        typeof checklist.value.new_project !== 'boolean') {
+      throw new Error(`Milestone B component summary ${componentId} has the wrong Proof checklist identity`);
+    }
+    bundles.push({claimId, componentId, snapshot: checklist.value});
+  }
+  if (!bundles.length) {
+    throw new Error('Milestone B journal has no active completed component fan-in checklist summary');
+  }
+  const byComponent = new Map<string, MilestoneBChecklistBundle>();
+  for (const bundle of bundles) {
+    if (byComponent.has(bundle.componentId)) {
+      throw new Error(`Milestone B journal has duplicate active component fan-in summary for ${bundle.componentId}`);
+    }
+    byComponent.set(bundle.componentId, bundle);
+  }
+  const first = bundles[0].snapshot;
+  for (const bundle of bundles.slice(1)) {
+    if (canonicalJson(bundle.snapshot) !== canonicalJson(first)) {
+      throw new Error('Milestone B component fan-in checklist snapshots diverge');
+    }
+  }
+  return [...byComponent.values()].sort((left, right) =>
+    Buffer.from(left.componentId).compare(Buffer.from(right.componentId)) ||
+    Buffer.from(left.claimId).compare(Buffer.from(right.claimId)),
+  );
+}
+
+/**
+ * Project Milestone B progress from the journaled component fan-in summaries.
+ * No live Proof readback or root checklist fallback is permitted here: a
+ * summary is usable only when its active claim is bound to the active,
+ * completed `wait-for-native-items` generation.
+ */
+export type NativeMilestoneBChecklistProjectionInput = Readonly<{
+  instanceProjection: InstanceProjection | unknown;
+  checkpoint?: unknown;
+  checkpointTimestamp?: unknown;
+  paused?: boolean;
+  resumed?: boolean;
+  retainedCatalogComponentIds?: readonly string[];
+  affectedComponentIds?: readonly string[];
+}>;
+
+export function buildNativeChecklistProgressFromMilestoneBProjections(
+  input: NativeMilestoneBChecklistProjectionInput,
+): NativeChecklistProgress {
+  const bundles = activeCompletedMilestoneBChecklistBundles(input.instanceProjection);
+  const selected = bundles[0];
+  return buildNativeChecklistProgress({
+    proofSnapshot: selected.snapshot,
+    proofSnapshotEvidence: {
+      source: 'native.component.summary@1',
+      claimIds: bundles.map(bundle => bundle.claimId),
+      componentIds: bundles.map(bundle => bundle.componentId),
+    },
+    instanceProjection: input.instanceProjection,
+    checkpoint: input.checkpoint,
+    checkpointTimestamp: input.checkpointTimestamp,
+    requireProofSnapshotClaim: true,
+    paused: input.paused,
+    resumed: input.resumed,
+    retainedCatalogComponentIds: input.retainedCatalogComponentIds,
+    affectedComponentIds: input.affectedComponentIds,
+  });
+}
+
 export function buildNativeChecklistProgressFromProjections(
   input: NativeChecklistProjectionInput
 ): NativeChecklistProgress {
@@ -1023,7 +1184,15 @@ function operationalProjection(
     const explicitKind = explicitOperationalKind(generation);
     let kind: OperationalKind | undefined = explicitKind;
     if (!kind) {
-      if (depth <= 1) kind = 'project';
+      const scopeParts = Array.isArray(generation.scope)
+        ? generation.scope.filter(isRecord)
+        : [];
+      const owner = scopeParts.length
+        ? optionalString(scopeParts[scopeParts.length - 1].expansionOwnerCheck)
+        : undefined;
+      if (owner === 'discover-native-components') kind = 'component';
+      else if (owner === 'enumerate-native-specs' || owner === '["native-component","enumerate-native-specs"]') kind = 'specification';
+      else if (depth <= 1) kind = 'project';
       else if (depth === 2) kind = 'component';
       else if (depth === 3) kind = 'specification';
       // Deeper scopes are deliberately not guessed as specifications.  A
@@ -1035,8 +1204,7 @@ function operationalProjection(
       continue;
     }
     if (kind === 'component' || kind === 'specification' || kind === 'batch') {
-      const fallbackId =
-        kind === 'component' ? keys[1] : kind === 'specification' ? keys[2] : keys[3];
+      const fallbackId = keys[keys.length - 1];
       const id =
         optionalString(generation.unit_id) ??
         optionalString(generation.unitId) ??
@@ -1163,13 +1331,33 @@ export function buildNativeChecklistProgress(
   if (
     requireLiveClaim &&
     input.proofSnapshotClaim === undefined &&
-    input.proofSnapshotReadback === undefined
+    input.proofSnapshotReadback === undefined &&
+    input.proofSnapshotEvidence === undefined
   ) {
     throw new Error('live checklist progress requires a lineage-linked proof snapshot claim');
   }
-  const claimEvidence = input.proofSnapshotReadback
-    ? validateCurrentReadbackEvidence(input.proofSnapshotReadback)
-    : validateSnapshotClaim(snapshot, input.proofSnapshotClaim, requireLiveClaim);
+  const claimEvidence = input.proofSnapshotEvidence
+    ? (() => {
+      if (input.proofSnapshotEvidence!.source !== 'native.component.summary@1') {
+        throw new Error('unsupported checklist snapshot evidence source');
+      }
+      const claimIds = stringArray(input.proofSnapshotEvidence!.claimIds, 'component summary claim IDs');
+      const componentIds = stringArray(input.proofSnapshotEvidence!.componentIds, 'component summary component IDs');
+      if (!claimIds.length || claimIds.length !== componentIds.length ||
+          claimIds.some(claimId => !/^[0-9a-f]{64}$/.test(claimId)) ||
+          new Set(claimIds).size !== claimIds.length ||
+          new Set(componentIds).size !== componentIds.length) {
+        throw new Error('component summary checklist evidence has invalid claim/component IDs');
+      }
+      return {
+        source: 'native.component.summary@1' as const,
+        claim_ids: claimIds,
+        component_ids: componentIds,
+      };
+    })()
+    : input.proofSnapshotReadback
+      ? validateCurrentReadbackEvidence(input.proofSnapshotReadback)
+      : validateSnapshotClaim(snapshot, input.proofSnapshotClaim, requireLiveClaim);
   const counts = {
     confirmed: 0,
     skipped: 0,
@@ -1275,6 +1463,8 @@ export function buildNativeChecklistProgress(
         checklist: checklistName,
         digest: snapshotDigest,
         ...(claimEvidence.claim_id ? { claim_id: claimEvidence.claim_id } : {}),
+        ...(claimEvidence.claim_ids ? { claim_ids: claimEvidence.claim_ids } : {}),
+        ...(claimEvidence.component_ids ? { component_ids: claimEvidence.component_ids } : {}),
         ...(claimEvidence.anchor_claim_id
           ? { anchor_claim_id: claimEvidence.anchor_claim_id }
           : {}),

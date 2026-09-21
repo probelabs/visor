@@ -318,6 +318,18 @@ function runFlow(componentCount: 1 | 2): void {
     expect(pauseEvents.some((event: any) => event.type === 'AttemptCompleted')).toBe(true);
     const progressedRows = rows.filter(row => row.id !== held.id);
     assertCandidatePackets(pauseCheckpoint, progressedRows, fixture);
+    const pausedProgressPath = path.join(fixture.output, 'paused', 'progress.json');
+    expect(fs.existsSync(pausedProgressPath)).toBe(componentCount === 2);
+    if (componentCount === 2) {
+      const pausedProgress = json<any>(pausedProgressPath);
+      expect(pausedProgress.evidence.proof_snapshot.source).toBe('native.component.summary@1');
+      expect(pausedProgress.operational.specifications.pending_count).toBe(1);
+      expect(pausedProgress.operational.specifications.completed_count).toBeGreaterThanOrEqual(1);
+      expect(pausedProgress.checklist.counts.pending + pausedProgress.checklist.counts.blocked).toBeGreaterThan(0);
+      const pausedHtml = fs.readFileSync(path.join(fixture.output, 'paused', 'progress.html'), 'utf8');
+      const pausedEmbedded = pausedHtml.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
+      expect(JSON.parse(pausedEmbedded as string)).toEqual(pausedProgress);
+    }
 
     runRunner(fixture, 'resume');
     const resumed = json<any>(path.join(fixture.output, 'resumed', 'checkpoint.json'));
@@ -348,6 +360,13 @@ function runFlow(componentCount: 1 | 2): void {
     const completedIds = new Set(resumedEventsOnly.filter((event: any) => event.type === 'AttemptCompleted').map((event: any) => event.nodeGenerationId));
     for (const id of startedIds) expect(completedIds).toContain(id);
     expect(resumedEvents.some((event: any) => event.type === 'AttemptFailed' || event.type === 'CheckErrored')).toBe(false);
+    const resumedProgress = json<any>(path.join(fixture.output, 'resumed', 'progress.json'));
+    expect(resumedProgress.evidence.proof_snapshot.source).toBe('native.component.summary@1');
+    expect(resumedProgress.operational.specifications.pending_count).toBe(0);
+    expect(resumedProgress.operational.specifications.completed_count).toBe(rows.length);
+    const resumedHtml = fs.readFileSync(path.join(fixture.output, 'resumed', 'progress.html'), 'utf8');
+    const resumedEmbedded = resumedHtml.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
+    expect(JSON.parse(resumedEmbedded as string)).toEqual(resumedProgress);
   } finally {
     fs.rmSync(fixture.parent, { recursive: true, force: true });
   }

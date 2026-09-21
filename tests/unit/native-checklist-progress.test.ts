@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 import {
   buildNativeChecklistProgress,
+  buildNativeChecklistProgressFromMilestoneBProjections,
   buildNativeChecklistProgressFromProjections,
   renderNativeChecklistProgress,
 } from '../../examples/agent-governance/native-onboarding/native-checklist-progress';
@@ -136,6 +137,59 @@ function instanceProjection(claims: Record<string, unknown>[]): Record<string, u
     generationsById: {},
     activeGenerationIdByNode: {},
   };
+}
+
+function milestoneBScope(component: string): Record<string, unknown>[] {
+  return [
+    {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: component, subgraphInstanceId: 'e'.repeat(64)},
+  ];
+}
+
+function milestoneBFanInProjection(
+  snapshots: Array<{component: string; snapshot: Record<string, unknown>}>,
+  options: {status?: string; generationId?: string; active?: boolean} = {},
+): Record<string, unknown> {
+  const claimsById: Record<string, unknown> = {};
+  const generationsById: Record<string, unknown> = {};
+  const activeGenerationIdByNode: Record<string, string> = {};
+  snapshots.forEach(({component, snapshot: checklist}, index) => {
+    const claimId = `${String.fromCharCode(97 + index)}`.repeat(64);
+    const generationId = options.generationId && snapshots.length === 1
+      ? options.generationId
+      : `fan-in-${component}`;
+    const payload = {
+      component,
+      freshness: [],
+      validation: {exit_code: 0, value: {}},
+      audit: {exit_code: 0, value: {}},
+      checklist: {exit_code: 0, value: checklist},
+      status: {exit_code: 0, value: {}},
+    };
+    claimsById[claimId] = {
+      claimId,
+      claim: 'native.component.summary@1',
+      payload,
+      payloadFingerprint: sha256Canonical(payload),
+      producerCheckId: 'wait-for-native-items',
+      nodeGenerationId: generationId,
+      subgraphInstanceId: 'e'.repeat(64),
+      scope: milestoneBScope(component),
+      parentClaimIds: [],
+      active: options.active !== false,
+    };
+    generationsById[generationId] = {
+      nodeGenerationId: generationId,
+      nodeInstanceId: `node-${component}`,
+      subgraphInstanceId: 'e'.repeat(64),
+      checkId: 'wait-for-native-items',
+      status: options.status ?? 'completed',
+      scope: milestoneBScope(component),
+      activeInputClaimIds: [],
+      completedOutputClaimIds: [claimId],
+    };
+    activeGenerationIdByNode[`node-${component}`] = generationId;
+  });
+  return {claimsById, generationsById, activeGenerationIdByNode};
 }
 
 function continuationSnapshotClaim(
@@ -1316,5 +1370,93 @@ describe('native checklist progress projection', () => {
     expect(() =>
       buildNativeChecklistProgress({ proofSnapshot: snapshot({ steps: ['not-an-object'] }) })
     ).toThrow(/steps must be an array/);
+  });
+
+  it('projects Milestone B progress only from completed component fan-in summaries', () => {
+    const proofSnapshot = snapshot();
+    const projection = milestoneBFanInProjection([
+      {component: 'jsonparser-core', snapshot: proofSnapshot},
+      {component: 'jsonparser-benchmark-suite', snapshot: proofSnapshot},
+    ]);
+    Object.assign(projection.generationsById, {
+      'sibling-spec': {
+        nodeGenerationId: 'sibling-spec', nodeInstanceId: 'sibling-spec-node',
+        subgraphInstanceId: '1'.repeat(64),
+        checkId: 'review-native-item', status: 'completed',
+        scope: [{kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'jsonparser-benchmark-suite', subgraphInstanceId: 'e'.repeat(64)}, {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-specs"]', key: 'REQ-S', subgraphInstanceId: '1'.repeat(64)}],
+      },
+      'held-spec': {
+        nodeGenerationId: 'held-spec', nodeInstanceId: 'held-spec-node',
+        subgraphInstanceId: '2'.repeat(64),
+        checkId: 'review-native-item', status: 'ready',
+        scope: [{kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'jsonparser-core', subgraphInstanceId: 'e'.repeat(64)}, {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-specs"]', key: 'REQ-H', subgraphInstanceId: '2'.repeat(64)}],
+      },
+    });
+    const progress = buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: projection,
+      checkpoint: {frontier: {eventCount: 4, lastEventId: 4}, graphSemanticDigest: 'graph', integrity: {digest: 'integrity'}},
+      paused: true,
+      retainedCatalogComponentIds: ['jsonparser-core', 'jsonparser-benchmark-suite', 'retained-unexpanded'],
+      affectedComponentIds: ['jsonparser-core', 'jsonparser-benchmark-suite'],
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'native.component.summary@1',
+      claim_ids: ['b'.repeat(64), 'a'.repeat(64)],
+      component_ids: ['jsonparser-benchmark-suite', 'jsonparser-core'],
+      digest: sha256Canonical(proofSnapshot),
+    });
+    expect(progress.operational.specifications.items).toEqual([
+      {id: 'REQ-H', state: 'pending', check_ids: ['review-native-item']},
+      {id: 'REQ-S', state: 'completed', check_ids: ['review-native-item']},
+    ]);
+    expect(progress.operational.catalog_coverage).toMatchObject({known_count: 3, affected_count: 2, reused_count: 1});
+    const rendered = renderNativeChecklistProgress(progress);
+    const embedded = rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('preserves native checklist identity booleans and rejects malformed values', () => {
+    const falseProjection = milestoneBFanInProjection([
+      {component: 'jsonparser-core', snapshot: snapshot({active: false, new_project: false})},
+    ]);
+    const progress = buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: falseProjection,
+    });
+    expect(progress.checklist.active).toBe(false);
+    expect(progress.checklist.new_project).toBe(false);
+
+    for (const field of ['active', 'new_project'] as const) {
+      const missing = snapshot();
+      delete missing[field];
+      expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
+        instanceProjection: milestoneBFanInProjection([
+          {component: 'jsonparser-core', snapshot: missing},
+        ]),
+      })).toThrow(/wrong Proof checklist identity/);
+      expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
+        instanceProjection: milestoneBFanInProjection([
+          {component: 'jsonparser-core', snapshot: snapshot({[field]: 'false'})},
+        ]),
+      })).toThrow(/wrong Proof checklist identity/);
+    }
+  });
+
+  it.each([
+    ['missing', () => ({claimsById: {}, generationsById: {}, activeGenerationIdByNode: {}})],
+    ['divergent', () => milestoneBFanInProjection([
+      {component: 'a', snapshot: snapshot()},
+      {component: 'b', snapshot: snapshot({checklist: 'other'})},
+    ])],
+    ['stale', () => milestoneBFanInProjection([{component: 'a', snapshot: snapshot()}], {status: 'ready'})],
+    ['unbound', () => {
+      const value = milestoneBFanInProjection([{component: 'a', snapshot: snapshot()}]);
+      const claim = Object.values(value.claimsById as Record<string, Record<string, unknown>>)[0];
+      claim.nodeGenerationId = 'missing-generation';
+      return value;
+    }],
+  ])('fails closed for a Milestone B %s fan-in summary', (_label, makeProjection) => {
+    expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: makeProjection(),
+    })).toThrow();
   });
 });
