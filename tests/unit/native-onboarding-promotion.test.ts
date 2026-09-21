@@ -205,6 +205,18 @@ function promotionInput(fixture: ReturnType<typeof createFixture>): NativePromot
   };
 }
 
+function withChecklistContinueStep<T>(step: string | undefined, callback: () => T): T {
+  const previous = process.env.NATIVE_CHECKLIST_CONTINUE_STEP;
+  if (step === undefined) delete process.env.NATIVE_CHECKLIST_CONTINUE_STEP;
+  else process.env.NATIVE_CHECKLIST_CONTINUE_STEP = step;
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) delete process.env.NATIVE_CHECKLIST_CONTINUE_STEP;
+    else process.env.NATIVE_CHECKLIST_CONTINUE_STEP = previous;
+  }
+}
+
 function canonicalBytes(root: string, relativePaths: string[]): Map<string, Buffer | undefined> {
   return new Map(
     relativePaths.map(relativePath => {
@@ -402,6 +414,91 @@ describe('non-authoritative Proof checklist refresh classifier', () => {
 });
 
 describeNative('native onboarding promotion boundary', () => {
+  it('rejects an empty writer delta outside the spec-review continuation context', () => {
+    const fixture = createFixture();
+    try {
+      const result = withChecklistContinueStep(undefined, () => promoteNativeDelta(promotionInput(fixture)));
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/no promotable native authored files/);
+      expect(result.accepted_paths).toEqual([]);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('returns a reviewed no-change promotion only for a clean spec-review continuation', () => {
+    const fixture = createFixture();
+    try {
+      const headBefore = git(fixture.canonicalRoot, ['rev-parse', 'HEAD']);
+      const result = withChecklistContinueStep('spec-review-1', () => promoteNativeDelta(promotionInput(fixture)));
+      expect(result).toMatchObject({
+        status: 'promoted',
+        accepted_paths: [],
+        ignored_paths: [],
+        rejected_paths: [],
+        reason: 'reviewed-no-change; zero authored files; no commit',
+        checkpoint: {
+          baseline_commit: fixture.baselineCommit,
+          component_id: 'component_b',
+          accepted_paths: [],
+          ignored_paths: [],
+          status: 'promoted',
+        },
+      });
+      expect(result).not.toHaveProperty('promoted_commit');
+      expect(git(fixture.canonicalRoot, ['rev-parse', 'HEAD'])).toBe(headBefore);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects the contextual no-change exception when the Proof component surface differs', () => {
+    const fixture = createFixture();
+    try {
+      fs.appendFileSync(path.join(fixture.canonicalRoot, fixture.componentBRequirementPath), '\n# canonical drift\n');
+      git(fixture.canonicalRoot, ['add', '--', fixture.componentBRequirementPath]);
+      git(fixture.canonicalRoot, ['commit', '--quiet', '-m', 'canonical component drift']);
+      const result = withChecklistContinueStep('spec-review-1', () => promoteNativeDelta(promotionInput(fixture)));
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/Proof component surface differs/);
+      expect(result.accepted_paths).toEqual([]);
+      expect(result.rejected_paths).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects a contextual no-change component with no Proof native surface', () => {
+    const fixture = createFixture();
+    try {
+      const result = withChecklistContinueStep('spec-review-1', () => promoteNativeDelta({
+        ...promotionInput(fixture),
+        workItem: {...fixture.workItem, component_id: 'component_without_native_surface'},
+      }));
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/Proof component surface differs|Proof req list|Proof var/);
+      expect(result.accepted_paths).toEqual([]);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects the contextual no-change exception when the writer is dirty', () => {
+    const fixture = createFixture();
+    try {
+      fs.writeFileSync(path.join(fixture.writerRoot, 'unreviewed-note.txt'), 'writer dirt\n');
+      const result = withChecklistContinueStep('spec-review-1', () => promoteNativeDelta(promotionInput(fixture)));
+      expect(result.status).toBe('rejected');
+      expect(result.reason).toMatch(/out-of-scope|no promotable native authored files|clean/);
+      expect(git(fixture.canonicalRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe('');
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it.each([
     ['executable source edit', 'package native\n// Implements: SYS-REQ-1\nfunc B() int { return 3 }\n'],
     ['raw-string pseudo annotation', 'package native\nconst marker = "// Implements: SYS-REQ-1"\nfunc B() int { return 2 }\n'],

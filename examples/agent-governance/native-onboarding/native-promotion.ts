@@ -314,6 +314,25 @@ function rejected(
   };
 }
 
+function reviewedNoChange(input: NativePromotionInput): NativePromotionResult {
+  const accepted_paths: string[] = [];
+  const ignored_paths: string[] = [];
+  return {
+    status: 'promoted',
+    accepted_paths,
+    ignored_paths,
+    rejected_paths: [],
+    reason: 'reviewed-no-change; zero authored files; no commit',
+    checkpoint: {
+      baseline_commit: input.baselineCommit,
+      component_id: input.workItem.component_id,
+      accepted_paths,
+      ignored_paths,
+      status: 'promoted',
+    },
+  };
+}
+
 function git(root: string, args: string[], raw = false): string {
   const output = String(
     execFileSync('git', ['-C', root, ...args], {
@@ -762,6 +781,26 @@ function collectNativeSurface(
   };
 }
 
+function nativeSurfacePaths(surface: NativeSurface): string[] {
+  return [...new Set([...surface.requirementFiles, ...surface.variableFiles])].sort();
+}
+
+function nativeSurfacesHaveEqualCurrentFiles(
+  writerRoot: string,
+  canonicalRoot: string,
+  writerSurface: NativeSurface,
+  canonicalSurface: NativeSurface,
+): boolean {
+  const writerPaths = nativeSurfacePaths(writerSurface);
+  const canonicalPaths = nativeSurfacePaths(canonicalSurface);
+  if (writerPaths.length === 0) return false;
+  if (!isDeepStrictEqual(writerPaths, canonicalPaths)) return false;
+  return writerPaths.every(relativePath => snapshotsEqual(
+    fileSnapshot(writerRoot, relativePath),
+    fileSnapshot(canonicalRoot, relativePath),
+  ));
+}
+
 function isVariablePath(relativePath: string): boolean {
   return relativePath.endsWith('.vars.yaml') || relativePath.endsWith('.vars.yml');
 }
@@ -1160,6 +1199,21 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       }
       rejectedPaths.push(entry.path);
     }
+    const componentId = input.workItem.component_id;
+    if (changed.length === 0 && process.env.NATIVE_CHECKLIST_CONTINUE_STEP === 'spec-review-1') {
+      if (ignoredPaths.length || rejectedPaths.length) {
+        return rejected(input, 'reviewed no-change requires empty ignored and rejected paths', [], ignoredPaths, rejectedPaths);
+      }
+      if (git(writerRoot, ['status', '--porcelain', '--untracked-files=all'])) {
+        return rejected(input, 'reviewed no-change requires a clean writer checkout', [], ignoredPaths, rejectedPaths);
+      }
+      const writerSurface = collectNativeSurface(input.proofBin, writerRoot, componentId, timeoutMs).surface;
+      const canonicalSurface = collectNativeSurface(input.proofBin, canonicalRoot, componentId, timeoutMs).surface;
+      if (!nativeSurfacesHaveEqualCurrentFiles(writerRoot, canonicalRoot, writerSurface, canonicalSurface)) {
+        return rejected(input, `reviewed no-change Proof component surface differs for ${componentId}`, [], ignoredPaths, rejectedPaths);
+      }
+      return reviewedNoChange(input);
+    }
     if (rejectedPaths.length) {
       const reason = sourcePolicyRejections.length
         ? `writer delta violates the bounded Go trace source policy: ${sourcePolicyRejections.join('; ')}`
@@ -1169,7 +1223,6 @@ export function promoteNativeDelta(input: NativePromotionInput): NativePromotion
       return rejected(input, reason, [], ignoredPaths, rejectedPaths);
     }
 
-    const componentId = input.workItem.component_id;
     const writerSurface = collectNativeSurface(input.proofBin, writerRoot, componentId, timeoutMs).surface;
     const canonicalSurface = collectNativeSurface(input.proofBin, canonicalRoot, componentId, timeoutMs).surface;
     const sourcePaths = changed
