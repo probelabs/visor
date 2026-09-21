@@ -626,7 +626,7 @@ function activeExpandedChecklistClaims(projection: unknown): SelectedChecklistSn
   return selected;
 }
 
-const NATIVE_CONTINUATION_STEPS = ['skeleton', 'traces-light', 'variables'] as const;
+const NATIVE_CONTINUATION_STEPS = ['skeleton', 'traces-light', 'variables', 'spec-review-1'] as const;
 type NativeContinuationStep = (typeof NATIVE_CONTINUATION_STEPS)[number];
 
 function completedChecklistContinuationGeneration(
@@ -734,7 +734,7 @@ function validateCurrentProofReadback(
     if (activePendingStep) {
       throw new Error(`current Proof readback requires a completed ${activePendingStep} generation`);
     }
-    throw new Error('current Proof readback requires exactly one active completed skeleton, traces-light, or variables generation');
+    throw new Error('current Proof readback requires exactly one active completed skeleton, traces-light, variables, or spec-review-1 generation');
   }
   const step = completedSteps[0];
   const rows = snapshotSteps(readback).filter(row => row.step_id === step);
@@ -746,13 +746,23 @@ function validateCurrentProofReadback(
     ? ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
     : step === 'traces-light'
       ? ['annotation_validity', 'orphan_code_clean']
-      : ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+      : step === 'variables'
+        ? ['variable_orphans_clean', 'variables_declared', 'variable_drift']
+        : [
+          'spec_lint_decomposition_adds_refinement',
+          'spec_lint_formalization_quality',
+          'solver_modeling_opportunity',
+          'under_modeled_requirements_clean',
+        ];
   const expectedRequires = step === 'skeleton'
     ? ['research']
     : step === 'traces-light'
       ? ['skeleton']
-      : ['traces-light'];
+      : step === 'variables'
+        ? ['traces-light']
+        : ['variables'];
   const expectedScope = step === 'traces-light' ? 'package' : 'repo';
+  const expectedRole = step === 'spec-review-1' ? 'spec-review' : 'onboard';
   const requiredChecks = stringArray(
     selected.required_checks,
     `current ${step} required_checks`,
@@ -763,7 +773,7 @@ function validateCurrentProofReadback(
   );
   if (
     selected.applicable !== true ||
-    selected.role !== 'onboard' ||
+    selected.role !== expectedRole ||
     selected.stamp !== 'confirm' ||
     selected.scope !== expectedScope ||
     canonicalJson(stringArray(selected.requires, `current ${step} requires`)) !== canonicalJson(expectedRequires) ||
@@ -779,7 +789,9 @@ function validateCurrentProofReadback(
       ? 'repository skeleton'
       : step === 'traces-light'
         ? 'package'
-        : 'repository variables';
+        : step === 'variables'
+          ? 'repository variables'
+          : 'repository spec-review-1';
     throw new Error(`current Proof checklist readback lacks exact confirmed ${evidenceScope} evidence`);
   }
   const generationId = requiredString(

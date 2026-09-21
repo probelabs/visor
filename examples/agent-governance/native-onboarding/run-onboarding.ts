@@ -7939,7 +7939,14 @@ async function main(): Promise<void> {
         // continuation anchor and would otherwise mask the real summary.
         checklistContinuationEvidence ? postflightValues.checklist : undefined,
       );
-    } catch {
+    } catch (error) {
+      // A continuation's current Proof readback is the authority for the
+      // postflight projection.  Do not leave the earlier anchor-derived
+      // progress artifact in place and report success when that projection
+      // cannot be rendered.  Bootstrap/skeleton paths retain their
+      // observational tolerance because they do not use current readback
+      // authority.
+      if (checklistContinuationEvidence) throw error;
       checklistProgress = undefined;
     }
   }

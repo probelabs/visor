@@ -13,6 +13,8 @@ import {compileClaimPlan} from '../../src/state-machine/graph/claim-plan';
 import {
   buildChecklistContinuationConfig,
   classifyChecklistContinuationCheckpoint,
+  selectFailedSpecReviewPromotionRecovery,
+  executeSpecReviewPromotionRecovery,
   executeChecklistContinuationEngine,
   validateRecordedPriorFrontierSuffix,
   validateChecklistContinuationCheckpoint,
@@ -571,7 +573,10 @@ describe('production traces-light continuation graph', () => {
       } else if (componentId === 'component-c') {
         fs.appendFileSync(path.join(checkout, 'specs/component-c/requirements/REQ-2.req.yaml'), 'reviewed-by-author: component-c\n', 'utf8');
       }
-      return {issues: [], output: {status: 'spec-review-mock', component_id: componentId}} as any;
+      return {
+        issues: [],
+        output: {status: 'spec-review-mock', component_id: componentId},
+      } as any;
     });
     try {
       process.env.PROOF_BIN = fixture.proof;
@@ -664,6 +669,221 @@ describe('production traces-light continuation graph', () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+      fixture.cleanup();
+    }
+  });
+
+  it('recovers one legacy empty-delta promotion without replaying the promoted sibling', async () => {
+    const fixture = makeGitFixture();
+    const previous = new Map<string, string | undefined>([
+      ['PROOF_BIN', process.env.PROOF_BIN],
+      ['VISOR_WORKSPACE_MAIN_PROJECT', process.env.VISOR_WORKSPACE_MAIN_PROJECT],
+      ['NATIVE_ONBOARDING_WORKTREE_ROOT', process.env.NATIVE_ONBOARDING_WORKTREE_ROOT],
+      ['NATIVE_CHECKLIST_CONTINUE_STEP', process.env.NATIVE_CHECKLIST_CONTINUE_STEP],
+      ['NATIVE_CHECKLIST_CONTINUE_CATALOG', process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG],
+      ['NATIVE_CHECKLIST_CONTINUE_SNAPSHOT', process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT],
+      ['NATIVE_ONBOARDING_OUTPUT_DIR', process.env.NATIVE_ONBOARDING_OUTPUT_DIR],
+      ['NATIVE_ONBOARDING_REPO_ROOT', process.env.NATIVE_ONBOARDING_REPO_ROOT],
+      ['NATIVE_ONBOARDING_TS_NODE', process.env.NATIVE_ONBOARDING_TS_NODE],
+      ['REQUEST_TIMEOUT', process.env.REQUEST_TIMEOUT],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STATE', process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE],
+      ['CONTINUATION_FIXTURE_CHECKLIST_STEP', process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP],
+      ['CONTINUATION_FIXTURE_CALL_LOG', process.env.CONTINUATION_FIXTURE_CALL_LOG],
+    ]);
+    const previousWorktreeConfig = worktreeManager.getConfig();
+    const fixtureWorktreeCache = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-spec-review-recovery-cache-'));
+    worktreeManager.configure({base_path: fixtureWorktreeCache, cleanup_on_exit: false});
+    const ai = jest.spyOn(AIReviewService.prototype, 'executeReview').mockImplementation(async function (_prInfo: any, prompt: string) {
+      const workItemStart = prompt.indexOf('WorkItem: ');
+      const checkoutStart = prompt.indexOf('Checkout: ', workItemStart);
+      if (workItemStart < 0 || checkoutStart < 0) throw new Error('spec-review mock prompt omitted bound WorkItem');
+      const workItem = JSON.parse(prompt.slice(workItemStart + 'WorkItem: '.length, checkoutStart).trim()) as {component_id?: unknown};
+      const componentId = workItem.component_id;
+      if (componentId !== 'component-a' && componentId !== 'component-c') throw new Error('spec-review mock prompt omitted component');
+      const checkoutEnd = prompt.indexOf('Built-in role:', checkoutStart);
+      if (checkoutStart < 0 || checkoutEnd < 0) throw new Error('spec-review mock prompt omitted bound checkout');
+      const checkoutPayload = JSON.parse(prompt.slice(checkoutStart + 'Checkout: '.length, checkoutEnd).trim()) as {path?: unknown};
+      if (typeof checkoutPayload.path !== 'string' || !path.isAbsolute(checkoutPayload.path)) {
+        throw new Error('spec-review mock prompt has invalid bound checkout');
+      }
+      expect(fs.realpathSync(checkoutPayload.path)).not.toBe(fs.realpathSync(fixture.root));
+      // A is a real native requirement edit. C deliberately leaves its clean
+      // checkout untouched, exercising the pre-no-op legacy rejection.
+      if (componentId === 'component-a') {
+        fs.appendFileSync(
+          path.join(checkoutPayload.path, 'specs/component-a/requirements/REQ-1.req.yaml'),
+          'reviewed-by-repair: component-a\n',
+          'utf8',
+        );
+      }
+      return {
+        issues: [],
+        output: {status: 'spec-review-mock', component_id: componentId, content: `mock author ${componentId}`},
+      } as any;
+    });
+    try {
+      process.env.PROOF_BIN = fixture.proof;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = fixture.root;
+      process.env.NATIVE_ONBOARDING_WORKTREE_ROOT = fixture.writerParent;
+      process.env.NATIVE_CHECKLIST_CONTINUE_CATALOG = JSON.stringify({
+        components: [
+          operationalSpecReviewWorkItem(fixture.workItem, ['specs/component-a/requirements/REQ-1.req.yaml'], ['REQ-1']),
+          operationalSpecReviewWorkItem(fixture.secondWorkItem, ['specs/component-c/requirements/REQ-2.req.yaml'], ['REQ-2']),
+        ],
+        full_components: [fixture.workItem, fixture.secondWorkItem],
+        affected_component_ids: ['component-a', 'component-c'],
+        reused_component_ids: [],
+        retained_receipt_identities: [],
+        current_receipt_identities: [],
+        authority: continuationAuthority([fixture.workItem, fixture.secondWorkItem], ['component-a', 'component-c'], []),
+      });
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STATE = fixture.checklistState;
+      process.env.CONTINUATION_FIXTURE_CHECKLIST_STEP = 'spec-review-1';
+      process.env.NATIVE_CHECKLIST_CONTINUE_SNAPSHOT = JSON.stringify(specReviewContinuationSnapshot());
+      process.env.NATIVE_ONBOARDING_OUTPUT_DIR = fixture.output;
+      process.env.NATIVE_ONBOARDING_REPO_ROOT = process.cwd();
+      process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
+      process.env.CONTINUATION_FIXTURE_CALL_LOG = fixture.checklistCalls;
+      process.env.REQUEST_TIMEOUT = '120000';
+
+      // Materialization strips the selected branch conditions into a direct
+      // config. Unsetting the stage after that keeps the first empty-delta
+      // promotion on the legacy strict rejection path.
+      process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'spec-review-1';
+      const config = buildChecklistContinuationConfig('spec-review-1') as any;
+      const firstEngine = new StateMachineExecutionEngine(fixture.root);
+      const prInfo = {
+        number: 0,
+        title: 'continuation fixture',
+        body: '',
+        author: 'continuation-fixture',
+        base: 'main',
+        head: 'subject',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        eventType: 'manual',
+      } as any;
+      // First run through the real graph, stopping only before promotion.
+      // This gives the test a deterministic boundary to switch the legacy
+      // strict promotion behavior without changing the production graph.
+      const partialResult = await firstEngine.executeGroupedChecks(
+        prInfo,
+        ['continue-retained-catalog'],
+        120000,
+        config,
+        'json',
+        false,
+        config.max_parallelism,
+        false,
+        undefined,
+        (generation: any) => generation.checkId === 'promote-native-component' ? 'defer' : 'dispatch',
+      );
+      expect(partialResult.statistics.failedExecutions).toBe(0);
+      const beforePromotion = ExecutionJournal.validateGraphCheckpointIntegrity(firstEngine.exportGraphCheckpoint());
+      expect(beforePromotion.events.filter(event => event.type === 'AttemptStarted' && event.checkId === 'promote-native-component')).toHaveLength(0);
+      delete process.env.NATIVE_CHECKLIST_CONTINUE_STEP;
+      const failedPromotionResult = await firstEngine.resumeGraphCheckpoint({
+        checkpoint: beforePromotion,
+        config,
+        prInfo,
+        maxParallelism: config.max_parallelism,
+        failFast: false,
+      });
+      expect(failedPromotionResult.result.statistics.failedExecutions).toBeGreaterThan(0);
+      const firstCheckpoint = ExecutionJournal.validateGraphCheckpointIntegrity(firstEngine.exportGraphCheckpoint());
+      fs.writeFileSync(path.join(fixture.output, 'checkpoint.partial.json'), canonicalGraphCheckpointJson(firstCheckpoint) + '\n', 'utf8');
+      const firstEventCount = firstCheckpoint.events.length;
+      expect(ai).toHaveBeenCalledTimes(2);
+      const firstStarts = firstCheckpoint.events.filter(event => event.type === 'AttemptStarted');
+      expect(firstStarts.filter(event => event.checkId === 'author-native-component')).toHaveLength(2);
+      expect(firstStarts.filter(event => event.checkId === 'spec-review-audit')).toHaveLength(2);
+      expect(firstStarts.filter(event => event.checkId === 'promote-native-component')).toHaveLength(2);
+      const firstPromotionStarts = firstStarts.filter(event => event.checkId === 'promote-native-component');
+      expect(firstPromotionStarts.map(event => event.scope[event.scope.length - 1]?.key).sort()).toEqual(['component-a', 'component-c']);
+      const firstJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), firstCheckpoint);
+      const firstProjection = firstJournal.getInstanceProjection() as any;
+      const firstActive = new Set(Object.values(firstProjection.activeGenerationIdByNode || {}));
+      const failedPromotion = Object.values(firstProjection.generationsById || {}).find((generation: any) =>
+        generation && generation.status === 'failed' && firstActive.has(generation.nodeGenerationId) &&
+        generation.checkId === 'promote-native-component' && generation.scope[generation.scope.length - 1]?.key === 'component-c',
+      ) as any;
+      expect(failedPromotion).toBeDefined();
+      expect(Object.values(firstProjection.generationsById || {}).some((generation: any) =>
+        generation && generation.status === 'failed' && firstActive.has(generation.nodeGenerationId) &&
+        generation.checkId === 'promote-native-component' && generation.scope[generation.scope.length - 1]?.key === 'component-a',
+      )).toBe(false);
+      expect(firstCheckpoint.events.some(event => event.type === 'AttemptStarted' && event.checkId === 'checklist-spec-review-1')).toBe(false);
+
+      const selected = selectFailedSpecReviewPromotionRecovery(config, firstCheckpoint, fixture.output, 'spec-review-1');
+      expect(selected.map(item => item.componentId)).toEqual(['component-c']);
+      expect(selected[0].generationId).toBe(failedPromotion.nodeGenerationId);
+      expect(selected[0].promotion.reason).toBe('writer delta contains no promotable native authored files');
+      expect(selected[0].auditReceipt.status).toBe('pass');
+
+      const recoveryOutput = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-spec-review-promotion-recovery-'));
+      try {
+        process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'spec-review-1';
+        process.env.NATIVE_ONBOARDING_OUTPUT_DIR = recoveryOutput;
+        const recoveryEngine = new StateMachineExecutionEngine(fixture.root);
+        const recovered = await executeSpecReviewPromotionRecovery(
+          recoveryEngine,
+          config,
+          firstCheckpoint,
+          120000,
+          selected,
+        );
+        expect(canonicalGraphCheckpointJson(recovered.checkpoint.events.slice(0, firstEventCount)))
+          .toBe(canonicalGraphCheckpointJson(firstCheckpoint.events));
+        const suffix = recovered.checkpoint.events.slice(firstEventCount);
+        const retryRequests = suffix.filter(event => event.type === 'AttemptRetryRequested');
+        expect(retryRequests).toHaveLength(1);
+        expect(retryRequests[0].nodeGenerationId).toBe(failedPromotion.nodeGenerationId);
+        const retryStarts = suffix.filter(event => event.type === 'AttemptStarted');
+        expect(retryStarts.filter(event => event.checkId === 'promote-native-component')).toHaveLength(1);
+        expect(retryStarts.filter(event => event.checkId === 'promote-native-component')
+          .every(event => event.scope[event.scope.length - 1]?.key === 'component-c')).toBe(true);
+        expect(retryStarts.filter(event => event.checkId === 'author-native-component' || event.checkId === 'spec-review-audit')).toHaveLength(0);
+        expect(retryStarts.filter(event => event.checkId === 'checklist-spec-review-1')).toHaveLength(0);
+        expect(retryStarts.filter(event => event.checkId === 'spec-review-1-audit')).toHaveLength(1);
+        expect(retryStarts.filter(event => event.checkId === 'promote-native-component' && event.scope[event.scope.length - 1]?.key === 'component-a')).toHaveLength(0);
+
+        const token = Buffer.from('component-c').toString('base64url');
+        const attemptOne = JSON.parse(fs.readFileSync(path.join(recoveryOutput, 'promotion-results', token, 'attempt-1.json'), 'utf8'));
+        const attemptTwo = JSON.parse(fs.readFileSync(path.join(recoveryOutput, 'promotion-results', token, 'attempt-2.json'), 'utf8'));
+        const finalRecord = JSON.parse(fs.readFileSync(path.join(recoveryOutput, 'promotion-results', `${token}.json`), 'utf8'));
+        expect(attemptOne).toMatchObject({status: 'rejected', component_id: 'component-c', reason: 'writer delta contains no promotable native authored files'});
+        expect(attemptTwo).toMatchObject({status: 'promoted', component_id: 'component-c', accepted_paths: [], ignored_paths: [], rejected_paths: [], reason: 'reviewed-no-change; zero authored files; no commit'});
+        expect(finalRecord).toEqual(attemptTwo);
+        expect(finalRecord).not.toHaveProperty('promoted_commit');
+
+        const auditCalls = fs.readFileSync(fixture.checklistCalls, 'utf8').trim().split('\n').filter(Boolean)
+          .map(line => JSON.parse(line).args as string[])
+          .filter(args => args[0] === 'audit');
+        const finalAuditCalls = auditCalls.filter(args =>
+          ['spec_lint_decomposition_adds_refinement', 'spec_lint_formalization_quality', 'solver_modeling_opportunity', 'under_modeled_requirements_clean']
+            .every(check => args.includes(check)) && !args.includes('--only'));
+        expect(finalAuditCalls).toHaveLength(1);
+        const recoveredJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), recovered.checkpoint);
+        const recoveredProjection = recoveredJournal.getInstanceProjection() as any;
+        const recoveredActive = new Set(Object.values(recoveredProjection.activeGenerationIdByNode || {}));
+        const activeGenerations = Object.values(recoveredProjection.generationsById || {})
+          .filter((generation: any) => generation && generation.status !== 'inactive' && recoveredActive.has(generation.nodeGenerationId));
+        expect(activeGenerations.filter((generation: any) => generation.checkId === 'spec-review-1-audit' && generation.status === 'completed')).toHaveLength(1);
+        expect(activeGenerations.filter((generation: any) => generation.checkId === 'checklist-spec-review-1')).toHaveLength(1);
+        expect(activeGenerations.find((generation: any) => generation.checkId === 'checklist-spec-review-1')?.status).toBe('ready');
+        expect(activeGenerations.filter((generation: any) => generation.checkId === 'promote-native-component' && generation.scope[generation.scope.length - 1]?.key === 'component-a' && generation.status === 'completed')).toHaveLength(1);
+      } finally {
+        fs.rmSync(recoveryOutput, {recursive: true, force: true});
+      }
+    } finally {
+      ai.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      worktreeManager.configure(previousWorktreeConfig);
+      fs.rmSync(fixtureWorktreeCache, {recursive: true, force: true});
       fixture.cleanup();
     }
   });
@@ -1708,6 +1928,159 @@ describe('production traces-light continuation graph', () => {
           .rejects.toThrow(/prior frontier pointer does not match/);
       } finally {
         fs.rmSync(tamperedRoot, {recursive: true, force: true});
+      }
+    } finally {
+      fs.rmSync(tempRoot, {recursive: true, force: true});
+    }
+  });
+
+  const promotionRecoveryFixtureTest = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT ? it : it.skip;
+  promotionRecoveryFixtureTest('selects only current failed spec-review promotions from the retained partial checkpoint', async () => {
+    const evidenceRoot = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT as string;
+    const output = path.join(evidenceRoot, 'spec-review-1-live-20260921T204652Z');
+    const checkpointPath = path.join(output, 'checkpoint.partial.json');
+    const configPath = path.join(output, 'checklist-materialized-config.json');
+    if (![checkpointPath, configPath].every(file => fs.existsSync(file))) {
+      throw new Error('promotion recovery fixture is incomplete');
+    }
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const selected = selectFailedSpecReviewPromotionRecovery(config, checkpoint, output, 'spec-review-1');
+    expect(selected.map(item => ({componentId: item.componentId, generationId: item.generationId}))).toEqual([
+      {componentId: 'unicode-escape', generationId: '13d53f877a76e5546be1e559790af9cec26287d3882ac41c4ff31793fa64561b'},
+      {componentId: 'benchmark-suite', generationId: '4544e6d8e113efdc11f16e19bc3ed536e2147fe3cc5b05df77ce15cfd2297a0d'},
+    ]);
+    expect(selected.every(item => item.promotion.reason === 'writer delta contains no promotable native authored files')).toBe(true);
+    expect(selected.every(item => item.auditReceipt.status === 'pass')).toBe(true);
+    expect(selected.every(item => item.auditReceipt.attempt === 1)).toBe(true);
+  });
+
+  promotionRecoveryFixtureTest('retries only failed promotions and stops at the clean spec-review confirmation frontier', async () => {
+    const evidenceRoot = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT as string;
+    const output = path.join(evidenceRoot, 'spec-review-1-live-20260921T204652Z');
+    const checkpointPath = path.join(output, 'checkpoint.partial.json');
+    const configPath = path.join(output, 'checklist-materialized-config.json');
+    if (![checkpointPath, configPath].every(file => fs.existsSync(file))) {
+      throw new Error('promotion recovery fixture is incomplete');
+    }
+    const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8')) as any;
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as any;
+    const selected = selectFailedSpecReviewPromotionRecovery(config, checkpoint, output, 'spec-review-1');
+    const tempOutput = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-promotion-recovery-run-'));
+    const previous = new Map<string, string | undefined>([
+      ['NATIVE_ONBOARDING_OUTPUT_DIR', process.env.NATIVE_ONBOARDING_OUTPUT_DIR],
+      ['NATIVE_ONBOARDING_REPO_ROOT', process.env.NATIVE_ONBOARDING_REPO_ROOT],
+      ['NATIVE_ONBOARDING_TS_NODE', process.env.NATIVE_ONBOARDING_TS_NODE],
+      ['NATIVE_CHECKLIST_CONTINUE_STEP', process.env.NATIVE_CHECKLIST_CONTINUE_STEP],
+      ['PROOF_BIN', process.env.PROOF_BIN],
+      ['VISOR_WORKSPACE_MAIN_PROJECT', process.env.VISOR_WORKSPACE_MAIN_PROJECT],
+      ['REQUEST_TIMEOUT', process.env.REQUEST_TIMEOUT],
+    ]);
+    try {
+      process.env.NATIVE_ONBOARDING_OUTPUT_DIR = tempOutput;
+      process.env.NATIVE_ONBOARDING_REPO_ROOT = process.cwd();
+      process.env.NATIVE_ONBOARDING_TS_NODE = require.resolve('ts-node/register/transpile-only');
+      process.env.NATIVE_CHECKLIST_CONTINUE_STEP = 'spec-review-1';
+      process.env.PROOF_BIN = '/private/tmp/proof-d21d4c808-build.wny8Zf/proof-d21d4c808';
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = '/private/tmp/native-checklist-live.UA9hMp/subject';
+      process.env.REQUEST_TIMEOUT = '120000';
+      const engine = new StateMachineExecutionEngine(process.env.VISOR_WORKSPACE_MAIN_PROJECT);
+      const recovered = await executeSpecReviewPromotionRecovery(engine, config, checkpoint, 120000, selected);
+      expect(canonicalGraphCheckpointJson(recovered.checkpoint.events.slice(0, checkpoint.events.length)))
+        .toBe(canonicalGraphCheckpointJson(checkpoint.events));
+      const suffix = recovered.checkpoint.events.slice(checkpoint.events.length);
+      const starts = suffix.filter(event => event.type === 'AttemptStarted');
+      expect(starts.filter(event => event.checkId === 'promote-native-component')).toHaveLength(2);
+      expect(starts.filter(event => event.checkId === 'author-native-component' || event.checkId === 'spec-review-audit')).toHaveLength(0);
+      expect(starts.filter(event => event.checkId === 'checklist-spec-review-1')).toHaveLength(0);
+      for (const componentId of ['unicode-escape', 'benchmark-suite']) {
+        const token = Buffer.from(componentId).toString('base64url');
+        const recordPath = path.join(tempOutput, 'promotion-results', `${token}.json`);
+        const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+        expect(record).toMatchObject({
+          status: 'promoted',
+          component_id: componentId,
+          accepted_paths: [],
+          ignored_paths: [],
+          rejected_paths: [],
+          reason: 'reviewed-no-change; zero authored files; no commit',
+        });
+        expect(record).not.toHaveProperty('promoted_commit');
+        const attemptOne = JSON.parse(fs.readFileSync(path.join(tempOutput, 'promotion-results', token, 'attempt-1.json'), 'utf8'));
+        expect(attemptOne).toMatchObject({status: 'rejected', component_id: componentId, reason: 'writer delta contains no promotable native authored files'});
+        const attemptTwo = JSON.parse(fs.readFileSync(path.join(tempOutput, 'promotion-results', token, 'attempt-2.json'), 'utf8'));
+        expect(attemptTwo).toEqual(record);
+      }
+      const finalJournal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), recovered.checkpoint);
+      const projection = finalJournal.getInstanceProjection() as any;
+      const active = new Set(Object.values(projection.activeGenerationIdByNode || {}));
+      const activeGenerations = Object.values(projection.generationsById || {})
+        .filter((generation: any) => generation && generation.status !== 'inactive' && active.has(generation.nodeGenerationId));
+      expect(activeGenerations.filter((generation: any) => generation.checkId === 'spec-review-1-audit' && generation.status === 'completed')).toHaveLength(1);
+      const checklist = activeGenerations.filter((generation: any) => generation.checkId === 'checklist-spec-review-1');
+      expect(checklist).toHaveLength(1);
+      expect((checklist[0] as any).status).toBe('ready');
+    } finally {
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tempOutput, {recursive: true, force: true});
+    }
+  });
+
+  const promotionRecoveryCliTest = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT &&
+    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_PROOF &&
+    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ORIGINAL_ROOT &&
+    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_CODEX_BIN &&
+    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_CODEX_SHA256 ? it : it.skip;
+  promotionRecoveryCliTest('classifies the retained failed-promotion checkpoint through the real CLI loader without dispatch', async () => {
+    const evidenceRoot = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT as string;
+    const proof = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_PROOF as string;
+    const original = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ORIGINAL_ROOT as string;
+    const codex = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_CODEX_BIN as string;
+    const codexSha256 = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_CODEX_SHA256 as string;
+    const outputRoot = path.join(evidenceRoot, 'spec-review-1-live-20260921T204652Z');
+    const checkpointPath = path.join(outputRoot, 'checkpoint.partial.json');
+    const subject = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_SUBJECT || path.join(evidenceRoot, 'subject');
+    if (![checkpointPath, subject, proof, original, codex].every(file => fs.existsSync(file))) {
+      throw new Error('promotion recovery CLI fixture is incomplete');
+    }
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-promotion-recovery-cli-'));
+    const output = path.join(tempRoot, 'output');
+    const env = {
+      ...process.env,
+      REQUEST_TIMEOUT: '1710000',
+      NATIVE_CHECKLIST_CONTINUE_STEP: 'spec-review-1',
+    };
+    delete env.CODEX_HOME;
+    const runner = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/run-onboarding.ts');
+    try {
+      const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner,
+        '--checklist-continue', checkpointPath, '--checklist-step', 'spec-review-1',
+        '--governed-codex-transport', 'exec-jsonl-default-auth-v1', '--codex-bin', codex,
+        '--codex-sha256', codexSha256,
+        '--subject-root', subject, '--original-root', original, '--proof-bin', proof,
+        '--output', output, '--timeout', '1800000', '--preflight-only'], {encoding: 'utf8', env});
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      const summary = JSON.parse(fs.readFileSync(path.join(output, 'preflight', 'summary.json'), 'utf8'));
+      expect(summary).toMatchObject({
+        status: 'preflight-only-complete',
+        checkpoint_classification: 'failed-promotion-recovery',
+        no_engine_dispatch: true,
+        current_catalog: {status: 'validated'},
+      });
+      expect(summary.promotion_recovery_component_ids).toEqual(['unicode-escape', 'benchmark-suite']);
+
+      const wrongRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-promotion-recovery-wrong-step-'));
+      try {
+        fs.copyFileSync(checkpointPath, path.join(wrongRoot, 'checkpoint.partial.json'));
+        fs.copyFileSync(path.join(outputRoot, 'checklist-materialized-config.json'), path.join(wrongRoot, 'checklist-materialized-config.json'));
+        await expect(validateChecklistContinuationCheckpoint(path.join(wrongRoot, 'checkpoint.partial.json'), {}, 'variables'))
+          .rejects.toThrow(/failed|running|frontier|no exact active/i);
+      } finally {
+        fs.rmSync(wrongRoot, {recursive: true, force: true});
       }
     } finally {
       fs.rmSync(tempRoot, {recursive: true, force: true});

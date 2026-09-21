@@ -426,6 +426,100 @@ function variablesReadbackSnapshot(): Record<string, unknown> {
   };
 }
 
+function specReviewReadbackSnapshot(): Record<string, unknown> {
+  const anchor = variablesReadbackSnapshot();
+  const confirmedAt = '2026-09-09T00:00:04Z';
+  const specReviewChecks = [
+    'spec_lint_decomposition_adds_refinement',
+    'spec_lint_formalization_quality',
+    'solver_modeling_opportunity',
+    'under_modeled_requirements_clean',
+  ];
+  const steps = (anchor.steps as Record<string, unknown>[]).map(step => {
+    if (step.step_id === 'spec-review-1') {
+      return {
+        ...step,
+        role: 'spec-review',
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        required_checks: specReviewChecks,
+        check_results: specReviewChecks.map(id => ({id, status: 'pass', at: confirmedAt})),
+      };
+    }
+    if (step.step_id === 'blocked-1') {
+      return {
+        ...step,
+        step_id: 'spec-review-2',
+        title: 'Spec review — deep pass with graph',
+        role: 'spec-review',
+        eligible: true,
+        unmet_requires: [],
+        effective_status: 'pending',
+        required_checks: ['spec_lint_spec_conformance_review_grounded', 'software_formalization_complete'],
+      };
+    }
+    if (step.step_id === 'blocked-2') {
+      return {
+        ...step,
+        step_id: 'surface-matrix',
+        title: 'Surface coverage matrix for declared packages',
+        role: 'surface-close',
+        scope: 'package',
+        eligible: true,
+        unmet_requires: [],
+        effective_status: 'pending',
+      };
+    }
+    return step;
+  });
+  return {
+    ...anchor,
+    steps,
+    steps_pending: 9,
+    counts: {confirmed: 6, skipped: 0, not_applicable: 0, pending: 2, blocked: 7},
+    eligible_step_ids: ['spec-review-2', 'surface-matrix'],
+    next: {
+      step_id: 'spec-review-2',
+      title: 'Spec review — deep pass with graph',
+      role: 'spec-review',
+      stamp: 'confirm',
+      scope: 'repo',
+      requires: ['spec-review-1'],
+      required_checks: ['spec_lint_spec_conformance_review_grounded', 'software_formalization_complete'],
+    },
+  };
+}
+
+function continuationProjectionWithSpecReview(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-variables');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'spec-review-generation',
+    nodeInstanceId: 'spec-review-node',
+    checkId: 'checklist-spec-review-1',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: {'spec-review-generation': generation},
+    activeGenerationIdByNode: {'spec-review-node': 'spec-review-generation'},
+  };
+}
+
 describe('native checklist progress projection', () => {
   it.each(['checklist-continuation-snapshot', 'checklist-traces-light', 'checklist-variables'] as const)(
     'projects a continuation checklist snapshot from the %s producer with full/affected/reused coverage',
@@ -643,6 +737,71 @@ describe('native checklist progress projection', () => {
     )?.[1];
     expect(embedded).toBeDefined();
     expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('uses current Proof readback for completed spec-review-1 and reports the post-confirmation 6/15 frontier', () => {
+    const anchor = variablesAnchorSnapshot();
+    const readback = specReviewReadbackSnapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSpecReview(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c', 'component-d'],
+      affectedComponentIds: [],
+    });
+    expect(progress.checklist.counts).toMatchObject({confirmed: 6, pending: 2, blocked: 7});
+    expect(progress.checklist.eligible_step_ids).toEqual(['spec-review-2', 'surface-matrix']);
+    expect(progress.checklist.steps.find(step => step.id === 'spec-review-1')).toMatchObject({
+      state: 'confirmed',
+      role: 'spec-review',
+      scope: 'repo',
+      required_checks: [
+        'spec_lint_decomposition_adds_refinement',
+        'spec_lint_formalization_quality',
+        'solver_modeling_opportunity',
+        'under_modeled_requirements_clean',
+      ],
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      anchor_claim_id: 'c'.repeat(64),
+      generation_id: 'spec-review-generation',
+      digest: sha256Canonical(readback),
+    });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=6');
+    expect(rendered.text).toContain('eligible=spec-review-2,surface-matrix');
+    expect(rendered.html).toContain('confirmed=6');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it.each([
+    ['wrong role', (step: Record<string, unknown>) => { step.role = 'review'; }],
+    ['wrong required check', (step: Record<string, unknown>) => {
+      step.required_checks = ['not-a-proof-check', ...(step.required_checks as string[]).slice(1)];
+    }],
+  ])('rejects spec-review-1 current readback with %s', (_label, mutate) => {
+    const readback = specReviewReadbackSnapshot();
+    const selected = (readback.steps as Record<string, unknown>[]).find(step => step.step_id === 'spec-review-1');
+    expect(selected).toBeDefined();
+    mutate(selected as Record<string, unknown>);
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSpecReview(variablesAnchorSnapshot()),
+      currentProofSnapshot: readback,
+    })).toThrow(/exact confirmed repository spec-review-1 evidence/);
+  });
+
+  it('rejects current spec-review-1 readback until its active generation is completed', () => {
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSpecReview(variablesAnchorSnapshot(), 'ready'),
+      currentProofSnapshot: specReviewReadbackSnapshot(),
+    })).toThrow(/completed spec-review-1 generation/);
   });
 
   it('rejects a variables readback until the active variables generation is completed', () => {
