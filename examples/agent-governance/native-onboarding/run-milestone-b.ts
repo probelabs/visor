@@ -2224,6 +2224,8 @@ function writeMilestoneBChecklistProgress(
   selectedRows: readonly ProofRow[],
   paused: boolean,
   resumed: boolean,
+  expansionPlan?: unknown,
+  currentProofInputs?: unknown,
 ): void {
   let progress;
   try {
@@ -2234,6 +2236,8 @@ function writeMilestoneBChecklistProgress(
       resumed,
       retainedCatalogComponentIds: [...new Set(catalogRows.map(row => row.component))],
       affectedComponentIds: [...new Set(selectedRows.map(row => row.component))],
+      expansionPlan,
+      currentProofInputs,
     });
   } catch (error) {
     // Milestone B can legitimately finish a graph frontier before a
@@ -2334,6 +2338,8 @@ async function pause(
     rows,
     true,
     false,
+    compileClaimPlan(config).expansionPlan,
+    rows.map(row => ({id: row.id, component: row.component, file_path: row.file_path, proof_file_hash: pauseHashes[row.id]})),
   );
   console.log(JSON.stringify({ mode: 'pause', status: 'quiescent-ready-frontier', held_scope: held, output }, null, 2));
 }
@@ -2368,6 +2374,25 @@ async function resume(
   }
   if (stale.length) {
     writeJson(path.join(output, 'resume', 'stale-inputs.json'), stale);
+    // Use the same zero-model/config normalization as the live resume path so
+    // the restored checkpoint is checked against the exact compiled graph.
+    const {config: staleConfig} = await configForSubject(subject, output);
+    const staleProjection = ExecutionJournal.restoreGraphCheckpoint(
+      compileClaimPlan(staleConfig),
+      checkpoint,
+    ).getInstanceProjection();
+    writeMilestoneBChecklistProgress(
+      output,
+      'resumed',
+      staleProjection,
+      checkpoint,
+      catalogRows,
+      rows,
+      false,
+      true,
+      compileClaimPlan(staleConfig).expansionPlan,
+      rows.map(row => ({id: row.id, component: row.component, file_path: row.file_path, proof_file_hash: currentHashes[row.id]})),
+    );
     throw new Error(`Proof inputs changed since prepare (${stale.map(item => String(item.id)).join(', ')})`);
   }
 
@@ -2445,6 +2470,8 @@ async function resume(
     rows,
     false,
     true,
+    compileClaimPlan(config).expansionPlan,
+    rows.map(row => ({id: row.id, component: row.component, file_path: row.file_path, proof_file_hash: currentHashes[row.id]})),
   );
   console.log(JSON.stringify({ mode: 'resume', status: 'completed-or-reviewed-state-recorded', output }, null, 2));
 }

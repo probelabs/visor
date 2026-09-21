@@ -69,6 +69,8 @@ export type ChecklistProgressRefreshOptions = Readonly<{
   resumed?: boolean;
   retainedCatalogComponentIds?: readonly string[];
   affectedComponentIds?: readonly string[];
+  currentProofInputs?: unknown;
+  expansionPlan?: unknown;
 }>;
 
 export type RecoveryTerminalStage =
@@ -125,6 +127,8 @@ export function writeNativeChecklistProgress(
     resumed: options.resumed,
     retainedCatalogComponentIds: options.retainedCatalogComponentIds,
     affectedComponentIds: options.affectedComponentIds,
+    expansionPlan: options.expansionPlan,
+    currentProofInputs: options.currentProofInputs,
     currentProofSnapshot,
   });
   const rendered = renderNativeChecklistProgress(progress);
@@ -142,13 +146,14 @@ function writeRestoredChecklistProgress(
   liveInstanceProjection?: unknown,
   currentProofSnapshot?: unknown,
 ): NativeChecklistProgress {
-  const journal = ExecutionJournal.restoreGraphCheckpoint(compileClaimPlan(config), checkpoint);
+  const claimPlan = compileClaimPlan(config);
+  const journal = ExecutionJournal.restoreGraphCheckpoint(claimPlan, checkpoint);
   return writeNativeChecklistProgress(
     output,
     journal.getClaimProjection(),
     liveInstanceProjection ?? journal.getInstanceProjection(),
     checkpoint,
-    options,
+    {...options, expansionPlan: claimPlan.expansionPlan},
     currentProofSnapshot,
   );
 }
@@ -6891,7 +6896,11 @@ async function main(): Promise<void> {
         latestChecklistCheckpoint,
         checklistProgressObservation,
         undefined,
-        postflightValues.checklist,
+        // A postflight checklist show is current-readback authority only for
+        // an explicit continuation.  Bootstrap/skeleton resume must remain
+        // bound to the newest checkpoint claim; the readback has no
+        // continuation anchor and would otherwise mask the real summary.
+        checklistContinuationEvidence ? postflightValues.checklist : undefined,
       );
     } catch {
       checklistProgress = undefined;

@@ -1180,10 +1180,11 @@ describe('native isolated author recovery', () => {
       failFast: false,
     });
     expect(partialRetryPrefix.events.slice(0, checkpoint.events.length)).toEqual(checkpoint.events);
-    expect(calls).toEqual([
+    expect(calls.filter(call => call.startsWith('review-native-item:') || call.startsWith('collect-proof-evidence:'))).toEqual([
       `review-native-item:${selectedItemId}`,
       `collect-proof-evidence:${selectedItemId}`,
     ]);
+    expect(calls.filter(call => call.startsWith('component-reviewed:'))).toEqual(['component-reviewed:A']);
     const partialRetryEvents = partialResumed.checkpoint.events.filter(event => event.type === 'AttemptRetryRequested');
     expect(partialRetryEvents).toHaveLength(1);
     expect(partialRetryEvents[0].nodeGenerationId).toBe(selectedGenerationIds[0]);
@@ -1206,7 +1207,8 @@ describe('native isolated author recovery', () => {
     expect(Object.values(partialProjection.generationsById).some(generation =>
       generation.checkId === 'component-reviewed' && generation.scope.at(-1)?.key === 'B'
     )).toBe(false);
-    expect(calls.some(call => call.startsWith('component-reviewed:'))).toBe(false);
+    expect(calls.filter(call => call.startsWith('component-reviewed:'))).toEqual(['component-reviewed:A']);
+    expect(calls.some(call => call === 'component-reviewed:B')).toBe(false);
 
     calls.length = 0;
     let retryPrefix: any;

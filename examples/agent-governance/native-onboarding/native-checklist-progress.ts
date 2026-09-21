@@ -9,6 +9,7 @@
 import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { ClaimProjection } from '../../../src/state-machine/graph/claim-kernel';
 import type { InstanceProjection } from '../../../src/state-machine/graph/instance-kernel';
+import type { ExpansionPlan } from '../../../src/state-machine/graph/instance-plan';
 
 type Json = Record<string, unknown>;
 
@@ -56,6 +57,10 @@ export type NativeChecklistProgressInput = Readonly<{
   retainedCatalogComponentIds?: readonly string[];
   /** Component IDs with newly derived work in this continuation stage. */
   affectedComponentIds?: readonly string[];
+  /** The compiled expansion topology used to prove missing-node conditions. */
+  expansionPlan?: ExpansionPlan | unknown;
+  /** Current Proof req-list/req-show identity tuples, when a stale check is requested. */
+  currentProofInputs?: unknown;
 }>;
 
 export type NativeChecklistProgressState =
@@ -141,6 +146,8 @@ export type NativeChecklistProgress = Readonly<{
       integrity_digest?: string;
       checkpoint_timestamp?: string;
       checkpoint_present: boolean;
+      provenance?: 'checkpoint' | 'live_projection';
+      durable_through_event_id?: number;
     }>;
   }>;
   paused: boolean;
@@ -188,11 +195,22 @@ export type NativeChecklistOperationalCollection = Readonly<{
   pending_count: number;
   unknown_count: number;
   unexpanded_count: number;
+  blocked_count: number;
+  stale_count: number;
   items: readonly Readonly<{
     id: string;
     state: NativeChecklistOperationalState;
     check_ids: readonly string[];
+    conditions?: readonly NativeChecklistOperationalCondition[];
+    /** Singular compatibility view for consumers rendering one condition. */
+    condition?: NativeChecklistOperationalCondition;
   }>[];
+}>;
+
+export type NativeChecklistOperationalCondition = Readonly<{
+  state: 'blocked' | 'stale';
+  kind: 'waiting' | 'failed_dependency' | 'changed_input';
+  evidence: Readonly<Record<string, unknown>>;
 }>;
 
 export type NativeChecklistCatalogCoverage = Readonly<{
@@ -747,6 +765,8 @@ export type NativeChecklistProjectionInput = Readonly<{
   affectedComponentIds?: readonly string[];
   /** Current Proof `checklist show` bytes, bound to the completed selected continuation run. */
   currentProofSnapshot?: unknown;
+  expansionPlan?: ExpansionPlan | unknown;
+  currentProofInputs?: unknown;
 }>;
 
 const MILESTONE_B_COMPONENT_SUMMARY_CLAIM = 'native.component.summary@1';
@@ -874,6 +894,8 @@ export type NativeMilestoneBChecklistProjectionInput = Readonly<{
   resumed?: boolean;
   retainedCatalogComponentIds?: readonly string[];
   affectedComponentIds?: readonly string[];
+  expansionPlan?: ExpansionPlan | unknown;
+  currentProofInputs?: unknown;
 }>;
 
 export function buildNativeChecklistProgressFromMilestoneBProjections(
@@ -896,6 +918,8 @@ export function buildNativeChecklistProgressFromMilestoneBProjections(
     resumed: input.resumed,
     retainedCatalogComponentIds: input.retainedCatalogComponentIds,
     affectedComponentIds: input.affectedComponentIds,
+    expansionPlan: input.expansionPlan,
+    currentProofInputs: input.currentProofInputs,
   });
 }
 
@@ -962,12 +986,15 @@ export function buildNativeChecklistProgressFromProjections(
     resumed: input.resumed,
     retainedCatalogComponentIds: input.retainedCatalogComponentIds,
     affectedComponentIds: input.affectedComponentIds,
+    expansionPlan: input.expansionPlan,
+    currentProofInputs: input.currentProofInputs,
   });
 }
 
 function checkpointEvidence(
   checkpoint: unknown,
-  checkpointTimestamp: unknown
+  checkpointTimestamp: unknown,
+  instanceProjection?: unknown,
 ): NativeChecklistProgress['evidence']['journal'] {
   if (checkpoint === undefined) {
     if (checkpointTimestamp !== undefined)
@@ -1009,6 +1036,17 @@ function checkpointEvidence(
   if (timestamp !== undefined && (typeof timestamp !== 'string' || !isRFC3339(timestamp))) {
     throw new Error('checkpoint timestamp must be an RFC3339 timestamp');
   }
+  const projectionEventId = isRecord(instanceProjection) && typeof instanceProjection.lastEventId === 'number' && Number.isSafeInteger(instanceProjection.lastEventId)
+    ? instanceProjection.lastEventId
+    : undefined;
+  const checkpointEventId = typeof lastEventId === 'number' ? lastEventId : undefined;
+  const provenance = projectionEventId === undefined || checkpointEventId === undefined
+    ? undefined
+    : projectionEventId === checkpointEventId
+      ? 'checkpoint' as const
+      : projectionEventId > checkpointEventId
+        ? 'live_projection' as const
+        : undefined;
   return {
     checkpoint_present: true,
     ...(optionalString(checkpoint.sessionId) ? { session_id: checkpoint.sessionId as string } : {}),
@@ -1017,6 +1055,10 @@ function checkpointEvidence(
     ...(graphDigest ? { graph_semantic_digest: graphDigest } : {}),
     ...(optionalString(integrity?.digest) ? { integrity_digest: integrity!.digest as string } : {}),
     ...(typeof timestamp === 'string' ? { checkpoint_timestamp: timestamp } : {}),
+    ...(provenance ? { provenance } : {}),
+    ...(provenance === 'live_projection' && checkpointEventId !== undefined
+      ? { durable_through_event_id: checkpointEventId }
+      : {}),
   };
 }
 
@@ -1039,27 +1081,48 @@ function operationalState(statuses: readonly string[]): NativeChecklistOperation
   return 'unknown';
 }
 
+type OperationalItem = Readonly<{
+  id: string;
+  status: string;
+  checkId?: string;
+  kind?: OperationalKind;
+  condition?: NativeChecklistOperationalCondition;
+}>;
+
+function conditionKey(condition: NativeChecklistOperationalCondition): string {
+  return canonicalJson(condition);
+}
+
 function collection(
-  items: readonly Readonly<{ id: string; status: string; checkId: string }>[],
+  items: readonly OperationalItem[],
   known: boolean,
   unexpandedCount = 0
 ): NativeChecklistOperationalCollection {
-  const grouped = new Map<string, { statuses: string[]; checks: string[] }>();
+  const grouped = new Map<string, { statuses: string[]; checks: string[]; conditions: NativeChecklistOperationalCondition[] }>();
   for (const item of items) {
-    const group = grouped.get(item.id) ?? { statuses: [], checks: [] };
+    const group = grouped.get(item.id) ?? { statuses: [], checks: [], conditions: [] };
     group.statuses.push(item.status);
-    if (!group.checks.includes(item.checkId)) group.checks.push(item.checkId);
+    if (item.checkId && !group.checks.includes(item.checkId)) group.checks.push(item.checkId);
+    if (item.condition && !group.conditions.some(existing => conditionKey(existing) === conditionKey(item.condition!))) {
+      group.conditions.push(item.condition);
+    }
     grouped.set(item.id, group);
   }
   const output = [...grouped.entries()]
     .sort(([a], [b]) => Buffer.from(a).compare(Buffer.from(b)))
-    .map(([id, group]) => ({
-      id,
-      state: operationalState(group.statuses),
-      check_ids: group.checks.sort((a, b) => Buffer.from(a).compare(Buffer.from(b))),
-    }));
+    .map(([id, group]) => {
+      const conditions = group.conditions.sort((a, b) => Buffer.from(conditionKey(a)).compare(Buffer.from(conditionKey(b))));
+      return {
+        id,
+        state: operationalState(group.statuses),
+        check_ids: group.checks.sort((a, b) => Buffer.from(a).compare(Buffer.from(b))),
+        ...(conditions.length ? {conditions, condition: conditions[0]} : {}),
+      };
+    });
   const count = (state: NativeChecklistOperationalState) =>
     output.filter(item => item.state === state).length;
+  const conditionCount = (state: NativeChecklistOperationalCondition['state']) =>
+    output.filter(item => item.conditions?.some(condition => condition.state === state)).length;
   return {
     known,
     known_count: output.length,
@@ -1069,6 +1132,8 @@ function collection(
     pending_count: count('pending'),
     unknown_count: count('unknown'),
     unexpanded_count: unexpandedCount,
+    blocked_count: conditionCount('blocked'),
+    stale_count: conditionCount('stale'),
     items: output,
   };
 }
@@ -1111,6 +1176,379 @@ function catalogCoverage(
 
 type OperationalKind = 'project' | 'component' | 'specification' | 'batch';
 
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+type NativeProofInputTuple = Readonly<{
+  id: string;
+  componentId: string;
+  filePath: string;
+  proofFileHash: string;
+}>;
+
+function digest(value: unknown): value is string {
+  return typeof value === 'string' && SHA256_DIGEST.test(value);
+}
+
+function tupleField(value: Json, ...keys: string[]): unknown {
+  for (const key of keys) if (Object.prototype.hasOwnProperty.call(value, key)) return value[key];
+  return undefined;
+}
+
+function normalizeProofTuple(value: unknown, label: string): NativeProofInputTuple {
+  if (!isRecord(value)) throw new Error(`${label} must be an object`);
+  const nested = isRecord(value.requirement) ? value.requirement : value;
+  const id = tupleField(nested, 'id', 'requirement_id');
+  const componentId = tupleField(nested, 'component_id', 'componentId', 'component');
+  const filePath = tupleField(value, 'file_path', 'filePath') ?? tupleField(nested, 'file_path', 'filePath');
+  const proofFileHash = tupleField(nested, 'proof_file_hash', 'proofFileHash', 'file_hash', 'fileHash');
+  if (typeof id !== 'string' || !id || typeof componentId !== 'string' || !componentId ||
+      typeof filePath !== 'string' || !filePath || !digest(proofFileHash)) {
+    throw new Error(`${label} is not a complete Proof req-list/req-show tuple`);
+  }
+  return {id, componentId, filePath, proofFileHash};
+}
+
+function currentProofTuples(value: unknown): NativeProofInputTuple[] | undefined {
+  if (value === undefined) return undefined;
+  let source: unknown = value;
+  if (isRecord(value)) {
+    source = value.items ?? value.requirements ?? value.rows ?? value.req_list ?? value.reqList ?? value.current;
+    if (source === undefined && (value.id !== undefined || value.requirement !== undefined)) source = [value];
+  }
+  if (!Array.isArray(source)) throw new Error('current Proof inputs must be an array of req-list/req-show tuples');
+  const tuples = source.map((item, index) => normalizeProofTuple(item, `current Proof input ${index}`));
+  const identities = new Set<string>();
+  const ids = new Set<string>();
+  for (const tuple of tuples) {
+    const identity = `${tuple.id}\0${tuple.componentId}\0${tuple.filePath}`;
+    if (identities.has(identity) || ids.has(tuple.id)) throw new Error(`current Proof inputs contain a duplicate tuple for ${tuple.id}`);
+    identities.add(identity);
+    ids.add(tuple.id);
+  }
+  return tuples;
+}
+
+function projectionGraphDigest(projection: unknown): string | undefined {
+  return isRecord(projection) && typeof projection.graphSemanticDigest === 'string'
+    ? projection.graphSemanticDigest
+    : undefined;
+}
+
+function checkpointGraphDigest(checkpoint: unknown): string | undefined {
+  return isRecord(checkpoint)
+    ? optionalString(checkpoint.graphSemanticDigest) ?? optionalString(checkpoint.graph_semantic_digest)
+    : undefined;
+}
+
+function expansionAuthority(
+  plan: unknown,
+  projection: unknown,
+  checkpoint: unknown,
+): {valid: boolean; reason?: string} {
+  if (!plan) return {valid: false, reason: 'compiled expansion topology was not supplied'};
+  if (!isRecord(plan) || typeof plan.graphSemanticDigest !== 'string' || !isRecord(plan.templatesByName)) {
+    throw new Error('compiled expansion topology is malformed');
+  }
+  const expected = plan.graphSemanticDigest;
+  const checkpointDigest = checkpointGraphDigest(checkpoint);
+  if (checkpointDigest !== undefined && checkpointDigest !== expected) {
+    return {valid: false, reason: 'checkpoint graph semantic digest does not match the compiled expansion topology'};
+  }
+  if (isRecord(projection)) {
+    const projectionDigest = projectionGraphDigest(projection);
+    if (projectionDigest !== undefined && projectionDigest !== expected) {
+      return {valid: false, reason: 'instance projection graph semantic digest does not match the compiled expansion topology'};
+    }
+    if (isRecord(projection.instancesById)) {
+      for (const instance of Object.values(projection.instancesById)) {
+        if (isRecord(instance) && typeof instance.graphSemanticDigest === 'string' && instance.graphSemanticDigest !== expected) {
+          return {valid: false, reason: 'active expansion instance graph semantic digest does not match the compiled expansion topology'};
+        }
+      }
+    }
+  }
+  return {valid: true};
+}
+
+function templateForInstance(plan: Json, instance: Json): Json | undefined {
+  const digestValue = instance.templateDigest;
+  if (typeof digestValue !== 'string' || !isRecord(plan.templatesByName)) return undefined;
+  return Object.values(plan.templatesByName).find(template =>
+    isRecord(template) && template.templateDigest === digestValue,
+  );
+}
+
+function conditionForDependency(
+  target: Json,
+  targetNode: Json,
+  prerequisite: Json,
+  targetStatus: 'waiting' | 'failed_dependency',
+  source: 'dependency' | 'expansion_barrier',
+): NativeChecklistOperationalCondition {
+  const evidence: Json = {source, prerequisite_status: prerequisite.status};
+  const optionalEvidence = [
+    ['target_node_instance_id', target.nodeInstanceId],
+    ['target_check_id', targetNode.templateNodeKey],
+    ['prerequisite_node_instance_id', prerequisite.nodeInstanceId],
+    ['prerequisite_check_id', prerequisite.templateNodeKey],
+    ['prerequisite_generation_id', prerequisite.nodeGenerationId],
+  ] as const;
+  for (const [key, value] of optionalEvidence) if (typeof value === 'string') evidence[key] = value;
+  return {
+    state: 'blocked',
+    kind: targetStatus,
+    evidence,
+  };
+}
+
+function nativeConditionEntries(
+  planValue: unknown,
+  projectionValue: unknown,
+  checkpoint: unknown,
+  currentInputsValue: unknown,
+): {items: OperationalItem[]; unknown: string[]} {
+  const authority = expansionAuthority(planValue, projectionValue, checkpoint);
+  if (!authority.valid) return {items: [], unknown: [authority.reason || 'compiled expansion topology is unverifiable']};
+  if (!isRecord(planValue) || !isRecord(projectionValue) || !isRecord(projectionValue.instancesById) ||
+      !isRecord(projectionValue.nodesById) || !isRecord(projectionValue.activeGenerationIdByNode) ||
+      !isRecord(projectionValue.generationsById)) {
+    return {items: [], unknown: ['native operational conditions are unavailable from the instance projection']};
+  }
+  const currentInputs = currentProofTuples(currentInputsValue);
+  const items: OperationalItem[] = [];
+  const unknown: string[] = [];
+  const activeGeneration = (nodeId: string): Json | undefined => {
+    const generationId = projectionValue.activeGenerationIdByNode?.[nodeId];
+    if (typeof generationId !== 'string') return undefined;
+    const generation = projectionValue.generationsById?.[generationId];
+    return isRecord(generation) && generation.status !== 'inactive' ? generation : undefined;
+  };
+  const nodeFor = (instance: Json, templateNodeKey: string): Json | undefined => {
+    const nodeId = isRecord(instance.nodeInstanceIdsByTemplateNode) ? instance.nodeInstanceIdsByTemplateNode[templateNodeKey] : undefined;
+    if (typeof nodeId !== 'string') return undefined;
+    if (isRecord(projectionValue.nodesById?.[nodeId])) return projectionValue.nodesById[nodeId] as Json;
+    // The instance mapping is authoritative for an expected node even when
+    // its node projection has not materialized yet.  Carry only identity and
+    // the exact owning scope; never invent a generation or execution state.
+    return Array.isArray(instance.scope)
+      ? {nodeInstanceId: nodeId, templateNodeKey, scope: instance.scope}
+      : undefined;
+  };
+  const itemIdFor = (node: Json): string | undefined => {
+    const scope = Array.isArray(node.scope) ? node.scope : [];
+    const keyed = scope.filter(isRecord).filter(part => part.kind === 'keyed');
+    const last = keyed[keyed.length - 1];
+    return typeof last?.key === 'string' ? last.key : undefined;
+  };
+  const itemKindFor = (node: Json, checkId: string): OperationalKind => {
+    const scope = Array.isArray(node.scope) ? node.scope.filter(isRecord) : [];
+    const owner = scope.length ? optionalString(scope[scope.length - 1].expansionOwnerCheck) : undefined;
+    if (owner === 'discover-native-components') return 'component';
+    if (owner === 'enumerate-native-specs' || owner === '["native-component","enumerate-native-specs"]' || checkId === 'review-native-item' || checkId === 'collect-proof-evidence') return 'specification';
+    if (scope.filter(part => part.kind === 'keyed').length > 3) return 'batch';
+    return 'component';
+  };
+  const componentGenerationFor = (componentId: string): {generation: Json; node: Json} | undefined => {
+    const candidates: Array<{generation: Json; node: Json; depth: number}> = [];
+    for (const [nodeId, rawNode] of Object.entries(projectionValue.nodesById)) {
+      if (!isRecord(rawNode)) continue;
+      const scope = Array.isArray(rawNode.scope) ? rawNode.scope.filter(isRecord) : [];
+      const keyed = scope.filter(part => part.kind === 'keyed');
+      const componentPart = keyed.at(-1);
+      if (componentPart?.expansionOwnerCheck !== 'discover-native-components' || componentPart.key !== componentId) continue;
+      const generation = activeGeneration(nodeId);
+      if (!generation) continue;
+      candidates.push({generation, node: rawNode, depth: scope.length});
+    }
+    // A projection may retain a generation without a corresponding node entry;
+    // its active binding and exact component-owned scope are still authoritative.
+    for (const [generationId, rawGeneration] of Object.entries(projectionValue.generationsById)) {
+      if (!isRecord(rawGeneration) || rawGeneration.status === 'inactive') continue;
+      const nodeId = rawGeneration.nodeInstanceId;
+      if (typeof nodeId !== 'string' || projectionValue.activeGenerationIdByNode[nodeId] !== generationId) continue;
+      const scope = Array.isArray(rawGeneration.scope) ? rawGeneration.scope.filter(isRecord) : [];
+      const keyed = scope.filter(part => part.kind === 'keyed');
+      const componentPart = keyed.at(-1);
+      if (componentPart?.expansionOwnerCheck !== 'discover-native-components' || componentPart.key !== componentId) continue;
+      if (candidates.some(candidate => candidate.generation.nodeGenerationId === rawGeneration.nodeGenerationId)) continue;
+      candidates.push({generation: rawGeneration, node: rawGeneration, depth: scope.length});
+    }
+    candidates.sort((left, right) => left.depth - right.depth || Buffer.from(String(left.generation.nodeGenerationId || '')).compare(Buffer.from(String(right.generation.nodeGenerationId || ''))));
+    return candidates[0];
+  };
+  const add = (node: Json, condition: NativeChecklistOperationalCondition): void => {
+    const id = itemIdFor(node);
+    const checkId = optionalString(node.templateNodeKey) ?? optionalString(node.checkId);
+    if (!id || !checkId) return;
+    items.push({id, status: 'pending', checkId, kind: itemKindFor(node, checkId), condition});
+  };
+  const instances = Object.values(projectionValue.instancesById)
+    .filter(isRecord)
+    .filter(instance => instance.status === 'active')
+    .sort((left, right) => Buffer.from(String(left.subgraphInstanceId || '')).compare(Buffer.from(String(right.subgraphInstanceId || ''))));
+  for (const instance of instances) {
+    const template = templateForInstance(planValue, instance);
+    if (!template || !isRecord(template.nodesByKey) || !isRecord(instance.nodeInstanceIdsByTemplateNode)) continue;
+    for (const [templateNodeKey, rawNode] of Object.entries(template.nodesByKey)) {
+      if (!isRecord(rawNode) || !isRecord(rawNode.check)) continue;
+      const node = nodeFor(instance, templateNodeKey);
+      if (!node) continue;
+      const active = activeGeneration(String(node.nodeInstanceId));
+      if (active) continue; // A ready target is pending, never blocked.
+      const check = rawNode.check;
+      // Conditional/optional paths have no unconditional expected target and
+      // therefore cannot supply blocker evidence from absence alone.
+      if (['if', 'assume', 'forEach', 'for_each', 'optional'].some(key => Object.prototype.hasOwnProperty.call(check, key))) continue;
+      const dependencies = Array.isArray(rawNode.dependencyNodeKeys)
+        ? rawNode.dependencyNodeKeys.filter((value): value is string => typeof value === 'string')
+        : [];
+      const prerequisites = dependencies.map(key => nodeFor(instance, key)).filter((value): value is Json => value !== undefined);
+      const failed = prerequisites.map(node => ({node, generation: activeGeneration(String(node.nodeInstanceId))})).find(value => value.generation?.status === 'failed');
+      const waiting = prerequisites.map(node => ({node, generation: activeGeneration(String(node.nodeInstanceId))})).find(value => value.generation?.status === 'ready' || value.generation?.status === 'running');
+      if (failed?.generation) add(node, conditionForDependency(node, node, {...failed.generation, nodeInstanceId: failed.node.nodeInstanceId, templateNodeKey: failed.node.templateNodeKey}, 'failed_dependency', 'dependency'));
+      else if (waiting?.generation) add(node, conditionForDependency(node, node, {...waiting.generation, nodeInstanceId: waiting.node.nodeInstanceId, templateNodeKey: waiting.node.templateNodeKey}, 'waiting', 'dependency'));
+
+      const wait = rawNode.waitForExpansion;
+      if (wait && typeof wait === 'object' && !Array.isArray(wait) && typeof (wait as Json).owner === 'string' && typeof (wait as Json).terminal_node === 'string') {
+        const childInstances = instances.filter(child => {
+          if (child.parentSubgraphInstanceId !== instance.subgraphInstanceId) return false;
+          if (child.expansionOwnerCheck === (wait as Json).owner) return true;
+          // Nested expansion owners are serialized as their canonical path;
+          // the terminal segment is the exact compiled owner named by wait.
+          if (typeof child.expansionOwnerCheck !== 'string') return false;
+          try {
+            const ownerPath = JSON.parse(child.expansionOwnerCheck) as unknown;
+            return Array.isArray(ownerPath) && ownerPath.at(-1) === (wait as Json).owner;
+          } catch {
+            return false;
+          }
+        });
+        for (const child of childInstances) {
+          const childNode = nodeFor(child, String((wait as Json).terminal_node));
+          if (!childNode) continue;
+          const childGeneration = activeGeneration(String(childNode.nodeInstanceId));
+          if (childGeneration && (childGeneration.status === 'failed' || childGeneration.status === 'ready' || childGeneration.status === 'running')) {
+            const pseudo = {...childGeneration, nodeInstanceId: childNode.nodeInstanceId, templateNodeKey: childNode.templateNodeKey};
+            add(node, conditionForDependency(node, node, pseudo, childGeneration.status === 'failed' ? 'failed_dependency' : 'waiting', 'expansion_barrier'));
+            continue;
+          }
+          // A child terminal node can itself be absent while its exact
+          // prerequisite is ready/running/failed.  Propagate only that
+          // compiled child frontier to the owning component wait node.
+          const childTemplate = templateForInstance(planValue, child);
+          const childRawNode = childTemplate && isRecord(childTemplate.nodesByKey)
+            ? childTemplate.nodesByKey[String((wait as Json).terminal_node)]
+            : undefined;
+          if (!isRecord(childRawNode)) continue;
+          const childDependencies = Array.isArray(childRawNode.dependencyNodeKeys)
+            ? childRawNode.dependencyNodeKeys.filter((value): value is string => typeof value === 'string')
+            : [];
+          const childPrerequisites = childDependencies
+            .map(key => nodeFor(child, key))
+            .filter((value): value is Json => value !== undefined);
+          const childFailed = childPrerequisites
+            .map(prerequisite => ({node: prerequisite, generation: activeGeneration(String(prerequisite.nodeInstanceId))}))
+            .find(value => value.generation?.status === 'failed');
+          const childWaiting = childPrerequisites
+            .map(prerequisite => ({node: prerequisite, generation: activeGeneration(String(prerequisite.nodeInstanceId))}))
+            .find(value => value.generation?.status === 'ready' || value.generation?.status === 'running');
+          const frontier = childFailed ?? childWaiting;
+          if (frontier?.generation) {
+            const pseudo = {
+              ...frontier.generation,
+              nodeInstanceId: frontier.node.nodeInstanceId,
+              templateNodeKey: frontier.node.templateNodeKey,
+            };
+            add(node, conditionForDependency(
+              node,
+              node,
+              pseudo,
+              childFailed ? 'failed_dependency' : 'waiting',
+              'expansion_barrier',
+            ));
+          }
+        }
+      }
+    }
+  }
+
+  if (currentInputs) {
+    const currentByIdentity = new Map(currentInputs.map(tuple => [`${tuple.id}\0${tuple.componentId}\0${tuple.filePath}`, tuple]));
+    const retainedById = new Set<string>();
+    for (const claim of Object.values(projectionValue.claimsById || {}).filter(isRecord)) {
+      if (claim.active !== true || (claim.claim !== 'native.requirement.item@1' && claim.claim !== 'native.spec.item@1')) continue;
+      if (!isRecord(claim.payload)) throw new Error('retained native Proof requirement claim is malformed');
+      const retained = normalizeProofTuple(claim.payload, `retained ${claim.claim} claim`);
+      if (retainedById.has(retained.id)) throw new Error(`retained native Proof requirement claims contain a duplicate for ${retained.id}`);
+      retainedById.add(retained.id);
+      const exact = currentByIdentity.get(`${retained.id}\0${retained.componentId}\0${retained.filePath}`);
+      if (!exact) {
+        if ([...currentByIdentity.keys()].some(key => key.startsWith(`${retained.id}\0`))) {
+          throw new Error(`current Proof requirement identity changed for ${retained.id}`);
+        }
+        throw new Error(`current Proof requirement tuple is missing for ${retained.id}`);
+      }
+      if (exact.proofFileHash === retained.proofFileHash) continue;
+      const generation = typeof claim.nodeGenerationId === 'string' ? projectionValue.generationsById?.[claim.nodeGenerationId] : undefined;
+      const scope = isRecord(generation) && Array.isArray(generation.scope) ? generation.scope : claim.scope;
+      const node = {
+        nodeInstanceId: isRecord(generation) ? generation.nodeInstanceId : undefined,
+        templateNodeKey: isRecord(generation) ? generation.templateNodeKey : claim.producerCheckId,
+        scope,
+      } as Json;
+      const staleEvidence: Json = {
+        requirement_id: retained.id,
+        component_id: retained.componentId,
+        file_path: retained.filePath,
+        retained_sha256: retained.proofFileHash,
+        current_sha256: exact.proofFileHash,
+        source_claim_id: claim.claimId,
+        ...(typeof node.nodeInstanceId === 'string' ? {node_instance_id: node.nodeInstanceId} : {}),
+      };
+      items.push({
+        id: retained.id,
+        // A stale condition is orthogonal to the execution state.  Reuse the
+        // retained generation state when it is available instead of turning a
+        // completed or failed execution into synthetic pending work.
+        status: isRecord(generation) && typeof generation.status === 'string' ? generation.status : 'unknown',
+        checkId: isRecord(generation) && typeof generation.checkId === 'string' ? generation.checkId : claim.producerCheckId,
+        kind: 'specification',
+        condition: {
+          state: 'stale',
+          kind: 'changed_input',
+          evidence: {...staleEvidence, scope: 'specification'},
+        },
+      });
+      const component = componentGenerationFor(retained.componentId);
+      items.push({
+        id: retained.componentId,
+        // Unknown is truthful when no component generation was retained; it
+        // must not be turned into a fabricated pending/success state.
+        status: component && typeof component.generation.status === 'string' ? component.generation.status : 'unknown',
+        ...(component ? {
+          checkId: typeof component.generation.checkId === 'string'
+            ? component.generation.checkId
+            : optionalString(component.node.templateNodeKey),
+        } : {}),
+        kind: 'component',
+        condition: {
+          state: 'stale',
+          kind: 'changed_input',
+          evidence: {
+            ...staleEvidence,
+            scope: 'component',
+            ...(component ? {component_generation_id: component.generation.nodeGenerationId} : {}),
+            ...(component && typeof component.node.nodeInstanceId === 'string'
+              ? {component_node_instance_id: component.node.nodeInstanceId}
+              : {}),
+          },
+        },
+      });
+    }
+  }
+  return {items, unknown};
+}
+
 function explicitOperationalKind(generation: Json): OperationalKind | undefined {
   const raw =
     optionalString(generation.operational_kind) ??
@@ -1129,10 +1567,14 @@ function operationalProjection(
   projection: unknown,
   retainedCatalogComponentIds?: readonly string[],
   affectedComponentIds?: readonly string[],
+  expansionPlan?: ExpansionPlan | unknown,
+  currentProofInputs?: unknown,
+  checkpoint?: unknown,
 ): OperationalProjectionResult {
   if (!isRecord(projection) || !isRecord(projection.generationsById)) {
     const unknown = { state: 'unknown' as const, known: false, check_ids: [] };
     const empty = (unexpandedCount: number) => collection([], false, unexpandedCount);
+    const conditionResult = nativeConditionEntries(expansionPlan, projection, checkpoint, currentProofInputs);
     return {
       value: {
         project: unknown,
@@ -1149,9 +1591,11 @@ function operationalProjection(
         'components are not expanded',
         'specifications are not expanded',
         'batches are not expanded',
+        ...conditionResult.unknown,
       ],
     };
   }
+  const conditionResult = nativeConditionEntries(expansionPlan, projection, checkpoint, currentProofInputs);
   const generations = Object.entries(projection.generationsById)
     .sort(([left], [right]) => Buffer.from(left).compare(Buffer.from(right)))
     .map(([, generation]) => generation)
@@ -1159,7 +1603,7 @@ function operationalProjection(
     .filter(generation => generation.status !== 'inactive');
   const itemsByKind: Record<
     'component' | 'specification' | 'batch',
-    Array<{ id: string; status: string; checkId: string }>
+    OperationalItem[]
   > = {
     component: [],
     specification: [],
@@ -1236,13 +1680,17 @@ function operationalProjection(
   const componentUnexpanded = componentEvidence ? 0 : 1;
   const specificationUnexpanded = specificationEvidence ? 0 : 1;
   const batchUnexpanded = batchEvidence ? 0 : 1;
-  const components = collection(itemsByKind.component, componentEvidence, componentUnexpanded);
+  for (const item of conditionResult.items) {
+    const kind = item.kind;
+    if (kind === 'component' || kind === 'specification' || kind === 'batch') itemsByKind[kind].push(item);
+  }
+  const components = collection(itemsByKind.component, componentEvidence || conditionResult.items.some(item => item.kind === 'component'), componentUnexpanded);
   const specifications = collection(
     itemsByKind.specification,
-    specificationEvidence,
+    specificationEvidence || conditionResult.items.some(item => item.kind === 'specification'),
     specificationUnexpanded
   );
-  const batches = collection(itemsByKind.batch, batchEvidence, batchUnexpanded);
+  const batches = collection(itemsByKind.batch, batchEvidence || conditionResult.items.some(item => item.kind === 'batch'), batchUnexpanded);
   const unknownCount =
     unknownGenerationCount +
     (project.known ? 0 : 1) +
@@ -1280,7 +1728,7 @@ function operationalProjection(
       unknown_count: unknownCount,
       unexpanded_count: unexpandedCount,
     },
-    unknown: [...new Set(unknownReasons)],
+    unknown: [...new Set([...unknownReasons, ...conditionResult.unknown])],
   };
 }
 
@@ -1404,7 +1852,7 @@ export function buildNativeChecklistProgress(
     });
   }
   const snapshotDigest = sha256Canonical(snapshot);
-  const journal = checkpointEvidence(input.checkpoint, input.checkpointTimestamp);
+  const journal = checkpointEvidence(input.checkpoint, input.checkpointTimestamp, input.instanceProjection);
   const paused = input.paused === true;
   const resumed = input.resumed === true;
   const resumable =
@@ -1419,6 +1867,9 @@ export function buildNativeChecklistProgress(
     input.instanceProjection,
     input.retainedCatalogComponentIds,
     input.affectedComponentIds,
+    input.expansionPlan,
+    input.currentProofInputs,
+    input.checkpoint,
   );
   unknown.push(...operationalResult.unknown);
   const checklistName = requiredString(snapshot.checklist, 'proof checklist checklist');
@@ -1514,13 +1965,13 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
         kind,
         `${group.known_count} discovered`,
         group.known ? 'expanded' : 'unexpanded',
-        `completed=${group.completed_count},running=${group.running_count},failed=${group.failed_count},pending=${group.pending_count},unknown=${group.unknown_count},unexpanded=${group.unexpanded_count}`,
+        `completed=${group.completed_count},running=${group.running_count},failed=${group.failed_count},pending=${group.pending_count},unknown=${group.unknown_count},unexpanded=${group.unexpanded_count},blocked=${group.blocked_count},stale=${group.stale_count}`,
       ];
     }),
   ];
   const operationalItems = (['components', 'specifications', 'batches'] as const).flatMap(kind =>
     progress.operational[kind].items.map(
-      item => `${kind}.${item.id}=${item.state} [${item.check_ids.join(',') || 'no-check'}]`
+      item => `${kind}.${item.id}=${item.state}${item.conditions?.length ? ` condition=${item.conditions.map(condition => `${condition.state}:${condition.kind}:${canonicalJson(condition.evidence)}`).join('|')}` : ''} [${item.check_ids.join(',') || 'no-check'}]`
     )
   );
   const journal = progress.evidence.journal;
@@ -1540,7 +1991,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
       `proof_steps_pending=${progress.checklist.steps_pending} unresolved=${progress.checklist.unresolved_count} eligible=${progress.checklist.eligible_step_ids.join(',') || 'none'}`,
       `paused=${progress.paused} resumed=${progress.resumed} resumable=${progress.resumable}`,
       `proof_snapshot=schema:${progress.evidence.proof_snapshot.schema_version} source:${progress.evidence.proof_snapshot.source || 'unlinked'}${progress.evidence.proof_snapshot.stage ? ` stage:${progress.evidence.proof_snapshot.stage}` : ''} digest:${progress.evidence.proof_snapshot.digest}${progress.evidence.proof_snapshot.claim_id ? ` claim:${progress.evidence.proof_snapshot.claim_id}` : ''}`,
-      `checkpoint ${journalFields.join(' ')}`,
+      `checkpoint ${journalFields.join(' ')}${journal.provenance ? ` provenance=${journal.provenance}` : ''}${journal.durable_through_event_id === undefined ? '' : ` durable_through=${journal.durable_through_event_id}`}`,
       `operational discovered=project:${progress.operational.discovered.project} components:${progress.operational.discovered.components} specifications:${progress.operational.discovered.specifications} batches:${progress.operational.discovered.batches} total:${progress.operational.discovered.total} unknown=${progress.operational.unknown_count} unexpanded=${progress.operational.unexpanded_count}`,
       `catalog coverage=known:${progress.operational.catalog_coverage.known_count} affected:${progress.operational.catalog_coverage.affected_count} reused:${progress.operational.catalog_coverage.reused_count} unexpanded:${progress.operational.catalog_coverage.unexpanded_count}`,
       ...operationalRows.map(row => `operational ${row[0]}: state=${row[1]} ${row[2]} ${row[3]}`),
@@ -1575,7 +2026,7 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
   const htmlUnknown = progress.unknown.length
     ? `<h3>Unknown / unexpanded</h3><ul>${progress.unknown.map(reason => `<li>${escapedHtml(reason)}</li>`).join('')}</ul>`
     : '';
-  const html = `<section data-native-checklist-progress="v1"><style>.native-checklist-progress{font:14px system-ui,sans-serif;color:#222;max-width:100%;overflow-wrap:anywhere}.native-checklist-progress table{border-collapse:collapse;margin:.5rem 0 1rem;min-width:38rem}.native-checklist-progress .table-wrap{max-width:100%;overflow-x:auto}.native-checklist-progress td,.native-checklist-progress th{border:1px solid #bbb;padding:.3rem .5rem;text-align:left;vertical-align:top}.native-checklist-progress .state{font-weight:600}.native-checklist-progress .badge{display:inline-block;border:1px solid #999;border-radius:.25rem;padding:.08rem .35rem;font-weight:600;white-space:nowrap}.native-checklist-progress .state-confirmed{background:#e5f6e8}.native-checklist-progress .state-pending,.native-checklist-progress .state-blocked{background:#fff2cc}.native-checklist-progress .state-stale,.native-checklist-progress .state-failed{background:#ffe1e1}.native-checklist-progress .state-unknown{background:#eee}.native-checklist-progress .metrics{display:flex;flex-wrap:wrap;gap:.25rem .8rem}.native-checklist-progress .metric{white-space:nowrap}.native-checklist-progress small{color:#555}@media(max-width:640px){.native-checklist-progress{font-size:13px}.native-checklist-progress table{min-width:32rem}.native-checklist-progress td,.native-checklist-progress th{padding:.25rem}}</style><div class="native-checklist-progress"><h2>${escapedHtml(progress.checklist.name)}</h2><p class="status-summary"><span class="badge">confirmed=${counts.confirmed}</span> <span class="badge state-pending">pending=${counts.pending}</span> <span class="badge state-blocked">blocked=${counts.blocked}</span> <span class="badge state-stale">stale=${counts.stale}</span> <span class="badge state-failed">failed=${counts.failed}</span> <span class="badge state-unknown">unknown=${counts.unknown}</span> <span>unresolved=${progress.checklist.unresolved_count}</span></p><p><span class="badge">paused=${progress.paused}</span> <span class="badge">resumed=${progress.resumed}</span> <span class="badge">resumable=${progress.resumable}</span>; eligible=${escapedHtml(progress.checklist.eligible_step_ids.join(', ') || 'none')}</p><h3>Checklist stages</h3><div class="table-wrap"><table><thead><tr><th>State</th><th>ID</th><th>Stage</th><th>Evidence</th></tr></thead><tbody>${htmlChecklistRows.join('')}</tbody></table></div><h3>Operational work</h3><div class="table-wrap"><table><thead><tr><th>Unit</th><th>State / discovered</th><th>Coverage</th><th>Counts / checks</th></tr></thead><tbody>${htmlOperationalRows.join('')}</tbody></table></div>${htmlOperationalItems ? `<h4>Known units</h4><ul>${htmlOperationalItems}</ul>` : ''}<p>discovered: project=${progress.operational.discovered.project}, components=${progress.operational.discovered.components}, specifications=${progress.operational.discovered.specifications}, batches=${progress.operational.discovered.batches}; unknown=${progress.operational.unknown_count}; unexpanded=${progress.operational.unexpanded_count}</p><p>catalog coverage: known=${progress.operational.catalog_coverage.known_count}, affected=${progress.operational.catalog_coverage.affected_count}, reused=${progress.operational.catalog_coverage.reused_count}, unexpanded=${progress.operational.catalog_coverage.unexpanded_count}</p><h3>Evidence and checkpoint</h3><p>Proof snapshot ${escapedHtml(progress.evidence.proof_snapshot.schema_version)} source ${escapedHtml(progress.evidence.proof_snapshot.source || 'unlinked')}${progress.evidence.proof_snapshot.stage ? ` stage ${escapedHtml(progress.evidence.proof_snapshot.stage)}` : ''} digest ${escapedHtml(progress.evidence.proof_snapshot.digest)}${progress.evidence.proof_snapshot.claim_id ? ` claim ${escapedHtml(progress.evidence.proof_snapshot.claim_id)}` : ''}<br>Checkpoint ${escapedHtml(journalFields.join(' '))}</p>${htmlUnknown}</div><script type="application/json" id="native-checklist-progress">${escapedHtmlJson(json)}</script></section>`;
+  const html = `<section data-native-checklist-progress="v1"><style>.native-checklist-progress{font:14px system-ui,sans-serif;color:#222;max-width:100%;overflow-wrap:normal;word-break:normal}.native-checklist-progress table{border-collapse:collapse;margin:.5rem 0 1rem;table-layout:fixed;width:100%;min-width:52rem}.native-checklist-progress th:nth-child(1),.native-checklist-progress td:nth-child(1){width:8rem}.native-checklist-progress th:nth-child(2),.native-checklist-progress td:nth-child(2){width:12rem}.native-checklist-progress th:nth-child(3),.native-checklist-progress td:nth-child(3){width:14rem}.native-checklist-progress th:nth-child(4),.native-checklist-progress td:nth-child(4){overflow-wrap:anywhere;word-break:break-word}.native-checklist-progress .table-wrap{max-width:100%;overflow-x:auto}.native-checklist-progress td,.native-checklist-progress th{border:1px solid #bbb;padding:.3rem .5rem;text-align:left;vertical-align:top}.native-checklist-progress li{overflow-wrap:anywhere;word-break:break-word}.native-checklist-progress .state{font-weight:600}.native-checklist-progress .badge{display:inline-block;border:1px solid #999;border-radius:.25rem;padding:.08rem .35rem;font-weight:600;white-space:nowrap}.native-checklist-progress .state-confirmed{background:#e5f6e8}.native-checklist-progress .state-pending,.native-checklist-progress .state-blocked{background:#fff2cc}.native-checklist-progress .state-stale,.native-checklist-progress .state-failed{background:#ffe1e1}.native-checklist-progress .state-unknown{background:#eee}.native-checklist-progress .metrics{display:flex;flex-wrap:wrap;gap:.25rem .8rem}.native-checklist-progress .metric{white-space:nowrap}.native-checklist-progress small{color:#555}@media(max-width:640px){.native-checklist-progress{font-size:13px}.native-checklist-progress table{min-width:32rem}.native-checklist-progress td,.native-checklist-progress th{padding:.25rem}}</style><div class="native-checklist-progress"><h2>${escapedHtml(progress.checklist.name)}</h2><p class="status-summary"><span class="badge">confirmed=${counts.confirmed}</span> <span class="badge state-pending">pending=${counts.pending}</span> <span class="badge state-blocked">blocked=${counts.blocked}</span> <span class="badge state-stale">stale=${counts.stale}</span> <span class="badge state-failed">failed=${counts.failed}</span> <span class="badge state-unknown">unknown=${counts.unknown}</span> <span>unresolved=${progress.checklist.unresolved_count}</span></p><p><span class="badge">paused=${progress.paused}</span> <span class="badge">resumed=${progress.resumed}</span> <span class="badge">resumable=${progress.resumable}</span>; eligible=${escapedHtml(progress.checklist.eligible_step_ids.join(', ') || 'none')}</p><h3>Checklist stages</h3><div class="table-wrap"><table><thead><tr><th>State</th><th>ID</th><th>Stage</th><th>Evidence</th></tr></thead><tbody>${htmlChecklistRows.join('')}</tbody></table></div><h3>Operational work</h3><div class="table-wrap"><table><thead><tr><th>Unit</th><th>State / discovered</th><th>Coverage</th><th>Counts / checks</th></tr></thead><tbody>${htmlOperationalRows.join('')}</tbody></table></div>${htmlOperationalItems ? `<h4>Known units</h4><ul>${htmlOperationalItems}</ul>` : ''}<p>discovered: project=${progress.operational.discovered.project}, components=${progress.operational.discovered.components}, specifications=${progress.operational.discovered.specifications}, batches=${progress.operational.discovered.batches}; unknown=${progress.operational.unknown_count}; unexpanded=${progress.operational.unexpanded_count}</p><p>catalog coverage: known=${progress.operational.catalog_coverage.known_count}, affected=${progress.operational.catalog_coverage.affected_count}, reused=${progress.operational.catalog_coverage.reused_count}, unexpanded=${progress.operational.catalog_coverage.unexpanded_count}</p><h3>Evidence and checkpoint</h3><p>Proof snapshot ${escapedHtml(progress.evidence.proof_snapshot.schema_version)} source ${escapedHtml(progress.evidence.proof_snapshot.source || 'unlinked')}${progress.evidence.proof_snapshot.stage ? ` stage ${escapedHtml(progress.evidence.proof_snapshot.stage)}` : ''} digest ${escapedHtml(progress.evidence.proof_snapshot.digest)}${progress.evidence.proof_snapshot.claim_id ? ` claim ${escapedHtml(progress.evidence.proof_snapshot.claim_id)}` : ''}<br>Checkpoint ${escapedHtml(journalFields.join(' '))}${journal.provenance ? ` provenance ${escapedHtml(journal.provenance)}` : ''}${journal.durable_through_event_id === undefined ? '' : ` durable through ${journal.durable_through_event_id}`}</p>${htmlUnknown}</div><script type="application/json" id="native-checklist-progress">${escapedHtmlJson(json)}</script></section>`;
   return { json, text, html };
 }
 

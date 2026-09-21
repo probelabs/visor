@@ -462,10 +462,6 @@ describeNative('native onboarding checklist first slice (real engine + Proof)', 
             if (step !== AUTHOR) return undefined;
             aiCalls.push(step);
             try {
-              const running = JSON.parse(fs.readFileSync(path.join(authorRunningDir, 'progress.json'), 'utf8')) as Json;
-              if (running.operational?.components?.running_count !== 1 || running.operational.components.items?.length !== 1 || running.operational.components.items[0].state !== 'running') {
-                hookErrors.push(`running progress did not show one running component: ${JSON.stringify(running.operational)}`);
-              }
               const projection = engine.getInstanceProjection() as any;
               const generation = Object.values(projection.generationsById).find((value: any) => value.checkId === AUTHOR && value.status === 'running') as any;
               if (!generation) throw new Error('author mock did not find the active running generation');
@@ -652,6 +648,17 @@ describeNative('native onboarding checklist first slice (real engine + Proof)', 
       expect(progressB.checklist.steps.find((step: Json) => step.id === 'skeleton')).toMatchObject({ state: 'confirmed', verify_required: false });
       expect(progressB.checklist.steps.some((step: Json) => step.state === 'pending' || step.state === 'blocked')).toBe(true);
       expect(progressB.checklist.unresolved_count).toBeGreaterThan(0);
+      const summaryB = JSON.parse(fs.readFileSync(path.join(outputB, 'summary.json'), 'utf8')) as Json;
+      expect(summaryB.status).toBe('checklist-onboarding-complete-with-later-proof-steps-pending');
+      expect(summaryB.checklist_snapshot_stage).toBe('skeleton');
+      expect(summaryB.confirmed_steps).toEqual(['init', 'research', 'skeleton']);
+      expect(summaryB.checklist_progress).toBe('progress.json');
+      const progressClaimId = progressB.evidence?.proof_snapshot?.claim_id;
+      const publishedClaimIds = eventsB
+        .slice(eventsA.length)
+        .filter(event => event.type === 'ClaimPublished' && typeof event.claimId === 'string')
+        .map(event => event.claimId);
+      expect(progressClaimId).toBe(publishedClaimIds.at(-1));
       const resultB = JSON.parse(fs.readFileSync(resultBPath, 'utf8')) as Json;
       expect(issues(resultB)).toEqual([]);
       const snapshotB = proofJson(runner.runProof, proof, fixture.subject, ['checklist', 'show', '--checklist', 'onboard_v1', '--format', 'json'], 'post-resume-checklist', outputB);

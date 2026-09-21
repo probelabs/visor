@@ -1208,6 +1208,167 @@ describe('native checklist progress projection', () => {
     expect(JSON.parse(embedded as string)).toEqual(json);
   });
 
+  it('keeps execution state separate from topology blockers and Proof input staleness', () => {
+    const proofSnapshot = snapshot();
+    const plan = {
+      graphSemanticDigest: 'graph',
+      templatesByName: {
+        native: {
+          templateDigest: 'template',
+          nodesByKey: {
+            review: {check: {}, dependencyNodeKeys: ['author']},
+            author: {check: {}, dependencyNodeKeys: []},
+          },
+        },
+      },
+    };
+    const scope = [{kind: 'keyed', expansionOwnerCheck: 'enumerate-native-specs', key: 'REQ-1', subgraphInstanceId: 'e'.repeat(64)}];
+    const retained = {
+      claimId: 'r'.repeat(64),
+      claim: 'native.requirement.item@1',
+      payload: {id: 'REQ-1', component_id: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'1'.repeat(64)}`},
+      active: true,
+      nodeGenerationId: 'item-generation',
+      producerCheckId: 'collect-proof-evidence',
+    };
+    const projection = {
+      lastEventId: 8,
+      instancesById: {
+        item: {
+          status: 'active', graphSemanticDigest: 'graph', templateDigest: 'template',
+          subgraphInstanceId: 'e'.repeat(64), nodeInstanceIdsByTemplateNode: {author: 'author-node', review: 'review-node'},
+        },
+      },
+      nodesById: {
+        'author-node': {nodeInstanceId: 'author-node', templateNodeKey: 'author', scope},
+        'review-node': {nodeInstanceId: 'review-node', templateNodeKey: 'review', scope},
+      },
+      generationsById: {
+        'author-generation': {nodeGenerationId: 'author-generation', nodeInstanceId: 'author-node', templateNodeKey: 'author', status: 'failed', checkId: 'author', scope},
+        'item-generation': {nodeGenerationId: 'item-generation', nodeInstanceId: 'review-node', templateNodeKey: 'review', status: 'completed', checkId: 'review', scope},
+      },
+      activeGenerationIdByNode: {'author-node': 'author-generation', 'review-node': 'item-generation'},
+      claimsById: {[`r`.repeat(64)]: retained},
+    };
+    const blocked = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: projection,
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+    });
+    const review = blocked.operational.specifications.items.find(item => item.id === 'REQ-1');
+    expect(review?.state).toBe('failed');
+    expect(review?.conditions).toBeUndefined();
+
+    const stale = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: {...projection, activeGenerationIdByNode: {'author-node': 'author-generation'}},
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+      currentProofInputs: [{id: 'REQ-1', component: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'2'.repeat(64)}`}],
+    });
+    const staleItem = stale.operational.specifications.items.find(item => item.id === 'REQ-1');
+    expect(staleItem?.conditions?.[0]).toMatchObject({state: 'stale', kind: 'changed_input'});
+    expect(stale.operational.specifications.stale_count).toBe(1);
+    const staleComponent = stale.operational.components.items.find(item => item.id === 'component-a');
+    expect(staleComponent?.conditions?.[0]).toMatchObject({state: 'stale', kind: 'changed_input', evidence: {scope: 'component'}});
+    expect(staleComponent?.conditions?.[0].evidence.component_generation_id).toBeUndefined();
+    expect(staleComponent?.check_ids).toEqual([]);
+    expect(stale.operational.components.stale_count).toBe(1);
+    expect(stale.evidence.journal.provenance).toBe('checkpoint');
+    const rendered = renderNativeChecklistProgress(stale);
+    expect(JSON.parse(rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1] as string)).toEqual(JSON.parse(rendered.json));
+    expect(rendered.html).toContain('overflow-wrap:normal;word-break:normal');
+    expect(rendered.html).toContain('table-layout:fixed;width:100%;min-width:52rem');
+    expect(rendered.html).toContain('overflow-wrap:anywhere;word-break:break-word');
+  });
+
+  it('proves exact component/specification blocker conditions without inferring optional or inactive work', () => {
+    const componentScope = [{kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'component-a', subgraphInstanceId: 'c'.repeat(64)}];
+    const specificationScope = [
+      ...componentScope,
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-specs', key: 'REQ-1', subgraphInstanceId: 's'.repeat(64)},
+    ];
+    const makePlan = (targetCheck: Record<string, unknown> = {}) => ({
+      graphSemanticDigest: 'graph',
+      templatesByName: {
+        component: {templateDigest: 'component-template', nodesByKey: {
+          prerequisite: {check: {}, dependencyNodeKeys: []},
+          target: {check: targetCheck, dependencyNodeKeys: ['prerequisite']},
+        }},
+        specification: {templateDigest: 'specification-template', nodesByKey: {
+          prerequisite: {check: {}, dependencyNodeKeys: []},
+          target: {check: targetCheck, dependencyNodeKeys: ['prerequisite']},
+        }},
+      },
+    });
+    const makeProjection = (prerequisiteStatus: 'ready' | 'running' | 'failed', options: {targetActive?: boolean; inactive?: boolean} = {}) => {
+      const instancesById = {
+        component: {
+          status: options.inactive ? 'inactive' : 'active', graphSemanticDigest: 'graph', templateDigest: 'component-template',
+          subgraphInstanceId: 'c'.repeat(64), scope: componentScope, nodeInstanceIdsByTemplateNode: {prerequisite: 'component-prerequisite', target: 'component-target'},
+        },
+        specification: {
+          status: options.inactive ? 'inactive' : 'active', graphSemanticDigest: 'graph', templateDigest: 'specification-template',
+          subgraphInstanceId: 's'.repeat(64), scope: specificationScope, nodeInstanceIdsByTemplateNode: {prerequisite: 'spec-prerequisite', target: 'spec-target'},
+        },
+      };
+      const nodesById = {
+        'component-prerequisite': {nodeInstanceId: 'component-prerequisite', templateNodeKey: 'prerequisite', scope: componentScope},
+        'spec-prerequisite': {nodeInstanceId: 'spec-prerequisite', templateNodeKey: 'prerequisite', scope: specificationScope},
+      };
+      const generationsById: Record<string, Record<string, unknown>> = {
+        'component-prerequisite-generation': {nodeGenerationId: 'component-prerequisite-generation', nodeInstanceId: 'component-prerequisite', templateNodeKey: 'prerequisite', checkId: 'component-prerequisite', status: prerequisiteStatus, scope: componentScope},
+        'spec-prerequisite-generation': {nodeGenerationId: 'spec-prerequisite-generation', nodeInstanceId: 'spec-prerequisite', templateNodeKey: 'prerequisite', checkId: 'spec-prerequisite', status: prerequisiteStatus, scope: specificationScope},
+      };
+      const activeGenerationIdByNode: Record<string, string> = {
+        'component-prerequisite': 'component-prerequisite-generation',
+        'spec-prerequisite': 'spec-prerequisite-generation',
+      };
+      if (options.targetActive) {
+        generationsById['component-target-generation'] = {nodeGenerationId: 'component-target-generation', nodeInstanceId: 'component-target', templateNodeKey: 'target', checkId: 'component-target', status: 'ready', scope: componentScope};
+        generationsById['spec-target-generation'] = {nodeGenerationId: 'spec-target-generation', nodeInstanceId: 'spec-target', templateNodeKey: 'target', checkId: 'spec-target', status: 'ready', scope: specificationScope};
+        activeGenerationIdByNode['component-target'] = 'component-target-generation';
+        activeGenerationIdByNode['spec-target'] = 'spec-target-generation';
+      }
+      return {lastEventId: 8, graphSemanticDigest: 'graph', instancesById, nodesById, generationsById, activeGenerationIdByNode, claimsById: {}};
+    };
+    const build = (prerequisiteStatus: 'ready' | 'running' | 'failed', plan = makePlan(), options: {targetActive?: boolean; inactive?: boolean} = {}) =>
+      buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        proofSnapshotClaim: {...rootClaim(snapshot()), active: true},
+        instanceProjection: makeProjection(prerequisiteStatus, options),
+        checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+        expansionPlan: plan,
+      });
+
+    for (const status of ['ready', 'running'] as const) {
+      const progress = build(status);
+      const component = progress.operational.components.items.find(item => item.id === 'component-a');
+      const specification = progress.operational.specifications.items.find(item => item.id === 'REQ-1');
+      expect(component).toMatchObject({condition: {state: 'blocked', kind: 'waiting', evidence: {target_node_instance_id: 'component-target'}}});
+      expect(specification).toMatchObject({condition: {state: 'blocked', kind: 'waiting'}});
+      expect(component?.condition?.evidence.target_check_id).toBe('target');
+      expect(specification?.condition?.evidence.target_check_id).toBe('target');
+      expect(progress.operational.components.blocked_count).toBe(1);
+      expect(progress.operational.specifications.blocked_count).toBe(1);
+    }
+    const failed = build('failed');
+    expect(failed.operational.components.items.find(item => item.id === 'component-a')?.condition).toMatchObject({state: 'blocked', kind: 'failed_dependency'});
+    expect(failed.operational.specifications.items.find(item => item.id === 'REQ-1')?.condition).toMatchObject({state: 'blocked', kind: 'failed_dependency'});
+    const readyTarget = build('failed', makePlan(), {targetActive: true});
+    expect(readyTarget.operational.components.items.find(item => item.id === 'component-a')?.condition).toBeUndefined();
+    expect(readyTarget.operational.specifications.items.find(item => item.id === 'REQ-1')?.condition).toBeUndefined();
+    const conditional = build('failed', makePlan({if: 'feature-enabled'}));
+    expect(conditional.operational.components.blocked_count).toBe(0);
+    expect(conditional.operational.specifications.blocked_count).toBe(0);
+    const inactive = build('failed', makePlan(), {inactive: true});
+    expect(inactive.operational.components.blocked_count).toBe(0);
+    expect(inactive.operational.specifications.blocked_count).toBe(0);
+  });
+
   it('selects research over the root bootstrap snapshot', () => {
     const proofSnapshot = snapshot();
     const research = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));

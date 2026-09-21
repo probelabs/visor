@@ -522,6 +522,47 @@ describeNative('native Milestone B component/spec progression', () => {
     }
   });
 
+  it('renders orthogonal stale/blocked conditions before refusing a stale resume', () => {
+    const fixture = createFixture(2);
+    try {
+      runRunner(fixture, 'prepare');
+      const rows = nativeCatalog(fixture).rows;
+      const held = rows[0];
+      runRunner(fixture, 'pause', ['--hold-id', held.id]);
+      const pausedCheckpointBytes = fs.readFileSync(path.join(fixture.output, 'paused', 'checkpoint.json'));
+      fs.appendFileSync(path.join(fixture.subject, held.file_path), '\n', 'utf8');
+      const result = runRunnerResult(fixture, 'resume');
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout || ''}${result.stderr || ''}`).toContain(`Proof inputs changed since prepare (${held.id})`);
+      const progress = json<any>(path.join(fixture.output, 'resumed', 'progress.json'));
+      expect(progress.operational.components.stale_count).toBeGreaterThan(0);
+      expect(progress.operational.specifications.stale_count).toBeGreaterThan(0);
+      expect(progress.operational.components.blocked_count).toBeGreaterThan(0);
+      expect(progress.operational.specifications.blocked_count).toBeGreaterThan(0);
+      expect(progress.operational.components.items.some((item: any) =>
+        item.conditions?.some((condition: any) => condition.state === 'stale' && condition.evidence.requirement_id === held.id && condition.evidence.scope === 'component'),
+      )).toBe(true);
+      expect(progress.operational.specifications.items.some((item: any) =>
+        item.conditions?.some((condition: any) => condition.state === 'stale' && condition.evidence.requirement_id === held.id),
+      )).toBe(true);
+      expect(fs.readFileSync(path.join(fixture.output, 'paused', 'checkpoint.json'))).toEqual(pausedCheckpointBytes);
+      for (const artifact of [
+        'resumed/checkpoint.json',
+        'resumed/observations.json',
+        'diagnostic/resume-checkpoint.json',
+        'diagnostic/resume-observations.json',
+        'diagnostic/resume-result.json',
+      ]) expect(fs.existsSync(path.join(fixture.output, artifact))).toBe(false);
+      const text = fs.readFileSync(path.join(fixture.output, 'resumed', 'progress.txt'), 'utf8');
+      const html = fs.readFileSync(path.join(fixture.output, 'resumed', 'progress.html'), 'utf8');
+      expect(text).toContain('stale');
+      const embedded = html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*?)<\/script>/)?.[1];
+      expect(JSON.parse(embedded as string)).toEqual(progress);
+    } finally {
+      fs.rmSync(fixture.parent, { recursive: true, force: true });
+    }
+  });
+
   it('reuses completed reader packets for per-item native review records with exact fresh resume', () => {
     const fixture = createFixture(2);
     const reviewOutput = path.join(fixture.parent, 'review-run');
