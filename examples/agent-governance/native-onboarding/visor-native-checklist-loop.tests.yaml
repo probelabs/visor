@@ -440,6 +440,7 @@ tests:
                 commit: '0000000000000000000000000000000000000000'
                 worktree_id: mock-target
                 repository: /tmp/native-checklist-target
+                ts: 123
               total_requirements: 6
               requirements:
                 - {id: req-a, component: component-a}
@@ -521,6 +522,7 @@ tests:
                 commit: '0000000000000000000000000000000000000000'
                 worktree_id: mock-target
                 repository: /tmp/native-checklist-target
+                ts: 123
             - id: 'component-a:batch:2'
               component_id: component-a
               requirement_ids: [req-f]
@@ -539,12 +541,10 @@ tests:
                 commit: '0000000000000000000000000000000000000000'
                 worktree_id: mock-target
                 repository: /tmp/native-checklist-target
+                ts: 123
         validate-batch-current[]:
           - {batch_id: 'component-a:batch:1', component_id: component-a, step_id: spec-review-7, role: spec-review, requirement_ids: [req-a, req-b, req-c, req-d, req-e], all_requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f], component_requirement_count: 6, batch_requirement_count: 5, context_ids: [req-a, req-b, req-c, req-d, req-e]}
           - {batch_id: 'component-a:batch:2', component_id: component-a, step_id: spec-review-7, role: spec-review, requirement_ids: [req-f], all_requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f], component_requirement_count: 6, batch_requirement_count: 1, context_ids: [req-f]}
-        batch-binding[]:
-          - {success: true, is_worktree: true, path: /tmp/native-checklist-target, commit: '0000000000000000000000000000000000000000', worktree_id: mock-target, repository: /tmp/native-checklist-target}
-          - {success: true, is_worktree: true, path: /tmp/native-checklist-target, commit: '0000000000000000000000000000000000000000', worktree_id: mock-target, repository: /tmp/native-checklist-target}
         batch-author[]:
           - {batch_id: 'component-a:batch:1', opened_ids: [req-a, req-b, req-c, req-d, req-e], component_requirement_count: 6, batch_requirement_count: 5, findings: [], errors: [], execution_status: completed}
           - {batch_id: 'component-a:batch:2', opened_ids: [req-f], component_requirement_count: 6, batch_requirement_count: 1, findings: [], errors: [], execution_status: completed}
@@ -552,13 +552,6 @@ tests:
           - {batch_id: 'component-a:batch:1', status: completed, opened_ids: [req-a, req-b, req-c, req-d, req-e], component_requirement_count: 6, batch_requirement_count: 5}
           - {batch_id: 'component-a:batch:2', status: completed, opened_ids: [req-f], component_requirement_count: 6, batch_requirement_count: 1}
         component-finished: {component_id: component-a, status: completed}
-        role-binding:
-          success: true
-          is_worktree: true
-          path: /tmp/native-checklist-target
-          commit: '0000000000000000000000000000000000000000'
-          worktree_id: mock-target
-          repository: /tmp/native-checklist-target
         role-finisher: {step_id: spec-review-7, role: spec-review, execution_status: completed, confirmation_status: confirmed, errors: []}
         role-readback: {step_id: spec-review-7, role: spec-review, status: confirmed, checklist: {active: true, next: {step_id: next-step, role: onboard}, steps: [{step_id: spec-review-7, stored_status: confirmed, effective_status: confirmed}]}}
         role-finished: {role_id: spec-review-7, status: completed}

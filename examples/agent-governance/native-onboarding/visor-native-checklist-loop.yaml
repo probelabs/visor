@@ -498,7 +498,15 @@ subgraphs:
           set -eu
           node <<'NODE'
           const role = {{ outputs.role | json }};
-          process.stdout.write(JSON.stringify(role.target));
+          const target = role.target || {};
+          process.stdout.write(JSON.stringify({
+            success: target.success,
+            is_worktree: target.is_worktree,
+            path: target.path,
+            commit: target.commit,
+            worktree_id: target.worktree_id,
+            repository: target.repository,
+          }));
           NODE
 
         emits:
@@ -812,7 +820,15 @@ subgraphs:
         exec: |
           node <<'NODE'
           const batch = {{ outputs.batch | json }};
-          process.stdout.write(JSON.stringify(batch.target));
+          const target = batch.target || {};
+          process.stdout.write(JSON.stringify({
+            success: target.success,
+            is_worktree: target.is_worktree,
+            path: target.path,
+            commit: target.commit,
+            worktree_id: target.worktree_id,
+            repository: target.repository,
+          }));
           NODE
         emits:
           - {claim: native.batch.checkout@1, from: output}
