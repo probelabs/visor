@@ -20,8 +20,46 @@ workspace:
   cleanup_on_exit: false
 
 checks:
+  target-binding:
+    type: command
+    timeout: 120000
+    output_format: json
+    schema:
+      type: object
+      additionalProperties: false
+      required: [success, is_worktree, path, commit, worktree_id, repository]
+      properties:
+        success: {const: true}
+        is_worktree: {const: true}
+        path: {type: string, minLength: 1}
+        commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_id: {type: string, minLength: 1}
+        repository: {type: string, minLength: 1}
+    exec: |
+      set -eu
+      : "${TARGET_ROOT:?TARGET_ROOT is required}"
+      TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd -P)"
+      test -d "$TARGET_ROOT"
+      test "$(git -C "$TARGET_ROOT" rev-parse --is-inside-work-tree)" = true
+      REPOSITORY="$(git -C "$TARGET_ROOT" rev-parse --show-toplevel)"
+      test "$TARGET_ROOT" = "$REPOSITORY"
+      COMMIT="$(git -C "$TARGET_ROOT" rev-parse HEAD)"
+      GIT_DIR="$(git -C "$TARGET_ROOT" rev-parse --git-dir)"
+      node - "$TARGET_ROOT" "$COMMIT" "$REPOSITORY" "$GIT_DIR" <<'NODE'
+      const [path, commit, repository, worktree_id] = process.argv.slice(2);
+      process.stdout.write(JSON.stringify({
+        success: true,
+        is_worktree: true,
+        path,
+        commit,
+        worktree_id,
+        repository,
+      }));
+      NODE
+
   native-state:
     type: command
+    depends_on: [target-binding]
     timeout: 120000
     output_format: json
     schema:
@@ -42,6 +80,8 @@ checks:
     exec: |
       set -eu
       : "${PROOF_BIN:?PROOF_BIN is required}"
+      : "${TARGET_ROOT:?TARGET_ROOT is required}"
+      cd "$TARGET_ROOT"
       if [ ! -f proof.yaml ]; then
         printf '%s\n' '{"bootstrap_required":true}'
         exit 0
@@ -54,8 +94,8 @@ checks:
     # check before native-state has produced its result.  Dispatch evaluates
     # the same expression again with the actual native-state output.
     if: "!outputs['native-state'] || outputs['native-state'].bootstrap_required === true || outputs['native-state'].ok !== true || outputs['proof-audit'] || outputs['native-completion']"
-    depends_on: [native-state]
-    timeout: 1800000
+    depends_on: [native-state, target-binding]
+    timeout: 660000
     criticality: internal
     assume: "true"
     # An already-ok native checklist intentionally skips this author on the
@@ -67,13 +107,10 @@ checks:
     schema: plain
     ai:
       allowEdit: true
-      allowBash: true
       max_iterations: 100
-      retry:
-        maxRetries: 0
-      fallback:
-        auto: false
-        maxTotalAttempts: 1
+      ai_timeout: 600000
+      codex_execution_profile: luna-xhigh-isolated-writer-v1
+      codex_working_directory_from: target-binding
     prompt: |
       Work only in the current subject repository. You are an editable native
       Proof onboarding author, not the completion authority.
@@ -98,6 +135,9 @@ checks:
 
       --- native-state (authoritative input) ---
       {{ outputs['native-state'] | json }}
+
+      --- selected target checkout (binding authority) ---
+      {{ outputs['target-binding'] | json }}
 
       --- prior independent Proof audit attempts (diagnostics only) ---
       {% if outputs_history['proof-audit'] %}
@@ -127,6 +167,8 @@ checks:
     exec: |
       set -eu
       : "${PROOF_BIN:?PROOF_BIN is required}"
+      : "${TARGET_ROOT:?TARGET_ROOT is required}"
+      cd "$TARGET_ROOT"
       "$PROOF_BIN" audit --no-cache --fail-level warn --format json --max-findings 0
     # Proof emits JSONL. The provider exposes its terminal row as output;
     # non-zero exit and malformed exit-0 output both route the exact result to
@@ -155,6 +197,8 @@ checks:
     exec: |
       set -eu
       : "${PROOF_BIN:?PROOF_BIN is required}"
+      : "${TARGET_ROOT:?TARGET_ROOT is required}"
+      cd "$TARGET_ROOT"
       "$PROOF_BIN" checklist show onboard_v1 --format json
     fail_if: "!output || output.ok !== true"
     on_fail:

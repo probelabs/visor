@@ -9,15 +9,21 @@ native checklist readback. The audit and readback can route the author once;
 terminal failure rather than approval. No custom runner or stage table is
 part of the current path.
 
-Run it from the selected disposable subject checkout. The subject directory is the
-process working directory; keep the protected/original checkout elsewhere and
-do not point the command at it. Supply the pinned absolute Proof binary and
-the standard Visor source entrypoint. Native roles may invoke bare `proof`
-commands; ensure `PATH` resolves the same pinned Proof version, without adding
-a wrapper:
+Run it from a separate disposable control repository while selecting the existing
+disposable subject checkout with `TARGET_ROOT`. The target may retain its native
+Proof state; this flow does not create a linked worktree or require re-onboarding
+or a reset. Keep the protected/original checkout elsewhere and do not point
+`TARGET_ROOT` at it. The standard target-binding check validates the selected
+checkout, binds the editable author to its exact path, and all Proof commands
+execute there. The author has a 600-second AI budget inside a 660-second check
+budget, with one bounded reroute (at most two author/audit attempts). Supply
+the pinned absolute Proof binary and the standard Visor source entrypoint.
+Native roles may invoke bare `proof` commands; ensure `PATH`
+resolves the same pinned Proof version, without adding a wrapper:
 
 ```sh
-cd /absolute/path/to/disposable-subject
+cd /absolute/path/to/disposable-control-repo
+TARGET_ROOT=/absolute/path/to/existing-disposable-subject
 VISOR_ROOT=/absolute/path/to/visor-exp-0208-product-native-demo-pack
 OUTPUT=/absolute/path/to/public-onboarding-output.json
 mkdir -p "$(dirname "$OUTPUT")"
@@ -27,9 +33,10 @@ env -u CODEX_HOME \
   -u VISOR_WORKSPACE_MAIN_PROJECT \
   -u VISOR_WORKSPACE_MAIN_PROJECT_NAME \
   -u VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT \
+  TARGET_ROOT="$TARGET_ROOT" \
   PROOF_BIN=/absolute/path/to/proof \
   USE_CODEX=true FORCE_PROVIDER=codex MODEL_NAME=gpt-5.6-luna \
-  DISABLE_FALLBACK=1 REQUEST_TIMEOUT=1710000 \
+  DISABLE_FALLBACK=1 \
   VISOR_TRACE_DIR="$(dirname "$OUTPUT")/traces" \
   TS_NODE_TRANSPILE_ONLY=1 \
   TS_NODE_PROJECT="$VISOR_ROOT/tsconfig.json" \
@@ -71,7 +78,8 @@ TS_NODE_TRANSPILE_ONLY=1 node -r ./node_modules/ts-node/register/transpile-only 
 The direct `run-onboarding.ts` and `run-demo.cjs` launchers are retired; the
 historical implementation remains available in Git revision `c6e56160` for
 reproduction only. The current operational choice is the standard Visor CLI
-and the canonical YAML above.
+and the canonical YAML above. The command's process cwd is the disposable
+control repository; `TARGET_ROOT` is the only selected subject checkout.
 
 ## Historical retained native Proof continuation (archived)
 

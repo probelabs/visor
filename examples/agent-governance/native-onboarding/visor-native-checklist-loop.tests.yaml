@@ -17,6 +17,13 @@ tests:
       event: manual
       fixture: local.minimal
       mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: 0000000000000000000000000000000000000000
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
         native-state:
           bootstrap_required: true
         author:
@@ -34,6 +41,7 @@ tests:
           steps: []
       expect:
         calls:
+          - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: author, exactly: 1}
           - {step: proof-audit, exactly: 1}
@@ -45,6 +53,7 @@ tests:
               - bootstrap_required
               - native Proof
               - role show
+              - /tmp/native-checklist-target
             not_contains:
               - AUDIT_REPAIR_TOKEN
         outputs:
@@ -58,6 +67,13 @@ tests:
       event: manual
       fixture: local.minimal
       mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: 0000000000000000000000000000000000000000
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
         native-state:
           schema_version: proof.checklist.show.v1
           checklist: onboard_v1
@@ -79,6 +95,7 @@ tests:
           steps: []
       expect:
         calls:
+          - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: author, exactly: 1}
           - {step: proof-audit, exactly: 1}
@@ -95,6 +112,13 @@ tests:
       event: manual
       fixture: local.minimal
       mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: 0000000000000000000000000000000000000000
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
         native-state:
           schema_version: proof.checklist.show.v1
           checklist: onboard_v1
@@ -119,6 +143,7 @@ tests:
           steps: []
       expect:
         calls:
+          - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: author, exactly: 2}
           - {step: proof-audit, exactly: 2}
@@ -141,6 +166,13 @@ tests:
       event: manual
       fixture: local.minimal
       mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: 0000000000000000000000000000000000000000
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
         native-state:
           schema_version: proof.checklist.show.v1
           checklist: onboard_v1
@@ -171,6 +203,7 @@ tests:
             steps: []
       expect:
         calls:
+          - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: author, exactly: 2}
           - {step: proof-audit, exactly: 2}
@@ -190,6 +223,13 @@ tests:
       event: manual
       fixture: local.minimal
       mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: 0000000000000000000000000000000000000000
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
         native-state:
           schema_version: proof.checklist.show.v1
           checklist: onboard_v1
@@ -208,6 +248,7 @@ tests:
             exit_code: 1
       expect:
         calls:
+          - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: author, exactly: 2}
           - {step: proof-audit, exactly: 2}
@@ -227,6 +268,13 @@ tests:
       event: manual
       fixture: local.minimal
       mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: 0000000000000000000000000000000000000000
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
         native-state:
           schema_version: proof.checklist.show.v1
           checklist: onboard_v1
@@ -251,6 +299,7 @@ tests:
           steps: []
       expect:
         calls:
+          - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: author, exactly: 1}
           - {step: proof-audit, exactly: 2}
@@ -263,3 +312,13 @@ tests:
           - {step: native-state, path: ok, equals: true}
           - {step: author, path: summary, equals: repaired the independent audit finding only}
           - {step: native-completion, path: ok, equals: true}
+
+# The native test harness injects its mock provider and disables tools. Keep
+# these six deterministic cases focused on graph/routing/history semantics;
+# the production YAML above is validated separately with the isolated-writer
+# profile intact.
+checks:
+  author:
+    ai:
+      codex_execution_profile: null
+      codex_working_directory_from: null
