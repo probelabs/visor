@@ -73,8 +73,11 @@ export class CLI {
       .option('--graph-resume-ready', 'Resume only the ready Graph-v2 frontier from an imported checkpoint')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
-        value => parseInt(value, 10)
+        'AI elapsed timeout in milliseconds (0 disables the Visor deadline; default: 1800000ms)',
+        value => {
+          const trimmed = value.trim();
+          return trimmed.length > 0 ? Number(trimmed) : Number.NaN;
+        }
       )
       .option(
         '--max-parallelism <count>',
@@ -355,9 +358,13 @@ export class CLI {
 
     // Validate timeout
     if (options.timeout !== undefined) {
-      if (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout < 0) {
+      if (
+        typeof options.timeout !== 'number' ||
+        !Number.isFinite(options.timeout) ||
+        options.timeout < 0
+      ) {
         throw new Error(
-          `Invalid timeout value: ${options.timeout}. Timeout must be a positive number in milliseconds.`
+          `Invalid timeout value: ${options.timeout}. Timeout must be a finite non-negative number in milliseconds.`
         );
       }
     }

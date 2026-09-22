@@ -19,6 +19,12 @@ does not assert that the overall workflow is complete. Ready-only resume may be
 used without a bound, but pairing `--graph-resume-ready` with the dispatch owner
 and limit enables the bounded-instance behavior described here.
 
+`--timeout` is an operational override and is excluded from the checkpoint's
+configuration digest. Each fresh process may choose its own value: omit it to
+preserve authored/default behavior, or use `--timeout 0` for an AI stage that
+must have no Visor elapsed deadline in that invocation. Provider-local safety
+and native transport inactivity behavior are unchanged.
+
 For example, a bounded initial run uses:
 
 ```sh

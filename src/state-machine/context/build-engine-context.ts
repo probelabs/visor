@@ -90,7 +90,8 @@ export function buildEngineContextForRun(
   failFast?: boolean,
   requestedChecks?: string[],
   graphCheckpointBootstrap?: undefined,
-  generatedDispatchGate?: GeneratedDispatchGate
+  generatedDispatchGate?: GeneratedDispatchGate,
+  runtimeTimeoutMs?: number
 ): EngineContext;
 export function buildEngineContextForRun(
   workingDirectory: string,
@@ -101,7 +102,8 @@ export function buildEngineContextForRun(
   failFast?: boolean,
   requestedChecks?: string[],
   graphCheckpointBootstrap?: CheckpointBootstrap,
-  generatedDispatchGate?: GeneratedDispatchGate
+  generatedDispatchGate?: GeneratedDispatchGate,
+  runtimeTimeoutMs?: number
 ): BuiltGraphCheckpointContext;
 export function buildEngineContextForRun(
   workingDirectory: string,
@@ -112,7 +114,8 @@ export function buildEngineContextForRun(
   failFast?: boolean,
   requestedChecks?: string[],
   graphCheckpointBootstrap?: CheckpointBootstrap,
-  generatedDispatchGate?: GeneratedDispatchGate
+  generatedDispatchGate?: GeneratedDispatchGate,
+  runtimeTimeoutMs?: number
 ): EngineContext | BuiltGraphCheckpointContext {
   // Deep clone provided config to avoid cross-run mutations between tests/runs
   const clonedConfig: VisorConfig = JSON.parse(JSON.stringify(config));
@@ -298,6 +301,7 @@ export function buildEngineContextForRun(
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
     prInfo,
     generatedDispatchGate,
+    runtimeTimeoutMs,
   };
 
   if (graphCheckpointBootstrap) {

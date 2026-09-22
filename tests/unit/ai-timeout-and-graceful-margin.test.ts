@@ -38,7 +38,7 @@ const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120_000
  */
 function deriveProbeTimeout(visorTimeout: number, aiTimeout?: number): number {
   return (
-    aiTimeout ||
+    aiTimeout ??
     (visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
       ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
       : visorTimeout)
@@ -93,9 +93,7 @@ describe('ai_timeout and graceful margin', () => {
     });
 
     it('should prefer explicit aiTimeout=0 over default derivation', () => {
-      // aiTimeout=0 is falsy, so falls through to default derivation
-      // This is by design: 0 means "not set"
-      expect(deriveProbeTimeout(1800000, 0)).toBe(1710000);
+      expect(deriveProbeTimeout(1800000, 0)).toBe(0);
     });
   });
 
@@ -428,6 +426,68 @@ describe('per-call ProbeAgent ownership cleanup', () => {
 
     expect(agent.cancel).toHaveBeenCalledTimes(1);
     expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves provider cancellation cleanup when the Visor timeout is zero', async () => {
+    const cancellation = Object.assign(new Error('provider cancelled'), { name: 'AbortError' });
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(cancellation),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation((options: Record<string, unknown>) => {
+      (agent as any).options = options;
+      return agent;
+    });
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+      timeout: 0,
+      aiTimeout: 0,
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'provider cancelled'
+    );
+    expect((agent as any).options.maxOperationTimeout).toBe(0);
+    expect((agent as any).options.requestTimeout).toBe(0);
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('explicit zero timeout wiring', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('forwards zero to Probe and allows a delayed response without a Visor deadline', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(
+        () => new Promise<string>(resolve => setTimeout(() => resolve('{"issues":[]}'), 25))
+      ),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation((options: Record<string, unknown>) => {
+      (agent as any).options = options;
+      return agent;
+    });
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+      timeout: 0,
+      aiTimeout: 0,
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).resolves.toEqual(
+      expect.objectContaining({ issues: [] })
+    );
+    expect((agent as any).options.maxOperationTimeout).toBe(0);
+    expect((agent as any).options.requestTimeout).toBe(0);
+    expect(agent.cancel).not.toHaveBeenCalled();
   });
 });
 

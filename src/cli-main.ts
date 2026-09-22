@@ -2752,6 +2752,7 @@ export async function main(): Promise<void> {
                 maxParallelism: options.maxParallelism,
                 failFast: options.failFast,
                 generatedDispatchGate,
+                timeout: options.timeout,
               });
               return resumed.result;
             }

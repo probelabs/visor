@@ -617,15 +617,20 @@ export async function executeSingleCheck(
     // Compute effective timeout, capped by any inherited parent deadline.
     const configTimeout = checkConfig.timeout || checkConfig.ai?.timeout || 1800000;
     const parentDeadline = context.executionContext?.deadline;
-    let effectiveTimeout = configTimeout;
-    if (parentDeadline) {
+    const runtimeTimeoutOverride =
+      providerType === 'ai' && context.runtimeTimeoutMs !== undefined
+        ? context.runtimeTimeoutMs
+        : undefined;
+    let effectiveTimeout =
+      runtimeTimeoutOverride !== undefined ? runtimeTimeoutOverride : configTimeout;
+    if (parentDeadline && effectiveTimeout > 0) {
       const remaining = parentDeadline - Date.now();
       if (remaining <= 0) {
         throw new Error(`Parent deadline exceeded: no time remaining for check '${checkId}'`);
       }
       effectiveTimeout = Math.min(effectiveTimeout, remaining);
     }
-    const deadline = Date.now() + effectiveTimeout;
+    const deadline = effectiveTimeout > 0 ? Date.now() + effectiveTimeout : undefined;
 
     const outputHistory = buildOutputHistoryFromJournal(context);
     // Resolve workflow inputs from config or context (centralized logic)
@@ -652,6 +657,7 @@ export async function executeSingleCheck(
       ai: {
         ...(checkConfig.ai || {}),
         timeout: effectiveTimeout,
+        ...(runtimeTimeoutOverride === 0 ? { ai_timeout: 0 } : {}),
         debug: !!context.debug,
       },
     };

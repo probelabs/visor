@@ -131,9 +131,14 @@ describe('CLI Argument Parser', () => {
     });
 
     it('should accept valid timeout values', () => {
+      expect(cli.parseArgs(['--check', 'performance', '--timeout', '0']).timeout).toBe(0);
       expect(() => cli.parseArgs(['--check', 'performance', '--timeout', '60000'])).not.toThrow();
       expect(() => cli.parseArgs(['--check', 'performance', '--timeout', '300000'])).not.toThrow();
       expect(() => cli.parseArgs(['--check', 'performance', '--timeout', '600000'])).not.toThrow();
+    });
+
+    it.each(['0oops', 'Infinity', '-0.5'])('should reject malformed or negative timeout %s', value => {
+      expect(() => cli.parseArgs(['--check', 'performance', '--timeout', value])).toThrow(/timeout/i);
     });
 
     it('should provide helpful error messages', () => {

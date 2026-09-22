@@ -1331,7 +1331,7 @@ export class AIReviewService {
         },
         () => cleanupCreatedAgent(true)
       );
-      const timeoutMs = Math.max(0, this.config.timeout || 0);
+      const timeoutMs = Math.max(0, this.config.timeout ?? 0);
       const {
         response,
         effectiveSchema,
@@ -1534,7 +1534,7 @@ export class AIReviewService {
         checkName,
         extender
       );
-      const timeoutMs = Math.max(0, this.config.timeout || 0);
+      const timeoutMs = Math.max(0, this.config.timeout ?? 0);
       const { response, effectiveSchema, parseSchema } =
         timeoutMs > 0
           ? await this.withTimeout(
@@ -1612,6 +1612,10 @@ export class AIReviewService {
     extender?: TimeoutExtender,
     onTimeout?: () => Promise<void> | void
   ): Promise<T> {
+    // An explicit zero timeout disables Visor's elapsed-time race. Provider
+    // and transport-local safety limits remain responsible for cancellation.
+    if (ms === 0) return await p;
+
     let timer: NodeJS.Timeout | undefined;
     const startTime = Date.now();
     let deadlineMs = ms; // total ms from startTime
@@ -2540,13 +2544,14 @@ ${this.escapeXml(processedFallbackDiff)}
 
     // Update maxOperationTimeout for this reuse call (timeout may differ from original)
     // Use explicit aiTimeout if set, otherwise default to timeout - 90s
-    const reuseTimeoutMs = this.config.timeout || 0;
+    const reuseTimeoutMs = this.config.timeout ?? 0;
     const reuseAiTimeout =
-      this.config.aiTimeout ||
-      (reuseTimeoutMs > MIN_TIMEOUT_FOR_MARGIN_MS
-        ? reuseTimeoutMs - PROBE_GRACEFUL_MARGIN_MS
-        : reuseTimeoutMs);
-    if (reuseAiTimeout > 0) {
+      this.config.aiTimeout !== undefined
+        ? this.config.aiTimeout
+        : reuseTimeoutMs > MIN_TIMEOUT_FOR_MARGIN_MS
+          ? reuseTimeoutMs - PROBE_GRACEFUL_MARGIN_MS
+          : reuseTimeoutMs;
+    if (reuseAiTimeout !== undefined) {
       (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
     // Update negotiated timeout / graceful stop options on session reuse.
@@ -3121,13 +3126,14 @@ If you receive a message that the time limit has been reached or your operation 
       // Wire Probe's graceful timeout (maxOperationTimeout).
       // Use explicit aiTimeout if set, otherwise default to timeout - 90s so Probe's
       // wind-down (4 bonus steps + 60s safety net) fires before Visor's hard kill.
-      const visorTimeout = this.config.timeout || 0;
+      const visorTimeout = this.config.timeout ?? 0;
       const aiTimeout =
-        this.config.aiTimeout ||
-        (visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
-          ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
-          : visorTimeout);
-      if (aiTimeout > 0) {
+        this.config.aiTimeout !== undefined
+          ? this.config.aiTimeout
+          : visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
+            ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
+            : visorTimeout;
+      if (aiTimeout !== undefined) {
         (options as any).maxOperationTimeout = aiTimeout;
       }
 
@@ -3340,11 +3346,11 @@ If you receive a message that the time limit has been reached or your operation 
       ) {
         if (
           !Number.isInteger(aiTimeout) ||
-          aiTimeout < PROBE_REQUEST_TIMEOUT_MIN_MS ||
+          (aiTimeout !== 0 && aiTimeout < PROBE_REQUEST_TIMEOUT_MIN_MS) ||
           aiTimeout > PROBE_REQUEST_TIMEOUT_MAX_MS
         ) {
           throw new Error(
-            `codex_execution_profile ${this.config.codexExecutionProfile} requires Probe requestTimeout between ${PROBE_REQUEST_TIMEOUT_MIN_MS} and ${PROBE_REQUEST_TIMEOUT_MAX_MS}ms; received ${String(aiTimeout)}`
+            `codex_execution_profile ${this.config.codexExecutionProfile} requires Probe requestTimeout 0 or between ${PROBE_REQUEST_TIMEOUT_MIN_MS} and ${PROBE_REQUEST_TIMEOUT_MAX_MS}ms; received ${String(aiTimeout)}`
           );
         }
         options.requestTimeout = aiTimeout;

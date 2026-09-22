@@ -167,6 +167,8 @@ export interface EngineContext {
   policyEngine?: import('../policy/types').PolicyEngine;
   /** Optional controller for a bounded, journal-derived ready frontier. */
   generatedDispatchGate?: GeneratedDispatchGate;
+  /** Explicit CLI/runtime timeout override; omitted preserves authored/default behavior. */
+  runtimeTimeoutMs?: number;
 }
 
 /**

@@ -221,7 +221,15 @@ The CLI supports a global timeout via the `--timeout` flag:
 visor --check all --timeout 300000  # 5 minute global timeout (milliseconds)
 ```
 
-This timeout applies to AI operations. The default is 1200000ms (30 minutes).
+This timeout applies to AI operations. The default is 1800000ms (30 minutes).
+
+The flag is an explicit runtime override and is not written into authored
+configuration or Graph-v2 checkpoint digests. Omitting it preserves each
+check's authored timeout and the existing default. Passing `--timeout 0`
+removes Visor's elapsed-time deadline for AI operations and forwards the zero
+budget to the AI provider; provider-, command-, sandbox-, and transport-local
+safety limits remain in force. This does not add or remove a native Codex SSE
+inactivity watchdog.
 
 ## Examples
 

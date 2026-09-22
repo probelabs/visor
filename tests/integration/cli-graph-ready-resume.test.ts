@@ -105,6 +105,7 @@ describe('source CLI Graph-v2 ready-only bounded resume', () => {
         '--graph-dispatch-owner', OWNER,
         '--graph-dispatch-limit', '1',
         '--graph-resume-ready',
+        '--timeout', '0',
         '--graph-checkpoint-in', checkpointA,
         '--graph-checkpoint-out', checkpointB,
       ], callLog);

@@ -48,6 +48,8 @@ export interface GraphCheckpointResumeInput {
   debug?: boolean;
   maxParallelism?: number;
   failFast?: boolean;
+  /** Explicit CLI/runtime timeout override; omitted preserves authored/default behavior. */
+  timeout?: number;
 }
 
 export type GraphCheckpointResumeResult = Omit<GraphCheckpointContinuationResult, 'requestId'>;
@@ -420,7 +422,8 @@ export class StateMachineExecutionEngine {
       failFast,
       checks, // Pass the explicit checks list
       graphCheckpointBootstrap,
-      generatedDispatchGate
+      generatedDispatchGate,
+      timeout
     );
     const context = graphCheckpointBootstrap
       ? (builtContext as BuiltGraphCheckpointContext).context
@@ -834,7 +837,8 @@ export class StateMachineExecutionEngine {
     failFast?: boolean,
     requestedChecks?: string[],
     graphCheckpointBootstrap?: CheckpointBootstrap,
-    generatedDispatchGate?: GeneratedDispatchGate
+    generatedDispatchGate?: GeneratedDispatchGate,
+    runtimeTimeoutMs?: number
   ): EngineContext | BuiltGraphCheckpointContext {
     const { buildEngineContextForRun } = require('./state-machine/context/build-engine-context');
     return buildEngineContextForRun(
@@ -846,7 +850,8 @@ export class StateMachineExecutionEngine {
       failFast,
       requestedChecks,
       graphCheckpointBootstrap,
-      generatedDispatchGate
+      generatedDispatchGate,
+      runtimeTimeoutMs
     );
   }
 
@@ -893,7 +898,7 @@ export class StateMachineExecutionEngine {
     const prepared = await this.executeGroupedChecksInternal(
       input.prInfo,
       [],
-      undefined,
+      input.timeout,
       input.config,
       undefined,
       input.debug,
@@ -924,7 +929,7 @@ export class StateMachineExecutionEngine {
     const prepared = await this.executeGroupedChecksInternal(
       input.prInfo,
       [],
-      undefined,
+      input.timeout,
       input.config,
       undefined,
       input.debug,

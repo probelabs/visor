@@ -3261,6 +3261,13 @@ async function executeSingleCheck(
     const providerRegistry =
       require('../../providers/check-provider-registry').CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
+    const configuredTimeout = checkConfig.timeout || checkConfig.ai?.timeout || 1800000;
+    const runtimeTimeoutOverride =
+      providerType === 'ai' && context.runtimeTimeoutMs !== undefined
+        ? context.runtimeTimeoutMs
+        : undefined;
+    const effectiveTimeout =
+      runtimeTimeoutOverride !== undefined ? runtimeTimeoutOverride : configuredTimeout;
 
     // Build output history for template rendering
     const outputHistory = dynamic?.kind === 'generated'
@@ -3293,7 +3300,8 @@ async function executeSingleCheck(
       workflowInputs,
       ai: {
         ...(checkConfig.ai || {}),
-        timeout: checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+        timeout: effectiveTimeout,
+        ...(runtimeTimeoutOverride === 0 ? { ai_timeout: 0 } : {}),
         debug: !!context.debug,
       },
     };
@@ -3742,7 +3750,7 @@ async function executeSingleCheck(
                     context,
                     prInfo,
                     providerDependencyResults,
-                    checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+                    effectiveTimeout,
                     () =>
                       provider.execute(prInfo, providerConfig, providerDependencyResults, executionContext)
                   );
@@ -3764,7 +3772,7 @@ async function executeSingleCheck(
               context,
               prInfo,
               providerDependencyResults,
-              checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+              effectiveTimeout,
               () => provider.execute(prInfo, providerConfig, providerDependencyResults, executionContext)
             );
             try {
