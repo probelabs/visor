@@ -234,6 +234,39 @@ describe('ordinary Luna Codex execution profile', () => {
     expect((service as any).sessionRegistry.hasSession(sessionId)).toBe(false);
   });
 
+  it('cleans the successful isolated writer agent once because it is not reusable', async () => {
+    const fixture = createWorktreeFixture();
+    try {
+      const cwd = fs.realpathSync(fixture.worktreeRoot);
+      const cancel = jest.fn();
+      const cleanup = jest.fn().mockResolvedValue(undefined);
+      (ProbeAgent as jest.Mock).mockImplementation(() => ({
+        initialize: jest.fn().mockResolvedValue(undefined),
+        answer: jest.fn().mockResolvedValue(JSON.stringify({ issues: [] })),
+        cancel,
+        cleanup,
+      }));
+      const service = new AIReviewService({
+        codexExecutionProfile: WRITER_PROFILE,
+        codexWorkingDirectoryFrom: 'checkout-worktree',
+        path: cwd,
+        cwd,
+        workspacePath: cwd,
+        allowedFolders: [cwd],
+        allowEdit: true,
+      });
+
+      const result = await service.executeReview(prInfo, 'Implement the scoped change');
+      expect(result).toEqual(expect.objectContaining({ issues: [] }));
+
+      expect(cancel).toHaveBeenCalledTimes(0);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect((service as any).sessionRegistry.hasSession((result as any).sessionId)).toBe(false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it('rejects USE_CLAUDE_CODE before Probe construction', () => {
     process.env.USE_CLAUDE_CODE = 'true';
     expect(() => new AIReviewService({ codexExecutionProfile: PROFILE, path: cwd })).toThrow(

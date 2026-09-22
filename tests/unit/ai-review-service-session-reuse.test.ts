@@ -258,6 +258,39 @@ describe('AIReviewService Session Reuse', () => {
       expect(result.debug?.errors?.[0]).toContain('AI service error');
       expect(result.debug).toBeDefined();
     });
+
+    it('does not cleanup or unregister the shared agent when session reuse times out', async () => {
+      const parentSessionId = 'parent-session-123';
+      const existingAgent = {
+        answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+        triggerGracefulWindDown: jest.fn(),
+        cancel: jest.fn(),
+        cleanup: jest.fn(),
+      };
+      mockSessionRegistry.getSession.mockReturnValue(existingAgent);
+      const timeoutService = new AIReviewService({
+        provider: 'google',
+        model: 'test-model',
+        timeout: 20,
+        debug: false,
+      });
+
+      await expect(
+        timeoutService.executeReviewWithSessionReuse(
+          mockPRInfo,
+          'Reuse session prompt',
+          parentSessionId,
+          undefined,
+          'dependent-check',
+          'append'
+        )
+      ).rejects.toThrow('AI review (session) timed out after 20ms');
+
+      expect(existingAgent.triggerGracefulWindDown).toHaveBeenCalledTimes(1);
+      expect(existingAgent.cancel).not.toHaveBeenCalled();
+      expect(existingAgent.cleanup).not.toHaveBeenCalled();
+      expect(mockSessionRegistry.unregisterSession).not.toHaveBeenCalled();
+    });
   });
 
   describe('session management methods', () => {

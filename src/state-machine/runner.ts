@@ -15,7 +15,10 @@ import type {
 import { generateHumanId } from '../utils/human-id';
 import type { EventEnvelope } from '../event-bus/types';
 import { logger } from '../logger';
-import type { ExecutionResult } from '../types/execution';
+import type {
+  ExecutionFailureDiagnostic,
+  ExecutionResult,
+} from '../types/execution';
 import { GroupedCheckResults } from '../reviewer';
 import { withActiveSpan, addEvent as addOtelEvent } from '../telemetry/trace-helpers';
 import type { DebugVisualizerServer } from '../debug-visualizer/ws-server';
@@ -411,6 +414,96 @@ export class StateMachineRunner {
   }
 
   /**
+   * Project failures that remain at the terminal frontier from the ordered
+   * execution events.  Failed-run counters are cumulative by design and
+   * therefore cannot distinguish a handled goto retry from an unresolved
+   * failure.
+   */
+  private collectUnresolvedFailures(): ExecutionFailureDiagnostic[] {
+    const latest = new Map<string, ExecutionFailureDiagnostic | null>();
+    const outcomeKey = (checkId: string, scope: unknown): string =>
+      `${checkId}\u0000${JSON.stringify(Array.isArray(scope) ? scope : [])}`;
+    const isExecutionFailureRule = (ruleId: unknown): boolean => {
+      if (typeof ruleId !== 'string') return false;
+      return (
+        ruleId.endsWith('/error') ||
+        ruleId.includes('/execution_error') ||
+        ruleId.includes('timeout') ||
+        (ruleId.endsWith('_fail_if') && ruleId !== 'global_fail_if')
+      );
+    };
+
+    for (const event of this.state.historyLog) {
+      if (event.type === 'CheckErrored') {
+        latest.set(outcomeKey(event.checkId, event.scope), {
+          checkName: event.checkId,
+          kind: 'exception',
+          message: event.error.message,
+          ...(event.scope?.length ? { scope: event.scope } : {}),
+        });
+        continue;
+      }
+      if (event.type !== 'CheckCompleted') continue;
+
+      const skippedMarker = (event.result as any)?.__skipped;
+      const key = outcomeKey(event.checkId, event.scope);
+      if (skippedMarker === 'dependency_failed') {
+        latest.set(key, {
+          checkName: event.checkId,
+          kind: 'dependency',
+          message: `Check skipped because a dependency failed: ${event.checkId}`,
+          skipReason: 'dependency_failed',
+          ...(event.scope?.length ? { scope: event.scope } : {}),
+        });
+        continue;
+      }
+
+      const issue = (event.result?.issues || []).find((candidate: any) =>
+        isExecutionFailureRule(candidate?.ruleId)
+      ) as any;
+      if (issue) {
+        latest.set(key, {
+          checkName: event.checkId,
+          kind: 'execution',
+          message: String(issue.message || 'check execution failed'),
+          ...(typeof issue.ruleId === 'string' ? { ruleId: issue.ruleId } : {}),
+          ...(event.scope?.length ? { scope: event.scope } : {}),
+        });
+      } else {
+        // A later successful completion clears an earlier routed failure for
+        // this exact check, while unrelated waves do not affect it.
+        latest.set(key, null);
+      }
+    }
+
+    // A few scheduler paths can record stats without emitting a check event.
+    // Use those stats only as a fallback; never let a stale skipped row
+    // overwrite a later event for the same check/scope.
+    for (const stats of this.state.stats.values()) {
+      const key = outcomeKey(stats.checkName, []);
+      if (latest.has(key)) continue;
+      if (stats.skipped && stats.skipReason === 'dependency_failed') {
+        latest.set(key, {
+          checkName: stats.checkName,
+          kind: 'dependency',
+          message: `Check skipped because a dependency failed: ${stats.checkName}`,
+          skipReason: stats.skipReason,
+        });
+      } else if (stats.errorMessage) {
+        latest.set(key, {
+          checkName: stats.checkName,
+          kind: 'exception',
+          message: stats.errorMessage,
+        });
+      }
+    }
+
+    return Array.from(latest.values())
+      .filter((failure): failure is ExecutionFailureDiagnostic => failure !== null)
+      .sort((a, b) => `${a.checkName}:${JSON.stringify(a.scope || [])}`.localeCompare(`${b.checkName}:${JSON.stringify(b.scope || [])}`));
+  }
+
+  /**
    * Build the final execution result
    */
   private buildExecutionResult(): ExecutionResult {
@@ -463,6 +556,7 @@ export class StateMachineRunner {
       );
     }
 
+    const unresolvedFailures = this.collectUnresolvedFailures();
     return {
       results,
       statistics: {
@@ -473,6 +567,7 @@ export class StateMachineRunner {
         skippedChecks: stats.filter(s => s.skipped).length,
         totalDuration,
         checks: stats,
+        ...(unresolvedFailures.length > 0 ? { unresolvedFailures } : {}),
       },
     };
   }

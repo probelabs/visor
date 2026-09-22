@@ -32,6 +32,7 @@ const PROBE_GRACEFUL_MARGIN_MS = 90_000;
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
 const PROBE_REQUEST_TIMEOUT_MIN_MS = 1_000;
 const PROBE_REQUEST_TIMEOUT_MAX_MS = 3_600_000;
+const PROBE_AGENT_CLEANUP_TIMEOUT_MS = 5_000;
 
 const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
 const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
@@ -1288,6 +1289,29 @@ export class AIReviewService {
       }
     }
 
+    let createdAgent: TracedProbeAgent | undefined;
+    let createdAgentCleanup: Promise<void> | undefined;
+    let createdAgentCancelRequested = false;
+    const cleanupCreatedAgent = (cancel = false): Promise<void> => {
+      const agent = createdAgent;
+      if (!agent) return Promise.resolve();
+      if (cancel && !createdAgentCancelRequested) {
+        createdAgentCancelRequested = true;
+        try {
+          agent.cancel();
+        } catch {
+          // Cleanup below still has its own abort path.
+        }
+      }
+      if (!createdAgentCleanup) {
+        createdAgentCleanup = this.cleanupProbeAgent(agent);
+      }
+      return createdAgentCleanup;
+    };
+    const profileSelected =
+      this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+      this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE;
+
     try {
       // Create an extender so withTimeout can be dynamically extended when the
       // agent's negotiated timeout observer grants more time (timeout.extended event).
@@ -1299,7 +1323,13 @@ export class AIReviewService {
         checkName,
         sessionId,
         extender,
-        nodeGenerationId
+        nodeGenerationId,
+        agent => {
+          // callProbeAgent invokes this immediately after construction, before
+          // initialization or answer() can yield.
+          createdAgent = agent;
+        },
+        () => cleanupCreatedAgent(true)
       );
       const timeoutMs = Math.max(0, this.config.timeout || 0);
       const {
@@ -1308,7 +1338,14 @@ export class AIReviewService {
         parseSchema,
         sessionId: usedSessionId,
       } = timeoutMs > 0
-        ? await this.withTimeout(call, timeoutMs, 'AI review', sessionId, extender)
+        ? await this.withTimeout(
+            call,
+            timeoutMs,
+            'AI review',
+            sessionId,
+            extender,
+            () => cleanupCreatedAgent(true)
+          )
         : await call;
       const processingTime = Date.now() - startTime;
 
@@ -1361,6 +1398,12 @@ export class AIReviewService {
         };
       }
       throw error;
+    } finally {
+      // Governed profile agents are deliberately not registered for reuse.
+      // Close the exact per-call instance once the call has settled.
+      if (profileSelected) {
+        await cleanupCreatedAgent();
+      }
     }
   }
 
@@ -1566,13 +1609,27 @@ export class AIReviewService {
     ms: number,
     label = 'operation',
     sessionId?: string,
-    extender?: TimeoutExtender
+    extender?: TimeoutExtender,
+    onTimeout?: () => Promise<void> | void
   ): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
     const startTime = Date.now();
     let deadlineMs = ms; // total ms from startTime
+    let timedOut = false;
 
     try {
+      // Once the deadline fires, the in-flight call must not win the race
+      // while its bounded cleanup is still pending.
+      const guardedCall = new Promise<T>((resolve, reject) => {
+        p.then(
+          value => {
+            if (!timedOut) resolve(value);
+          },
+          error => {
+            if (!timedOut) reject(error);
+          }
+        );
+      });
       const timeout = new Promise<never>((_, reject) => {
         const scheduleTimer = () => {
           if (timer) clearTimeout(timer);
@@ -1584,11 +1641,25 @@ export class AIReviewService {
           timer = setTimeout(() => fireTimeout(reject), remaining);
         };
 
-        const fireTimeout = (rej: (reason: Error) => void) => {
+        const fireTimeout = async (rej: (reason: Error) => void) => {
+          if (timedOut) return;
+          timedOut = true;
+          if (timer) clearTimeout(timer);
+          const timeoutError = new Error(`${label} timed out after ${deadlineMs}ms`);
+
           // Signal the agent to wind down before the hard kill.
           // This gives the agent a chance to produce partial results
           // in its bonus wind-down steps before we reject the promise.
-          if (sessionId) {
+          // A per-call cleanup owns newly-created agents and intentionally
+          // bypasses the registry, which may contain an unrelated/shared
+          // session with the same ID.
+          if (onTimeout) {
+            try {
+              await onTimeout();
+            } catch {
+              // Preserve the original timeout; cleanup failures are private.
+            }
+          } else if (sessionId) {
             try {
               const agent = this.sessionRegistry.getSession(sessionId);
               if (agent && typeof (agent as any).triggerGracefulWindDown === 'function') {
@@ -1598,7 +1669,7 @@ export class AIReviewService {
               // Best-effort: don't let registry errors block the timeout
             }
           }
-          rej(new Error(`${label} timed out after ${deadlineMs}ms`));
+          rej(timeoutError);
         };
 
         // Allow the deadline to be extended dynamically
@@ -1622,7 +1693,7 @@ export class AIReviewService {
 
         scheduleTimer();
       });
-      return (await Promise.race([p, timeout])) as T;
+      return (await Promise.race([guardedCall, timeout])) as T;
     } finally {
       if (timer) clearTimeout(timer);
       if (extender) extender._listener = undefined;
@@ -1687,6 +1758,50 @@ export class AIReviewService {
     } catch {
       // Best-effort: older Probe versions may not have events
     }
+  }
+
+  /**
+   * Close one newly-created ProbeAgent without allowing cleanup to replace the
+   * caller's result or keep a timed-out review pending indefinitely.
+   */
+  private cleanupProbeAgent(agent: TracedProbeAgent): Promise<void> {
+    const cleanup = (agent as any).cleanup;
+    if (typeof cleanup !== 'function') return Promise.resolve();
+
+    return new Promise<void>(resolve => {
+      let settled = false;
+      const finish = (warning?: 'failed' | 'timed_out') => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (warning) {
+          // Keep cleanup diagnostics fixed-shape and free of provider/private
+          // error payloads, which may contain transport or workspace details.
+          try {
+            logger.warn(`probe.agent_cleanup_${warning}`);
+          } catch {
+            // A warning sink must not keep the timeout or cleanup promise open.
+          }
+        }
+        resolve();
+      };
+      const timer = setTimeout(
+        () => finish('timed_out'),
+        PROBE_AGENT_CLEANUP_TIMEOUT_MS
+      );
+
+      let result: unknown;
+      try {
+        result = cleanup.call(agent);
+      } catch {
+        finish('failed');
+        return;
+      }
+      Promise.resolve(result).then(
+        () => finish(),
+        () => finish('failed')
+      );
+    });
   }
 
   /**
@@ -2831,7 +2946,9 @@ ${'='.repeat(60)}
     _checkName?: string,
     providedSessionId?: string,
     extender?: TimeoutExtender,
-    nodeGenerationId?: string
+    nodeGenerationId?: string,
+    onAgentCreated?: (agent: TracedProbeAgent) => void,
+    onCallFailure?: () => Promise<void> | void
   ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown>; sessionId: string }> {
     // Derive a stable session ID for this call so the engine can reuse it later
     const sessionId =
@@ -3237,7 +3354,8 @@ If you receive a message that the time limit has been reached or your operation 
         `🔧 ProbeAgent options: allowEdit=${(options as any).allowEdit}, enableBash=${(options as any).enableBash}, promptType=${options.promptType}`
       );
 
-      const agent = new ProbeAgent(options);
+      const agent = new ProbeAgent(options) as TracedProbeAgent;
+      onAgentCreated?.(agent);
 
       // Initialize agent to enable CLI fallback detection (claude-code/codex)
       // This must be called before agent.answer() for auto-fallback to work.
@@ -3607,6 +3725,11 @@ ${'='.repeat(60)}
 
       return { response, effectiveSchema, parseSchema, sessionId };
     } catch (error) {
+      try {
+        await onCallFailure?.();
+      } catch {
+        // Preserve the original Probe failure if per-call cleanup itself fails.
+      }
       const handledGovernedFailure = warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
       if (handledGovernedFailure) throw error;
       console.error('❌ ProbeAgent failed:', error);

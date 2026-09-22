@@ -311,6 +311,126 @@ describe('safe Probe request timeout events', () => {
   });
 });
 
+describe('per-call ProbeAgent ownership cleanup', () => {
+  let warningLog: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function profileService(timeout: number): AIReviewService {
+    return new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+      timeout,
+      aiTimeout: 1000,
+    });
+  }
+
+  it('cancels and completes exact-agent cleanup before rejecting the original timeout', async () => {
+    let cleanupCompleted = false;
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockImplementation(async () => {
+        cleanupCompleted = true;
+      }),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(25).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 25ms'
+    );
+
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+    expect(cleanupCompleted).toBe(true);
+  });
+
+  it('preserves timeout and sanitized warning when cleanup rejects', async () => {
+    const privateCleanupFailure = 'private cleanup transport payload';
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockRejectedValue(new Error(privateCleanupFailure)),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(25).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 25ms'
+    );
+
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+    expect(warningLog).toHaveBeenCalledWith('probe.agent_cleanup_failed');
+    expect(warningLog.mock.calls.flat().join(' ')).not.toContain(privateCleanupFailure);
+  });
+
+  it('bounds a hanging cleanup and still rejects with the original timeout', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockReturnValue(new Promise<void>(() => undefined)),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    const startedAt = Date.now();
+    await expect(profileService(25).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 25ms'
+    );
+    const elapsed = Date.now() - startedAt;
+
+    expect(elapsed).toBeGreaterThanOrEqual(4_900);
+    expect(elapsed).toBeLessThan(6_500);
+    expect(warningLog).toHaveBeenCalledWith('probe.agent_cleanup_timed_out');
+  });
+
+  it('does not let a late answer win while timeout cleanup is settling', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(
+        () => new Promise<string>(resolve => setTimeout(() => resolve('{"issues":[]}'), 35))
+      ),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockImplementation(
+        () => new Promise<void>(resolve => setTimeout(resolve, 45))
+      ),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(20).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 20ms'
+    );
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans a newly-created agent once when answer rejects directly', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(new Error('answer failed')),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(1000).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'answer failed'
+    );
+
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('public governed raw-item failure warning', () => {
   let warningLog: jest.SpyInstance;
   let consoleError: jest.SpyInstance;

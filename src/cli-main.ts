@@ -13,7 +13,7 @@ import { CLI } from './cli';
 import { ConfigManager } from './config';
 import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
-import { CheckResult, GroupedCheckResults } from './reviewer';
+import { CheckResult, GroupedCheckResults, ReviewIssue } from './reviewer';
 import { extractTextFromJson } from './utils/json-text-extractor';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
@@ -2808,6 +2808,33 @@ export async function main(): Promise<void> {
       }
     }
 
+    // Keep terminal execution failures visible in every normal output mode.
+    // The grouped journal result can contain an empty dependency skip and the
+    // final check output can otherwise look clean even though the terminal
+    // execution state is unresolved.  These diagnostics are projected from
+    // the runner's latest per-check outcomes, not cumulative failedRuns.
+    const unresolvedFailures = executionStatistics.unresolvedFailures || [];
+    if (unresolvedFailures.length > 0) {
+      const issues: ReviewIssue[] = unresolvedFailures.map(failure => ({
+        file: 'execution',
+        line: 0,
+        ruleId: `execution/${failure.kind}`,
+        message: failure.message,
+        severity: 'error',
+        category: 'logic',
+        checkName: failure.checkName,
+      }));
+      const diagnosticResult: CheckResult = {
+        checkName: '__execution',
+        content: unresolvedFailures.map(failure => `${failure.checkName}: ${failure.message}`).join('\n'),
+        group: '__execution',
+        output: { unresolvedFailures },
+        issues,
+      };
+      if (!groupedResultsToUse.__execution) groupedResultsToUse.__execution = [];
+      groupedResultsToUse.__execution.push(diagnosticResult);
+    }
+
     // Get executed check names
     const executedCheckNames = Array.from(
       new Set(
@@ -2958,7 +2985,8 @@ export async function main(): Promise<void> {
     // This is necessary because some async resources may not be properly cleaned up
     // and can keep the event loop alive indefinitely
     const receiptTerminalFailed = receiptDraft !== undefined && receiptDraft.failureCode !== null;
-    let exitCode = criticalCount > 0 || hasRepositoryError || memoryCleanupFailed || receiptProjectionFailed || receiptTerminalFailed || checkpointExportFailed ? 1 : 0;
+    const hasUnresolvedExecutionFailures = unresolvedFailures.length > 0;
+    let exitCode = criticalCount > 0 || hasRepositoryError || hasUnresolvedExecutionFailures || memoryCleanupFailed || receiptProjectionFailed || receiptTerminalFailed || checkpointExportFailed ? 1 : 0;
     // Ensure a trace report exists when enabled (artifact-friendly), even if no spans were recorded
     try {
       if (process.env.VISOR_TRACE_REPORT === 'true') {
