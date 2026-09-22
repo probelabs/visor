@@ -1150,6 +1150,30 @@ function terminalExpansionOwner(value: unknown): string | undefined {
   return raw;
 }
 
+type ComponentScopeContext = Readonly<{
+  componentId: string;
+  componentScopeKey: string;
+}>;
+
+function componentScopeContext(scope: unknown): ComponentScopeContext | undefined {
+  if (!Array.isArray(scope)) return undefined;
+  const parts = scope.filter(isRecord);
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index];
+    if (
+      terminalExpansionOwner(part.expansionOwnerCheck) === 'enumerate-native-components' &&
+      typeof part.key === 'string' &&
+      part.key.length > 0
+    ) {
+      return {
+        componentId: part.key,
+        componentScopeKey: canonicalJson(parts.slice(0, index + 1)),
+      };
+    }
+  }
+  return undefined;
+}
+
 function operationalState(statuses: readonly string[]): NativeChecklistOperationalState {
   if (statuses.length === 0) return 'unknown';
   if (statuses.includes('unknown')) return 'unknown';
@@ -1165,6 +1189,8 @@ type OperationalItem = Readonly<{
   status: string;
   checkId?: string;
   kind?: OperationalKind;
+  componentId?: string;
+  componentScopeKey?: string;
   condition?: NativeChecklistOperationalCondition;
   /** A condition-only row must not override an authoritative execution row. */
   conditionOnly?: boolean;
@@ -1470,7 +1496,16 @@ function nativeConditionEntries(
     const id = itemIdFor(node);
     const checkId = optionalString(node.templateNodeKey) ?? optionalString(node.checkId);
     if (!id || !checkId) return;
-    items.push({id, status: 'pending', checkId, kind: itemKindFor(node, checkId), condition});
+    const kind = itemKindFor(node, checkId);
+    const component = componentScopeContext(node.scope);
+    items.push({
+      id,
+      status: 'pending',
+      checkId,
+      kind,
+      ...(component ? {componentId: component.componentId, componentScopeKey: component.componentScopeKey} : {}),
+      condition,
+    });
   };
   const instances = Object.values(projectionValue.instancesById)
     .filter(isRecord)
@@ -1714,6 +1749,27 @@ function operationalProjection(
   let componentEvidence = false;
   let specificationEvidence = false;
   let batchEvidence = false;
+  type ComponentBatchAggregate = {
+    componentId: string;
+    componentScopeKey: string;
+    batchStatuses: string[];
+    terminalStatuses: string[];
+  };
+  const componentBatchAggregates = new Map<string, ComponentBatchAggregate>();
+  const authoritativeBatchIds = new Set<string>();
+  const aggregateFor = (component: ComponentScopeContext): ComponentBatchAggregate => {
+    const key = `${component.componentId}\0${component.componentScopeKey}`;
+    const existing = componentBatchAggregates.get(key);
+    if (existing) return existing;
+    const created: ComponentBatchAggregate = {
+      componentId: component.componentId,
+      componentScopeKey: component.componentScopeKey,
+      batchStatuses: [],
+      terminalStatuses: [],
+    };
+    componentBatchAggregates.set(key, created);
+    return created;
+  };
   for (const generation of generations) {
     const checkId =
       optionalString(generation.checkId) ??
@@ -1761,7 +1817,21 @@ function operationalProjection(
         unknownReasons.push(`operational ${kind} generation has no stable id`);
         continue;
       }
-      itemsByKind[kind].push({ id, status, checkId });
+      const component = componentScopeContext(generation.scope);
+      const item: OperationalItem = {
+        id,
+        status,
+        checkId,
+        ...(component ? {componentId: component.componentId, componentScopeKey: component.componentScopeKey} : {}),
+      };
+      itemsByKind[kind].push(item);
+      if (component && kind === 'batch') {
+        const aggregate = aggregateFor(component);
+        aggregate.batchStatuses.push(status);
+        authoritativeBatchIds.add(`${component.componentId}\0${component.componentScopeKey}\0${id}`);
+      } else if (component && kind === 'component' && checkId === 'component-finished') {
+        aggregateFor(component).terminalStatuses.push(status);
+      }
       if (kind === 'component') componentEvidence = true;
       if (kind === 'specification') specificationEvidence = true;
       if (kind === 'batch') batchEvidence = true;
@@ -1798,9 +1868,57 @@ function operationalProjection(
   const batchUnexpanded = batchEvidence ? 0 : 1;
   for (const item of conditionResult.items) {
     const kind = item.kind;
-    if (kind === 'component' || kind === 'specification' || kind === 'batch') itemsByKind[kind].push(item);
+    if (kind === 'component' || kind === 'specification' || kind === 'batch') {
+      itemsByKind[kind].push(item);
+      if (item.componentId && item.componentScopeKey && kind === 'batch') {
+        const identity = `${item.componentId}\0${item.componentScopeKey}\0${item.id}`;
+        if (!authoritativeBatchIds.has(identity)) {
+          const aggregate = aggregateFor({componentId: item.componentId, componentScopeKey: item.componentScopeKey});
+          aggregate.batchStatuses.push(item.condition?.kind === 'failed_dependency' ? 'failed' : item.status);
+        }
+      } else if (
+        item.componentId &&
+        item.componentScopeKey &&
+        kind === 'component' &&
+        item.checkId === 'component-finished'
+      ) {
+        aggregateFor({componentId: item.componentId, componentScopeKey: item.componentScopeKey})
+          .terminalStatuses.push(item.condition?.kind === 'failed_dependency' ? 'failed' : item.status);
+      }
+    }
   }
   const components = collection(itemsByKind.component, componentEvidence || conditionResult.items.some(item => item.kind === 'component'), componentUnexpanded);
+  const componentStateOverrides = new Map<string, NativeChecklistOperationalState>();
+  for (const aggregate of componentBatchAggregates.values()) {
+    if (aggregate.batchStatuses.length === 0) continue;
+    const state = aggregate.terminalStatuses.includes('failed') || aggregate.batchStatuses.includes('failed')
+      ? 'failed'
+      : aggregate.terminalStatuses.includes('running') || aggregate.batchStatuses.includes('running')
+        ? 'running'
+        : aggregate.batchStatuses.every(status => status === 'completed') && aggregate.terminalStatuses.includes('completed')
+          ? 'completed'
+          : 'pending';
+    const prior = componentStateOverrides.get(aggregate.componentId);
+    componentStateOverrides.set(
+      aggregate.componentId,
+      prior ? operationalState([prior, state]) : state,
+    );
+  }
+  const overriddenComponentItems = components.items.map(item => {
+    const state = componentStateOverrides.get(item.id);
+    return state ? {...item, state} : item;
+  });
+  const componentCount = (state: NativeChecklistOperationalState) =>
+    overriddenComponentItems.filter(item => item.state === state).length;
+  const componentsWithBatchState = {
+    ...components,
+    completed_count: componentCount('completed'),
+    running_count: componentCount('running'),
+    failed_count: componentCount('failed'),
+    pending_count: componentCount('pending'),
+    unknown_count: componentCount('unknown'),
+    items: overriddenComponentItems,
+  };
   const specifications = collection(
     itemsByKind.specification,
     specificationEvidence || conditionResult.items.some(item => item.kind === 'specification'),
@@ -1826,7 +1944,7 @@ function operationalProjection(
   return {
     value: {
       project,
-      components,
+      components: componentsWithBatchState,
       specifications,
       batches,
       catalog_coverage: catalogCoverage(retainedCatalogComponentIds, affectedComponentIds),
@@ -2388,7 +2506,10 @@ export async function runNativeChecklistProgressDisplay(
     resumed: input.resumed,
     expansionPlan: claimPlan.expansionPlan,
   }));
-  writeDisplayOutputs(outputDir, outputTargets, [rendered.json, rendered.text, rendered.html]);
+  const htmlDocument = '<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Proof onboarding progress</title></head><body>'
+    + rendered.html
+    + '</body></html>';
+  writeDisplayOutputs(outputDir, outputTargets, [rendered.json, rendered.text, htmlDocument]);
   return outputTargets;
 }
 

@@ -1015,6 +1015,115 @@ describe('native checklist progress projection', () => {
     expect(JSON.parse(embedded as string)).toEqual(json);
   });
 
+  it('folds exact component-owned batch states into five component rows without fabricating completion', () => {
+    const componentScope = (component: string) => [
+      {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'spec-review'},
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-components', key: component},
+    ];
+    const batchScope = (component: string, batch: string) => [
+      ...componentScope(component),
+      {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key: batch},
+    ];
+    const generationsById: Record<string, unknown> = {
+      project: {status: 'completed', checkId: 'native-project-dispatch', scope: [{kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'}]},
+    };
+    const batches: Array<{component: string; id: string; status: string}> = [
+      {component: 'component-a', id: 'a-failed', status: 'failed'},
+      {component: 'component-a', id: 'a-pending', status: 'pending'},
+      {component: 'component-b', id: 'b-pending', status: 'pending'},
+      {component: 'component-c', id: 'c-pending', status: 'pending'},
+      {component: 'component-d', id: 'd-pending', status: 'pending'},
+      {component: 'component-e', id: 'e-pending', status: 'pending'},
+    ];
+    for (const component of ['component-a', 'component-b', 'component-c', 'component-d', 'component-e']) {
+      generationsById[`component-${component}`] = {
+        status: 'completed',
+        checkId: 'enumerate-native-components',
+        scope: componentScope(component),
+      };
+    }
+    for (const batch of batches) {
+      generationsById[`batch-${batch.id}`] = {
+        status: batch.status,
+        checkId: 'enumerate-native-batches',
+        scope: batchScope(batch.component, batch.id),
+      };
+    }
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: {...instanceProjection([]), generationsById},
+    });
+
+    expect(progress.operational.components).toMatchObject({
+      known: true,
+      known_count: 5,
+      completed_count: 0,
+      running_count: 0,
+      failed_count: 1,
+      pending_count: 4,
+    });
+    expect(progress.operational.components.items.map(item => [item.id, item.state])).toEqual([
+      ['component-a', 'failed'],
+      ['component-b', 'pending'],
+      ['component-c', 'pending'],
+      ['component-d', 'pending'],
+      ['component-e', 'pending'],
+    ]);
+    expect(progress.operational.batches).toMatchObject({
+      known_count: 6,
+      completed_count: 0,
+      failed_count: 1,
+      pending_count: 5,
+    });
+    expect(progress.operational.project.state).toBe('failed');
+
+    const rendered = renderNativeChecklistProgress(progress);
+    const json = JSON.parse(rendered.json);
+    expect(json.operational.components.items).toEqual(progress.operational.components.items);
+    expect(rendered.text).toContain(
+      'operational components: state=5 discovered expanded completed=0,running=0,failed=1,pending=4'
+    );
+    expect(rendered.html).toContain('<b>failed:</b> 1');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
+  it('requires an exact completed component-finished generation after all batches complete', () => {
+    const componentScope = [
+      {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'spec-review'},
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-components', key: 'component-a'},
+    ];
+    const batchScope = [
+      ...componentScope,
+      {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key: 'batch-a'},
+    ];
+    const build = (terminalStatus?: string) => {
+      const generationsById: Record<string, unknown> = {
+        component: {status: 'completed', checkId: 'enumerate-native-components', scope: componentScope},
+        batch: {status: 'completed', checkId: 'enumerate-native-batches', scope: batchScope},
+      };
+      if (terminalStatus) {
+        generationsById.terminal = {status: terminalStatus, checkId: 'component-finished', scope: componentScope};
+      }
+      return buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        instanceProjection: {...instanceProjection([]), generationsById},
+      });
+    };
+
+    expect(build().operational.components.items).toEqual([
+      {id: 'component-a', state: 'pending', check_ids: ['enumerate-native-components']},
+    ]);
+    expect(build('ready').operational.components.items[0].state).toBe('pending');
+    expect(build('completed').operational.components.items).toEqual([
+      {id: 'component-a', state: 'completed', check_ids: ['component-finished', 'enumerate-native-components']},
+    ]);
+  });
+
   it('marks missing or non-pass required-check evidence stale without treating snapshot ok as authority', () => {
     const missing = snapshot({
       ok: true,

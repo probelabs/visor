@@ -23,10 +23,10 @@ function proofSnapshot(): Record<string, unknown> {
     new_project: true,
     steps_pending: 1,
     eligible_step_ids: ['research'],
-    next: {step_id: 'research', title: 'Research'},
+    next: {step_id: 'research', title: 'Spec review — code↔spec'},
     steps: [{
       step_id: 'research',
-      title: 'Research',
+      title: 'Spec review — code↔spec',
       effective_status: 'pending',
       stored_status: 'pending',
       applicable: true,
@@ -143,6 +143,22 @@ process.stdout.write(JSON.stringify(${JSON.stringify(proofSnapshot())}));
     });
     for (const target of written) expect(fs.statSync(target).mode & 0o777).toBe(0o600);
     expect(restore).toHaveBeenCalledTimes(1);
+  });
+
+  it('wraps display HTML with an explicit UTF-8 document without changing embedded JSON', async () => {
+    const written = await runNativeChecklistProgressDisplay(args());
+    const html = fs.readFileSync(written[2], 'utf8');
+    const json = JSON.parse(fs.readFileSync(written[0], 'utf8'));
+    const embedded = html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(html).toMatch(
+      /^<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Proof onboarding progress<\/title><\/head><body>/
+    );
+    expect(html.indexOf('<meta charset="UTF-8">')).toBeLessThan(html.indexOf('Spec review —'));
+    expect(html.indexOf('<meta charset="UTF-8">')).toBeLessThan(html.indexOf('code↔spec'));
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(json);
   });
 
   it('requires an existing private output directory and refuses overwrite or symlink targets', async () => {
