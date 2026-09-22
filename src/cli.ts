@@ -71,6 +71,8 @@ export class CLI {
       .option('--graph-dispatch-owner <owner>', 'Exact compiled Graph-v2 expansion owner to bound by keyed instance')
       .option('--graph-dispatch-limit <count>', 'Maximum keyed Graph-v2 instances admitted in this run', parsePositiveSafeInteger)
       .option('--graph-resume-ready', 'Resume only the ready Graph-v2 frontier from an imported checkpoint')
+      .option('--graph-retry-generation <generation-id>', 'Retry one exact failed Graph-v2 generated generation')
+      .option('--graph-retry-side-effects <disposition>', 'Side-effect disposition: absent, safely_idempotent, or isolated_draft_replay')
       .option(
         '--timeout <ms>',
         'AI elapsed timeout in milliseconds (0 disables the Visor deadline; default: 1800000ms)',
@@ -250,6 +252,8 @@ export class CLI {
         graphDispatchOwner: typeof options.graphDispatchOwner === 'string' ? options.graphDispatchOwner : undefined,
         graphDispatchLimit: typeof options.graphDispatchLimit === 'number' ? options.graphDispatchLimit : undefined,
         graphResumeReady: Boolean(options.graphResumeReady),
+        graphRetryGeneration: typeof options.graphRetryGeneration === 'string' ? options.graphRetryGeneration : undefined,
+        graphRetrySideEffects: typeof options.graphRetrySideEffects === 'string' ? options.graphRetrySideEffects as import('./types/cli').GraphRetrySideEffects : undefined,
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
@@ -355,7 +359,16 @@ export class CLI {
     if (options.graphDispatchLimit !== undefined && (typeof options.graphDispatchLimit !== 'number' || !Number.isSafeInteger(options.graphDispatchLimit) || options.graphDispatchLimit < 1)) {
       throw new Error('--graph-dispatch-limit must be a positive safe integer');
     }
-
+    if (options.graphRetryGeneration !== undefined &&
+        (typeof options.graphRetryGeneration !== 'string' || !/^[0-9a-f]{64}$/.test(options.graphRetryGeneration))) {
+      throw new Error('--graph-retry-generation must be exactly 64 lowercase hexadecimal characters');
+    }
+    const retrySideEffects = options.graphRetrySideEffects;
+    if (retrySideEffects !== undefined &&
+        (typeof retrySideEffects !== 'string' ||
+          !['absent', 'safely_idempotent', 'isolated_draft_replay'].includes(retrySideEffects))) {
+      throw new Error('--graph-retry-side-effects must be absent, safely_idempotent, or isolated_draft_replay');
+    }
     // Validate timeout
     if (options.timeout !== undefined) {
       if (

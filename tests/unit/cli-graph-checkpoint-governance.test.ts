@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
 import yaml from 'js-yaml';
 import { CLI } from '../../src/cli';
-import { validateArtifactPathAliases, validateGraphCheckpointMode, validateGraphDispatchOwner } from '../../src/cli-main';
+import { resolveGraphRetryPrefixPath, validateArtifactPathAliases, validateGraphCheckpointMode, validateGraphDispatchOwner } from '../../src/cli-main';
 import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapshot-store';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import type { CliOptions } from '../../src/types/cli';
@@ -14,6 +14,7 @@ function options(overrides: Partial<CliOptions>): CliOptions {
 }
 
 describe('CLI checkpoint governance preflight', () => {
+  const retryGeneration = 'a'.repeat(64);
   it.each(['0', '-1', '1.5', '9007199254740992'])('rejects unsafe graph dispatch limit %s during parsing', value => {
     expect(() => new CLI().parseArgs(['node', 'visor', '--graph-dispatch-limit', value])).toThrow(/positive safe integer/);
   });
@@ -26,8 +27,33 @@ describe('CLI checkpoint governance preflight', () => {
     [{ graphResumeReady: true, graphCheckpointIn: '/tmp/checkpoint.json' }, /requires --graph-checkpoint-out/],
     [{ graphDispatchOwner: 'discover', graphDispatchLimit: 1, graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json' }, /requires --graph-resume-ready/],
     [{ graphCheckpointOwner: 'discover', graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json', graphDispatchOwner: 'discover', graphDispatchLimit: 1, graphResumeReady: true }, /cannot be used/],
+    [{ graphRetryGeneration: retryGeneration, graphRetrySideEffects: 'absent' }, /requires --graph-checkpoint-in/],
+    [{ graphRetryGeneration: retryGeneration, graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json', graphResumeReady: true }, /requires --graph-retry-side-effects/],
+    [{ graphRetrySideEffects: 'absent', graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json', graphResumeReady: true }, /requires --graph-retry-generation/],
+    [{ graphRetryGeneration: retryGeneration, graphRetrySideEffects: 'absent', graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json' }, /requires --graph-resume-ready/],
+    [{ graphRetryGeneration: retryGeneration, graphRetrySideEffects: 'absent', graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json', graphResumeReady: true, graphCheckpointOwner: 'discover' }, /cannot/],
+    [{ graphRetryGeneration: retryGeneration, graphRetrySideEffects: 'absent', graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json', graphResumeReady: true, graphDispatchOwner: 'discover', graphDispatchLimit: 1 }, /cannot be combined/],
   ])('rejects invalid bounded checkpoint combination %#', (override, error) => {
     expect(() => validateGraphCheckpointMode(options(override))).toThrow(error);
+  });
+
+  it('parses the exact retry generation and side-effect disposition', () => {
+    expect(new CLI().parseArgs([
+      'node', 'visor', '--graph-retry-generation', retryGeneration,
+      '--graph-retry-side-effects', 'isolated_draft_replay',
+    ])).toMatchObject({ graphRetryGeneration: retryGeneration, graphRetrySideEffects: 'isolated_draft_replay' });
+    expect(() => new CLI().parseArgs(['node', 'visor', '--graph-retry-generation', 'A'.repeat(64), '--graph-retry-side-effects', 'absent']))
+      .toThrow(/64 lowercase hexadecimal/);
+    expect(() => new CLI().parseArgs(['node', 'visor', '--graph-retry-generation', retryGeneration, '--graph-retry-side-effects', 'unknown']))
+      .toThrow(/side-effects must be/);
+  });
+
+  it('derives the mandatory retry prefix beside the checkpoint output', () => {
+    expect(resolveGraphRetryPrefixPath(options({
+      graphRetryGeneration: retryGeneration,
+      graphRetrySideEffects: 'absent',
+      graphCheckpointOut: '/tmp/retry-checkpoint.json',
+    }))).toBe('/tmp/retry-checkpoint.json.retry.json');
   });
 
   it('requires an exact compiled nested expansion owner before dispatch', () => {

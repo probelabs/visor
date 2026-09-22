@@ -50,3 +50,34 @@ Checkpoint validation and graph/config digest checks run before provider
 dispatch. Ready-only resume does not reconcile external subject freshness or
 retry failed leaves; workflow policy and native Proof remain responsible for
 those decisions.
+
+## Retrying one failed generated attempt
+
+Retry mode is an explicit fresh-process operation. It requires the same
+`--config`, exactly one `--check`, `--output json`, `--graph-checkpoint-in`,
+`--graph-checkpoint-out`, and `--graph-resume-ready` arguments, plus:
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ./node_modules/ts-node/register/transpile-only ./src/index.ts \
+  --config ./config.yaml --check discover --output json \
+  --graph-retry-generation <64-lowercase-hex-generation-id> \
+  --graph-retry-side-effects absent \
+  --graph-resume-ready \
+  --graph-checkpoint-in /absolute/path/failed.json \
+  --graph-checkpoint-out /absolute/path/retried.json
+```
+
+`--graph-retry-side-effects` must explicitly be `absent`,
+`safely_idempotent`, or `isolated_draft_replay`. The CLI creates the durable
+prefix `/absolute/path/retried.json.retry.json` in the same private directory
+and publishes it after the journal records the retry event but before any
+provider or command dispatch. The
+prefix is canonical, mode `0600`, and must be absent before the run; its
+parent must already be private mode `0700`. Input/output/receipt/output-file
+aliases are rejected, including inode aliases.
+
+Retry reopens only the selected failed generation's exact subgraph instance
+and its same-instance downstream work. Other generated siblings and parent
+barriers remain ready for an ordinary resume; retry output is therefore not a
+claim that the overall workflow completed. The retry event gets a fresh
+attempt identity and fence while preserving the old checkpoint event prefix.

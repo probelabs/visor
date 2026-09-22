@@ -51,6 +51,8 @@ describe('CLI options consistency', () => {
       'graph-checkpoint-owner': 'discover',
       'graph-dispatch-owner': 'discover',
       'graph-dispatch-limit': '1',
+      'graph-retry-generation': 'a'.repeat(64),
+      'graph-retry-side-effects': 'absent',
       timeout: '1000',
       'max-parallelism': '2',
       tags: 'foo',

@@ -43,8 +43,8 @@ import { isGovernedProofComponentSelector, isGovernedProofSpecReviewSelector } f
 import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft } from './governed-graph-terminal-receipt';
 import { publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
 import { compileClaimPlan } from './state-machine/graph/claim-plan';
-import type { GraphJournalCheckpointV1 } from './snapshot-store';
-import { composeGraphDispatchGate, createGraphDispatchGate } from './graph-dispatch-gate';
+import { ExecutionJournal, type GraphJournalCheckpointV1 } from './snapshot-store';
+import { composeGraphDispatchGate, createGraphDispatchGate, createGraphRetryDispatchGate } from './graph-dispatch-gate';
 
 const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 
@@ -130,6 +130,8 @@ export function validateArtifactPathAliases(options: import('./types/cli').CliOp
     ['--governed-receipt', options.governedReceipt],
     ['--output-file', options.outputFile],
   ].filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+  const retryPrefix = resolveGraphRetryPrefixPath(options);
+  if (retryPrefix) paths.push(['derived graph retry prefix', retryPrefix]);
   const identities = paths.map(([, target]) => identity(target));
   for (let left = 0; left < paths.length; left++) {
     for (let right = left + 1; right < paths.length; right++) {
@@ -142,8 +144,13 @@ export function validateArtifactPathAliases(options: import('./types/cli').CliOp
   }
 }
 
+export function resolveGraphRetryPrefixPath(options: import('./types/cli').CliOptions): string | undefined {
+  if (!options.graphRetryGeneration || !options.graphCheckpointOut) return undefined;
+  return path.resolve(`${options.graphCheckpointOut}.retry.json`);
+}
+
 export function validateGraphCheckpointMode(options: import('./types/cli').CliOptions): GraphJournalCheckpointV1 | undefined {
-  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner && !options.graphDispatchOwner && options.graphDispatchLimit === undefined && !options.graphResumeReady) return undefined;
+  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner && !options.graphDispatchOwner && options.graphDispatchLimit === undefined && !options.graphResumeReady && !options.graphRetryGeneration && !options.graphRetrySideEffects) return undefined;
   if (options.graphCheckpointOwner && !options.graphCheckpointIn) throw new Error('--graph-checkpoint-owner requires --graph-checkpoint-in');
   if (options.graphDispatchOwner && options.graphDispatchLimit === undefined) throw new Error('--graph-dispatch-owner requires --graph-dispatch-limit');
   if (options.graphDispatchLimit !== undefined && !options.graphDispatchOwner) throw new Error('--graph-dispatch-limit requires --graph-dispatch-owner');
@@ -152,6 +159,14 @@ export function validateGraphCheckpointMode(options: import('./types/cli').CliOp
   if (options.graphResumeReady && !options.graphCheckpointIn) throw new Error('--graph-resume-ready requires --graph-checkpoint-in');
   if (options.graphResumeReady && !options.graphCheckpointOut) throw new Error('--graph-resume-ready requires --graph-checkpoint-out');
   if (options.graphCheckpointOwner && options.graphResumeReady) throw new Error('--graph-checkpoint-owner cannot be used with --graph-resume-ready');
+  if (options.graphRetryGeneration && !options.graphCheckpointIn) throw new Error('--graph-retry-generation requires --graph-checkpoint-in');
+  if (options.graphRetryGeneration && !options.graphCheckpointOut) throw new Error('--graph-retry-generation requires --graph-checkpoint-out');
+  if (options.graphRetryGeneration && !options.graphResumeReady) throw new Error('--graph-retry-generation requires --graph-resume-ready');
+  if (options.graphRetryGeneration && !options.graphRetrySideEffects) throw new Error('--graph-retry-generation requires --graph-retry-side-effects');
+  if (!options.graphRetryGeneration && options.graphRetrySideEffects) throw new Error('--graph-retry-side-effects requires --graph-retry-generation');
+  if (options.graphRetryGeneration && (options.graphCheckpointOwner || options.graphDispatchOwner || options.graphDispatchLimit !== undefined)) {
+    throw new Error('--graph-retry-generation cannot be combined with checkpoint-owner or dispatch-owner/limit');
+  }
   if ((options.graphCheckpointIn || options.graphCheckpointOut) && (!options.configPath || options.checks.length !== 1 || options.output !== 'json')) {
     throw new Error('--graph-checkpoint-in/out requires --config, one --check, and --output json');
   }
@@ -159,6 +174,8 @@ export function validateGraphCheckpointMode(options: import('./types/cli').CliOp
     ? validateGraphCheckpointInputFile(path.resolve(options.graphCheckpointIn))
     : undefined;
   if (options.graphCheckpointOut) validateGraphCheckpointOutputTarget(path.resolve(options.graphCheckpointOut));
+  const retryPrefix = resolveGraphRetryPrefixPath(options);
+  if (retryPrefix) validateGraphCheckpointOutputTarget(retryPrefix);
   return checkpoint;
 }
 
@@ -176,6 +193,24 @@ export function validateGraphDispatchOwner(
     throw new Error(`--graph-dispatch-owner must exactly match a compiled expansion owner: ${owner}`);
   }
   return owner;
+}
+
+export function resolveGraphRetryTarget(
+  config: import('./types/config').VisorConfig,
+  checkpoint: GraphJournalCheckpointV1,
+  generationId: string,
+): string {
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as import('./types/config').VisorConfig);
+  const journal = ExecutionJournal.restoreGraphCheckpoint(plan, checkpoint);
+  const generation = journal.getInstanceProjection().generationsById[generationId];
+  if (!generation) {
+    throw new Error(`--graph-retry-generation is unknown in the checkpoint: ${generationId}`);
+  }
+  if (generation.status !== 'failed' || !generation.scheduled || !generation.attemptId ||
+      generation.fence === undefined || !generation.reason || generation.completedOutputClaimIds.length !== 0) {
+    throw new Error(`--graph-retry-generation must select an eligible failed generated generation: ${generationId}`);
+  }
+  return generation.subgraphInstanceId;
 }
 
 function resolveGraphCheckpointOwner(config: VisorConfig, checks: readonly string[], explicit?: string): string {
@@ -1993,6 +2028,9 @@ export async function main(): Promise<void> {
       config,
       options.graphDispatchOwner,
     );
+    const graphRetryTargetInstanceId = options.graphRetryGeneration
+      ? resolveGraphRetryTarget(config, graphCheckpointInput!, options.graphRetryGeneration)
+      : undefined;
 
     if (proofCapability) {
       const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
@@ -2707,7 +2745,13 @@ export async function main(): Promise<void> {
     const graphDispatchHandle = validatedGraphDispatchOwner && options.graphDispatchLimit !== undefined
       ? createGraphDispatchGate(validatedGraphDispatchOwner, options.graphDispatchLimit)
       : undefined;
-    const generatedDispatchGate = composeGraphDispatchGate(pauseGate, graphDispatchHandle?.gate);
+    const graphRetryHandle = graphRetryTargetInstanceId
+      ? createGraphRetryDispatchGate(graphRetryTargetInstanceId)
+      : undefined;
+    const generatedDispatchGate = composeGraphDispatchGate(
+      pauseGate,
+      graphRetryHandle?.gate || graphDispatchHandle?.gate,
+    );
 
     // Skip initial automatic run for TUI mode - wait for user to type a message
     // TUI workflows are typically chat-style and expect user input first
@@ -2743,6 +2787,26 @@ export async function main(): Promise<void> {
           { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
           { source: 'cli', workflowId: checksToRun.join(',') },
           async () => {
+            if (options.graphRetryGeneration) {
+              const retryPrefix = resolveGraphRetryPrefixPath(options);
+              if (!retryPrefix || !graphCheckpointInput) {
+                throw new Error('Graph retry requires validated checkpoint input and retry prefix');
+              }
+              const retried = await engine.retryGraphCheckpoint({
+                checkpoint: graphCheckpointInput,
+                config,
+                prInfo: prInfoWithContext,
+                debug: options.debug || false,
+                maxParallelism: options.maxParallelism,
+                failFast: options.failFast,
+                generatedDispatchGate,
+                timeout: options.timeout,
+                retryGenerationIds: [options.graphRetryGeneration],
+                externalSideEffects: options.graphRetrySideEffects!,
+                onRetryCheckpoint: retryCheckpoint => publishGraphCheckpointFile(retryCheckpoint, retryPrefix),
+              });
+              return retried.result;
+            }
             if (options.graphCheckpointIn && options.graphResumeReady) {
               const resumed = await engine.resumeGraphCheckpoint({
                 checkpoint: graphCheckpointInput!,
@@ -2887,8 +2951,9 @@ export async function main(): Promise<void> {
     // A bounded graph run may intentionally stop with other generated work at
     // the ready frontier. Keep that control state explicit in the ordinary
     // result shape; it is not a workflow-completion claim.
-    if (graphDispatchHandle) {
-      const paused = graphDispatchHandle.state.deferred;
+    const boundedGraphHandle = graphRetryHandle || graphDispatchHandle;
+    if (boundedGraphHandle) {
+      const paused = boundedGraphHandle.state.deferred;
       const checkpointResult: CheckResult = {
         checkName: '__graph_checkpoint',
         content: paused
@@ -2899,7 +2964,8 @@ export async function main(): Promise<void> {
           state: paused ? 'paused' : 'drained-without-defer',
           dispatchOwner: validatedGraphDispatchOwner,
           dispatchLimit: options.graphDispatchLimit,
-          deferredInstances: graphDispatchHandle.state.deferredInstanceIds.size,
+          retryGeneration: options.graphRetryGeneration,
+          deferredInstances: boundedGraphHandle.state.deferredInstanceIds.size,
         },
         issues: [],
       };

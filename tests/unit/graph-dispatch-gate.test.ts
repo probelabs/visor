@@ -1,4 +1,4 @@
-import { createGraphDispatchGate } from '../../src/graph-dispatch-gate';
+import { createGraphDispatchGate, createGraphRetryDispatchGate } from '../../src/graph-dispatch-gate';
 import type { NodeGenerationProjection } from '../../src/state-machine/graph/instance-kernel';
 
 function generation(owner: string, key: string, instanceId: string): NodeGenerationProjection {
@@ -34,5 +34,15 @@ describe('Graph-v2 keyed dispatch gate', () => {
     expect(handle.state.admittedInstanceIds.size).toBe(1);
     expect(handle.state.deferredInstanceIds.size).toBe(1);
     expect(handle.state.deferred).toBe(true);
+  });
+
+  it('retries only the selected generated instance and defers its siblings', async () => {
+    const target = 'a'.repeat(64);
+    const handle = createGraphRetryDispatchGate(target);
+    expect(await handle.gate(generation('owner', 'A', target))).toBe('dispatch');
+    expect(await handle.gate(generation('owner', 'B', 'b'.repeat(64)))).toBe('defer');
+    expect(await handle.gate({ ...generation('owner', 'root', 'c'.repeat(64)), scope: [] })).toBe('defer');
+    expect(handle.state.deferred).toBe(true);
+    expect(handle.state.deferredInstanceIds).toEqual(new Set(['b'.repeat(64), 'c'.repeat(64)]));
   });
 });

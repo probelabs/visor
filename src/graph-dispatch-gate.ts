@@ -55,6 +55,34 @@ export function createGraphDispatchGate(
   return { gate, state };
 }
 
+/**
+ * Retry only the selected generated subgraph instance. Every other generated
+ * instance, including parent/barrier work and empty-scope generated work,
+ * stays ready until an ordinary resume explicitly drains it.
+ */
+export function createGraphRetryDispatchGate(
+  targetSubgraphInstanceId: string,
+): GraphDispatchGateHandle {
+  const admittedInstanceIds = new Set<string>([targetSubgraphInstanceId]);
+  const deferredInstanceIds = new Set<string>();
+  const state: GraphDispatchGateState = {
+    admittedInstanceIds,
+    deferredInstanceIds,
+    deferred: false,
+  };
+
+  const gate: GeneratedDispatchGate = (generation: NodeGenerationProjection): GeneratedDispatchGateDecision => {
+    if (generation.subgraphInstanceId === targetSubgraphInstanceId) {
+      return 'dispatch';
+    }
+    state.deferred = true;
+    deferredInstanceIds.add(generation.subgraphInstanceId);
+    return 'defer';
+  };
+
+  return { gate, state };
+}
+
 /** Apply the existing pause/stop check before making the keyed admission decision. */
 export function composeGraphDispatchGate(
   pauseGate: () => Promise<void>,

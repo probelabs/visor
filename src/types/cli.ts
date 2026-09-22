@@ -11,6 +11,11 @@ export type CheckType = string;
  */
 export type OutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 
+export type GraphRetrySideEffects =
+  | 'absent'
+  | 'safely_idempotent'
+  | 'isolated_draft_replay';
+
 /**
  * CLI options parsed from command line arguments
  */
@@ -37,6 +42,10 @@ export interface CliOptions {
   graphDispatchLimit?: number;
   /** Resume only the ready frontier from an imported Graph-v2 checkpoint */
   graphResumeReady?: boolean;
+  /** Exact failed generated node-generation ID to reopen from an imported checkpoint */
+  graphRetryGeneration?: string;
+  /** Explicit external side-effect disposition for the selected failed generation */
+  graphRetrySideEffects?: GraphRetrySideEffects;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */
