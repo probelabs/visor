@@ -139,6 +139,121 @@ function instanceProjection(claims: Record<string, unknown>[]): Record<string, u
   };
 }
 
+function nativeBatchFixture(options: {
+  finishedBatches?: number;
+  duplicateRequirementId?: boolean;
+  duplicateReceipt?: boolean;
+  malformedFinding?: boolean;
+  mismatchedReceipt?: boolean;
+  duplicateFinding?: boolean;
+  receiptBeforeTerminal?: boolean;
+} = {}): Record<string, unknown> {
+  const claimsById: Record<string, unknown> = {};
+  const generationsById: Record<string, unknown> = {};
+  const activeGenerationIdByNode: Record<string, string> = {};
+  const components = ['component-a', 'component-b', 'component-c', 'component-d', 'component-e'];
+  let claimIndex = 0;
+  let batchOrdinal = 0;
+  const claimId = () => `${(++claimIndex).toString(16).padStart(2, '0')}`.repeat(32);
+  const scopeFor = (component: string, batch?: string): Record<string, unknown>[] => [
+    {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'native-project'},
+    {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'spec-review-2'},
+    {kind: 'keyed', expansionOwnerCheck: '["native-role","enumerate-native-components"]', key: component},
+    ...(batch ? [{kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key: batch}] : []),
+  ];
+  const activate = (id: string, generation: Record<string, unknown>) => {
+    generationsById[id] = generation;
+    activeGenerationIdByNode[String(generation.nodeInstanceId)] = id;
+  };
+  activate('project-generation', {nodeGenerationId: 'project-generation', nodeInstanceId: 'project-node', checkId: 'native-project-dispatch', status: 'completed', scope: [{kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'native-project'}]});
+  components.forEach(component => {
+    const componentScope = scopeFor(component);
+    activate(`component-${component}`, {nodeGenerationId: `component-${component}`, nodeInstanceId: `component-node-${component}`, checkId: 'enumerate-native-components', status: 'completed', scope: componentScope});
+    activate(`component-finished-${component}`, {nodeGenerationId: `component-finished-${component}`, nodeInstanceId: `component-finished-node-${component}`, checkId: 'component-finished', status: 'ready', scope: componentScope});
+    const allIds = Array.from({length: 14}, (_, index) => `REQ-${component.slice(-1)}-${String(index + 1).padStart(2, '0')}`);
+    for (let batchIndex = 1; batchIndex <= 3; batchIndex++) {
+      batchOrdinal += 1;
+      const batchId = `${component}:batch:${batchIndex}`;
+      const requirementIds = allIds.slice((batchIndex - 1) * 5, batchIndex * 5);
+      if (options.duplicateRequirementId && component === 'component-b' && batchIndex === 2) requirementIds[0] = 'REQ-a-01';
+      const scope = scopeFor(component, batchId);
+      const itemClaimId = claimId();
+      const requirements = requirementIds.map(id => ({id, component}));
+      claimsById[itemClaimId] = {
+        claimId: itemClaimId,
+        claim: 'native.batch.item@1',
+        kind: 'controller-item',
+        active: true,
+        scope,
+        payload: {
+          id: batchId,
+          component_id: component,
+          requirement_ids: requirementIds,
+          all_requirement_ids: allIds,
+          requirements,
+          component_requirement_count: allIds.length,
+          batch_requirement_count: requirementIds.length,
+          batch_index: batchIndex,
+          total_batches: 3,
+          step_id: 'spec-review-2',
+          role: 'spec-review',
+          target: {path: '/tmp/target'},
+        },
+      };
+      activate(`batch-${batchId}`, {
+        nodeGenerationId: `batch-${batchId}`,
+        nodeInstanceId: `batch-node-${batchId}`,
+        checkId: 'validate-batch-current',
+        status: batchOrdinal <= (options.finishedBatches ?? 2) ? 'completed' : 'ready',
+        scope,
+      });
+      if (batchOrdinal <= (options.finishedBatches ?? 2)) {
+        const receiptClaimId = claimId();
+        const findings = requirementIds.map((id, index) => ({
+          requirement_id: id,
+          decision: component === 'component-a' && batchIndex === 1 && index < 2 ? 'approved' : 'needs_changes',
+          finding: `finding for ${id}`,
+        }));
+        if (options.malformedFinding && component === 'component-a' && batchIndex === 1) findings[0].finding = '';
+        if (options.duplicateFinding && component === 'component-a' && batchIndex === 1) findings.push({...findings[0]});
+        const receiptPayload = {
+          batch_id: batchId,
+          opened_ids: options.mismatchedReceipt && component === 'component-a' && batchIndex === 1
+            ? [...requirementIds.slice(1), 'REQ-mismatch']
+            : requirementIds,
+          component_requirement_count: allIds.length,
+          batch_requirement_count: requirementIds.length,
+          findings,
+          errors: [],
+          execution_status: 'completed',
+        };
+        claimsById[receiptClaimId] = {
+          claimId: receiptClaimId,
+          claim: 'native.batch.receipt@1',
+          kind: 'generated-output',
+          producerCheckId: 'batch-author',
+          nodeGenerationId: `author-${batchId}`,
+          active: true,
+          scope,
+          payload: receiptPayload,
+        };
+        if (options.duplicateReceipt && component === 'component-a' && batchIndex === 1) {
+          const duplicateId = claimId();
+          claimsById[duplicateId] = {...claimsById[receiptClaimId], claimId: duplicateId};
+        }
+        if (!options.receiptBeforeTerminal) {
+          activate(`author-${batchId}`, {nodeGenerationId: `author-${batchId}`, nodeInstanceId: `author-node-${batchId}`, checkId: 'batch-author', status: 'completed', scope, activeInputClaimIds: [itemClaimId]});
+          activate(`finish-${batchId}`, {nodeGenerationId: `finish-${batchId}`, nodeInstanceId: `finish-node-${batchId}`, checkId: 'batch-finished', status: 'completed', scope, activeInputClaimIds: [itemClaimId, receiptClaimId]});
+        } else {
+          activate(`author-${batchId}`, {nodeGenerationId: `author-${batchId}`, nodeInstanceId: `author-node-${batchId}`, checkId: 'batch-author', status: 'completed', scope, activeInputClaimIds: [itemClaimId]});
+          activate(`finish-${batchId}`, {nodeGenerationId: `finish-${batchId}`, nodeInstanceId: `finish-node-${batchId}`, checkId: 'batch-finished', status: 'ready', scope, activeInputClaimIds: [itemClaimId, receiptClaimId]});
+        }
+      }
+    }
+  });
+  return {claimsById, generationsById, activeGenerationIdByNode};
+}
+
 function milestoneBScope(component: string): Record<string, unknown>[] {
   return [
     {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: component, subgraphInstanceId: 'e'.repeat(64)},
@@ -2144,5 +2259,74 @@ describe('native checklist progress projection', () => {
     expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
       instanceProjection: makeProjection(),
     })).toThrow();
+  });
+
+  it('materializes the exact 70-item batch catalog and separates execution from receipt decisions', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: nativeBatchFixture(),
+    });
+    const specifications = progress.operational.specifications;
+    expect(specifications).toMatchObject({
+      known: true,
+      known_count: 70,
+      completed_count: 10,
+      pending_count: 60,
+      unknown_count: 0,
+      receipt_decisions: {approved: 2, needs_changes: 8, unreviewed: 60, unknown: 0},
+    });
+    expect(progress.operational.components.items.map(item => [item.id, item.state])).toEqual([
+      ['component-a', 'pending'], ['component-b', 'pending'], ['component-c', 'pending'], ['component-d', 'pending'], ['component-e', 'pending'],
+    ]);
+    expect(specifications.items.filter(item => item.state === 'completed')).toHaveLength(10);
+    expect(specifications.items.every(item => item.component_id && item.batch_id && item.receipt_decision)).toBe(true);
+    const rendered = renderNativeChecklistProgress(progress);
+    const json = JSON.parse(rendered.json) as Record<string, any>;
+    expect(json.operational.specifications).toEqual(specifications);
+    expect(rendered.text).toContain('RECEIPT DECISION approved=2,needs_changes=8,unreviewed=60,unknown=0');
+    expect(rendered.html).toContain('RECEIPT DECISION approved:</b> 2');
+    expect(rendered.html).toContain('needs_changes:</b> 8');
+    expect(rendered.html).toContain('unreviewed:</b> 60');
+    expect(rendered.html).toContain('unknown:</b> 0');
+    const embedded = rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
+  it.each([
+    ['missing terminal', {receiptBeforeTerminal: true}, 0],
+    ['duplicate receipt', {duplicateReceipt: true}, 5],
+    ['malformed finding', {malformedFinding: true}, 5],
+    ['mismatched receipt', {mismatchedReceipt: true}, 5],
+    ['duplicate finding', {duplicateFinding: true}, 5],
+  ] as const)('fails closed for %s batch evidence', (_label, options, completedCount) => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: nativeBatchFixture(options),
+    });
+    expect(progress.operational.specifications.completed_count).toBe(completedCount);
+    if (options.duplicateReceipt || options.malformedFinding || options.mismatchedReceipt || options.duplicateFinding) {
+      expect(progress.operational.specifications.receipt_decisions?.unknown).toBeGreaterThan(0);
+    }
+  });
+
+  it('rejects duplicate requirement ownership instead of claiming a completed spec row', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: nativeBatchFixture({duplicateRequirementId: true}),
+    });
+    expect(progress.operational.specifications.items.find(item => item.id === 'REQ-a-01')?.state).toBe('unknown');
+    expect(progress.unknown.some(reason => reason.includes('requirement'))).toBe(true);
+  });
+
+  it('rejects a mixed-type batch scope instead of treating the claim as completed catalog work', () => {
+    const projection = nativeBatchFixture();
+    const batchClaim = Object.values(projection.claimsById as Record<string, Record<string, unknown>>)
+      .find(claim => (claim.payload as Record<string, unknown>)?.id === 'component-a:batch:1');
+    expect(batchClaim).toBeDefined();
+    batchClaim!.scope = [...(batchClaim!.scope as unknown[]), 'malformed-scope-entry'];
+    const progress = buildNativeChecklistProgress({proofSnapshot: snapshot(), instanceProjection: projection});
+    expect(progress.operational.specifications.known_count).toBe(65);
+    expect(progress.operational.specifications.completed_count).toBe(5);
+    expect(progress.unknown.some(reason => reason.includes('invalid component/batch scope'))).toBe(true);
   });
 });

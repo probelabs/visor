@@ -207,10 +207,21 @@ export type NativeChecklistOperationalCollection = Readonly<{
   unexpanded_count: number;
   blocked_count: number;
   stale_count: number;
+  /** Receipt decisions are execution-adjacent review observations, not Proof confirmation. */
+  receipt_decisions?: Readonly<{
+    approved: number;
+    needs_changes: number;
+    unreviewed: number;
+    unknown: number;
+  }>;
   items: readonly Readonly<{
     id: string;
     state: NativeChecklistOperationalState;
     check_ids: readonly string[];
+    component_id?: string;
+    batch_id?: string;
+    receipt_decision?: 'approved' | 'needs_changes' | 'unreviewed' | 'unknown';
+    receipt_claim_id?: string;
     conditions?: readonly NativeChecklistOperationalCondition[];
     /** Singular compatibility view for consumers rendering one condition. */
     condition?: NativeChecklistOperationalCondition;
@@ -1158,6 +1169,7 @@ type ComponentScopeContext = Readonly<{
 function componentScopeContext(scope: unknown): ComponentScopeContext | undefined {
   if (!Array.isArray(scope)) return undefined;
   const parts = scope.filter(isRecord);
+  if (parts.length !== scope.length) return undefined;
   for (let index = parts.length - 1; index >= 0; index--) {
     const part = parts[index];
     if (
@@ -1172,6 +1184,53 @@ function componentScopeContext(scope: unknown): ComponentScopeContext | undefine
     }
   }
   return undefined;
+}
+
+type BatchScopeContext = Readonly<{
+  componentId: string;
+  componentScopeKey: string;
+  batchId: string;
+  batchScopeKey: string;
+}>;
+
+/**
+ * Batch claims are only authoritative inside the compiled native component
+ * expansion.  In particular, a similarly named batch in another generation
+ * must not be allowed to satisfy this projection.
+ */
+function batchScopeContext(scope: unknown): BatchScopeContext | undefined {
+  if (!Array.isArray(scope)) return undefined;
+  const parts = scope.filter(isRecord);
+  if (parts.length !== scope.length) return undefined;
+  let componentIndex = -1;
+  let batchIndex = -1;
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const owner = parts[index].expansionOwnerCheck;
+    let decoded: unknown = owner;
+    if (typeof owner === 'string') {
+      try { decoded = JSON.parse(owner); } catch { /* scalar owner */ }
+    }
+    if (Array.isArray(decoded) && canonicalJson(decoded) === canonicalJson(['native-component', 'enumerate-native-batches'])) {
+      if (batchIndex !== -1) return undefined;
+      batchIndex = index;
+      continue;
+    }
+    if (terminalExpansionOwner(owner) === 'enumerate-native-components') {
+      if (componentIndex !== -1) return undefined;
+      componentIndex = index;
+    }
+  }
+  if (componentIndex < 0 || batchIndex <= componentIndex) return undefined;
+  const component = parts[componentIndex];
+  const batch = parts[batchIndex];
+  if (component.kind !== 'keyed' || typeof component.key !== 'string' || component.key.length === 0 ||
+      batch.kind !== 'keyed' || typeof batch.key !== 'string' || batch.key.length === 0) return undefined;
+  return {
+    componentId: component.key,
+    componentScopeKey: canonicalJson(parts.slice(0, componentIndex + 1)),
+    batchId: batch.key,
+    batchScopeKey: canonicalJson(parts.slice(0, batchIndex + 1)),
+  };
 }
 
 function operationalState(statuses: readonly string[]): NativeChecklistOperationalState {
@@ -1191,6 +1250,11 @@ type OperationalItem = Readonly<{
   kind?: OperationalKind;
   componentId?: string;
   componentScopeKey?: string;
+  batchScopeKey?: string;
+  outputComponentId?: string;
+  batchId?: string;
+  receiptDecision?: 'approved' | 'needs_changes' | 'unreviewed' | 'unknown';
+  receiptClaimId?: string;
   condition?: NativeChecklistOperationalCondition;
   /** A condition-only row must not override an authoritative execution row. */
   conditionOnly?: boolean;
@@ -1203,9 +1267,10 @@ function conditionKey(condition: NativeChecklistOperationalCondition): string {
 function collection(
   items: readonly OperationalItem[],
   known: boolean,
-  unexpandedCount = 0
+  unexpandedCount = 0,
+  includeReceiptDecisions = false,
 ): NativeChecklistOperationalCollection {
-  const grouped = new Map<string, { statuses: string[]; checks: string[]; conditions: NativeChecklistOperationalCondition[] }>();
+  const grouped = new Map<string, { statuses: string[]; checks: string[]; conditions: NativeChecklistOperationalCondition[]; metadata?: OperationalItem }>();
   for (const item of items) {
     const group = grouped.get(item.id) ?? { statuses: [], checks: [], conditions: [] };
     if (!item.conditionOnly) group.statuses.push(item.status);
@@ -1213,16 +1278,24 @@ function collection(
     if (item.condition && !group.conditions.some(existing => conditionKey(existing) === conditionKey(item.condition!))) {
       group.conditions.push(item.condition);
     }
+    if (!group.metadata && (item.outputComponentId || item.batchId || item.receiptDecision || item.receiptClaimId)) {
+      group.metadata = item;
+    }
     grouped.set(item.id, group);
   }
   const output = [...grouped.entries()]
     .sort(([a], [b]) => Buffer.from(a).compare(Buffer.from(b)))
     .map(([id, group]) => {
       const conditions = group.conditions.sort((a, b) => Buffer.from(conditionKey(a)).compare(Buffer.from(conditionKey(b))));
+      const metadata = group.metadata;
       return {
         id,
         state: operationalState(group.statuses),
         check_ids: group.checks.sort((a, b) => Buffer.from(a).compare(Buffer.from(b))),
+        ...(metadata?.outputComponentId ? {component_id: metadata.outputComponentId} : {}),
+        ...(metadata?.batchId ? {batch_id: metadata.batchId} : {}),
+        ...(metadata?.receiptDecision ? {receipt_decision: metadata.receiptDecision} : {}),
+        ...(metadata?.receiptClaimId ? {receipt_claim_id: metadata.receiptClaimId} : {}),
         ...(conditions.length ? {conditions, condition: conditions[0]} : {}),
       };
     });
@@ -1230,6 +1303,14 @@ function collection(
     output.filter(item => item.state === state).length;
   const conditionCount = (state: NativeChecklistOperationalCondition['state']) =>
     output.filter(item => item.conditions?.some(condition => condition.state === state)).length;
+  const receiptDecisions = includeReceiptDecisions
+    ? {
+      approved: output.filter(item => item.receipt_decision === 'approved').length,
+      needs_changes: output.filter(item => item.receipt_decision === 'needs_changes').length,
+      unreviewed: output.filter(item => item.receipt_decision === 'unreviewed').length,
+      unknown: output.filter(item => item.receipt_decision === 'unknown').length,
+    }
+    : undefined;
   return {
     known,
     known_count: output.length,
@@ -1241,6 +1322,7 @@ function collection(
     unexpanded_count: unexpandedCount,
     blocked_count: conditionCount('blocked'),
     stale_count: conditionCount('stale'),
+    ...(receiptDecisions ? {receipt_decisions: receiptDecisions} : {}),
     items: output,
   };
 }
@@ -1695,6 +1777,208 @@ function explicitOperationalKind(generation: Json): OperationalKind | undefined 
   return undefined;
 }
 
+type NativeReceiptDecision = 'approved' | 'needs_changes' | 'unreviewed' | 'unknown';
+
+type NativeBatchProjection = Readonly<{
+  claimId: string;
+  payload: Json;
+  scope: Json[];
+  scopeContext: BatchScopeContext;
+  operationalItems: readonly OperationalItem[];
+}>;
+
+function activeGenerationRecords(projection: Json): Json[] {
+  if (!isRecord(projection.generationsById)) return [];
+  const activeIds = new Set(
+    isRecord(projection.activeGenerationIdByNode)
+      ? Object.values(projection.activeGenerationIdByNode).filter((value): value is string => typeof value === 'string')
+      : [],
+  );
+  return Object.entries(projection.generationsById)
+    .filter(([id, value]) => activeIds.has(id) && isRecord(value) && value.status !== 'inactive')
+    .map(([, value]) => value as Json);
+}
+
+function matchingScope(value: unknown, expected: string): value is Json[] {
+  return Array.isArray(value) && canonicalJson(value) === expected;
+}
+
+function sortedStringIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.length === 0)) return undefined;
+  const ids = [...value] as string[];
+  if (new Set(ids).size !== ids.length) return undefined;
+  return ids.sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
+}
+
+function validBatchPayload(
+  payload: Json,
+  scopeContext: BatchScopeContext,
+): {requirementIds: string[]; requirements: Json[]} | undefined {
+  if (payload.id !== scopeContext.batchId || payload.component_id !== scopeContext.componentId) return undefined;
+  const requirementIds = sortedStringIds(payload.requirement_ids);
+  const requirements = Array.isArray(payload.requirements) && payload.requirements.every(isRecord)
+    ? payload.requirements as Json[]
+    : undefined;
+  if (!requirementIds || !requirements || requirements.length !== requirementIds.length) return undefined;
+  const seen = new Set<string>();
+  for (const requirement of requirements) {
+    const id = optionalString(requirement.id) ?? optionalString(requirement.requirement_id);
+    const component = optionalString(requirement.component) ?? optionalString(requirement.component_id);
+    if (!id || !component || component !== scopeContext.componentId || seen.has(id) || !requirementIds.includes(id)) return undefined;
+    seen.add(id);
+  }
+  if (seen.size !== requirementIds.length) return undefined;
+  return {requirementIds, requirements};
+}
+
+function receiptFindings(
+  payload: Json,
+  requirementIds: readonly string[],
+): Map<string, Exclude<NativeReceiptDecision, 'unreviewed' | 'unknown'>> | undefined {
+  if (payload.execution_status !== 'completed' || !Array.isArray(payload.errors) || payload.errors.length !== 0) return undefined;
+  const opened = sortedStringIds(payload.opened_ids);
+  const expected = [...requirementIds].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
+  if (!opened || canonicalJson(opened) !== canonicalJson(expected) || !Array.isArray(payload.findings)) return undefined;
+  const findings = new Map<string, Exclude<NativeReceiptDecision, 'unreviewed' | 'unknown'>>();
+  for (const raw of payload.findings) {
+    if (!isRecord(raw)) return undefined;
+    const requirementId = optionalString(raw.requirement_id);
+    const decision = raw.decision;
+    const finding = optionalString(raw.finding);
+    if (!requirementId || !requirementIds.includes(requirementId) ||
+        (decision !== 'approved' && decision !== 'needs_changes') || !finding || findings.has(requirementId)) return undefined;
+    findings.set(requirementId, decision);
+  }
+  if (findings.size !== requirementIds.length) return undefined;
+  return findings;
+}
+
+function nativeBatchSpecificationItems(
+  projection: Json,
+  batchItems: readonly OperationalItem[],
+  unknownReasons: string[],
+): {items: OperationalItem[]; evidence: boolean} {
+  if (!isRecord(projection.claimsById)) return {items: [], evidence: false};
+  const activeClaims = Object.entries(projection.claimsById)
+    .filter(([, value]) => isRecord(value) && value.active === true)
+    .map(([claimId, value]) => ({claimId, claim: value as Json}));
+  const activeBatchClaims: NativeBatchProjection[] = [];
+  for (const {claimId, claim} of activeClaims.filter(entry => entry.claim.claim === 'native.batch.item@1')) {
+    if (claim.kind !== 'controller-item') {
+      unknownReasons.push(`active native.batch.item@1 claim ${claimId} is not a controller-item claim`);
+      continue;
+    }
+    const scopeContext = batchScopeContext(claim.scope);
+    if (!scopeContext || !Array.isArray(claim.scope) || !isRecord(claim.payload)) {
+      unknownReasons.push(`active native.batch.item@1 claim ${claimId} has an invalid component/batch scope or payload`);
+      continue;
+    }
+    const payloadResult = validBatchPayload(claim.payload, scopeContext);
+    if (!payloadResult) {
+      unknownReasons.push(`active native.batch.item@1 claim ${claimId} has inconsistent requirement IDs or objects`);
+      continue;
+    }
+    const scope = claim.scope as Json[];
+    const operationalItems = batchItems.filter(item =>
+      item.id === scopeContext.batchId &&
+      item.componentId === scopeContext.componentId &&
+      item.batchScopeKey === scopeContext.batchScopeKey,
+    );
+    if (operationalItems.length === 0) {
+      unknownReasons.push(`native batch ${scopeContext.batchId} has no exact operational generation link`);
+      continue;
+    }
+    activeBatchClaims.push({claimId, payload: claim.payload, scope, scopeContext, operationalItems});
+  }
+  if (activeBatchClaims.length === 0) return {items: [], evidence: false};
+
+  const occurrences = new Map<string, NativeBatchProjection[]>();
+  for (const batch of activeBatchClaims) {
+    const ids = sortedStringIds(batch.payload.requirement_ids) ?? [];
+    for (const id of ids) occurrences.set(id, [...(occurrences.get(id) ?? []), batch]);
+  }
+  const activeGenerations = activeGenerationRecords(projection);
+  const receiptCandidates = activeClaims.filter(entry => entry.claim.claim === 'native.batch.receipt@1');
+  const invalidReceiptScopes = new Set(
+    receiptCandidates
+      .filter(entry => entry.claim.kind !== 'generated-output' || entry.claim.producerCheckId !== 'batch-author')
+      .map(entry => batchScopeContext(entry.claim.scope)?.batchScopeKey)
+      .filter((value): value is string => typeof value === 'string'),
+  );
+  const receipts = receiptCandidates
+    .filter(entry => entry.claim.kind === 'generated-output' && entry.claim.producerCheckId === 'batch-author')
+    .flatMap(({claimId, claim}) =>
+      Array.isArray(claim.scope) && isRecord(claim.payload)
+        ? [{claimId, payload: claim.payload, scope: claim.scope as Json[]}]
+        : [],
+    );
+  const output: OperationalItem[] = [];
+  const sortedBatches = [...activeBatchClaims].sort((left, right) => Buffer.from(left.scopeContext.batchScopeKey).compare(Buffer.from(right.scopeContext.batchScopeKey)));
+  for (const batch of sortedBatches) {
+    const requirementIds = sortedStringIds(batch.payload.requirement_ids) ?? [];
+    const terminalGenerations = activeGenerations.filter(generation =>
+      generation.checkId === 'batch-finished' && matchingScope(generation.scope, batch.scopeContext.batchScopeKey),
+    );
+    const batchState = operationalState(batch.operationalItems.map(item => item.status));
+    const terminal = terminalGenerations.length === 1 ? terminalGenerations[0] : undefined;
+    const matchingReceipts = receipts.filter(receipt =>
+      receipt.payload.batch_id === batch.scopeContext.batchId &&
+      matchingScope(receipt.scope, batch.scopeContext.batchScopeKey),
+    );
+    const receipt = matchingReceipts.length === 1 ? matchingReceipts[0] : undefined;
+    const receiptClaim = receipt && isRecord(projection.claimsById)
+      ? projection.claimsById[receipt.claimId]
+      : undefined;
+    const receiptGeneration = receipt && isRecord(receiptClaim) && receiptClaim.nodeGenerationId
+      ? activeGenerations.find(generation =>
+        generation.nodeGenerationId === receiptClaim.nodeGenerationId &&
+        generation.checkId === 'batch-author' && generation.status === 'completed' &&
+        matchingScope(generation.scope, batch.scopeContext.batchScopeKey),
+      )
+      : undefined;
+    const terminalLineage = terminal && Array.isArray(terminal.activeInputClaimIds) &&
+      terminal.activeInputClaimIds.includes(batch.claimId) &&
+      !!receipt && terminal.activeInputClaimIds.includes(receipt.claimId);
+    const receiptLineage = receiptGeneration && Array.isArray(receiptGeneration.activeInputClaimIds) &&
+      receiptGeneration.activeInputClaimIds.includes(batch.claimId);
+    const exactTerminal = terminal?.status === 'completed' && terminalLineage;
+    const decisions = receipt && receiptGeneration
+      ? receiptFindings(receipt.payload, requirementIds)
+      : undefined;
+    const receiptDecisionFor = (id: string): NativeReceiptDecision => {
+      if (occurrences.get(id)?.length !== 1) return 'unknown';
+      if (matchingReceipts.length > 1) return 'unknown';
+      if (matchingReceipts.length === 0 && invalidReceiptScopes.has(batch.scopeContext.batchScopeKey)) return 'unknown';
+      if (!receipt) return 'unreviewed';
+      if (!receiptGeneration || !decisions) return 'unknown';
+      return decisions.get(id) ?? 'unknown';
+    };
+    const completed = batchState === 'completed' && exactTerminal && !!receiptGeneration && !!receiptLineage && !!decisions;
+    const state = batchState === 'completed'
+      ? (completed ? 'completed' : 'unknown')
+      : batchState;
+    if (batchState === 'completed' && !completed) {
+      unknownReasons.push(`native batch ${batch.scopeContext.batchId} lacks an exact completed terminal and receipt lineage`);
+    }
+    if (requirementIds.some(id => occurrences.get(id)?.length !== 1)) {
+      unknownReasons.push(`native batch ${batch.scopeContext.batchId} has a requirement owned by multiple active batches`);
+    }
+    for (const id of requirementIds) {
+      const decision = receiptDecisionFor(id);
+      output.push({
+        id,
+        status: occurrences.get(id)?.length === 1 ? state : 'unknown',
+        checkId: batch.operationalItems[0].checkId,
+        outputComponentId: batch.scopeContext.componentId,
+        batchId: batch.scopeContext.batchId,
+        receiptDecision: decision,
+        ...(receipt && matchingReceipts.length === 1 ? {receiptClaimId: receipt.claimId} : {}),
+      });
+    }
+  }
+  return {items: output, evidence: output.length > 0};
+}
+
 function operationalProjection(
   projection: unknown,
   retainedCatalogComponentIds?: readonly string[],
@@ -1818,11 +2102,13 @@ function operationalProjection(
         continue;
       }
       const component = componentScopeContext(generation.scope);
+      const batchScope = kind === 'batch' ? batchScopeContext(generation.scope) : undefined;
       const item: OperationalItem = {
         id,
         status,
         checkId,
         ...(component ? {componentId: component.componentId, componentScopeKey: component.componentScopeKey} : {}),
+        ...(batchScope ? {batchScopeKey: batchScope.batchScopeKey} : {}),
       };
       itemsByKind[kind].push(item);
       if (component && kind === 'batch') {
@@ -1864,7 +2150,7 @@ function operationalProjection(
   // authoritative unit.  This prevents an empty pre-expansion list from
   // looking like completed zero work.
   const componentUnexpanded = componentEvidence ? 0 : 1;
-  const specificationUnexpanded = specificationEvidence ? 0 : 1;
+  let specificationUnexpanded = specificationEvidence ? 0 : 1;
   const batchUnexpanded = batchEvidence ? 0 : 1;
   for (const item of conditionResult.items) {
     const kind = item.kind;
@@ -1885,6 +2171,24 @@ function operationalProjection(
         aggregateFor({componentId: item.componentId, componentScopeKey: item.componentScopeKey})
           .terminalStatuses.push(item.condition?.kind === 'failed_dependency' ? 'failed' : item.status);
       }
+    }
+  }
+  // Native spec rows are materialized from active controller claims, never
+  // inferred from generation depth or from a receipt alone.  This keeps the
+  // real catalog denominator visible while fail-closing stale/mismatched
+  // terminal evidence.
+  let receiptDecisionEvidence = false;
+  if (isRecord(projection)) {
+    const nativeSpecs = nativeBatchSpecificationItems(
+      projection,
+      itemsByKind.batch,
+      unknownReasons,
+    );
+    if (nativeSpecs.evidence) {
+      itemsByKind.specification.push(...nativeSpecs.items);
+      specificationEvidence = true;
+      specificationUnexpanded = 0;
+      receiptDecisionEvidence = true;
     }
   }
   const components = collection(itemsByKind.component, componentEvidence || conditionResult.items.some(item => item.kind === 'component'), componentUnexpanded);
@@ -1922,7 +2226,8 @@ function operationalProjection(
   const specifications = collection(
     itemsByKind.specification,
     specificationEvidence || conditionResult.items.some(item => item.kind === 'specification'),
-    specificationUnexpanded
+    specificationUnexpanded,
+    receiptDecisionEvidence,
   );
   const batches = collection(itemsByKind.batch, batchEvidence || conditionResult.items.some(item => item.kind === 'batch'), batchUnexpanded);
   const unknownCount =
@@ -2202,17 +2507,20 @@ export function renderNativeChecklistProgress(progress: NativeChecklistProgress)
     ],
     ...(['components', 'specifications', 'batches'] as const).map(kind => {
       const group = progress.operational[kind];
+      const receipt = kind === 'specifications' && group.receipt_decisions
+        ? `,RECEIPT DECISION approved=${group.receipt_decisions.approved},needs_changes=${group.receipt_decisions.needs_changes},unreviewed=${group.receipt_decisions.unreviewed},unknown=${group.receipt_decisions.unknown}`
+        : '';
       return [
         kind,
         `${group.known_count} discovered`,
         group.known ? 'expanded' : 'unexpanded',
-        `completed=${group.completed_count},running=${group.running_count},failed=${group.failed_count},pending=${group.pending_count},unknown=${group.unknown_count},unexpanded=${group.unexpanded_count},blocked=${group.blocked_count},stale=${group.stale_count}`,
+        `completed=${group.completed_count},running=${group.running_count},failed=${group.failed_count},pending=${group.pending_count},unknown=${group.unknown_count},unexpanded=${group.unexpanded_count},blocked=${group.blocked_count},stale=${group.stale_count}${receipt}`,
       ];
     }),
   ];
   const operationalItems = (['components', 'specifications', 'batches'] as const).flatMap(kind =>
     progress.operational[kind].items.map(
-      item => `${kind}.${item.id}=${item.state}${item.conditions?.length ? ` condition=${item.conditions.map(condition => `${condition.state}:${condition.kind}:${canonicalJson(condition.evidence)}`).join('|')}` : ''} [${item.check_ids.join(',') || 'no-check'}]`
+      item => `${kind}.${item.id}=${item.state}${item.receipt_decision ? ` RECEIPT DECISION=${item.receipt_decision}` : ''}${item.conditions?.length ? ` condition=${item.conditions.map(condition => `${condition.state}:${condition.kind}:${canonicalJson(condition.evidence)}`).join('|')}` : ''} [${item.check_ids.join(',') || 'no-check'}]`
     )
   );
   const journal = progress.evidence.journal;
