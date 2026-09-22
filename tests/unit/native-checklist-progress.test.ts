@@ -936,6 +936,66 @@ describe('native checklist progress projection', () => {
     expect(JSON.stringify(progress)).not.toMatch(/percent|eta/i);
   });
 
+  it('projects JSON-qualified native batch owners consistently across JSON, text, and HTML', () => {
+    const componentScope = [
+      {kind: 'keyed', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'component-a'},
+    ];
+    const batchScope = (key: string) => [
+      ...componentScope,
+      {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key},
+    ];
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: {
+        generationsById: {
+          component: {
+            status: 'completed',
+            checkId: 'discover-native-components',
+            scope: componentScope,
+          },
+          completedBatch: {
+            status: 'completed',
+            checkId: 'enumerate-native-batches',
+            scope: batchScope('batch-completed'),
+          },
+          readyBatch: {
+            status: 'ready',
+            checkId: 'enumerate-native-batches',
+            scope: batchScope('batch-ready'),
+          },
+        },
+      },
+    });
+    const expectedComponent = {
+      id: 'component-a',
+      state: 'completed',
+      check_ids: ['discover-native-components'],
+    };
+    const expectedBatches = [
+      {id: 'batch-completed', state: 'completed', check_ids: ['enumerate-native-batches']},
+      {id: 'batch-ready', state: 'pending', check_ids: ['enumerate-native-batches']},
+    ];
+    expect(progress.operational.components.items).toEqual([expectedComponent]);
+    expect(progress.operational.batches.items).toEqual(expectedBatches);
+
+    const rendered = renderNativeChecklistProgress(progress);
+    const json = JSON.parse(rendered.json) as Record<string, any>;
+    expect(json.operational.components.items).toEqual([expectedComponent]);
+    expect(json.operational.batches.items).toEqual(expectedBatches);
+    expect(rendered.text).toContain('components.component-a=completed [discover-native-components]');
+    expect(rendered.text).toContain('batches.batch-completed=completed [enumerate-native-batches]');
+    expect(rendered.text).toContain('batches.batch-ready=pending [enumerate-native-batches]');
+    expect(rendered.html).toContain('component-a');
+    expect(rendered.html).toContain('batch-completed');
+    expect(rendered.html).toContain('batch-ready');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
   it('marks missing or non-pass required-check evidence stale without treating snapshot ok as authority', () => {
     const missing = snapshot({
       ok: true,

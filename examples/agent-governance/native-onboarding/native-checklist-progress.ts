@@ -1128,6 +1128,21 @@ function keyedScope(scope: unknown): string[] {
   );
 }
 
+function terminalExpansionOwner(value: unknown): string | undefined {
+  const raw = optionalString(value);
+  if (!raw) return undefined;
+  try {
+    const decoded = JSON.parse(raw) as unknown;
+    if (Array.isArray(decoded)) {
+      const terminal = decoded.at(-1);
+      return typeof terminal === 'string' ? terminal : undefined;
+    }
+  } catch {
+    // Scalar owner names are the original graph representation.
+  }
+  return raw;
+}
+
 function operationalState(statuses: readonly string[]): NativeChecklistOperationalState {
   if (statuses.length === 0) return 'unknown';
   if (statuses.includes('unknown')) return 'unknown';
@@ -1402,14 +1417,15 @@ function nativeConditionEntries(
   const itemKindFor = (node: Json, checkId: string): OperationalKind => {
     const scope = Array.isArray(node.scope) ? node.scope.filter(isRecord) : [];
     const keyed = scope.filter(part => part.kind === 'keyed');
-    const owner = keyed.length ? optionalString(keyed[keyed.length - 1].expansionOwnerCheck) : undefined;
+    const owner = keyed.length ? terminalExpansionOwner(keyed[keyed.length - 1].expansionOwnerCheck) : undefined;
     // The continuation project's fan-in target is an absent node in the
     // project instance.  Its exact compiled one-segment project scope is
     // authoritative; do not let the generic component fallback fabricate a
     // component with the project key.
     if (keyed.length === 1 && owner === 'project') return 'project';
     if (owner === 'discover-native-components') return 'component';
-    if (owner === 'enumerate-native-specs' || owner === '["native-component","enumerate-native-specs"]' || checkId === 'review-native-item' || checkId === 'collect-proof-evidence') return 'specification';
+    if (owner === 'enumerate-native-specs' || checkId === 'review-native-item' || checkId === 'collect-proof-evidence') return 'specification';
+    if (owner === 'enumerate-native-batches') return 'batch';
     if (keyed.length > 3) return 'batch';
     return 'component';
   };
@@ -1704,10 +1720,11 @@ function operationalProjection(
         ? generation.scope.filter(isRecord)
         : [];
       const owner = scopeParts.length
-        ? optionalString(scopeParts[scopeParts.length - 1].expansionOwnerCheck)
+        ? terminalExpansionOwner(scopeParts[scopeParts.length - 1].expansionOwnerCheck)
         : undefined;
       if (owner === 'discover-native-components') kind = 'component';
-      else if (owner === 'enumerate-native-specs' || owner === '["native-component","enumerate-native-specs"]') kind = 'specification';
+      else if (owner === 'enumerate-native-specs') kind = 'specification';
+      else if (owner === 'enumerate-native-batches') kind = 'batch';
       else if (depth <= 1) kind = 'project';
       else if (depth === 2) kind = 'component';
       else if (depth === 3) kind = 'specification';
