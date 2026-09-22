@@ -927,6 +927,15 @@ async function handleClaimReadyDispatch(
   let generatedDispatchGateHalted = false;
   const maxParallelism = context.maxParallelism || 10;
   const failed = ((state as any).failedChecks ||= new Set<string>()) as Set<string>;
+  const currentWaveCompletions = (((state as any).currentWaveCompletions ||= new Set<string>()) as Set<string>);
+  // Ordinary dependencies are allowed to use cumulative completion state only
+  // when they were not scheduled for this dispatch.  A routed retry that is
+  // already queued must wait for its current-wave predecessor, otherwise the
+  // stale completedChecks entry can release it concurrently with that retry.
+  const scheduledThisDispatch = new Set<string>([
+    ...queued,
+    ...currentWaveCompletions,
+  ]);
 
   emitEvent({ type: 'LevelReady', level: { level: 0, parallel: queued }, wave: state.wave });
 
@@ -938,7 +947,11 @@ async function handleClaimReadyDispatch(
     const consumedEmitters = new Set(consumes.map(input => plan.emitterByClaim[input.claim]));
     for (const dependency of plan.effectiveDependenciesByCheck[checkId] || []) {
       if (consumedEmitters.has(dependency)) continue;
-      if (!state.completedChecks.has(dependency)) return false;
+      if (scheduledThisDispatch.has(dependency)) {
+        if (!currentWaveCompletions.has(dependency)) return false;
+      } else if (!state.completedChecks.has(dependency)) {
+        return false;
+      }
       if (failed.has(dependency) && !context.config.checks?.[dependency]?.continue_on_failure) {
         return false;
       }
@@ -965,6 +978,7 @@ async function handleClaimReadyDispatch(
         if (context.failFast) state.flags.failFastTriggered = true;
       } finally {
         state.completedChecks.add(checkId);
+        currentWaveCompletions.add(checkId);
         running.delete(checkId);
       }
     })();

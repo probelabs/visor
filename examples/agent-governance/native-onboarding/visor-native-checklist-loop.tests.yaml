@@ -21,7 +21,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -71,7 +71,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -116,7 +116,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -170,7 +170,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -227,7 +227,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -272,7 +272,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -352,7 +352,7 @@ tests:
           success: true
           is_worktree: true
           path: /tmp/native-checklist-target
-          commit: 0000000000000000000000000000000000000000
+          commit: '0000000000000000000000000000000000000000'
           worktree_id: mock-target
           repository: /tmp/native-checklist-target
         native-state:
@@ -382,8 +382,269 @@ tests:
         fail:
           message_contains: max
 
+    - name: native-spec-review-batches-preserve-denominator
+      description: |
+        An active Proof spec-review role is expanded through the standard
+        project/role/component/batch graph. Six requirements become two
+        deterministic batches (5 + 1), each writer receives a compact fresh
+        preflight receipt, and the receipt contract permits needs_changes
+        findings as execution data; this green fixture uses no unresolved
+        finding, so only the post-batch native finisher may confirm the role.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: '0000000000000000000000000000000000000000'
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: false
+          steps: []
+          steps_pending: 1
+          next: {step_id: spec-review-7, role: spec-review}
+        native-project-dispatch:
+          projects:
+            - id: native-project
+              target:
+                success: true
+                is_worktree: true
+                path: /tmp/native-checklist-target
+                commit: '0000000000000000000000000000000000000000'
+                worktree_id: mock-target
+                repository: /tmp/native-checklist-target
+              state:
+                schema_version: proof.checklist.show.v1
+                checklist: onboard_v1
+                active: true
+                ok: false
+                steps: []
+                steps_pending: 1
+                next: {step_id: spec-review-7, role: spec-review}
+        native-role-dispatch:
+          total_roles: 1
+          roles:
+            - id: spec-review-7
+              mode: spec-review
+              step_id: spec-review-7
+              role: spec-review
+              target:
+                success: true
+                is_worktree: true
+                path: /tmp/native-checklist-target
+                commit: '0000000000000000000000000000000000000000'
+                worktree_id: mock-target
+                repository: /tmp/native-checklist-target
+              total_requirements: 6
+              requirements:
+                - {id: req-a, component: component-a}
+                - {id: req-b, component: component-a}
+                - {id: req-c, component: component-a}
+                - {id: req-d, component: component-a}
+                - {id: req-e, component: component-a}
+                - {id: req-f, component: component-a}
+        native-role-barrier: {status: drained}
+        enumerate-native-components:
+          total_components: 1
+          total_requirements: 6
+          step_id: spec-review-7
+          role: spec-review
+          target:
+            success: true
+            is_worktree: true
+            path: /tmp/native-checklist-target
+            commit: '0000000000000000000000000000000000000000'
+            worktree_id: mock-target
+            repository: /tmp/native-checklist-target
+          components:
+            - id: component-a
+              component_id: component-a
+              requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f]
+              requirements:
+                - {id: req-a, component: component-a}
+                - {id: req-b, component: component-a}
+                - {id: req-c, component: component-a}
+                - {id: req-d, component: component-a}
+                - {id: req-e, component: component-a}
+                - {id: req-f, component: component-a}
+              total_requirements: 6
+              batch_count: 2
+              step_id: spec-review-7
+              role: spec-review
+              target:
+                success: true
+                is_worktree: true
+                path: /tmp/native-checklist-target
+                commit: '0000000000000000000000000000000000000000'
+                worktree_id: mock-target
+                repository: /tmp/native-checklist-target
+        component-barrier: {status: drained}
+        enumerate-native-batches:
+          total_batches: 2
+          component_requirement_count: 6
+          component_id: component-a
+          step_id: spec-review-7
+          role: spec-review
+          target:
+            success: true
+            is_worktree: true
+            path: /tmp/native-checklist-target
+            commit: '0000000000000000000000000000000000000000'
+            worktree_id: mock-target
+            repository: /tmp/native-checklist-target
+          batches:
+            - id: 'component-a:batch:1'
+              component_id: component-a
+              requirement_ids: [req-a, req-b, req-c, req-d, req-e]
+              all_requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f]
+              requirements:
+                - {id: req-a, component: component-a}
+                - {id: req-b, component: component-a}
+                - {id: req-c, component: component-a}
+                - {id: req-d, component: component-a}
+                - {id: req-e, component: component-a}
+              component_requirement_count: 6
+              batch_requirement_count: 5
+              batch_index: 1
+              total_batches: 2
+              step_id: spec-review-7
+              role: spec-review
+              target:
+                success: true
+                is_worktree: true
+                path: /tmp/native-checklist-target
+                commit: '0000000000000000000000000000000000000000'
+                worktree_id: mock-target
+                repository: /tmp/native-checklist-target
+            - id: 'component-a:batch:2'
+              component_id: component-a
+              requirement_ids: [req-f]
+              all_requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f]
+              requirements: [{id: req-f, component: component-a}]
+              component_requirement_count: 6
+              batch_requirement_count: 1
+              batch_index: 2
+              total_batches: 2
+              step_id: spec-review-7
+              role: spec-review
+              target:
+                success: true
+                is_worktree: true
+                path: /tmp/native-checklist-target
+                commit: '0000000000000000000000000000000000000000'
+                worktree_id: mock-target
+                repository: /tmp/native-checklist-target
+        validate-batch-current[]:
+          - {batch_id: 'component-a:batch:1', component_id: component-a, step_id: spec-review-7, role: spec-review, requirement_ids: [req-a, req-b, req-c, req-d, req-e], all_requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f], component_requirement_count: 6, batch_requirement_count: 5, context_ids: [req-a, req-b, req-c, req-d, req-e]}
+          - {batch_id: 'component-a:batch:2', component_id: component-a, step_id: spec-review-7, role: spec-review, requirement_ids: [req-f], all_requirement_ids: [req-a, req-b, req-c, req-d, req-e, req-f], component_requirement_count: 6, batch_requirement_count: 1, context_ids: [req-f]}
+        batch-binding[]:
+          - {success: true, is_worktree: true, path: /tmp/native-checklist-target, commit: '0000000000000000000000000000000000000000', worktree_id: mock-target, repository: /tmp/native-checklist-target}
+          - {success: true, is_worktree: true, path: /tmp/native-checklist-target, commit: '0000000000000000000000000000000000000000', worktree_id: mock-target, repository: /tmp/native-checklist-target}
+        batch-author[]:
+          - {batch_id: 'component-a:batch:1', opened_ids: [req-a, req-b, req-c, req-d, req-e], component_requirement_count: 6, batch_requirement_count: 5, findings: [], errors: [], execution_status: completed}
+          - {batch_id: 'component-a:batch:2', opened_ids: [req-f], component_requirement_count: 6, batch_requirement_count: 1, findings: [], errors: [], execution_status: completed}
+        batch-finished[]:
+          - {batch_id: 'component-a:batch:1', status: completed, opened_ids: [req-a, req-b, req-c, req-d, req-e], component_requirement_count: 6, batch_requirement_count: 5}
+          - {batch_id: 'component-a:batch:2', status: completed, opened_ids: [req-f], component_requirement_count: 6, batch_requirement_count: 1}
+        component-finished: {component_id: component-a, status: completed}
+        role-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: '0000000000000000000000000000000000000000'
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
+        role-finisher: {step_id: spec-review-7, role: spec-review, execution_status: completed, confirmation_status: confirmed, errors: []}
+        role-readback: {step_id: spec-review-7, role: spec-review, status: confirmed, checklist: {active: true, next: {step_id: next-step, role: onboard}, steps: [{step_id: spec-review-7, stored_status: confirmed, effective_status: confirmed}]}}
+        role-finished: {role_id: spec-review-7, status: completed}
+      expect:
+        calls:
+          - {step: target-binding, exactly: 1}
+          - {step: native-state, exactly: 1}
+          - {step: native-project-dispatch, exactly: 1}
+          - {logical_step: native-role-dispatch, exactly: 1}
+          - {logical_step: enumerate-native-components, exactly: 1}
+          - {logical_step: enumerate-native-batches, exactly: 1}
+          - {logical_step: validate-batch-current, exactly: 2}
+          - {logical_step: batch-author, exactly: 2}
+          - {logical_step: batch-finished, exactly: 2}
+          - {logical_step: role-finisher, exactly: 1}
+          - {logical_step: role-readback, exactly: 1}
+          - {logical_step: role-finished, exactly: 1}
+          - {logical_step: native-role-barrier, exactly: 1}
+          - {logical_step: component-barrier, exactly: 1}
+          - {logical_step: component-finished, exactly: 1}
+          - {logical_step: batch-binding, exactly: 2}
+          - {logical_step: role-binding, exactly: 1}
+          - {step: author, exactly: 0}
+          - {step: proof-audit, exactly: 0}
+          - {step: native-completion, exactly: 0}
+        prompts:
+          - step: batch-author
+            index: first
+            contains: [exact denominator, needs_changes, checklist confirmation]
+          - step: role-finisher
+            index: first
+            contains: [full exit, confirmation]
+        outputs:
+          - {step: batch-author, where: {path: batch_requirement_count, equals: 5}, path: batch_requirement_count, equals: 5}
+          - {step: batch-author, where: {path: batch_requirement_count, equals: 1}, path: batch_requirement_count, equals: 1}
+          - {step: role-finished, path: status, equals: completed}
+
+    - name: native-non-review-next-uses-generic-author
+      description: |
+        A real native checklist next step with a non-review role keeps the
+        existing generic author path and does not enter the spec-review graph.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        target-binding:
+          success: true
+          is_worktree: true
+          path: /tmp/native-checklist-target
+          commit: '0000000000000000000000000000000000000000'
+          worktree_id: mock-target
+          repository: /tmp/native-checklist-target
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: false
+          steps: []
+          steps_pending: 1
+          next: {step_id: onboard-1, role: onboard}
+        author: {pass: 1, summary: completed the current generic native role}
+        proof-audit:
+          stdout: '{"audit_exit_code":0,"stdout_artifact":".visor-native-checklist-audit/attempt-1/audit.stdout.jsonl","stderr_artifact":".visor-native-checklist-audit/attempt-1/audit.stderr.log","terminal":{"event":"check_done","check":"audit","status":"pass"}}'
+          stderr: ''
+          exit_code: 0
+        native-completion:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: true
+          steps: []
+          steps_pending: 0
+          next: null
+      expect:
+        calls:
+          - {step: target-binding, exactly: 1}
+          - {step: native-state, exactly: 1}
+          - {step: native-project-dispatch, exactly: 0}
+          - {step: author, exactly: 1}
+          - {step: proof-audit, exactly: 1}
+          - {step: native-completion, exactly: 1}
+        prompts:
+          - step: author
+            contains: [onboard-1]
+
 # The native test harness injects its mock provider and disables tools. Keep
-# these seven deterministic cases focused on graph/routing/history semantics;
+# these deterministic cases focused on graph/routing/history semantics;
 # the production YAML above is validated separately with the isolated-writer
 # profile intact.
 checks:

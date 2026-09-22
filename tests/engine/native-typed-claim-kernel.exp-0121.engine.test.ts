@@ -70,6 +70,11 @@ describe('EXP-0121 native typed-claim engine', () => {
   let peakActive: number;
   let scheduleVisibleAtProviderStart: Record<string, boolean>;
   let historyVisibleAtProviderStart: Record<string, boolean>;
+  let routedAuthorRuns: number;
+  let routedAuditRuns: number;
+  let routedCompletionRuns: number;
+  let routedAuthorSecondStarted: ReturnType<typeof deferred>;
+  let releaseRoutedAuthorSecond: ReturnType<typeof deferred>;
 
   class ControlledNoopProvider extends CheckProvider {
     getName() {
@@ -111,6 +116,23 @@ describe('EXP-0121 native typed-claim engine', () => {
             (event: any) => event.type === 'CheckScheduled' && event.checkId === checkId
           );
 
+        if (checkId === 'routed-author') {
+          routedAuthorRuns++;
+          if (routedAuthorRuns === 2) {
+            routedAuthorSecondStarted.resolve();
+            await releaseRoutedAuthorSecond.promise;
+          }
+          return { issues: [], output: { attempt: routedAuthorRuns } };
+        }
+        if (checkId === 'routed-audit') {
+          routedAuditRuns++;
+          return { issues: [], output: { ok: routedAuditRuns > 1 } };
+        }
+        if (checkId === 'routed-completion') {
+          routedCompletionRuns++;
+          return { issues: [], output: { completed: true } };
+        }
+
         if (checkId === 'producer') return { issues: [], output: producerOutput };
         if (checkId === 'undefined-foreach') return { issues: [], output: undefined };
         if (checkId === 'slow-sibling') {
@@ -142,6 +164,11 @@ describe('EXP-0121 native typed-claim engine', () => {
     peakActive = 0;
     scheduleVisibleAtProviderStart = {};
     historyVisibleAtProviderStart = {};
+    routedAuthorRuns = 0;
+    routedAuditRuns = 0;
+    routedCompletionRuns = 0;
+    routedAuthorSecondStarted = deferred();
+    releaseRoutedAuthorSecond = deferred();
     registry.unregister('noop');
     registry.register(new ControlledNoopProvider());
   });
@@ -508,6 +535,61 @@ describe('EXP-0121 native typed-claim engine', () => {
       ts: expect.any(Number),
     });
     expect((engine as any)._lastContext.journal.readRuntimeEvents()).toEqual([]);
+  });
+
+  it('does not release a rerouted ordinary dependency from cumulative completion state', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      max_parallelism: 2,
+      workspace: { enabled: false },
+      claim_types: {
+        'fixture.inert@1': {
+          schema: { type: 'object', additionalProperties: false },
+        },
+      },
+      checks: {
+        'routed-author': { type: 'noop' },
+        'routed-audit': {
+          type: 'noop',
+          depends_on: ['routed-author'],
+          fail_if: '!output || output.ok !== true',
+          on_fail: { goto: 'routed-author' },
+        },
+        'routed-completion': {
+          type: 'noop',
+          depends_on: ['routed-audit'],
+        },
+      },
+    } as VisorConfig;
+
+    const run = engine.executeGroupedChecks(
+      prInfo,
+      ['routed-author', 'routed-audit', 'routed-completion'],
+      undefined,
+      config,
+      'table',
+      false,
+      2
+    );
+
+    await routedAuthorSecondStarted.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const auditRunsWhileRepairBlocked = routedAuditRuns;
+
+    releaseRoutedAuthorSecond.resolve();
+    const result = await run;
+    expect(auditRunsWhileRepairBlocked).toBe(1);
+    expect(routedAuthorRuns).toBe(2);
+    expect(routedAuditRuns).toBe(2);
+    expect(routedCompletionRuns).toBe(1);
+    expect(invocations).toEqual([
+      'routed-author',
+      'routed-audit',
+      'routed-author',
+      'routed-audit',
+      'routed-completion',
+    ]);
+    expect(result.statistics.failedExecutions).toBeGreaterThanOrEqual(1);
   });
 
   it('preserves legacy non-claim OR dependency behavior', async () => {

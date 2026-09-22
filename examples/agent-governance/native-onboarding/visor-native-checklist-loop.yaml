@@ -19,6 +19,912 @@ workspace:
   enabled: false
   cleanup_on_exit: false
 
+claim_types:
+  native.project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, target, state]
+            properties:
+              id: {type: string, minLength: 1}
+              target: {type: object}
+              state: {type: object}
+
+  native.project.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, target, state]
+      properties:
+        id: {type: string, minLength: 1}
+        target: {type: object}
+        state: {type: object}
+
+  native.target.binding@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [success, is_worktree, path, commit, worktree_id, repository]
+      properties:
+        success: {const: true}
+        is_worktree: {const: true}
+        path: {type: string, minLength: 1}
+        commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_id: {type: string, minLength: 1}
+        repository: {type: string, minLength: 1}
+
+  native.state@1:
+    schema:
+      oneOf:
+        - type: object
+          additionalProperties: true
+          required: [bootstrap_required]
+          properties:
+            bootstrap_required: {const: true}
+        - type: object
+          additionalProperties: true
+          required: [schema_version, checklist, active, ok, steps]
+          properties:
+            schema_version: {const: proof.checklist.show.v1}
+            checklist: {const: onboard_v1}
+            active: {type: boolean}
+            ok: {type: boolean}
+            steps: {type: array}
+            steps_pending: {type: integer, minimum: 0}
+            next:
+              oneOf:
+                - type: 'null'
+                - type: object
+                  required: [step_id, role]
+                  properties:
+                    step_id: {type: string, minLength: 1}
+                    role: {type: string, minLength: 1}
+
+  native.role.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [roles, total_roles]
+      properties:
+        total_roles: {type: integer, minimum: 1}
+        roles:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, mode, step_id, role, target, requirements, total_requirements]
+            properties:
+              id: {type: string, minLength: 1}
+              mode: {enum: [generic, spec-review]}
+              step_id: {type: string, minLength: 1}
+              role: {type: string, minLength: 1}
+              target: {type: object}
+              total_requirements: {type: integer, minimum: 0}
+              requirements:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+                  required: [id, component]
+                  properties:
+                    id: {type: string, minLength: 1}
+                    component: {type: string, minLength: 1}
+
+  native.role.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, mode, step_id, role, target, requirements, total_requirements]
+      properties:
+        id: {type: string, minLength: 1}
+        mode: {enum: [generic, spec-review]}
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        target: {type: object}
+        total_requirements: {type: integer, minimum: 0}
+        requirements:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            required: [id, component]
+            properties:
+              id: {type: string, minLength: 1}
+              component: {type: string, minLength: 1}
+
+  native.component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components, total_components, total_requirements, step_id, role, target]
+      properties:
+        total_components: {type: integer, minimum: 0}
+        total_requirements: {type: integer, minimum: 0}
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        target: {type: object}
+        components:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, component_id, requirement_ids, requirements, total_requirements, batch_count, step_id, role, target]
+            properties:
+              id: {type: string, minLength: 1}
+              component_id: {type: string, minLength: 1}
+              requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+              requirements: {type: array, minItems: 1, items: {type: object}}
+              total_requirements: {type: integer, minimum: 1}
+              batch_count: {type: integer, minimum: 1}
+              step_id: {type: string, minLength: 1}
+              role: {type: string, minLength: 1}
+              target: {type: object}
+
+  native.component.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, component_id, requirement_ids, requirements, total_requirements, batch_count, step_id, role, target]
+      properties:
+        id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        requirements: {type: array, minItems: 1, items: {type: object}}
+        total_requirements: {type: integer, minimum: 1}
+        batch_count: {type: integer, minimum: 1}
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        target: {type: object}
+
+  native.batch.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [batches, total_batches, component_requirement_count, component_id, step_id, role, target]
+      properties:
+        total_batches: {type: integer, minimum: 1}
+        component_requirement_count: {type: integer, minimum: 1}
+        component_id: {type: string, minLength: 1}
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        target: {type: object}
+        batches:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, component_id, requirement_ids, all_requirement_ids, requirements, component_requirement_count, batch_requirement_count, batch_index, total_batches, step_id, role, target]
+            properties:
+              id: {type: string, minLength: 1}
+              component_id: {type: string, minLength: 1}
+              requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+              all_requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+              requirements: {type: array, minItems: 1, items: {type: object}}
+              component_requirement_count: {type: integer, minimum: 1}
+              batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+              batch_index: {type: integer, minimum: 1}
+              total_batches: {type: integer, minimum: 1}
+              step_id: {type: string, minLength: 1}
+              role: {type: string, minLength: 1}
+              target: {type: object}
+
+  native.batch.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, component_id, requirement_ids, all_requirement_ids, requirements, component_requirement_count, batch_requirement_count, batch_index, total_batches, step_id, role, target]
+      properties:
+        id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        all_requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        requirements: {type: array, minItems: 1, items: {type: object}}
+        component_requirement_count: {type: integer, minimum: 1}
+        batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+        batch_index: {type: integer, minimum: 1}
+        total_batches: {type: integer, minimum: 1}
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        target: {type: object}
+
+  native.batch.preflight@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [batch_id, component_id, step_id, role, requirement_ids, all_requirement_ids, component_requirement_count, batch_requirement_count, context_ids]
+      properties:
+        batch_id: {type: string, minLength: 1}
+        component_id: {type: string, minLength: 1}
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        all_requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        component_requirement_count: {type: integer, minimum: 1}
+        batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+        context_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+
+  native.batch.receipt@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [batch_id, opened_ids, component_requirement_count, batch_requirement_count, findings, errors, execution_status]
+      properties:
+        batch_id: {type: string, minLength: 1}
+        opened_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        component_requirement_count: {type: integer, minimum: 1}
+        batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+        findings: {type: array}
+        errors: {type: array, maxItems: 0}
+        execution_status: {const: completed}
+
+  native.batch.checkout@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [success, is_worktree, path, commit, worktree_id, repository]
+      properties:
+        success: {const: true}
+        is_worktree: {const: true}
+        path: {type: string, minLength: 1}
+        commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+        worktree_id: {type: string, minLength: 1}
+        repository: {type: string, minLength: 1}
+
+  native.role.finish@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [step_id, role, execution_status, confirmation_status, errors]
+      properties:
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        execution_status: {const: completed}
+        confirmation_status: {enum: [confirmed, not_confirmed]}
+        errors: {type: array, maxItems: 10}
+
+  native.role.readback@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [step_id, role, status, checklist]
+      properties:
+        step_id: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        status: {const: confirmed}
+        checklist: {type: object}
+
+subgraphs:
+  native-project:
+    input: {name: project, claim: native.project.item@1}
+    checks:
+      native-role-dispatch:
+        type: command
+        consumes:
+          - {claim: native.project.item@1, as: project}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [roles, total_roles]
+          properties:
+            total_roles: {type: integer, const: 1}
+            roles:
+              type: array
+              minItems: 1
+              maxItems: 1
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${TARGET_ROOT:?TARGET_ROOT is required}"
+          node <<'NODE'
+          const {execFileSync} = require('child_process');
+          const project = {{ outputs.project | json }};
+          const state = project.state || {};
+          const next = state.next;
+          if (!next || typeof next.step_id !== 'string' || typeof next.role !== 'string') {
+            throw new Error('native checklist next role/step is missing');
+          }
+          const role = next.role;
+          const stepId = next.step_id;
+          let requirements = [];
+          if (role === 'spec-review') {
+            const raw = execFileSync(process.env.PROOF_BIN, ['req', 'list', '--format', 'json'], {
+              cwd: process.env.TARGET_ROOT,
+              encoding: 'utf8',
+            });
+            const parsed = JSON.parse(raw);
+            const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.requirements) ? parsed.requirements : parsed.items);
+            if (!Array.isArray(rows)) throw new Error('Proof req list did not return a requirement array');
+            requirements = rows.map((row, index) => {
+              const id = String(row.id || row.req_id || row.requirement_id || '');
+              const component = String(row.component || row.component_id || (row.scope && row.scope.component) || '');
+              if (!id || !component) throw new Error(`Proof req list row ${index} lacks id/component`);
+              return { ...row, id, component };
+            }).sort((left, right) => Buffer.from(left.id, 'utf8').compare(Buffer.from(right.id, 'utf8')));
+          }
+          process.stdout.write(JSON.stringify({
+            total_roles: 1,
+            roles: [{
+              id: stepId,
+              mode: role === 'spec-review' ? 'spec-review' : 'generic',
+              step_id: stepId,
+              role,
+              target: project.target,
+              requirements,
+              total_requirements: requirements.length,
+            }],
+          }));
+          NODE
+        emits:
+          - {claim: native.role.catalog@1, from: output}
+        expand:
+          claim: native.role.catalog@1
+          template: native-role
+          items_pointer: /roles
+          key_pointer: /id
+          item_claim: native.role.item@1
+
+      native-role-barrier:
+        type: command
+        depends_on: [native-role-dispatch]
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [status]
+          properties:
+            status: {const: drained}
+        exec: |
+          printf '%s\n' '{"status":"drained"}'
+        wait_for_expansion:
+          owner: native-role-dispatch
+          terminal_node: role-finished
+
+  native-role:
+    input: {name: role, claim: native.role.item@1}
+    checks:
+      enumerate-native-components:
+        type: command
+        consumes:
+          - {claim: native.role.item@1, as: role}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [components, total_components, total_requirements, step_id, role, target]
+          properties:
+            components: {type: array, minItems: 1}
+            total_components: {type: integer, minimum: 1}
+            total_requirements: {type: integer, minimum: 1}
+            step_id: {type: string, minLength: 1}
+            role: {type: string, const: spec-review}
+            target: {type: object}
+        exec: |
+          set -eu
+          node <<'NODE'
+          const role = {{ outputs.role | json }};
+          const byComponent = new Map();
+          for (const requirement of role.requirements || []) {
+            const component = String(requirement.component || '');
+            if (!component) throw new Error('native component is missing');
+            if (!byComponent.has(component)) byComponent.set(component, []);
+            byComponent.get(component).push(requirement);
+          }
+          const sortBytes = (left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
+          const components = [...byComponent.entries()].sort((left, right) => sortBytes(left[0], right[0])).map(([componentId, rows]) => {
+            rows.sort((left, right) => sortBytes(left.id, right.id));
+            const requirementIds = rows.map(row => row.id);
+            return {
+              id: componentId,
+              component_id: componentId,
+              requirement_ids: requirementIds,
+              requirements: rows,
+              total_requirements: rows.length,
+              batch_count: Math.ceil(rows.length / 5),
+              step_id: role.step_id,
+              role: role.role,
+              target: role.target,
+            };
+          });
+          process.stdout.write(JSON.stringify({
+            components,
+            total_components: components.length,
+            total_requirements: role.total_requirements,
+            step_id: role.step_id,
+            role: role.role,
+            target: role.target,
+          }));
+          NODE
+        emits:
+          - {claim: native.component.catalog@1, from: output}
+        expand:
+          claim: native.component.catalog@1
+          template: native-component
+          items_pointer: /components
+          key_pointer: /id
+          item_claim: native.component.item@1
+
+      component-barrier:
+        type: command
+        depends_on: [enumerate-native-components]
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [status]
+          properties:
+            status: {const: drained}
+        exec: |
+          printf '%s\n' '{"status":"drained"}'
+        wait_for_expansion:
+          owner: enumerate-native-components
+          terminal_node: component-finished
+
+      role-binding:
+        type: command
+        depends_on: [component-barrier]
+        consumes:
+          - {claim: native.role.item@1, as: role}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [success, is_worktree, path, commit, worktree_id, repository]
+          properties:
+            success: {const: true}
+            is_worktree: {const: true}
+            path: {type: string, minLength: 1}
+            commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+            worktree_id: {type: string, minLength: 1}
+            repository: {type: string, minLength: 1}
+        exec: |
+          set -eu
+          node <<'NODE'
+          const role = {{ outputs.role | json }};
+          process.stdout.write(JSON.stringify(role.target));
+          NODE
+
+        emits:
+          - {claim: native.batch.checkout@1, from: output}
+
+      role-finisher:
+        type: ai
+        depends_on: [role-binding]
+        consumes:
+          - {claim: native.role.item@1, as: role}
+          - {claim: native.batch.checkout@1, as: checkout}
+        timeout: 660000
+        criticality: internal
+        assume: "true"
+        ai_model: gpt-5.6-luna
+        ai_prompt_type: engineer
+        schema:
+          type: object
+          additionalProperties: false
+          required: [step_id, role, execution_status, confirmation_status, errors]
+          properties:
+            step_id: {type: string, minLength: 1}
+            role: {type: string, minLength: 1}
+            execution_status: {const: completed}
+            confirmation_status: {enum: [confirmed, not_confirmed]}
+            errors: {type: array, maxItems: 10}
+        ai:
+          allowEdit: true
+          max_iterations: 100
+          ai_timeout: 600000
+          codex_execution_profile: luna-xhigh-isolated-writer-v1
+          codex_working_directory_from: role-binding
+        prompt: |
+          Work in the validated target checkout and reload the complete native
+          Proof role for `{{ outputs.role.role }}`. Reconcile the persisted
+          batch authoring and findings, then follow the role's full exit
+          doctrine and every required check. Preserve review history and
+          requirement intent; do not weaken, waive, suppress, or rewrite it,
+          and do not change executable source behavior. Native Proof remains
+          the only confirmation authority: invoke its documented confirmation
+          command only when the role's checks are genuinely green. Never
+          parse human EXIT CHECKS prose as a shadow gate. If the role is not
+          green, report a technical/non-confirmed outcome instead of claiming
+          completion. Return JSON with the exact step_id/role, completed
+          execution_status, confirmed confirmation_status only after Proof
+          accepts the confirmation, and an empty errors array.
+
+          --- role item ---
+          {{ outputs.role | json }}
+          --- target checkout ---
+          {{ outputs.checkout | json }}
+        emits:
+          - {claim: native.role.finish@1, from: output}
+
+      role-readback:
+        type: command
+        depends_on: [role-finisher]
+        consumes:
+          - {claim: native.role.item@1, as: role}
+          - {claim: native.role.finish@1, as: finish}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [step_id, role, status, checklist]
+          properties:
+            step_id: {type: string, minLength: 1}
+            role: {type: string, minLength: 1}
+            status: {const: confirmed}
+            checklist: {type: object}
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${TARGET_ROOT:?TARGET_ROOT is required}"
+          cd "$TARGET_ROOT"
+          NATIVE_STATE="$($PROOF_BIN checklist show onboard_v1 --format json)"
+          node - "$NATIVE_STATE" '{{ outputs.role.step_id }}' '{{ outputs.role.role }}' <<'NODE'
+          const [raw, expectedStep, expectedRole] = process.argv.slice(2);
+          const finish = {{ outputs.finish | json }};
+          if (!finish || finish.step_id !== expectedStep || finish.role !== expectedRole || finish.execution_status !== 'completed' || finish.confirmation_status !== 'confirmed' || !Array.isArray(finish.errors) || finish.errors.length !== 0) {
+            throw new Error('native role finisher did not produce a confirmed, error-free receipt');
+          }
+          const checklist = JSON.parse(raw);
+          const next = checklist && checklist.next;
+          const rows = Array.isArray(checklist && checklist.steps) ? checklist.steps : [];
+          const row = rows.find(candidate => candidate && (candidate.step_id === expectedStep || candidate.id === expectedStep));
+          if (!checklist || checklist.active !== true || !row || row.stored_status !== 'confirmed' || row.effective_status !== 'confirmed' || (next && next.step_id === expectedStep && next.role === expectedRole)) {
+            throw new Error('native checklist readback did not confirm and advance the exact role');
+          }
+          process.stdout.write(JSON.stringify({step_id: expectedStep, role: expectedRole, status: 'confirmed', checklist}));
+          NODE
+
+        emits:
+          - {claim: native.role.readback@1, from: output}
+
+      role-finished:
+        type: command
+        depends_on: [role-readback]
+        consumes:
+          - {claim: native.role.item@1, as: role}
+          - {claim: native.role.readback@1, as: readback}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [role_id, status]
+          properties:
+            role_id: {type: string, minLength: 1}
+            status: {const: completed}
+        exec: |
+          node <<'NODE'
+          const role = {{ outputs.role | json }};
+          const readback = {{ outputs.readback | json }};
+          if (!readback || readback.status !== 'confirmed') throw new Error('native role confirmation readback is incomplete');
+          process.stdout.write(JSON.stringify({role_id: role.step_id, status: 'completed'}));
+          NODE
+
+  native-component:
+    input: {name: component, claim: native.component.item@1}
+    checks:
+      enumerate-native-batches:
+        type: command
+        consumes:
+          - {claim: native.component.item@1, as: component}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [batches, total_batches, component_requirement_count, component_id, step_id, role, target]
+          properties:
+            batches: {type: array, minItems: 1}
+            total_batches: {type: integer, minimum: 1}
+            component_requirement_count: {type: integer, minimum: 1}
+            component_id: {type: string, minLength: 1}
+            step_id: {type: string, minLength: 1}
+            role: {type: string, const: spec-review}
+            target: {type: object}
+        exec: |
+          set -eu
+          node <<'NODE'
+          const component = {{ outputs.component | json }};
+          const sortBytes = (left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
+          const requirements = [...(component.requirements || [])].sort((left, right) => sortBytes(left.id, right.id));
+          const allIds = requirements.map(requirement => requirement.id);
+          const batches = [];
+          for (let offset = 0; offset < requirements.length; offset += 5) {
+            const rows = requirements.slice(offset, offset + 5);
+            const index = batches.length + 1;
+            batches.push({
+              id: `${component.component_id}:batch:${index}`,
+              component_id: component.component_id,
+              requirement_ids: rows.map(row => row.id),
+              all_requirement_ids: allIds,
+              requirements: rows,
+              component_requirement_count: requirements.length,
+              batch_requirement_count: rows.length,
+              batch_index: index,
+              total_batches: Math.ceil(requirements.length / 5),
+              step_id: component.step_id,
+              role: component.role,
+              target: component.target,
+            });
+          }
+          process.stdout.write(JSON.stringify({
+            batches,
+            total_batches: batches.length,
+            component_requirement_count: requirements.length,
+            component_id: component.component_id,
+            step_id: component.step_id,
+            role: component.role,
+            target: component.target,
+          }));
+          NODE
+        emits:
+          - {claim: native.batch.catalog@1, from: output}
+        expand:
+          claim: native.batch.catalog@1
+          template: native-batch
+          items_pointer: /batches
+          key_pointer: /id
+          item_claim: native.batch.item@1
+
+      component-finished:
+        type: command
+        depends_on: [enumerate-native-batches]
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [component_id, status]
+          properties:
+            component_id: {type: string, minLength: 1}
+            status: {const: completed}
+        exec: |
+          node <<'NODE'
+          const component = {{ outputs.component | json }};
+          process.stdout.write(JSON.stringify({component_id: component.component_id, status: 'completed'}));
+          NODE
+        wait_for_expansion:
+          owner: enumerate-native-batches
+          terminal_node: batch-finished
+
+  native-batch:
+    input: {name: batch, claim: native.batch.item@1}
+    checks:
+      validate-batch-current:
+        type: command
+        consumes:
+          - {claim: native.batch.item@1, as: batch}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [batch_id, component_id, step_id, role, requirement_ids, all_requirement_ids, component_requirement_count, batch_requirement_count, context_ids]
+          properties:
+            batch_id: {type: string, minLength: 1}
+            component_id: {type: string, minLength: 1}
+            step_id: {type: string, minLength: 1}
+            role: {type: string, minLength: 1}
+            requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+            all_requirement_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+            component_requirement_count: {type: integer, minimum: 1}
+            batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+            context_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+        exec: |
+          set -eu
+          : "${PROOF_BIN:?PROOF_BIN is required}"
+          : "${TARGET_ROOT:?TARGET_ROOT is required}"
+          node <<'NODE'
+          const {execFileSync} = require('child_process');
+          const batch = {{ outputs.batch | json }};
+          const realTarget = execFileSync('pwd', ['-P'], {cwd: process.env.TARGET_ROOT, encoding: 'utf8'}).trim();
+          if (!batch.target || String(batch.target.path || '') !== realTarget) {
+            throw new Error(`native batch ${batch.id} target binding does not match TARGET_ROOT`);
+          }
+          const stateRaw = execFileSync(process.env.PROOF_BIN, ['checklist', 'show', 'onboard_v1', '--format', 'json'], {
+            cwd: process.env.TARGET_ROOT,
+            encoding: 'utf8',
+          });
+          const state = JSON.parse(stateRaw);
+          if (!state || state.active !== true || !state.next || state.next.step_id !== batch.step_id || state.next.role !== batch.role) {
+            throw new Error(`native batch ${batch.id} is stale: native checklist role/step changed`);
+          }
+          const raw = execFileSync(process.env.PROOF_BIN, ['req', 'list', '--format', 'json'], {
+            cwd: process.env.TARGET_ROOT,
+            encoding: 'utf8',
+          });
+          const parsed = JSON.parse(raw);
+          const rows = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.requirements) ? parsed.requirements : parsed.items);
+          if (!Array.isArray(rows)) throw new Error('Proof req list did not return a requirement array');
+          const componentRows = rows.filter(row => String(row.component || row.component_id || (row.scope && row.scope.component) || '') === batch.component_id);
+          const current = componentRows.map(row => String(row.id || row.req_id || row.requirement_id || '')).filter(Boolean).sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+          const allIds = [...batch.all_requirement_ids].sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+          if (allIds.length !== current.length || allIds.some((id, index) => id !== current[index])) {
+            throw new Error(`native batch ${batch.id} is stale: component requirement IDs changed or were repartitioned`);
+          }
+          if (batch.component_requirement_count !== allIds.length || batch.total_batches !== Math.ceil(allIds.length / 5) || batch.batch_index < 1 || batch.batch_index > batch.total_batches) {
+            throw new Error(`native batch ${batch.id} has inconsistent component denominator or batch count`);
+          }
+          const expected = [...batch.requirement_ids].sort((left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8')));
+          const expectedSlice = allIds.slice((batch.batch_index - 1) * 5, batch.batch_index * 5);
+          if (expected.length !== batch.batch_requirement_count || JSON.stringify(expected) !== JSON.stringify(expectedSlice)) {
+            throw new Error(`native batch ${batch.id} has an invalid stable batch slice`);
+          }
+          const contextIds = expected.map(id => {
+            const context = execFileSync(process.env.PROOF_BIN, ['req', 'context', id, '--format', 'md'], {
+              cwd: process.env.TARGET_ROOT,
+              encoding: 'utf8',
+            }).trim();
+            if (!context) throw new Error(`native batch ${batch.id} has empty context for ${id}`);
+            return id;
+          });
+          process.stdout.write(JSON.stringify({
+            batch_id: batch.id,
+            component_id: batch.component_id,
+            step_id: batch.step_id,
+            role: batch.role,
+            requirement_ids: expected,
+            all_requirement_ids: allIds,
+            component_requirement_count: batch.component_requirement_count,
+            batch_requirement_count: expected.length,
+            context_ids: contextIds,
+          }));
+          NODE
+        emits:
+          - {claim: native.batch.preflight@1, from: output}
+
+      batch-binding:
+        type: command
+        depends_on: [validate-batch-current]
+        consumes:
+          - {claim: native.batch.item@1, as: batch}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [success, is_worktree, path, commit, worktree_id, repository]
+          properties:
+            success: {const: true}
+            is_worktree: {const: true}
+            path: {type: string, minLength: 1}
+            commit: {type: string, pattern: '^[0-9a-f]{40,64}$'}
+            worktree_id: {type: string, minLength: 1}
+            repository: {type: string, minLength: 1}
+        exec: |
+          node <<'NODE'
+          const batch = {{ outputs.batch | json }};
+          process.stdout.write(JSON.stringify(batch.target));
+          NODE
+        emits:
+          - {claim: native.batch.checkout@1, from: output}
+
+      batch-author:
+        type: ai
+        depends_on: [validate-batch-current, batch-binding]
+        consumes:
+          - {claim: native.batch.item@1, as: batch}
+          - {claim: native.batch.preflight@1, as: preflight}
+          - {claim: native.batch.checkout@1, as: checkout}
+        timeout: 660000
+        criticality: internal
+        assume: "true"
+        ai_model: gpt-5.6-luna
+        ai_prompt_type: engineer
+        schema:
+          type: object
+          additionalProperties: false
+          required: [batch_id, opened_ids, component_requirement_count, batch_requirement_count, findings, errors, execution_status]
+          properties:
+            batch_id: {type: string, minLength: 1}
+            opened_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+            component_requirement_count: {type: integer, minimum: 1}
+            batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+            findings: {type: array}
+            errors: {type: array, maxItems: 0}
+            execution_status: {const: completed}
+        ai:
+          allowEdit: true
+          max_iterations: 100
+          ai_timeout: 600000
+          codex_execution_profile: luna-xhigh-isolated-writer-v1
+          codex_working_directory_from: batch-binding
+        prompt: |
+          Work only in the validated isolated target checkout. The native Proof
+          role and native Proof checklist remain the authorities. This is one bounded
+          spec-review batch, not a checklist confirmation step.
+
+          Reload the complete built-in role with:
+            $PROOF_BIN role show {{ outputs.batch.role }} --format agent
+          Open every requirement ID in this batch with its full native context.
+          The context must include the requirement, required parent context,
+          implementing code, and tests. Open exactly these IDs and report the
+          exact denominator; do not substitute, add, or silently drop IDs.
+          Inspect the scoped subject and perform the role's required checks.
+          For every opened requirement, persist the role-required decision and
+          finding through the documented native Proof append-only review or
+          evidence record. Use role-permitted native requirement, annotation,
+          or variable edits when needed. Do not leave findings only in this
+          receipt. Preserve human-owned INTENT; correct an agent-authored MODEL
+          field only when independent authoritative intent or documentation
+          proves it wrong, and record the rationale and review append-only. A
+          completed review with findings, including needs_changes, is successful
+          execution data. Provider, tool, malformed-output, or context failures
+          are technical failures.
+
+          Do not change executable behavior, waive or suppress a requirement,
+          rewrite history, or run a checklist confirmation command from this
+          batch. The later role finisher owns role exit procedure; Proof owns
+          native confirmation and blocking.
+
+          Never claim a checklist row is confirmed and never turn a finding into
+          a waiver or suppression. The later role finisher must reconcile the
+          persisted native records before any confirmation.
+
+          --- batch item ---
+          {{ outputs.batch | json }}
+          --- preflight membership receipt (fresh and drift-checked) ---
+          {{ outputs.preflight | json }}
+          --- isolated checkout binding ---
+          {{ outputs.checkout | json }}
+
+          Return only JSON matching the configured receipt schema:
+          batch_id, opened_ids, component_requirement_count, batch_requirement_count, findings, errors,
+          execution_status: completed. `opened_ids` must equal the batch IDs in
+          byte-sorted order and `errors` must be empty. Open the full contexts
+          yourself; do not include hashes or invented fingerprints.
+        emits:
+          - {claim: native.batch.receipt@1, from: output}
+
+      batch-finished:
+        type: command
+        depends_on: [batch-author]
+        consumes:
+          - {claim: native.batch.item@1, as: batch}
+          - {claim: native.batch.receipt@1, as: receipt}
+        timeout: 120000
+        output_format: json
+        schema:
+          type: object
+          additionalProperties: false
+          required: [batch_id, status, opened_ids, component_requirement_count, batch_requirement_count]
+          properties:
+            batch_id: {type: string, minLength: 1}
+            status: {const: completed}
+            opened_ids: {type: array, minItems: 1, items: {type: string, minLength: 1}}
+            component_requirement_count: {type: integer, minimum: 1}
+            batch_requirement_count: {type: integer, minimum: 1, maximum: 5}
+        exec: |
+          node <<'NODE'
+          const batch = {{ outputs.batch | json }};
+          const receipt = {{ outputs.receipt | json }};
+          const sortBytes = (left, right) => Buffer.from(left, 'utf8').compare(Buffer.from(right, 'utf8'));
+          const expected = [...batch.requirement_ids].sort(sortBytes);
+          const opened = [...(receipt.opened_ids || [])].sort(sortBytes);
+          if (receipt.execution_status !== 'completed' || (receipt.errors || []).length !== 0 || receipt.batch_id !== batch.id || receipt.component_requirement_count !== batch.component_requirement_count || receipt.batch_requirement_count !== batch.batch_requirement_count || JSON.stringify(opened) !== JSON.stringify(expected)) {
+            throw new Error(`native batch ${batch.id} returned an incomplete or mismatched receipt`);
+          }
+          process.stdout.write(JSON.stringify({batch_id: batch.id, status: 'completed', opened_ids: expected, component_requirement_count: batch.component_requirement_count, batch_requirement_count: batch.batch_requirement_count}));
+          NODE
+
 checks:
   target-binding:
     type: command
@@ -56,7 +962,6 @@ checks:
         repository,
       }));
       NODE
-
   native-state:
     type: command
     depends_on: [target-binding]
@@ -77,6 +982,15 @@ checks:
             active: {type: boolean}
             ok: {type: boolean}
             steps: {type: array}
+            steps_pending: {type: integer, minimum: 0}
+            next:
+              oneOf:
+                - type: 'null'
+                - type: object
+                  required: [step_id, role]
+                  properties:
+                    step_id: {type: string, minLength: 1}
+                    role: {type: string, minLength: 1}
     exec: |
       set -eu
       : "${PROOF_BIN:?PROOF_BIN is required}"
@@ -87,13 +1001,49 @@ checks:
         exit 0
       fi
       exec "$PROOF_BIN" checklist show onboard_v1 --format json
-
+  native-project-dispatch:
+    type: command
+    if: "!outputs['native-state'] || (outputs['native-state'].active === true && outputs['native-state'].next && outputs['native-state'].next.role === 'spec-review')"
+    depends_on: [native-state, target-binding]
+    timeout: 120000
+    output_format: json
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, target, state]
+            properties:
+              id: {type: string, minLength: 1}
+              target: {type: object}
+              state: {type: object}
+    exec: |
+      node <<'NODE'
+      const state = {{ outputs['native-state'] | json }};
+      const target = {{ outputs['target-binding'] | json }};
+      process.stdout.write(JSON.stringify({projects: [{id: 'native-project', target, state}]}));
+      NODE
+    emits:
+      - {claim: native.project.catalog@1, from: output}
+    expand:
+      claim: native.project.catalog@1
+      template: native-project
+      items_pointer: /projects
+      key_pointer: /id
+      item_claim: native.project.item@1
   author:
     type: ai
     # The missing-output guard keeps the initial plan from filtering this
     # check before native-state has produced its result.  Dispatch evaluates
     # the same expression again with the actual native-state output.
-    if: "!outputs['native-state'] || outputs['native-state'].bootstrap_required === true || outputs['native-state'].ok !== true || outputs['proof-audit'] || outputs['native-completion']"
+    if: "(!outputs['native-state'] || !outputs['native-state'].next || outputs['native-state'].next.role !== 'spec-review') && (!outputs['native-state'] || outputs['native-state'].bootstrap_required === true || outputs['native-state'].ok !== true || outputs['proof-audit'] || outputs['native-completion'])"
     depends_on: [native-state, target-binding]
     timeout: 660000
     criticality: internal
@@ -165,6 +1115,7 @@ checks:
 
   proof-audit:
     type: command
+    if: "!outputs['native-state'] || !outputs['native-state'].next || outputs['native-state'].next.role !== 'spec-review'"
     depends_on: [author]
     timeout: 1200000
     criticality: internal
