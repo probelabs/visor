@@ -9,18 +9,27 @@ native checklist readback. The audit and readback can route the author once;
 terminal failure rather than approval. No custom runner or stage table is
 part of the current path.
 
-Run it from the selected subject checkout with a caller-supplied absolute
-Proof binary and the standard Visor source entrypoint:
+Run it from the selected disposable subject checkout. The subject directory is the
+process working directory; keep the protected/original checkout elsewhere and
+do not point the command at it. Supply the pinned absolute Proof binary and
+the standard Visor source entrypoint. Native roles may invoke bare `proof`
+commands; ensure `PATH` resolves the same pinned Proof version, without adding
+a wrapper:
 
 ```sh
+cd /absolute/path/to/disposable-subject
 VISOR_ROOT=/absolute/path/to/visor-exp-0208-product-native-demo-pack
 OUTPUT=/absolute/path/to/public-onboarding-output.json
 mkdir -p "$(dirname "$OUTPUT")"
 env -u CODEX_HOME \
+  -u VISOR_ORIGINAL_WORKDIR \
+  -u VISOR_WORKSPACE_ROOT \
+  -u VISOR_WORKSPACE_MAIN_PROJECT \
+  -u VISOR_WORKSPACE_MAIN_PROJECT_NAME \
+  -u VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT \
   PROOF_BIN=/absolute/path/to/proof \
-  PROBE_PATH=/usr/local/bin/probe \
   USE_CODEX=true FORCE_PROVIDER=codex MODEL_NAME=gpt-5.6-luna \
-  DISABLE_FALLBACK=1 REQUEST_TIMEOUT=1400000 \
+  DISABLE_FALLBACK=1 REQUEST_TIMEOUT=1710000 \
   VISOR_TRACE_DIR="$(dirname "$OUTPUT")/traces" \
   TS_NODE_TRANSPILE_ONLY=1 \
   TS_NODE_PROJECT="$VISOR_ROOT/tsconfig.json" \
@@ -28,8 +37,24 @@ env -u CODEX_HOME \
     "$VISOR_ROOT/src/index.ts" \
     --config "$VISOR_ROOT/examples/agent-governance/native-onboarding/visor-native-checklist-loop.yaml" \
     --check native-completion --event manual --output json \
-    --output-file "$OUTPUT" --timeout 1800000 --max-parallelism 1
+    --output-file "$OUTPUT" --timeout 7200000 --max-parallelism 1
 ```
+
+For a subsequent run, `--task-tracking --verbose` may be appended to expose
+public execution/task lifecycle metadata. Inspect tracked tasks during or
+after a tracked run with the standard CLI:
+
+```sh
+env -u CODEX_HOME TS_NODE_TRANSPILE_ONLY=1 \
+  TS_NODE_PROJECT="$VISOR_ROOT/tsconfig.json" \
+  node -r "$VISOR_ROOT/node_modules/ts-node/register/transpile-only" \
+  "$VISOR_ROOT/src/index.ts" tasks list --all --output table
+```
+
+Task tracking and `tasks list` report public lifecycle state only; they are not
+token, approval, or model-liveness signals. `PROBE_PATH` is intentionally not
+set here: provide a pinned absolute Probe path only when the selected source
+configuration explicitly requires it.
 
 For zero-model checks, validate the config and run the adjacent native YAML
 mock suite:
