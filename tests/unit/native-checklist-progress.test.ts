@@ -925,7 +925,7 @@ describe('native checklist progress projection', () => {
     expect(progress.checklist.steps[0].state).toBe('confirmed');
     expect(progress.checklist.steps[1].state).toBe('pending');
     expect(progress.checklist.steps[2].state).toBe('failed');
-    expect(progress.operational.project.state).toBe('completed');
+    expect(progress.operational.project.state).toBe('running');
     expect(progress.operational.components.items).toEqual([
       { id: 'alpha', state: 'running', check_ids: ['promote-native-component'] },
     ]);
@@ -938,8 +938,9 @@ describe('native checklist progress projection', () => {
 
   it('projects JSON-qualified native batch owners consistently across JSON, text, and HTML', () => {
     const componentScope = [
-      {kind: 'keyed', key: 'project'},
-      {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'component-a'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'onboard'},
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-components', key: 'component-a'},
     ];
     const batchScope = (key: string) => [
       ...componentScope,
@@ -949,9 +950,24 @@ describe('native checklist progress projection', () => {
       proofSnapshot: snapshot(),
       instanceProjection: {
         generationsById: {
+          project: {
+            status: 'completed',
+            checkId: 'native-project-dispatch',
+            scope: [componentScope[0]],
+          },
+          role: {
+            status: 'completed',
+            checkId: 'native-role-dispatch',
+            scope: componentScope.slice(0, 2),
+          },
           component: {
             status: 'completed',
-            checkId: 'discover-native-components',
+            checkId: 'enumerate-native-components',
+            scope: componentScope,
+          },
+          componentFinished: {
+            status: 'ready',
+            checkId: 'component-finished',
             scope: componentScope,
           },
           completedBatch: {
@@ -969,8 +985,8 @@ describe('native checklist progress projection', () => {
     });
     const expectedComponent = {
       id: 'component-a',
-      state: 'completed',
-      check_ids: ['discover-native-components'],
+      state: 'pending',
+      check_ids: ['component-finished', 'enumerate-native-components'],
     };
     const expectedBatches = [
       {id: 'batch-completed', state: 'completed', check_ids: ['enumerate-native-batches']},
@@ -978,12 +994,15 @@ describe('native checklist progress projection', () => {
     ];
     expect(progress.operational.components.items).toEqual([expectedComponent]);
     expect(progress.operational.batches.items).toEqual(expectedBatches);
+    expect(progress.operational.specifications.items).toEqual([]);
+    expect(progress.operational.project.state).toBe('pending');
 
     const rendered = renderNativeChecklistProgress(progress);
     const json = JSON.parse(rendered.json) as Record<string, any>;
     expect(json.operational.components.items).toEqual([expectedComponent]);
     expect(json.operational.batches.items).toEqual(expectedBatches);
-    expect(rendered.text).toContain('components.component-a=completed [discover-native-components]');
+    expect(rendered.text).toContain('components.component-a=pending [component-finished,enumerate-native-components]');
+    expect(progress.checklist.counts.pending).toBeGreaterThan(0);
     expect(rendered.text).toContain('batches.batch-completed=completed [enumerate-native-batches]');
     expect(rendered.text).toContain('batches.batch-ready=pending [enumerate-native-batches]');
     expect(rendered.html).toContain('component-a');

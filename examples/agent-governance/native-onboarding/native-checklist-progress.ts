@@ -6,6 +6,13 @@
  * projection and an optional checkpoint, and deliberately does not persist or
  * infer completion from counts, filenames, or process exit status.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { ConfigManager } from '../../../src/config';
+import { validateGraphCheckpointInputFile } from '../../../src/graph-checkpoint-file';
+import { ExecutionJournal } from '../../../src/snapshot-store';
+import { compileClaimPlan } from '../../../src/state-machine/graph/claim-plan';
 import { canonicalJson, sha256Canonical } from '../../../src/state-machine/graph/claim-kernel';
 import type { ClaimProjection } from '../../../src/state-machine/graph/claim-kernel';
 import type { InstanceProjection } from '../../../src/state-machine/graph/instance-kernel';
@@ -1422,8 +1429,8 @@ function nativeConditionEntries(
     // project instance.  Its exact compiled one-segment project scope is
     // authoritative; do not let the generic component fallback fabricate a
     // component with the project key.
-    if (keyed.length === 1 && owner === 'project') return 'project';
-    if (owner === 'discover-native-components') return 'component';
+    if (owner === 'project' || owner === 'native-project-dispatch' || owner === 'native-role-dispatch') return 'project';
+    if (owner === 'discover-native-components' || owner === 'enumerate-native-components') return 'component';
     if (owner === 'enumerate-native-specs' || checkId === 'review-native-item' || checkId === 'collect-proof-evidence') return 'specification';
     if (owner === 'enumerate-native-batches') return 'batch';
     if (keyed.length > 3) return 'batch';
@@ -1436,7 +1443,8 @@ function nativeConditionEntries(
       const scope = Array.isArray(rawNode.scope) ? rawNode.scope.filter(isRecord) : [];
       const keyed = scope.filter(part => part.kind === 'keyed');
       const componentPart = keyed.at(-1);
-      if (componentPart?.expansionOwnerCheck !== 'discover-native-components' || componentPart.key !== componentId) continue;
+      const componentOwner = componentPart && terminalExpansionOwner(componentPart.expansionOwnerCheck);
+      if (!componentPart || (componentOwner !== 'discover-native-components' && componentOwner !== 'enumerate-native-components') || componentPart.key !== componentId) continue;
       const generation = activeGeneration(nodeId);
       if (!generation) continue;
       candidates.push({generation, node: rawNode, depth: scope.length});
@@ -1450,7 +1458,8 @@ function nativeConditionEntries(
       const scope = Array.isArray(rawGeneration.scope) ? rawGeneration.scope.filter(isRecord) : [];
       const keyed = scope.filter(part => part.kind === 'keyed');
       const componentPart = keyed.at(-1);
-      if (componentPart?.expansionOwnerCheck !== 'discover-native-components' || componentPart.key !== componentId) continue;
+      const componentOwner = componentPart && terminalExpansionOwner(componentPart.expansionOwnerCheck);
+      if (!componentPart || (componentOwner !== 'discover-native-components' && componentOwner !== 'enumerate-native-components') || componentPart.key !== componentId) continue;
       if (candidates.some(candidate => candidate.generation.nodeGenerationId === rawGeneration.nodeGenerationId)) continue;
       candidates.push({generation: rawGeneration, node: rawGeneration, depth: scope.length});
     }
@@ -1699,6 +1708,7 @@ function operationalProjection(
   };
   const projectStatuses: string[] = [];
   const projectChecks: string[] = [];
+  const descendantStatuses: string[] = [];
   const unknownReasons: string[] = [];
   let unknownGenerationCount = 0;
   let componentEvidence = false;
@@ -1722,7 +1732,8 @@ function operationalProjection(
       const owner = scopeParts.length
         ? terminalExpansionOwner(scopeParts[scopeParts.length - 1].expansionOwnerCheck)
         : undefined;
-      if (owner === 'discover-native-components') kind = 'component';
+      if (owner === 'native-project-dispatch' || owner === 'native-role-dispatch') kind = 'project';
+      else if (owner === 'discover-native-components' || owner === 'enumerate-native-components') kind = 'component';
       else if (owner === 'enumerate-native-specs') kind = 'specification';
       else if (owner === 'enumerate-native-batches') kind = 'batch';
       else if (depth <= 1) kind = 'project';
@@ -1736,6 +1747,7 @@ function operationalProjection(
       projectChecks.push(checkId);
       continue;
     }
+    descendantStatuses.push(status);
     if (kind === 'component' || kind === 'specification' || kind === 'batch') {
       const fallbackId = keys[keys.length - 1];
       const id =
@@ -1766,8 +1778,15 @@ function operationalProjection(
     projectStatuses.push(item.status);
     if (item.checkId) projectChecks.push(item.checkId);
   }
+  const projectState = operationalState(projectStatuses);
+  const descendantState = operationalState(descendantStatuses);
   const project = {
-    state: operationalState(projectStatuses),
+    // A completed project/controller generation is not a workflow-success
+    // claim while an authoritative component/specification/batch frontier is
+    // still ready, running, or failed.
+    state: projectState === 'completed' && descendantState !== 'unknown' && descendantState !== 'completed'
+      ? descendantState
+      : projectState,
     known: projectStatuses.length > 0,
     check_ids: [...new Set(projectChecks)].sort((a, b) => Buffer.from(a).compare(Buffer.from(b))),
   };
@@ -2146,4 +2165,238 @@ export function renderNativeChecklistProgressText(progress: NativeChecklistProgr
 /** Render the already-built canonical projection as a dependency-free static page. */
 export function renderNativeChecklistProgressHtml(progress: NativeChecklistProgress): string {
   return renderNativeChecklistProgress(progress).html;
+}
+
+export type NativeChecklistDisplayArgs = Readonly<{
+  config: string;
+  checkpoint: string;
+  proofBin: string;
+  targetRoot: string;
+  outputDir: string;
+  resumed: boolean;
+}>;
+
+const DISPLAY_OUTPUT_NAMES = [
+  'native-checklist-progress.json',
+  'native-checklist-progress.txt',
+  'native-checklist-progress.html',
+] as const;
+
+function displayPath(value: string, label: string): string {
+  if (!value || !path.isAbsolute(value)) throw new Error(`${label} requires an absolute path`);
+  return path.resolve(value);
+}
+
+function parseNativeChecklistDisplayArgs(argv: readonly string[]): NativeChecklistDisplayArgs {
+  const args = [...argv];
+  if (args[0] === 'display') args.shift();
+  const values: Partial<Record<'config' | 'checkpoint' | 'proof-bin' | 'target-root' | 'output-dir', string>> = {};
+  let resumed = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--resumed') {
+      resumed = true;
+      continue;
+    }
+    const key = arg?.startsWith('--') ? arg.slice(2) : '';
+    if (!['config', 'checkpoint', 'proof-bin', 'target-root', 'output-dir'].includes(key)) {
+      throw new Error(`unknown display argument ${arg || '<empty>'}`);
+    }
+    const value = args[++index];
+    if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
+    if (values[key as keyof typeof values] !== undefined) throw new Error(`${arg} was supplied more than once`);
+    values[key as keyof typeof values] = value;
+  }
+  const config = values.config;
+  const checkpoint = values.checkpoint;
+  const proofBin = values['proof-bin'];
+  const targetRoot = values['target-root'];
+  const outputDir = values['output-dir'];
+  if (!config || !checkpoint || !proofBin || !targetRoot || !outputDir) {
+    throw new Error('display requires --config, --checkpoint, --proof-bin, --target-root, and --output-dir');
+  }
+  return {
+    config: displayPath(config, '--config'),
+    checkpoint: displayPath(checkpoint, '--checkpoint'),
+    proofBin: displayPath(proofBin, '--proof-bin'),
+    targetRoot: displayPath(targetRoot, '--target-root'),
+    outputDir: displayPath(outputDir, '--output-dir'),
+    resumed,
+  };
+}
+
+type PrivateDisplayDirectory = Readonly<{path: string; dev: number; ino: number}>;
+
+function privateDisplayDirectory(target: string): PrivateDisplayDirectory {
+  const requested = displayPath(target, '--output-dir');
+  const requestedStat = fs.lstatSync(requested);
+  if (requestedStat.isSymbolicLink() || !requestedStat.isDirectory()) {
+    throw new Error('display output directory must be an existing real directory');
+  }
+  const real = fs.realpathSync(requested);
+  const stat = fs.statSync(real);
+  if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700) {
+    throw new Error('display output directory must be private mode 0700');
+  }
+  return {path: real, dev: stat.dev, ino: stat.ino};
+}
+
+function assertDisplayOutputsAbsent(outputDir: PrivateDisplayDirectory): string[] {
+  const current = fs.statSync(outputDir.path);
+  if (!current.isDirectory() || current.dev !== outputDir.dev || current.ino !== outputDir.ino || (current.mode & 0o777) !== 0o700) {
+    throw new Error('display output directory identity changed');
+  }
+  const targets = DISPLAY_OUTPUT_NAMES.map(name => path.join(outputDir.path, name));
+  for (const target of targets) {
+    try {
+      fs.lstatSync(target);
+      throw new Error(`display output target must be absent: ${path.basename(target)}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return targets;
+}
+
+function writeDisplayOutputs(outputDir: PrivateDisplayDirectory, targets: readonly string[], contents: readonly string[]): void {
+  const created: Array<{target: string; dev: number; ino: number}> = [];
+  try {
+    for (let index = 0; index < targets.length; index++) {
+      const target = targets[index];
+      const currentDirectory = fs.statSync(outputDir.path);
+      if (!currentDirectory.isDirectory() || currentDirectory.dev !== outputDir.dev || currentDirectory.ino !== outputDir.ino || (currentDirectory.mode & 0o777) !== 0o700) {
+        throw new Error('display output directory identity changed');
+      }
+      const fd = fs.openSync(
+        target,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0),
+        0o600,
+      );
+      try {
+        const descriptor = fs.fstatSync(fd);
+        if (!descriptor.isFile() || (descriptor.mode & 0o777) !== 0o600) throw new Error('display output identity or mode is invalid');
+        created.push({target, dev: descriptor.dev, ino: descriptor.ino});
+        const bytes = Buffer.from(contents[index], 'utf8');
+        let offset = 0;
+        while (offset < bytes.length) {
+          const written = fs.writeSync(fd, bytes, offset, bytes.length - offset);
+          if (!Number.isInteger(written) || written <= 0) throw new Error('display output write made no progress');
+          offset += written;
+        }
+        fs.fsyncSync(fd);
+        const after = fs.fstatSync(fd);
+        if (!after.isFile() || (after.mode & 0o777) !== 0o600 || after.size !== bytes.length) throw new Error('display output identity or mode changed');
+        if (after.dev !== descriptor.dev || after.ino !== descriptor.ino) throw new Error('display output identity changed');
+        const pathname = fs.lstatSync(target);
+        if (pathname.isSymbolicLink() || !pathname.isFile() || pathname.dev !== descriptor.dev || pathname.ino !== descriptor.ino || (pathname.mode & 0o777) !== 0o600) throw new Error('display output identity changed');
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    const directoryFd = fs.openSync(outputDir.path, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+  } catch (error) {
+    for (const entry of created.reverse()) {
+      try {
+        const current = fs.lstatSync(entry.target);
+        if (current.dev === entry.dev && current.ino === entry.ino) fs.unlinkSync(entry.target);
+      } catch {
+        // Preserve the original write failure and never remove an unrelated file.
+      }
+    }
+    throw error;
+  }
+}
+
+function restoreRemoteExtendsPolicy<T>(work: () => Promise<T>): Promise<T> {
+  const previous = process.env.VISOR_NO_REMOTE_EXTENDS;
+  process.env.VISOR_NO_REMOTE_EXTENDS = 'true';
+  return work().finally(() => {
+    if (previous === undefined) delete process.env.VISOR_NO_REMOTE_EXTENDS;
+    else process.env.VISOR_NO_REMOTE_EXTENDS = previous;
+  });
+}
+
+function targetBindingPath(projection: InstanceProjection): string {
+  const bindings = Object.values(projection.claimsById).filter(claim => claim.active && claim.claim === 'native.project.item@1');
+  if (bindings.length !== 1) throw new Error('display requires exactly one active native.project.item@1 target binding');
+  const payload = bindings[0].payload;
+  const target = isRecord(payload) && isRecord(payload.target) ? payload.target.path : undefined;
+  if (typeof target !== 'string' || target.length === 0) throw new Error('active native.project.item@1 target binding has no target.path');
+  return target;
+}
+
+function assertDisplayTarget(projection: InstanceProjection, targetRoot: string): void {
+  const expected = fs.realpathSync(targetBindingPath(projection));
+  const actual = fs.realpathSync(targetRoot);
+  if (expected !== actual) throw new Error('display target-root does not match the active native.project.item@1 target binding');
+}
+
+function readProofChecklistSnapshot(proofBin: string, targetRoot: string): Json {
+  const realProofBin = fs.realpathSync(proofBin);
+  const proofStat = fs.statSync(realProofBin);
+  if (!proofStat.isFile() || (proofStat.mode & 0o111) === 0) throw new Error('proof-bin must be an executable regular file');
+  const result = spawnSync(realProofBin, ['checklist', 'show', 'onboard_v1', '--format', 'json'], {
+    cwd: targetRoot,
+    env: {...process.env},
+    encoding: 'utf8',
+    timeout: 30000,
+    maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error) {
+    if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') throw new Error('Proof checklist show timed out');
+    throw new Error(`Proof checklist show failed: ${result.error.message}`);
+  }
+  if (result.signal) throw new Error(`Proof checklist show terminated by ${result.signal}`);
+  if (result.status !== 0) throw new Error(`Proof checklist show failed with exit ${String(result.status)}`);
+  const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+  if (!stdout) throw new Error('Proof checklist show returned empty JSON');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(`Proof checklist show returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(parsed)) throw new Error('Proof checklist show JSON must be an object');
+  return parsed;
+}
+
+/**
+ * Display one validated Graph-v2 checkpoint and one fresh Proof snapshot.
+ * This adapter never dispatches work, resumes a session, or mutates a journal.
+ */
+export async function runNativeChecklistProgressDisplay(
+  input: NativeChecklistDisplayArgs,
+): Promise<readonly string[]> {
+  const targetRoot = fs.realpathSync(input.targetRoot);
+  if (!fs.statSync(targetRoot).isDirectory()) throw new Error('target-root must be an existing directory');
+  const outputDir = privateDisplayDirectory(input.outputDir);
+  const outputTargets = assertDisplayOutputsAbsent(outputDir);
+  const checkpoint = validateGraphCheckpointInputFile(input.checkpoint);
+  const config = await restoreRemoteExtendsPolicy(() => new ConfigManager().loadConfig(input.config));
+  const claimPlan = compileClaimPlan(config);
+  const journal = ExecutionJournal.restoreGraphCheckpoint(claimPlan, checkpoint);
+  const instanceProjection = journal.getInstanceProjection();
+  assertDisplayTarget(instanceProjection, targetRoot);
+  const proofSnapshot = readProofChecklistSnapshot(input.proofBin, targetRoot);
+  const rendered = renderNativeChecklistProgress(buildNativeChecklistProgress({
+    proofSnapshot,
+    instanceProjection,
+    checkpoint,
+    paused: journal.queryReadyWork().length > 0,
+    resumed: input.resumed,
+    expansionPlan: claimPlan.expansionPlan,
+  }));
+  writeDisplayOutputs(outputDir, outputTargets, [rendered.json, rendered.text, rendered.html]);
+  return outputTargets;
+}
+
+if (require.main === module) {
+  runNativeChecklistProgressDisplay(parseNativeChecklistDisplayArgs(process.argv.slice(2)))
+    .then(targets => process.stdout.write(`${targets.join('\n')}\n`))
+    .catch(error => {
+      process.stderr.write(`native checklist display failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    });
 }
