@@ -1,7 +1,57 @@
-# Current: retained native Proof continuation
+# Current: native Proof checklist loop (standard Visor CLI)
 
-The current entrypoint is a two-phase bridge for an already initialized and
-promoted subject. Phase A authors and reviews native requirements, then
+The canonical onboarding entry is the ordinary Visor configuration
+[`visor-native-checklist-loop.yaml`](./visor-native-checklist-loop.yaml). It
+uses native Proof checklist state as its authority: a bootstrap/native-state
+read, an editable role-driven author, an independent full Proof audit, and a
+native checklist readback. The audit and readback can route the author once;
+`routing.max_loops: 1` and `limits.max_runs_per_check: 2` make exhaustion a
+terminal failure rather than approval. No custom runner or stage table is
+part of the current path.
+
+Run it from the selected subject checkout with a caller-supplied absolute
+Proof binary and the standard Visor source entrypoint:
+
+```sh
+VISOR_ROOT=/absolute/path/to/visor-exp-0208-product-native-demo-pack
+OUTPUT=/absolute/path/to/public-onboarding-output.json
+mkdir -p "$(dirname "$OUTPUT")"
+env -u CODEX_HOME \
+  PROOF_BIN=/absolute/path/to/proof \
+  PROBE_PATH=/usr/local/bin/probe \
+  USE_CODEX=true FORCE_PROVIDER=codex MODEL_NAME=gpt-5.6-luna \
+  DISABLE_FALLBACK=1 REQUEST_TIMEOUT=1400000 \
+  VISOR_TRACE_DIR="$(dirname "$OUTPUT")/traces" \
+  TS_NODE_TRANSPILE_ONLY=1 \
+  TS_NODE_PROJECT="$VISOR_ROOT/tsconfig.json" \
+  node -r "$VISOR_ROOT/node_modules/ts-node/register/transpile-only" \
+    "$VISOR_ROOT/src/index.ts" \
+    --config "$VISOR_ROOT/examples/agent-governance/native-onboarding/visor-native-checklist-loop.yaml" \
+    --check native-completion --event manual --output json \
+    --output-file "$OUTPUT" --timeout 1800000 --max-parallelism 1
+```
+
+For zero-model checks, validate the config and run the adjacent native YAML
+mock suite:
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ./node_modules/ts-node/register/transpile-only \
+  ./src/index.ts validate \
+  --config examples/agent-governance/native-onboarding/visor-native-checklist-loop.yaml
+TS_NODE_TRANSPILE_ONLY=1 node -r ./node_modules/ts-node/register/transpile-only \
+  ./src/index.ts test \
+  --config examples/agent-governance/native-onboarding/visor-native-checklist-loop.tests.yaml
+```
+
+The direct `run-onboarding.ts` and `run-demo.cjs` launchers are retired; the
+historical implementation remains available in Git revision `c6e56160` for
+reproduction only. The current operational choice is the standard Visor CLI
+and the canonical YAML above.
+
+## Historical retained native Proof continuation (archived)
+
+The former entrypoint was a two-phase bridge for an already initialized and
+promoted subject. Phase A authored and reviewed native requirements, then
 exports the reviewed packet archive. Phase B below revalidates that retained
 archive against the current Proof WorkItems, builds a fresh graph, and runs
 the unchanged native validation/admission/reconciliation suffix. It does not
@@ -34,7 +84,8 @@ a real Luna model. The retained path requires a current authenticated Proof
 WorkItem set and matching hashes; it is not crash-atomic recovery or a claim
 that the historical author/review phase was rerun.
 
-The sections below are historical milestone notes and launch records.
+The sections below are historical milestone notes and launch records; they are
+not current operational recipes.
 
 ## Historical Milestone A: native Proof onboarding
 

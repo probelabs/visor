@@ -334,8 +334,10 @@ function waitForChild(child: ChildProcess, parentPid: number, timeoutMs: number)
 describeNative('native onboarding checklist first slice (real engine + Proof)', () => {
   jest.setTimeout(240_000);
 
-  const test = configuredProof || evidenceRequired ? it : it.skip;
-  test('observes running authoring, promotes one linked skeleton, and resumes in a new Node process', async () => {
+  // Superseded: direct run-onboarding CLI execution is retired. Keep the
+  // historical fixture for imported engine assertions, but do not treat this
+  // direct-process resume as current product acceptance.
+  it.skip('observes running authoring, promotes one linked skeleton, and resumes in a new Node process', async () => {
     const proof = process.env.PROOF_BIN;
     if (!proof) throw new Error('PROOF_BIN is required when first-slice evidence is required');
     const identity = proofIdentity(proof);

@@ -1,0 +1,265 @@
+version: "1.0"
+extends: "visor-native-checklist-loop.yaml"
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+    fail_on_unexpected_calls: true
+    frontends: []
+
+  cases:
+    - name: native-checklist-bootstrap-reaches-author
+      description: |
+        A fresh subject has no Proof project. The ordinary native-state check
+        supplies bootstrap input, the author runs once, and independent audit
+        plus native checklist readback complete the bounded graph.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        native-state:
+          bootstrap_required: true
+        author:
+          pass: 1
+          summary: bootstrapped the native Proof project and followed its current role
+        proof-audit:
+          stdout: '{"event":"check_done","check":"audit","status":"pass"}'
+          stderr: ""
+          exit_code: 0
+        native-completion:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: true
+          steps: []
+      expect:
+        calls:
+          - {step: native-state, exactly: 1}
+          - {step: author, exactly: 1}
+          - {step: proof-audit, exactly: 1}
+          - {step: native-completion, exactly: 1}
+        prompts:
+          - step: author
+            index: first
+            contains:
+              - bootstrap_required
+              - native Proof
+              - role show
+            not_contains:
+              - AUDIT_REPAIR_TOKEN
+        outputs:
+          - {step: native-state, path: bootstrap_required, equals: true}
+          - {step: native-completion, path: ok, equals: true}
+
+    - name: native-checklist-inactive-show-bootstraps-author
+      description: |
+        A present but inactive native checklist is valid bootstrap input. The
+        raw Proof show is preserved and the author is still selected.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: false
+          ok: false
+          steps: []
+        author:
+          pass: 1
+          summary: initialized the inactive native checklist
+        proof-audit:
+          stdout: '{"event":"check_done","check":"audit","status":"pass"}'
+          stderr: ""
+          exit_code: 0
+        native-completion:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: true
+          steps: []
+      expect:
+        calls:
+          - {step: native-state, exactly: 1}
+          - {step: author, exactly: 1}
+          - {step: proof-audit, exactly: 1}
+          - {step: native-completion, exactly: 1}
+        prompts:
+          - step: author
+            index: first
+            contains: [inactive, native Proof]
+
+    - name: native-checklist-audit-failure-feedback
+      description: |
+        A failed independent Proof audit routes the exact raw failure back to
+        the same author. The second audit passes and the native readback is ok.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: false
+          steps: []
+        author[]:
+          - {pass: 1, summary: completed the current native role work}
+          - {pass: 2, summary: repaired the exact independent audit finding}
+        proof-audit[]:
+          - stdout: '{"event":"check_done","check":"audit","status":"pass","failure":"AUDIT_REPAIR_TOKEN"}'
+            stderr: ""
+            exit_code: 1
+          - stdout: '{"event":"check_done","check":"audit","status":"pass"}'
+            stderr: ""
+            exit_code: 0
+        native-completion:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: true
+          steps: []
+      expect:
+        calls:
+          - {step: native-state, exactly: 1}
+          - {step: author, exactly: 2}
+          - {step: proof-audit, exactly: 2}
+          - {step: native-completion, exactly: 1}
+        prompts:
+          - step: author
+            index: first
+            not_contains: [AUDIT_REPAIR_TOKEN]
+          - step: author
+            index: 1
+            contains: [AUDIT_REPAIR_TOKEN]
+        outputs:
+          - {step: proof-audit, index: last, path: status, equals: pass}
+          - {step: native-completion, path: ok, equals: true}
+
+    - name: native-checklist-completion-failure-feedback
+      description: |
+        A native checklist readback that remains not-ok routes its exact result
+        to the author once, then converges on the second independent readback.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: false
+          steps: []
+        author[]:
+          - {pass: 1, summary: completed native work before readback}
+          - {pass: 2, summary: repaired the native completion finding}
+        proof-audit[]:
+          - stdout: '{"event":"check_done","check":"audit","status":"pass"}'
+            stderr: ""
+            exit_code: 0
+          - stdout: '{"event":"check_done","check":"audit","status":"pass"}'
+            stderr: ""
+            exit_code: 0
+        native-completion[]:
+          - schema_version: proof.checklist.show.v1
+            checklist: onboard_v1
+            active: true
+            ok: false
+            failure: COMPLETION_REPAIR_TOKEN
+            steps: []
+          - schema_version: proof.checklist.show.v1
+            checklist: onboard_v1
+            active: true
+            ok: true
+            steps: []
+      expect:
+        calls:
+          - {step: native-state, exactly: 1}
+          - {step: author, exactly: 2}
+          - {step: proof-audit, exactly: 2}
+          - {step: native-completion, exactly: 2}
+        prompts:
+          - step: author
+            index: 1
+            contains: [COMPLETION_REPAIR_TOKEN]
+        outputs:
+          - {step: native-completion, index: first, path: ok, equals: false}
+          - {step: native-completion, index: last, path: ok, equals: true}
+
+    - name: native-checklist-bounded-nonconvergence
+      description: |
+        Two exact independent audit failures consume the YAML-owned retry
+        budget and remain terminal instead of looping indefinitely.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: false
+          steps: []
+        author[]:
+          - {pass: 1, summary: attempted current native role work}
+          - {pass: 2, summary: attempted bounded repair from audit feedback}
+        proof-audit[]:
+          - stdout: '{"event":"check_done","check":"audit","status":"failed","failure":"BOUND_FAILURE_ONE"}'
+            stderr: ""
+            exit_code: 1
+          - stdout: '{"event":"check_done","check":"audit","status":"failed","failure":"BOUND_FAILURE_TWO"}'
+            stderr: ""
+            exit_code: 1
+      expect:
+        calls:
+          - {step: native-state, exactly: 1}
+          - {step: author, exactly: 2}
+          - {step: proof-audit, exactly: 2}
+          - {step: native-completion, exactly: 0}
+        prompts:
+          - step: author
+            index: 1
+            contains: [BOUND_FAILURE_ONE]
+        fail:
+          message_contains: max
+
+    - name: native-checklist-ok-skips-author-but-repairs-audit
+      description: |
+        An already-native-ok checklist skips the initial author, but an
+        independent audit failure still re-enters that author with exact
+        feedback before the final readback.
+      event: manual
+      fixture: local.minimal
+      mocks:
+        native-state:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: true
+          steps: []
+        author:
+          pass: 1
+          summary: repaired the independent audit finding only
+        proof-audit[]:
+          - stdout: '{"event":"check_done","check":"audit","status":"pass","failure":"OK_STATE_AUDIT_REPAIR_TOKEN"}'
+            stderr: ""
+            exit_code: 1
+          - stdout: '{"event":"check_done","check":"audit","status":"pass"}'
+            stderr: ""
+            exit_code: 0
+        native-completion:
+          schema_version: proof.checklist.show.v1
+          checklist: onboard_v1
+          active: true
+          ok: true
+          steps: []
+      expect:
+        calls:
+          - {step: native-state, exactly: 1}
+          - {step: author, exactly: 1}
+          - {step: proof-audit, exactly: 2}
+          - {step: native-completion, exactly: 1}
+        prompts:
+          - step: author
+            index: first
+            contains: [OK_STATE_AUDIT_REPAIR_TOKEN]
+        outputs:
+          - {step: native-state, path: ok, equals: true}
+          - {step: author, path: summary, equals: repaired the independent audit finding only}
+          - {step: native-completion, path: ok, equals: true}

@@ -40,6 +40,7 @@ const helper = require('../../examples/agent-governance/native-onboarding/run-de
 
 const ROOT = resolve(__dirname, '../..');
 const PROFILE = join(ROOT, 'examples/agent-governance/native-onboarding/visor.yaml');
+const LEGACY_RUN_DEMO = join(ROOT, 'examples/agent-governance/native-onboarding/run-demo.cjs');
 
 function git(cwd: string, args: string[]): void {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -70,6 +71,18 @@ function gitFixture(prefix: string): { root: string; original: string; proof: st
 }
 
 describe('native onboarding milestone A', () => {
+  it('refuses direct legacy run-demo execution before argument parsing or dispatch', () => {
+    const result = spawnSync(process.execPath, [LEGACY_RUN_DEMO, '--not-a-real-legacy-option'], {
+      encoding: 'utf8',
+      env: {...process.env},
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('legacy native onboarding runner is retired');
+    expect(result.stderr).toContain('src/index.ts');
+    expect(result.stderr).toContain('visor-native-checklist-loop.yaml');
+  });
+
   it('loads the human-readable YAML through ConfigManager and preserves the normal command-to-AI DAG', async () => {
     const raw = yaml.load(readFileSync(PROFILE, 'utf8')) as any;
     const manager = new ConfigManager();

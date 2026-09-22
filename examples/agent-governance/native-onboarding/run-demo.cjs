@@ -104,6 +104,14 @@ function help() {
   ].join('\n');
 }
 
+function assertLegacyNativeOnboardingRunnerRetired() {
+  throw new Error([
+    'The legacy native onboarding runner is retired and cannot execute.',
+    'Use the standard Visor CLI instead:',
+    'node -r ts-node/register/transpile-only src/index.ts --config examples/agent-governance/native-onboarding/visor-native-checklist-loop.yaml --check native-completion',
+  ].join('\n'));
+}
+
 function defaultVisor() {
   if (process.env.VISOR_BIN) return process.env.VISOR_BIN;
   // This path is for the source checkout that contains this example.  The
@@ -635,10 +643,12 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(error => {
-    process.stderr.write(`${error && error.stack ? error.stack : String(error)}\n`);
+  try {
+    assertLegacyNativeOnboardingRunnerRetired();
+  } catch (error) {
+    process.stderr.write(`${error && error.message ? error.message : String(error)}\n`);
     process.exitCode = 1;
-  });
+  }
 }
 
 module.exports = {

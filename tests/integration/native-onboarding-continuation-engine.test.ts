@@ -1859,7 +1859,9 @@ describe('production traces-light continuation graph', () => {
     }
   });
 
-  const stageTransitionLiveTest = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_ROOT ? it : it.skip;
+  // Superseded: direct run-onboarding CLI execution is retired. Standard YAML
+  // Visor execution owns this retained stage-transition acceptance path.
+  const stageTransitionLiveTest = it.skip;
   stageTransitionLiveTest('classifies a retained completed variables checkpoint through the real CLI loader before spec-review dispatch', async () => {
     const evidenceRoot = process.env.NATIVE_STAGE_TRANSITION_FIXTURE_ROOT as string;
     const checkpointPath = path.join(evidenceRoot, 'variables-resume-01', 'checkpoint.json');
@@ -2029,11 +2031,9 @@ describe('production traces-light continuation graph', () => {
     }
   });
 
-  const promotionRecoveryCliTest = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT &&
-    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_PROOF &&
-    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ORIGINAL_ROOT &&
-    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_CODEX_BIN &&
-    process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_CODEX_SHA256 ? it : it.skip;
+  // Superseded: direct run-onboarding CLI execution is retired. Standard YAML
+  // Visor execution owns this retained promotion-recovery acceptance path.
+  const promotionRecoveryCliTest = it.skip;
   promotionRecoveryCliTest('classifies the retained failed-promotion checkpoint through the real CLI loader without dispatch', async () => {
     const evidenceRoot = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_ROOT as string;
     const proof = process.env.NATIVE_SPEC_REVIEW_PROMOTION_RECOVERY_FIXTURE_PROOF as string;

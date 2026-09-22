@@ -1,0 +1,161 @@
+# Canonical native Proof onboarding loop.
+#
+# This is an ordinary Visor graph: the native checklist is the authority, the
+# author is an editable Probe/Codex step, and the independent Proof audit and
+# checklist readback are completion gates.  The single native goto is bounded
+# by both limits below; exhaustion is a terminal failure, never approval.
+version: "1.0"
+ai_provider: codex
+ai_model: gpt-5.6-luna
+max_parallelism: 1
+fail_fast: false
+
+routing:
+  max_loops: 1
+limits:
+  max_runs_per_check: 2
+  max_workflow_depth: 1
+workspace:
+  enabled: false
+  cleanup_on_exit: false
+
+checks:
+  native-state:
+    type: command
+    timeout: 120000
+    output_format: json
+    schema:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [bootstrap_required]
+          properties:
+            bootstrap_required: {const: true}
+        - type: object
+          required: [schema_version, checklist, active, ok, steps]
+          properties:
+            schema_version: {const: proof.checklist.show.v1}
+            checklist: {const: onboard_v1}
+            active: {type: boolean}
+            ok: {type: boolean}
+            steps: {type: array}
+    exec: |
+      set -eu
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      if [ ! -f proof.yaml ]; then
+        printf '%s\n' '{"bootstrap_required":true}'
+        exit 0
+      fi
+      exec "$PROOF_BIN" checklist show onboard_v1 --format json
+
+  author:
+    type: ai
+    # The missing-output guard keeps the initial plan from filtering this
+    # check before native-state has produced its result.  Dispatch evaluates
+    # the same expression again with the actual native-state output.
+    if: "!outputs['native-state'] || outputs['native-state'].bootstrap_required === true || outputs['native-state'].ok !== true || outputs['proof-audit'] || outputs['native-completion']"
+    depends_on: [native-state]
+    timeout: 1800000
+    criticality: internal
+    assume: "true"
+    # An already-ok native checklist intentionally skips this author on the
+    # first wave; the independent audit must still run and can route the
+    # author back when its own evidence fails.
+    continue_on_failure: true
+    ai_model: gpt-5.6-luna
+    ai_prompt_type: engineer
+    schema: plain
+    ai:
+      allowEdit: true
+      allowBash: true
+      max_iterations: 100
+      retry:
+        maxRetries: 0
+      fallback:
+        auto: false
+        maxTotalAttempts: 1
+    prompt: |
+      Work only in the current subject repository. You are an editable native
+      Proof onboarding author, not the completion authority.
+
+      Read the native state below. If bootstrap_required is true, or the native
+      show is inactive, use the native Proof help/init/checklist commands to
+      establish the project before doing other work. Otherwise repeatedly read
+      the native checklist and
+      choose only its current `next` or explicitly eligible row. For each row,
+      load its native role with `$PROOF_BIN role show <role> --format agent`,
+      follow that role, run every row-provided required check, and confirm only
+      through the native Proof command that the role specifies. Re-read the
+      checklist after each native confirmation and stop only at native `ok:true`
+      or with a concrete, logged blocker.
+
+      Do not invent a stage table or check IDs. Do not waive, ignore, mute,
+      lower policy, rewrite history, fabricate approval, or edit outside the
+      current subject and the native role's allowed surface. Do not change
+      executable source behavior; only Proof-native authored requirements,
+      variables, and role-permitted source annotations/comments are in scope.
+      Branches, commits, and pushes belong to the outer orchestrator.
+
+      --- native-state (authoritative input) ---
+      {{ outputs['native-state'] | json }}
+
+      --- prior independent Proof audit attempts (diagnostics only) ---
+      {% if outputs_history['proof-audit'] %}
+      {{ outputs_history['proof-audit'] | json }}
+      {% else %}
+      (no prior Proof audit has run)
+      {% endif %}
+
+      --- prior native completion readbacks (diagnostics only) ---
+      {% if outputs_history['native-completion'] %}
+      {{ outputs_history['native-completion'] | json }}
+      {% else %}
+      (no prior native completion readback has run)
+      {% endif %}
+
+      Return after bounded, evidence-backed work. The independent Proof audit
+      and native checklist readback decide completion.
+
+  proof-audit:
+    type: command
+    depends_on: [author]
+    timeout: 1200000
+    criticality: internal
+    assume: "true"
+    output_format: text
+    schema: plain
+    exec: |
+      set -eu
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      "$PROOF_BIN" audit --no-cache --fail-level warn --format json --max-findings 0
+    # Proof emits JSONL. The provider exposes its terminal row as output;
+    # non-zero exit and malformed exit-0 output both route the exact result to
+    # the same author in the bounded native loop.
+    fail_if: "!(output?.event === 'check_done' && typeof output?.check === 'string' && output.check.length > 0 && ['pass', 'skip', 'info'].includes(output?.status))"
+    on_fail:
+      goto: author
+
+  native-completion:
+    type: command
+    depends_on: [proof-audit]
+    timeout: 120000
+    criticality: internal
+    assume: "true"
+    output_format: json
+    schema:
+      type: object
+      additionalProperties: true
+      required: [schema_version, checklist, active, ok, steps]
+      properties:
+        schema_version: {const: proof.checklist.show.v1}
+        checklist: {const: onboard_v1}
+        active: {const: true}
+        ok: {type: boolean}
+        steps: {type: array}
+    exec: |
+      set -eu
+      : "${PROOF_BIN:?PROOF_BIN is required}"
+      "$PROOF_BIN" checklist show onboard_v1 --format json
+    fail_if: "!output || output.ok !== true"
+    on_fail:
+      goto: author

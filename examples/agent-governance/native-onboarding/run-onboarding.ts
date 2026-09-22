@@ -276,6 +276,20 @@ export function nativeOnboardingCountsAreConsistent(counts: NativeOnboardingComp
     counts.reviewed_items === counts.native_requirements;
 }
 
+/**
+ * The historical bespoke onboarding loop is no longer an executable product
+ * entrypoint.  Keep this module importable for its narrowly-scoped validators
+ * and test helpers, while directing direct invocations to the standard Visor
+ * CLI/YAML path before any argument parsing or filesystem/provider work.
+ */
+export function assertLegacyNativeOnboardingRunnerRetired(): never {
+  throw new Error([
+    'The legacy native onboarding runner is retired and cannot execute.',
+    'Use the standard Visor CLI instead:',
+    'node -r ts-node/register/transpile-only src/index.ts --config examples/agent-governance/native-onboarding/visor-native-checklist-loop.yaml --check native-completion',
+  ].join('\n'));
+}
+
 const CONFIG_PATH = path.resolve(__dirname, 'visor-onboarding.yaml');
 const CHECKLIST_CONFIG_PATH = path.resolve(__dirname, 'visor-checklist-onboarding.yaml');
 const CHECKLIST_CONTINUATION_CONFIG_PATH = path.resolve(__dirname, 'visor-checklist-continuation.yaml');
@@ -8126,19 +8140,10 @@ async function main(): Promise<void> {
 }
 
 if (require.main === module) {
-  main().catch(error => {
-    const message = error instanceof Error ? (error.stack || error.message) : String(error);
-    if (recoveryTerminalPersistence) {
-      try { recoveryTerminalPersistence(error); } catch { /* preserve stderr */ }
-      recoveryTerminalPersistence = undefined;
-    }
-    if (!diagnosticOutput) {
-      try { diagnosticOutput = process.env.NATIVE_ONBOARDING_OUTPUT_DIR; } catch { diagnosticOutput = undefined; }
-    }
-    if (diagnosticOutput) {
-      try { writeText(path.join(diagnosticOutput, 'failure.stderr'), message + '\n'); } catch { /* preserve stderr */ }
-    }
-    console.error(message);
+  try {
+    assertLegacyNativeOnboardingRunnerRetired();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  });
+  }
 }

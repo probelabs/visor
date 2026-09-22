@@ -1607,16 +1607,17 @@ describe('native onboarding runner boundaries', () => {
     execFileSync('git', ['-C', subject, 'worktree', 'remove', '--force', worker]);
   });
 
-  it('runs the CLI guard without a module-scope ReferenceError before Proof dispatch', () => {
+  it('retires direct CLI execution before parsing, output creation, or Proof dispatch', () => {
     const subject = path.join(root, 'subject-cli');
     const original = path.join(root, 'original-cli');
     const output = path.join(root, 'output-cli');
     const proof = path.join(root, 'proof-bin');
+    const marker = path.join(root, 'proof-invoked');
     fs.mkdirSync(subject);
     fs.mkdirSync(original);
     execFileSync('git', ['init', '--quiet', subject]);
     execFileSync('git', ['init', '--quiet', original]);
-    fs.writeFileSync(proof, '#!/bin/sh\nexit 0\n', 'utf8');
+    fs.writeFileSync(proof, `#!/bin/sh\nprintf invoked > ${marker}\n`, 'utf8');
     fs.chmodSync(proof, 0o755);
     const env = {...process.env};
     delete env.REQUEST_TIMEOUT;
@@ -1625,9 +1626,12 @@ describe('native onboarding runner boundaries', () => {
       '--subject-root', subject, '--original-root', original, '--proof-bin', proof,
       '--output', output, '--timeout', '1800000'], {encoding: 'utf8', env});
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('REQUEST_TIMEOUT must be an explicit positive inner budget');
-    expect(result.stderr).not.toContain('ReferenceError');
-    expect(fs.existsSync(output)).toBe(true);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('legacy native onboarding runner is retired');
+    expect(result.stderr).toContain('src/index.ts');
+    expect(result.stderr).toContain('visor-native-checklist-loop.yaml');
+    expect(fs.existsSync(output)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('requires a complete sorted explicit recovery selection', () => {
@@ -2595,45 +2599,6 @@ describe('native onboarding runner boundaries', () => {
     }), 'utf8');
     await expect(loadRetainedOnboardingConfig(prior, path.join(root, 'rejected-authority-output')))
       .rejects.toThrow(/successful exact command/);
-  });
-
-  it('rejects an invalid checkpoint before Proof init or any command dispatch', () => {
-    const subject = path.join(root, 'recovery-cli-subject');
-    const original = path.join(root, 'recovery-cli-original');
-    const prior = path.join(root, 'recovery-cli-prior');
-    const output = path.join(root, 'recovery-cli-output');
-    const home = path.join(root, 'recovery-cli-home');
-    const proof = path.join(root, 'recovery-cli-proof');
-    const marker = path.join(root, 'proof-invoked');
-    for (const directory of [subject, original, home, path.join(prior, 'worktrees')]) fs.mkdirSync(directory, {recursive: true});
-    execFileSync('git', ['init', '--quiet', subject]);
-    execFileSync('git', ['init', '--quiet', original]);
-    execFileSync('git', ['-C', subject, 'config', 'user.name', 'fixture']);
-    execFileSync('git', ['-C', subject, 'config', 'user.email', 'fixture@example.invalid']);
-    fs.writeFileSync(path.join(subject, 'proof.yaml'), 'project:\n  name: already-initialized\n', 'utf8');
-    execFileSync('git', ['-C', subject, 'add', 'proof.yaml']);
-    execFileSync('git', ['-C', subject, 'commit', '--quiet', '-m', 'initialized recovery CLI fixture']);
-    fs.writeFileSync(path.join(prior, 'checkpoint.json'), '{}\n', 'utf8');
-    fs.writeFileSync(path.join(home, 'config.toml'), 'model = "gpt-5.6-luna"\n', 'utf8');
-    fs.writeFileSync(proof, `#!/bin/sh\nprintf invoked > ${marker}\n`, 'utf8');
-    fs.chmodSync(proof, 0o755);
-    const subjectProof = fs.readFileSync(path.join(subject, 'proof.yaml'), 'utf8');
-    const runner = path.resolve(__dirname, '../../examples/agent-governance/native-onboarding/run-onboarding.ts');
-    const env = {...process.env, CODEX_HOME: home, REQUEST_TIMEOUT: '1000', TS_NODE_TRANSPILE_ONLY: '1'};
-    delete env.USE_CLAUDE_CODE;
-    delete env.ANTHROPIC_API_KEY;
-    delete env.OPENAI_API_KEY;
-    delete env.OPENAI_BASE_URL;
-    const result = spawnSync(process.execPath, ['-r', 'ts-node/register/transpile-only', runner,
-      '--recover-checkpoint', path.join(prior, 'checkpoint.json'), '--prior-output', prior,
-      '--retry-generations', 'a'.repeat(64), '--external-side-effects', 'absent',
-      '--subject-root', subject, '--original-root', original, '--proof-bin', proof,
-      '--output', output, '--timeout', '2000'], {encoding: 'utf8', env});
-    expect(result.status).toBe(1);
-    expect(result.stderr).toMatch(/Checkpoint/);
-    expect(fs.existsSync(marker)).toBe(false);
-    expect(fs.existsSync(path.join(output, 'commands'))).toBe(false);
-    expect(fs.readFileSync(path.join(subject, 'proof.yaml'), 'utf8')).toBe(subjectProof);
   });
 
   it('documents the Proof inventory path contract in both discovery schemas', () => {
