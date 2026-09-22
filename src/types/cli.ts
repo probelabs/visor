@@ -31,6 +31,12 @@ export interface CliOptions {
   graphCheckpointOut?: string;
   /** Expansion owner used when continuing an imported Graph-v2 checkpoint */
   graphCheckpointOwner?: string;
+  /** Exact compiled expansion owner whose keyed instances may be admitted */
+  graphDispatchOwner?: string;
+  /** Maximum number of keyed instances admitted in one bounded run */
+  graphDispatchLimit?: number;
+  /** Resume only the ready frontier from an imported Graph-v2 checkpoint */
+  graphResumeReady?: boolean;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */

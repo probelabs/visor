@@ -44,6 +44,7 @@ import { finalizeGovernedGraphTerminalReceipt, publishGovernedGraphTerminalRecei
 import { publishGraphCheckpointFile, validateGraphCheckpointInputFile, validateGraphCheckpointOutputTarget } from './graph-checkpoint-file';
 import { compileClaimPlan } from './state-machine/graph/claim-plan';
 import type { GraphJournalCheckpointV1 } from './snapshot-store';
+import { composeGraphDispatchGate, createGraphDispatchGate } from './graph-dispatch-gate';
 
 const PROOF_INVOCATION_KEYS = ['role_id', 'stance', 'subject', 'output_schema_id', 'output_schema'] as const;
 
@@ -142,8 +143,15 @@ export function validateArtifactPathAliases(options: import('./types/cli').CliOp
 }
 
 export function validateGraphCheckpointMode(options: import('./types/cli').CliOptions): GraphJournalCheckpointV1 | undefined {
-  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner) return undefined;
+  if (!options.graphCheckpointIn && !options.graphCheckpointOut && !options.graphCheckpointOwner && !options.graphDispatchOwner && options.graphDispatchLimit === undefined && !options.graphResumeReady) return undefined;
   if (options.graphCheckpointOwner && !options.graphCheckpointIn) throw new Error('--graph-checkpoint-owner requires --graph-checkpoint-in');
+  if (options.graphDispatchOwner && options.graphDispatchLimit === undefined) throw new Error('--graph-dispatch-owner requires --graph-dispatch-limit');
+  if (options.graphDispatchLimit !== undefined && !options.graphDispatchOwner) throw new Error('--graph-dispatch-limit requires --graph-dispatch-owner');
+  if (options.graphDispatchLimit !== undefined && !options.graphCheckpointOut) throw new Error('--graph-dispatch-limit requires --graph-checkpoint-out');
+  if (options.graphCheckpointIn && options.graphDispatchLimit !== undefined && !options.graphResumeReady) throw new Error('--graph-dispatch-limit with --graph-checkpoint-in requires --graph-resume-ready');
+  if (options.graphResumeReady && !options.graphCheckpointIn) throw new Error('--graph-resume-ready requires --graph-checkpoint-in');
+  if (options.graphResumeReady && !options.graphCheckpointOut) throw new Error('--graph-resume-ready requires --graph-checkpoint-out');
+  if (options.graphCheckpointOwner && options.graphResumeReady) throw new Error('--graph-checkpoint-owner cannot be used with --graph-resume-ready');
   if ((options.graphCheckpointIn || options.graphCheckpointOut) && (!options.configPath || options.checks.length !== 1 || options.output !== 'json')) {
     throw new Error('--graph-checkpoint-in/out requires --config, one --check, and --output json');
   }
@@ -152,6 +160,22 @@ export function validateGraphCheckpointMode(options: import('./types/cli').CliOp
     : undefined;
   if (options.graphCheckpointOut) validateGraphCheckpointOutputTarget(path.resolve(options.graphCheckpointOut));
   return checkpoint;
+}
+
+export function validateGraphDispatchOwner(
+  config: import('./types/config').VisorConfig,
+  owner: string | undefined,
+): string | undefined {
+  if (owner === undefined) return undefined;
+  const plan = compileClaimPlan(JSON.parse(JSON.stringify(config)) as import('./types/config').VisorConfig);
+  const owners = new Set([
+    ...Object.keys(plan.expansionPlan.byOwner),
+    ...Object.keys(plan.expansionPlan.byNestedOwner),
+  ]);
+  if (!owners.has(owner)) {
+    throw new Error(`--graph-dispatch-owner must exactly match a compiled expansion owner: ${owner}`);
+  }
+  return owner;
 }
 
 function resolveGraphCheckpointOwner(config: VisorConfig, checks: readonly string[], explicit?: string): string {
@@ -1963,6 +1987,13 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
+    // Validate the bounded generated-instance selector against the loaded,
+    // compiled graph before provider admission or run services are started.
+    const validatedGraphDispatchOwner = validateGraphDispatchOwner(
+      config,
+      options.graphDispatchOwner,
+    );
+
     if (proofCapability) {
       const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
       CheckProviderRegistry.getInstance().bootstrapProofAdmission(proofCapability);
@@ -2673,6 +2704,11 @@ export async function main(): Promise<void> {
         })()
       : async () => {};
 
+    const graphDispatchHandle = validatedGraphDispatchOwner && options.graphDispatchLimit !== undefined
+      ? createGraphDispatchGate(validatedGraphDispatchOwner, options.graphDispatchLimit)
+      : undefined;
+    const generatedDispatchGate = composeGraphDispatchGate(pauseGate, graphDispatchHandle?.gate);
+
     // Skip initial automatic run for TUI mode - wait for user to type a message
     // TUI workflows are typically chat-style and expect user input first
     let executionResult: import('./types/execution').ExecutionResult;
@@ -2707,6 +2743,18 @@ export async function main(): Promise<void> {
           { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
           { source: 'cli', workflowId: checksToRun.join(',') },
           async () => {
+            if (options.graphCheckpointIn && options.graphResumeReady) {
+              const resumed = await engine.resumeGraphCheckpoint({
+                checkpoint: graphCheckpointInput!,
+                config,
+                prInfo: prInfoWithContext,
+                debug: options.debug || false,
+                maxParallelism: options.maxParallelism,
+                failFast: options.failFast,
+                generatedDispatchGate,
+              });
+              return resumed.result;
+            }
             if (options.graphCheckpointIn) {
               const checkpoint = graphCheckpointInput!;
               const ownerCheck = resolveGraphCheckpointOwner(config, checksToRun, options.graphCheckpointOwner);
@@ -2731,7 +2779,7 @@ export async function main(): Promise<void> {
               options.maxParallelism,
               options.failFast,
               tagFilter,
-              pauseGate
+              generatedDispatchGate
             );
           }
         );
@@ -2833,6 +2881,28 @@ export async function main(): Promise<void> {
       };
       if (!groupedResultsToUse.__execution) groupedResultsToUse.__execution = [];
       groupedResultsToUse.__execution.push(diagnosticResult);
+    }
+
+    // A bounded graph run may intentionally stop with other generated work at
+    // the ready frontier. Keep that control state explicit in the ordinary
+    // result shape; it is not a workflow-completion claim.
+    if (graphDispatchHandle) {
+      const paused = graphDispatchHandle.state.deferred;
+      const checkpointResult: CheckResult = {
+        checkName: '__graph_checkpoint',
+        content: paused
+          ? 'Bounded Graph-v2 dispatch is paused at a quiescent ready frontier; resume is required.'
+          : 'Bounded Graph-v2 dispatch drained its admitted frontier; inspect the checkpoint before declaring completion.',
+        group: '__graph_checkpoint',
+        output: {
+          state: paused ? 'paused' : 'drained-without-defer',
+          dispatchOwner: validatedGraphDispatchOwner,
+          dispatchLimit: options.graphDispatchLimit,
+          deferredInstances: graphDispatchHandle.state.deferredInstanceIds.size,
+        },
+        issues: [],
+      };
+      groupedResultsToUse.__graph_checkpoint = [checkpointResult];
     }
 
     // Get executed check names

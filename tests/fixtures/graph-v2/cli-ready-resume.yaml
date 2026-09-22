@@ -1,0 +1,109 @@
+version: '1.0'
+max_parallelism: 1
+workspace: {enabled: false}
+
+claim_types:
+  project.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id]
+            properties:
+              id: {type: string, minLength: 1}
+  project.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: {type: string, minLength: 1}
+  child.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [children]
+      properties:
+        children:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id]
+            properties:
+              id: {type: string, minLength: 1}
+  child.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: {type: string, minLength: 1}
+  child.result@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, stage]
+      properties:
+        id: {type: string, minLength: 1}
+        stage: {type: string, minLength: 1}
+
+subgraphs:
+  project:
+    input: {name: project, claim: project.item@1}
+    checks:
+      materialize:
+        type: command
+        consumes: [{claim: project.item@1, as: project}]
+        emits: [{claim: child.catalog@1, from: output}]
+        exec: |
+          node -e 'const fs=require("fs"); fs.appendFileSync(process.env.GRAPH_CALL_LOG, "materialize\n"); process.stdout.write(JSON.stringify({children:[{id:"A"},{id:"B"}]}));'
+        expand:
+          claim: child.catalog@1
+          template: child
+          items_pointer: /children
+          key_pointer: /id
+          item_claim: child.item@1
+      barrier:
+        type: command
+        depends_on: [materialize]
+        wait_for_expansion: {owner: materialize, terminal_node: terminal}
+        exec: |
+          node -e 'const fs=require("fs"); fs.appendFileSync(process.env.GRAPH_CALL_LOG, "barrier\n"); process.stdout.write("barrier");'
+
+  child:
+    input: {name: child, claim: child.item@1}
+    checks:
+      inspect:
+        type: command
+        consumes: [{claim: child.item@1, as: child}]
+        emits: [{claim: child.result@1, from: output}]
+        exec: |
+          node -e 'const fs=require("fs"); const id=process.argv[1]; fs.appendFileSync(process.env.GRAPH_CALL_LOG, `inspect:${id}\n`); process.stdout.write(JSON.stringify({id,stage:"inspected"}));' '{{ outputs.child.id }}'
+      terminal:
+        type: command
+        depends_on: [inspect]
+        consumes: [{claim: child.result@1, as: result}]
+        exec: |
+          node -e 'const fs=require("fs"); const id=process.argv[1]; fs.appendFileSync(process.env.GRAPH_CALL_LOG, `terminal:${id}\n`); process.stdout.write("terminal");' '{{ outputs.inspect.id }}'
+
+checks:
+  discover:
+    type: command
+    emits: [{claim: project.catalog@1, from: output}]
+    exec: |
+      node -e 'const fs=require("fs"); fs.appendFileSync(process.env.GRAPH_CALL_LOG, "discover\n"); process.stdout.write(JSON.stringify({projects:[{id:"P1"}]}));'
+    expand:
+      claim: project.catalog@1
+      template: project
+      items_pointer: /projects
+      key_pointer: /id
+      item_claim: project.item@1

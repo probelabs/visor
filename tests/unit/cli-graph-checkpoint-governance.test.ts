@@ -1,8 +1,12 @@
-import { chmodSync, linkSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
-import { validateArtifactPathAliases, validateGraphCheckpointMode } from '../../src/cli-main';
+import yaml from 'js-yaml';
+import { CLI } from '../../src/cli';
+import { validateArtifactPathAliases, validateGraphCheckpointMode, validateGraphDispatchOwner } from '../../src/cli-main';
+import { canonicalGraphCheckpointJson, ExecutionJournal } from '../../src/snapshot-store';
+import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
 import type { CliOptions } from '../../src/types/cli';
 
 function options(overrides: Partial<CliOptions>): CliOptions {
@@ -10,6 +14,39 @@ function options(overrides: Partial<CliOptions>): CliOptions {
 }
 
 describe('CLI checkpoint governance preflight', () => {
+  it.each(['0', '-1', '1.5', '9007199254740992'])('rejects unsafe graph dispatch limit %s during parsing', value => {
+    expect(() => new CLI().parseArgs(['node', 'visor', '--graph-dispatch-limit', value])).toThrow(/positive safe integer/);
+  });
+
+  it.each([
+    [{ graphDispatchLimit: 1 }, /--graph-dispatch-limit requires --graph-dispatch-owner/],
+    [{ graphDispatchOwner: 'discover' }, /--graph-dispatch-owner requires --graph-dispatch-limit/],
+    [{ graphDispatchOwner: 'discover', graphDispatchLimit: 1 }, /requires --graph-checkpoint-out/],
+    [{ graphResumeReady: true }, /--graph-resume-ready requires --graph-checkpoint-in/],
+    [{ graphResumeReady: true, graphCheckpointIn: '/tmp/checkpoint.json' }, /requires --graph-checkpoint-out/],
+    [{ graphDispatchOwner: 'discover', graphDispatchLimit: 1, graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json' }, /requires --graph-resume-ready/],
+    [{ graphCheckpointOwner: 'discover', graphCheckpointIn: '/tmp/checkpoint.json', graphCheckpointOut: '/tmp/next.json', graphDispatchOwner: 'discover', graphDispatchLimit: 1, graphResumeReady: true }, /cannot be used/],
+  ])('rejects invalid bounded checkpoint combination %#', (override, error) => {
+    expect(() => validateGraphCheckpointMode(options(override))).toThrow(error);
+  });
+
+  it('requires an exact compiled nested expansion owner before dispatch', () => {
+    const config = yaml.load(readFileSync(resolve(__dirname, '../fixtures/graph-v2/cli-ready-resume.yaml'), 'utf8')) as import('../../src/types/config').VisorConfig;
+    expect(validateGraphDispatchOwner(config, '["project","materialize"]')).toBe('["project","materialize"]');
+    expect(() => validateGraphDispatchOwner(config, '["project","materialize","wrong"]')).toThrow(/exactly match/);
+  });
+
+  it('accepts an unbounded ready-only resume with checkpoint input and output', () => {
+    const root = mkdtempSync(join(tmpdir(), 'visor-ready-only-cli-')); chmodSync(root, 0o700);
+    try {
+      const config = yaml.load(readFileSync(resolve(__dirname, '../fixtures/graph-v2/cli-ready-resume.yaml'), 'utf8')) as import('../../src/types/config').VisorConfig;
+      const checkpoint = new ExecutionJournal(compileClaimPlan(config)).exportGraphCheckpoint('ready-only');
+      const input = join(root, 'input.json'); const output = join(root, 'output.json');
+      writeFileSync(input, `${canonicalGraphCheckpointJson(checkpoint)}\n`, { mode: 0o600 });
+      expect(validateGraphCheckpointMode(options({ graphCheckpointIn: input, graphCheckpointOut: output, graphResumeReady: true }))).toMatchObject({ kind: 'visor.graph-journal-checkpoint' });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('rejects corrupt input without invoking an external authority', () => {
     const root = mkdtempSync(join(tmpdir(), 'visor-checkpoint-cli-')); chmodSync(root, 0o700);
     const input = join(root, 'input.json'); const proofCall = jest.fn();

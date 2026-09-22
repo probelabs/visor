@@ -49,6 +49,8 @@ describe('CLI options consistency', () => {
       'graph-checkpoint-in': '/tmp/checkpoint.json',
       'graph-checkpoint-out': '/tmp/checkpoint-out.json',
       'graph-checkpoint-owner': 'discover',
+      'graph-dispatch-owner': 'discover',
+      'graph-dispatch-limit': '1',
       timeout: '1000',
       'max-parallelism': '2',
       tags: 'foo',

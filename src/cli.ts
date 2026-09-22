@@ -7,6 +7,17 @@ import * as path from 'path';
 // Import version from package.json to avoid hardcoding
 const packageJson = require('../package.json');
 
+function parsePositiveSafeInteger(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error('graph dispatch limit must be a positive safe integer');
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error('graph dispatch limit must be a positive safe integer');
+  }
+  return parsed;
+}
+
 /**
  * CLI argument parser and command handler
  */
@@ -57,6 +68,9 @@ export class CLI {
       .option('--graph-checkpoint-in <path>', 'Import an existing Graph-v2 checkpoint and continue it')
       .option('--graph-checkpoint-out <path>', 'Write a quiescent Graph-v2 checkpoint to an absolute new file')
       .option('--graph-checkpoint-owner <check>', 'Expansion owner to reconcile when importing a Graph-v2 checkpoint')
+      .option('--graph-dispatch-owner <owner>', 'Exact compiled Graph-v2 expansion owner to bound by keyed instance')
+      .option('--graph-dispatch-limit <count>', 'Maximum keyed Graph-v2 instances admitted in this run', parsePositiveSafeInteger)
+      .option('--graph-resume-ready', 'Resume only the ready Graph-v2 frontier from an imported checkpoint')
       .option(
         '--timeout <ms>',
         'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
@@ -230,6 +244,9 @@ export class CLI {
         graphCheckpointIn: typeof options.graphCheckpointIn === 'string' ? options.graphCheckpointIn : undefined,
         graphCheckpointOut: typeof options.graphCheckpointOut === 'string' ? options.graphCheckpointOut : undefined,
         graphCheckpointOwner: typeof options.graphCheckpointOwner === 'string' ? options.graphCheckpointOwner : undefined,
+        graphDispatchOwner: typeof options.graphDispatchOwner === 'string' ? options.graphDispatchOwner : undefined,
+        graphDispatchLimit: typeof options.graphDispatchLimit === 'number' ? options.graphDispatchLimit : undefined,
+        graphResumeReady: Boolean(options.graphResumeReady),
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
@@ -328,6 +345,12 @@ export class CLI {
     }
     if (options.graphCheckpointOwner !== undefined && (typeof options.graphCheckpointOwner !== 'string' || options.graphCheckpointOwner.length === 0)) {
       throw new Error('--graph-checkpoint-owner must be a non-empty check name');
+    }
+    if (options.graphDispatchOwner !== undefined && (typeof options.graphDispatchOwner !== 'string' || options.graphDispatchOwner.length === 0)) {
+      throw new Error('--graph-dispatch-owner must be a non-empty compiled expansion owner');
+    }
+    if (options.graphDispatchLimit !== undefined && (typeof options.graphDispatchLimit !== 'number' || !Number.isSafeInteger(options.graphDispatchLimit) || options.graphDispatchLimit < 1)) {
+      throw new Error('--graph-dispatch-limit must be a positive safe integer');
     }
 
     // Validate timeout
