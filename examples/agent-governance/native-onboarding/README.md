@@ -21,6 +21,11 @@ the pinned absolute Proof binary and the standard Visor source entrypoint.
 Native roles may invoke bare `proof` commands; ensure `PATH`
 resolves the same pinned Proof version, without adding a wrapper:
 
+Each full Proof audit attempt is retained as target-local stdout JSONL and
+stderr artifacts. The retry prompt receives only a small terminal receipt and relative
+artifact paths, so inspect the referenced artifact for detailed findings rather
+than pasting the full audit stream into model context.
+
 ```sh
 cd /absolute/path/to/disposable-control-repo
 TARGET_ROOT=/absolute/path/to/existing-disposable-subject

@@ -123,8 +123,9 @@ checks:
       load its native role with `$PROOF_BIN role show <role> --format agent`,
       follow that role, run every row-provided required check, and confirm only
       through the native Proof command that the role specifies. Re-read the
-      checklist after each native confirmation and stop only at native `ok:true`
-      or with a concrete, logged blocker.
+      checklist after each native confirmation, then return after one bounded,
+      coherent unit of current role work; do not wait indefinitely for native
+      `ok:true` or claim completion from an incomplete unit.
 
       Do not invent a stage table or check IDs. Do not waive, ignore, mute,
       lower policy, rewrite history, fabricate approval, or edit outside the
@@ -139,22 +140,28 @@ checks:
       --- selected target checkout (binding authority) ---
       {{ outputs['target-binding'] | json }}
 
-      --- prior independent Proof audit attempts (diagnostics only) ---
-      {% if outputs_history['proof-audit'] %}
-      {{ outputs_history['proof-audit'] | json }}
+      --- latest independent Proof audit diagnostic (bounded) ---
+      {% if outputs['proof-audit'] %}
+      {{ outputs['proof-audit'] | json }}
       {% else %}
       (no prior Proof audit has run)
       {% endif %}
 
-      --- prior native completion readbacks (diagnostics only) ---
-      {% if outputs_history['native-completion'] %}
-      {{ outputs_history['native-completion'] | json }}
+      --- latest native completion readback (bounded) ---
+      {% if outputs['native-completion'] %}
+      {{ outputs['native-completion'] | json }}
       {% else %}
       (no prior native completion readback has run)
       {% endif %}
 
-      Return after bounded, evidence-backed work. The independent Proof audit
-      and native checklist readback decide completion.
+      The audit diagnostic includes relative target-checkout artifact paths.
+      Inspect a referenced artifact only when needed; never paste its full
+      contents into your response. Complete one bounded, coherent unit of the
+      current native Proof role, run every row-required check/evidence before
+      confirmation, and return before the 600-second author budget even if the
+      current unit is incomplete. The independent Proof audit and native
+      checklist readback decide completion; never claim completion from an
+      incomplete unit.
 
   proof-audit:
     type: command
@@ -162,18 +169,67 @@ checks:
     timeout: 1200000
     criticality: internal
     assume: "true"
-    output_format: text
-    schema: plain
+    output_format: json
+    schema:
+      type: object
+      additionalProperties: false
+      required: [audit_exit_code, stdout_artifact, stderr_artifact, terminal]
+      properties:
+        audit_exit_code: {type: integer, minimum: 0}
+        stdout_artifact: {type: string, minLength: 1}
+        stderr_artifact: {type: string, minLength: 1}
+        terminal:
+          oneOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              required: [event, check, status]
+              properties:
+                event: {type: string}
+                check: {type: string}
+                status: {type: string}
     exec: |
       set -eu
       : "${PROOF_BIN:?PROOF_BIN is required}"
       : "${TARGET_ROOT:?TARGET_ROOT is required}"
       cd "$TARGET_ROOT"
-      "$PROOF_BIN" audit --no-cache --fail-level warn --format json --max-findings 0
-    # Proof emits JSONL. The provider exposes its terminal row as output;
-    # non-zero exit and malformed exit-0 output both route the exact result to
-    # the same author in the bounded native loop.
-    fail_if: "!(output?.event === 'check_done' && typeof output?.check === 'string' && output.check.length > 0 && ['pass', 'skip', 'info'].includes(output?.status))"
+      AUDIT_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+      AUDIT_ROOT="$(mktemp -d "$TARGET_ROOT/.visor-native-checklist-audit.${AUDIT_STAMP}.XXXXXX")"
+      AUDIT_STDOUT="$AUDIT_ROOT/audit.stdout.jsonl"
+      AUDIT_STDERR="$AUDIT_ROOT/audit.stderr.log"
+      set +e
+      "$PROOF_BIN" audit --no-cache --fail-level warn --format json --max-findings 0 >"$AUDIT_STDOUT" 2>"$AUDIT_STDERR"
+      AUDIT_EXIT_CODE=$?
+      set -e
+      node - "$TARGET_ROOT" "$AUDIT_STDOUT" "$AUDIT_STDERR" "$AUDIT_EXIT_CODE" <<'NODE'
+      const fs = require('fs');
+      const path = require('path');
+      const [targetRoot, stdoutPath, stderrPath, exitText] = process.argv.slice(2);
+      const stdout = fs.readFileSync(stdoutPath, 'utf8');
+      const lines = stdout.split(/\r?\n/).filter(line => line.trim().length > 0);
+      let terminal = null;
+      if (lines.length > 0) {
+        try {
+          const parsed = JSON.parse(lines[lines.length - 1]);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            terminal = { event: parsed.event, check: parsed.check, status: parsed.status };
+          }
+        } catch {}
+      }
+      const exitCode = Number.parseInt(exitText, 10);
+      const rel = file => path.relative(targetRoot, file).split(path.sep).join('/');
+      const result = {
+        audit_exit_code: Number.isInteger(exitCode) && exitCode >= 0 ? exitCode : 1,
+        stdout_artifact: rel(stdoutPath),
+        stderr_artifact: rel(stderrPath),
+        terminal,
+      };
+      process.stdout.write(JSON.stringify(result));
+      NODE
+    # The full native audit remains in target-local artifacts. Only this tiny
+    # receipt reaches the graph and author prompt; the original terminal-row
+    # guard plus the true native exit code preserve failure semantics.
+    fail_if: "!output || output.audit_exit_code !== 0 || !output.terminal || output.terminal.event !== 'check_done' || typeof output.terminal.check !== 'string' || output.terminal.check.length === 0 || !['pass', 'skip', 'info'].includes(output.terminal.status)"
     on_fail:
       goto: author
 
