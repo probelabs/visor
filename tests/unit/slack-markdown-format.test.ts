@@ -1,4 +1,4 @@
-import { markdownToSlack } from '../../src/slack/markdown';
+import { markdownToSlack, chunkText } from '../../src/slack/markdown';
 
 describe('markdownToSlack', () => {
   it('converts bold and links to Slack mrkdwn', () => {
@@ -108,5 +108,163 @@ describe('markdownToSlack', () => {
         '• <https://github.com/org/repo/blob/main/auth.go#L10|auth.go:10> - Auth handler',
       ].join('\n')
     );
+  });
+});
+
+describe('chunkText', () => {
+  it('returns single chunk when text is under limit', () => {
+    const text = 'Hello world, this is a short message.';
+    const chunks = chunkText(text, 100);
+    expect(chunks).toEqual([text]);
+  });
+
+  it('handles falsy or empty text safely', () => {
+    expect(chunkText('', 100)).toEqual(['']);
+    expect(chunkText(null as any, 100)).toEqual(['']);
+    expect(chunkText(undefined as any, 100)).toEqual(['']);
+  });
+
+  it('splits text over limit at line boundaries without code blocks', () => {
+    const lines = [
+      'Line 1: first paragraph content',
+      'Line 2: second paragraph content',
+      'Line 3: third paragraph content',
+    ];
+    const text = lines.join('\n');
+    const chunks = chunkText(text, 40);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(40);
+    }
+    expect(chunks.join('\n')).toBe(text);
+  });
+
+  it('splits inside a code block, closing chunk 1 with ``` and reopening chunk 2 with ```<lang>', () => {
+    const text = [
+      'Intro before code',
+      '```typescript',
+      'const a = 1;',
+      'const b = 2;',
+      '```',
+      'Outro after code',
+    ].join('\n');
+
+    // Limit 50 splits neatly into 2 chunks:
+    // Chunk 0: Intro + ```typescript + const a = 1; + ``` (48 chars)
+    // Chunk 1: ```typescript + const b = 2; + ``` + Outro (47 chars)
+    const chunks = chunkText(text, 50);
+
+    expect(chunks.length).toBe(2);
+    expect(chunks[0].length).toBeLessThanOrEqual(50);
+    expect(chunks[1].length).toBeLessThanOrEqual(50);
+
+    // Chunk 0 must end cleanly with closing code fence
+    expect(chunks[0]).toContain('```typescript\nconst a = 1;');
+    expect(chunks[0].endsWith('```')).toBe(true);
+
+    // Chunk 1 must reopen with the same language specifier
+    expect(chunks[1].startsWith('```typescript\n')).toBe(true);
+    expect(chunks[1]).toContain('const b = 2;');
+    expect(chunks[1]).toContain('Outro after code');
+  });
+
+  it('splits inside a code block without language specifier, reopening with plain ```', () => {
+    const text = [
+      '```',
+      'first line of code',
+      'second line of code',
+      'third line of code',
+      '```',
+    ].join('\n');
+
+    const chunks = chunkText(text, 35);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(35);
+    }
+
+    // First chunk closes with ```
+    expect(chunks[0].endsWith('```')).toBe(true);
+    // Subsequent chunk reopens with plain ```
+    expect(chunks[1].startsWith('```\n')).toBe(true);
+  });
+
+  it('handles multiple code blocks and preserves respective language specifiers', () => {
+    const text = [
+      'Start',
+      '```python',
+      'def foo():',
+      '    x = 1',
+      '    y = 2',
+      '```',
+      'Middle explanation text',
+      '```json',
+      '{"key1": "value1",',
+      ' "key2": "value2"}',
+      '```',
+      'End',
+    ].join('\n');
+
+    const chunks = chunkText(text, 40);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(40);
+    }
+
+    // Verify python chunks
+    const pythonChunks = chunks.filter(c => c.includes('def foo') || c.includes('x = 1'));
+    for (const pc of pythonChunks) {
+      expect(pc).toMatch(/```python/);
+    }
+
+    // Verify json chunks
+    const jsonChunks = chunks.filter(c => c.includes('key1') || c.includes('key2'));
+    for (const jc of jsonChunks) {
+      expect(jc).toMatch(/```json/);
+    }
+  });
+
+  it('force-splits a single line exceeding limit outside code blocks', () => {
+    const longLine = 'a'.repeat(120);
+    const chunks = chunkText(longLine, 50);
+
+    expect(chunks.length).toBe(3);
+    expect(chunks[0].length).toBe(50);
+    expect(chunks[1].length).toBe(50);
+    expect(chunks[2].length).toBe(20);
+    expect(chunks.join('')).toBe(longLine);
+  });
+
+  it('safely splits and wraps a single line exceeding limit inside code block', () => {
+    const longCodeLine = 'x'.repeat(100);
+    const text = `\`\`\`javascript\n${longCodeLine}\n\`\`\``;
+    const chunks = chunkText(text, 40);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(40);
+      expect(chunk.startsWith('```javascript')).toBe(true);
+      expect(chunk.endsWith('```')).toBe(true);
+    }
+  });
+
+  it('cleanly closes unclosed code blocks when splitting occurs', () => {
+    const text = [
+      '```python',
+      'line 1 of open block',
+      'line 2 of open block',
+      'line 3 of open block',
+    ].join('\n');
+
+    const chunks = chunkText(text, 35);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(35);
+    }
+    // Final chunk should also be closed cleanly
+    expect(chunks[chunks.length - 1].endsWith('```')).toBe(true);
   });
 });
