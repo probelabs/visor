@@ -363,3 +363,138 @@ export function replaceFileSections(
 export function formatSlackText(text: string): string {
   return markdownToSlack(text);
 }
+
+/**
+ * Chunk text into segments no larger than limit, splitting at line boundaries
+ * with code-fence awareness.
+ *
+ * When splitting inside an active fenced code block (```lang), the current chunk
+ * is cleanly closed with ``` and the next chunk reopens with ```lang so that
+ * Slack does not naively split mid-code-block or leave unbalanced fences.
+ */
+export function chunkText(text: string, limit: number = 4000): string[] {
+  if (!text || typeof text !== 'string' || text.length <= limit) {
+    return [text || ''];
+  }
+  const effectiveLimit = limit > 0 ? limit : 4000;
+
+  const chunks: string[] = [];
+  const lines = text.split(/\r?\n/);
+  let current = '';
+  let inCodeBlock = false;
+  let codeBlockLang = '';
+
+  const closeBlock = (c: string): string => (c.endsWith('\n') ? c + '```' : c + '\n```');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const isFence = /^```/.test(trimmed);
+
+    if (!inCodeBlock) {
+      if (isFence) {
+        // Line opens a code block
+        const langMatch = trimmed.match(/^```([^\s`]*)/);
+        const lang = langMatch ? langMatch[1] : '';
+
+        // If candidate exceeds limit (reserving 4 chars for closing fence \n```),
+        // push current chunk first.
+        const candidate = current ? current + '\n' + line : line;
+        if (candidate.length + 4 > effectiveLimit) {
+          if (current) {
+            chunks.push(current);
+            current = '';
+          }
+          if (line.length + 4 > effectiveLimit) {
+            chunks.push(line);
+          } else {
+            current = line;
+          }
+        } else {
+          current = candidate;
+        }
+        inCodeBlock = true;
+        codeBlockLang = lang;
+      } else {
+        // Regular line outside code block
+        const candidate = current ? current + '\n' + line : line;
+        if (candidate.length > effectiveLimit) {
+          if (current) {
+            chunks.push(current);
+            current = '';
+          }
+          if (line.length > effectiveLimit) {
+            // Force-split single line exceeding limit
+            let remaining = line;
+            while (remaining.length > effectiveLimit) {
+              chunks.push(remaining.slice(0, effectiveLimit));
+              remaining = remaining.slice(effectiveLimit);
+            }
+            current = remaining;
+          } else {
+            current = line;
+          }
+        } else {
+          current = candidate;
+        }
+      }
+    } else {
+      // Inside code block
+      if (isFence) {
+        // Line closes the code block
+        const candidate = current ? current + '\n' + line : line;
+        if (candidate.length > effectiveLimit) {
+          // If closing fence doesn't fit in current chunk, close current cleanly and push
+          if (current) {
+            chunks.push(closeBlock(current));
+          }
+          current = '';
+        } else {
+          current = candidate;
+        }
+        inCodeBlock = false;
+        codeBlockLang = '';
+      } else {
+        // Content line inside code block
+        const candidate = current ? current + '\n' + line : line;
+        if (candidate.length + 4 > effectiveLimit) {
+          if (current) {
+            chunks.push(closeBlock(current));
+            current = '';
+          }
+
+          // In new chunk, content needs reopening fence: ```<lang>\n<line>
+          const reopenFence = '```' + codeBlockLang;
+          const reopened = reopenFence + '\n' + line;
+
+          if (reopened.length + 4 > effectiveLimit) {
+            // Single line inside code block exceeds remaining space
+            const fenceOverhead = reopenFence.length + 1 + 4; // ```lang\n + \n```
+            const maxSlice = Math.max(1, effectiveLimit - fenceOverhead);
+            let remaining = line;
+            while (remaining.length > maxSlice) {
+              const slice = remaining.slice(0, maxSlice);
+              chunks.push(reopenFence + '\n' + slice + '\n```');
+              remaining = remaining.slice(maxSlice);
+            }
+            current = reopenFence + (remaining ? '\n' + remaining : '');
+          } else {
+            current = reopened;
+          }
+        } else {
+          current = candidate;
+        }
+      }
+    }
+  }
+
+  if (current) {
+    if (inCodeBlock) {
+      chunks.push(closeBlock(current));
+    } else {
+      chunks.push(current);
+    }
+  }
+
+  return chunks;
+}
