@@ -5,8 +5,12 @@ import { logger } from '../../src/logger';
 function makeFakeSlack() {
   const chat = {
     // underscore unused param to satisfy lint
-    postMessage: jest.fn(async (_req: any) => ({ ts: '123.456', message: { ts: '123.456' } })),
-    update: jest.fn(async (_req: any) => ({})),
+    postMessage: jest.fn(async (_req: any) => ({
+      ok: true,
+      ts: '123.456',
+      message: { ts: '123.456' },
+    })),
+    update: jest.fn(async (_req: any) => ({ ok: true })),
   };
   return { chat } as any;
 }
@@ -418,5 +422,54 @@ describe('SlackFrontend (event-bus)', () => {
       'The AI provider failed before generating any response. This is usually caused by a provider-side limit, rate limit, or outage. Please retry.'
     );
     expect(req.text).not.toContain('ProbeAgent execution failed');
+  });
+
+  test('posts long AI replies in multiple chunks with code fences preserved', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '123.456', text: 'hi' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          reply: { type: 'ai', group: 'chat', schema: 'plain' },
+        },
+      },
+      run: { runId: 'r1' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    // Create text > 4000 characters with an embedded code block
+    const codeLines = Array(150).fill('const sampleVar = "line of code inside fenced block";');
+    const longText = `Summary:\n\`\`\`typescript\n${codeLines.join('\n')}\n\`\`\`\nConclusion`;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: longText } },
+    });
+
+    expect(slack.chat.postMessage.mock.calls.length).toBeGreaterThan(1);
+    for (const [req] of slack.chat.postMessage.mock.calls) {
+      expect(req.channel).toBe('C1');
+      expect(req.thread_ts).toBe('123.456');
+      expect(req.text.length).toBeLessThanOrEqual(4000);
+    }
+
+    // First chunk should close the code block
+    const firstChunk = slack.chat.postMessage.mock.calls[0][0].text;
+    expect(firstChunk.endsWith('```')).toBe(true);
+
+    // Second chunk should reopen with ```typescript
+    const secondChunk = slack.chat.postMessage.mock.calls[1][0].text;
+    expect(secondChunk.startsWith('```typescript\n')).toBe(true);
   });
 });

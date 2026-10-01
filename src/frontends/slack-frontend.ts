@@ -23,6 +23,7 @@ import type { Frontend, FrontendContext } from './host';
 import { SlackClient } from '../slack/client';
 import {
   formatSlackText,
+  chunkText,
   type MermaidDiagram,
   renderMermaidToPng,
   replaceMermaidBlocks,
@@ -358,24 +359,28 @@ export class SlackFrontend implements Frontend {
     }
 
     const formattedText = formatSlackText(text);
-    const postResult = await slack.chat.postMessage({
-      channel,
-      text: formattedText,
-      thread_ts: threadTs,
-    });
-    if (!postResult?.ok) {
-      try {
-        ctx.logger.warn(
-          `[slack-frontend] failed to post error notice to ${channel} thread=${threadTs} check=${
-            checkId || 'run'
-          } error=${postResult?.error || 'unknown_error'}`
-        );
-      } catch {}
-      return;
+    const chunks = chunkText(formattedText, 4000);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const postResult = await slack.chat.postMessage({
+        channel,
+        text: chunk,
+        thread_ts: threadTs,
+      });
+      if (!postResult || postResult.ok === false || (!postResult.ok && !postResult.ts)) {
+        try {
+          ctx.logger.warn(
+            `[slack-frontend] failed to post error notice chunk ${i + 1}/${chunks.length} to ${channel} thread=${threadTs} check=${
+              checkId || 'run'
+            } error=${postResult?.error || 'unknown_error'}`
+          );
+        } catch {}
+        return;
+      }
     }
     try {
       ctx.logger.info(
-        `[slack-frontend] posted error notice to ${channel} thread=${threadTs} check=${checkId || 'run'}`
+        `[slack-frontend] posted error notice (${chunks.length} chunk(s)) to ${channel} thread=${threadTs} check=${checkId || 'run'}`
       );
     } catch {}
     this.errorNotified = true;
@@ -731,22 +736,28 @@ export class SlackFrontend implements Frontend {
       }
 
       const formattedText = formatSlackText(decoratedText);
-      const postResult = await slack.chat.postMessage({
-        channel,
-        text: formattedText,
-        thread_ts: threadTs,
-      });
-      if (!postResult?.ok) {
-        ctx.logger.warn(
-          `[slack-frontend] failed to post AI reply for ${checkId} to ${channel} thread=${threadTs} error=${
-            postResult?.error || 'unknown_error'
-          }`
-        );
-        return;
+      const chunks = chunkText(formattedText, 4000);
+      let lastPostResult: any = null;
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const postResult = await slack.chat.postMessage({
+          channel,
+          text: chunk,
+          thread_ts: threadTs,
+        });
+        if (!postResult || postResult.ok === false || (!postResult.ok && !postResult.ts)) {
+          ctx.logger.warn(
+            `[slack-frontend] failed to post AI reply chunk ${i + 1}/${chunks.length} for ${checkId} to ${channel} thread=${threadTs} error=${
+              postResult?.error || 'unknown_error'
+            }`
+          );
+          return;
+        }
+        lastPostResult = postResult;
       }
       ctx.logger.info(
-        `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs} ts=${
-          postResult.ts || '-'
+        `[slack-frontend] posted AI reply (${chunks.length} chunk(s)) for ${checkId} to ${channel} thread=${threadTs} ts=${
+          lastPostResult?.ts || '-'
         }`
       );
 

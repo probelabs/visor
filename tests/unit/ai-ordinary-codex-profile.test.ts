@@ -185,7 +185,7 @@ describe('ordinary Luna Codex execution profile', () => {
       expect((ProbeAgent as jest.Mock).mock.calls[0][0].requestTimeout).toBe(requestTimeout);
     } else {
       await expect(service.executeReview(prInfo, 'Read the project')).rejects.toThrow(
-        /requires Probe requestTimeout between 1000 and 3600000ms/
+        /requires Probe requestTimeout 0 or between 1000 and 3600000ms/
       );
       expect(ProbeAgent).not.toHaveBeenCalled();
     }
