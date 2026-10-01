@@ -1,0 +1,30 @@
+version: "1.0"
+max_parallelism: 2
+
+claim_types:
+  fixture.ready@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - value
+      properties:
+        value:
+          type: string
+          const: ready
+
+checks:
+  producer:
+    type: noop
+    emits:
+      - claim: fixture.ready@1
+        from: output
+
+  slow-sibling:
+    type: noop
+
+  consumer:
+    type: noop
+    consumes:
+      - claim: fixture.ready@1
+        cardinality: one

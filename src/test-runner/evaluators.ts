@@ -35,7 +35,7 @@ function mapGithubOp(op: string): string {
 }
 
 function buildExecutedMap(stats: ExecStats): Record<string, number> {
-  const executed: Record<string, number> = {};
+  const executed: Record<string, number> = Object.create(null);
   for (const s of stats.checks) {
     const name = (s as any)?.checkName;
     if (
@@ -49,6 +49,71 @@ function buildExecutedMap(stats: ExecStats): Record<string, number> {
     }
   }
   return executed;
+}
+
+/**
+ * Build counts for generated rows only. Generated stats retain their opaque
+ * checkName (nodeGenerationId) for exact/legacy assertions and carry the
+ * logical id separately, so this map must never fall back to checkName.
+ */
+function buildLogicalExecutedMap(stats: ExecStats): Record<string, number> {
+  const executed: Record<string, number> = Object.create(null);
+  for (const s of stats.checks) {
+    const name = (s as any)?.logicalCheckName;
+    if (
+      !s.skipped &&
+      (s.totalRuns || 0) > 0 &&
+      typeof name === 'string' &&
+      name.trim().length > 0 &&
+      name !== 'undefined'
+    ) {
+      executed[name] = (executed[name] || 0) + (s.totalRuns || 0);
+    }
+  }
+  return executed;
+}
+
+type CallSelector = 'step' | 'logical_step' | 'provider' | 'invalid';
+
+/**
+ * Resolve the intentionally explicit selector used by a calls assertion.
+ * Provider calls are a separate, backwards-compatible form with no step
+ * selector. Exact `step` values are never normalized or aliased.
+ */
+function callSelector(call: any): CallSelector {
+  const hasStep = call?.step !== undefined;
+  const hasLogicalStep = call?.logical_step !== undefined;
+  if (hasStep && hasLogicalStep) return 'invalid';
+  if (hasStep) {
+    return typeof call.step === 'string' && call.step.trim().length > 0 ? 'step' : 'invalid';
+  }
+  if (hasLogicalStep) {
+    return typeof call.logical_step === 'string' && call.logical_step.trim().length > 0
+      ? 'logical_step'
+      : 'invalid';
+  }
+  if (call?.provider !== undefined) {
+    return typeof call.provider === 'string' && call.provider.trim().length > 0
+      ? 'provider'
+      : 'invalid';
+  }
+  return 'invalid';
+}
+
+function reportInvalidCallSelector(errors: string[], call: any): void {
+  const hasStep = call?.step !== undefined;
+  const hasLogicalStep = call?.logical_step !== undefined;
+  if (hasStep && hasLogicalStep) {
+    errors.push('Call expectation cannot specify both step and logical_step');
+  } else if (!hasStep && !hasLogicalStep && call?.provider === undefined) {
+    errors.push('Call expectation must specify exactly one of step or logical_step');
+  } else if (hasStep) {
+    errors.push('Call expectation step must be a non-empty string');
+  } else if (hasLogicalStep) {
+    errors.push('Call expectation logical_step must be a non-empty string');
+  } else {
+    errors.push('Call expectation provider must be a non-empty string');
+  }
 }
 
 // Middle‑truncate with explicit omitted-chars indicator and whitespace normalization
@@ -68,21 +133,30 @@ function previewMiddle(raw: unknown, max = 240): string {
 export function evaluateCalls(
   errors: string[],
   expect: ExpectBlock,
-  executed: Record<string, number>
+  executed: Record<string, number>,
+  logicalExecuted: Record<string, number> = Object.create(null)
 ): void {
   for (const call of expect.calls || []) {
-    if (call.step) {
-      validateCounts(call);
-      const actual = executed[call.step] || 0;
-      if (call.exactly !== undefined && actual !== call.exactly) {
-        errors.push(`Expected step ${call.step} exactly ${call.exactly}, got ${actual}`);
-      }
-      if (call.at_least !== undefined && actual < call.at_least) {
-        errors.push(`Expected step ${call.step} at_least ${call.at_least}, got ${actual}`);
-      }
-      if (call.at_most !== undefined && actual > call.at_most) {
-        errors.push(`Expected step ${call.step} at_most ${call.at_most}, got ${actual}`);
-      }
+    const selector = callSelector(call);
+    if (selector === 'invalid') {
+      reportInvalidCallSelector(errors, call);
+      continue;
+    }
+    if (selector === 'provider') continue;
+
+    validateCounts(call);
+    const selected = selector === 'step' ? call.step : call.logical_step;
+    const counts = selector === 'step' ? executed : logicalExecuted;
+    const actual = counts[selected] || 0;
+    const label = selector === 'step' ? 'step' : 'logical_step';
+    if (call.exactly !== undefined && actual !== call.exactly) {
+      errors.push(`Expected ${label} ${selected} exactly ${call.exactly}, got ${actual}`);
+    }
+    if (call.at_least !== undefined && actual < call.at_least) {
+      errors.push(`Expected ${label} ${selected} at_least ${call.at_least}, got ${actual}`);
+    }
+    if (call.at_most !== undefined && actual > call.at_most) {
+      errors.push(`Expected ${label} ${selected} at_most ${call.at_most}, got ${actual}`);
     }
   }
 }
@@ -94,6 +168,10 @@ export function evaluateProviderCalls(
   slackRecorder?: { calls: SlackRecordedCall[] }
 ): void {
   for (const call of expect.calls || []) {
+    // Step selectors are evaluated by evaluateCalls. A provider selector may
+    // still be combined with one step selector, preserving the prior ability
+    // to assert both effects in a single calls entry.
+    if (callSelector(call) === 'invalid') continue;
     const provider = (call.provider || '').toLowerCase();
     if (provider === 'github') {
       validateCounts(call);
@@ -502,13 +580,30 @@ export function evaluateCase(
 ): string[] {
   const errors: string[] = [];
   const executed = buildExecutedMap(stats);
+  const logicalExecuted = buildLogicalExecutedMap(stats);
+  const generatedLogicalNames = new Set<string>();
+  for (const stat of stats.checks) {
+    const logicalName = (stat as any)?.logicalCheckName;
+    if (
+      !stat.skipped &&
+      (stat.totalRuns || 0) > 0 &&
+      typeof logicalName === 'string' &&
+      logicalName.trim().length > 0 &&
+      logicalName !== 'undefined'
+    ) {
+      generatedLogicalNames.add(logicalName);
+    }
+  }
 
   // Augment executed map with nested step counts from outputHistory.
   // Dotted step names (e.g. "route-intent.classify") come from child journal
   // entries propagated by WorkflowCheckProvider and appear in outputHistory
   // but not in top-level execution stats.
   for (const key of Object.keys(outputHistory)) {
-    if (key.includes('.') && !(key in executed)) {
+    // Generated logical ids are intentionally excluded from the exact-step
+    // map. Their stats are keyed by nodeGenerationId and must be selected via
+    // logical_step, even when the id happens to be dotted.
+    if (key.includes('.') && !(key in executed) && !generatedLogicalNames.has(key)) {
       const hist = outputHistory[key];
       if (Array.isArray(hist) && hist.length > 0) {
         executed[key] = hist.length;
@@ -517,14 +612,52 @@ export function evaluateCase(
   }
 
   if (strict) {
-    const expectedSteps = new Set(
-      (expect.calls || []).filter(c => c.step).map(c => String(c.step))
-    );
-    for (const step of Object.keys(executed))
-      if (!expectedSteps.has(step)) errors.push(`Step executed without expect: ${step}`);
+    const expectedSteps = new Set<string>();
+    const expectedLogicalSteps = new Set<string>();
+    for (const call of expect.calls || []) {
+      const selector = callSelector(call);
+      if (selector === 'step') expectedSteps.add(String(call.step));
+      else if (selector === 'logical_step') expectedLogicalSteps.add(String(call.logical_step));
+    }
+
+    // Evaluate stats row-by-row. A logical selector covers only generated rows
+    // carrying logicalCheckName; it must not cover a top-level row whose
+    // checkName happens to be the same logical string.
+    const statNames = new Set<string>();
+    for (const stat of stats.checks) {
+      const checkName = (stat as any)?.checkName;
+      if (
+        stat.skipped ||
+        (stat.totalRuns || 0) <= 0 ||
+        typeof checkName !== 'string' ||
+        checkName.trim().length === 0 ||
+        checkName === 'undefined'
+      ) {
+        continue;
+      }
+      statNames.add(checkName);
+      const logicalName = (stat as any)?.logicalCheckName;
+      const hasLogicalName =
+        typeof logicalName === 'string' &&
+        logicalName.trim().length > 0 &&
+        logicalName !== 'undefined';
+      const covered =
+        expectedSteps.has(checkName) ||
+        (hasLogicalName && expectedLogicalSteps.has(logicalName));
+      if (!covered) errors.push(`Step executed without expect: ${checkName}`);
+    }
+
+    // Preserve strict handling for nested steps inferred from output history.
+    for (const step of Object.keys(executed)) {
+      const coveredGeneratedLogicalStep =
+        generatedLogicalNames.has(step) && expectedLogicalSteps.has(step);
+      if (!statNames.has(step) && !expectedSteps.has(step) && !coveredGeneratedLogicalStep) {
+        errors.push(`Step executed without expect: ${step}`);
+      }
+    }
   }
 
-  evaluateCalls(errors, expect, executed);
+  evaluateCalls(errors, expect, executed, logicalExecuted);
   evaluateProviderCalls(errors, expect, recorder, slackRecorder);
   evaluateNoCalls(errors, expect, executed, recorder, slackRecorder);
   evaluatePrompts(errors, expect, promptsByStep);

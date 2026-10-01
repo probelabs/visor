@@ -15,7 +15,10 @@ import type {
 import { generateHumanId } from '../utils/human-id';
 import type { EventEnvelope } from '../event-bus/types';
 import { logger } from '../logger';
-import type { ExecutionResult } from '../types/execution';
+import type {
+  ExecutionFailureDiagnostic,
+  ExecutionResult,
+} from '../types/execution';
 import { GroupedCheckResults } from '../reviewer';
 import { withActiveSpan, addEvent as addOtelEvent } from '../telemetry/trace-helpers';
 import type { DebugVisualizerServer } from '../debug-visualizer/ws-server';
@@ -37,6 +40,7 @@ export class StateMachineRunner {
   private state: RunState;
   private debugServer?: DebugVisualizerServer;
   private hasRun = false;
+  private runActive = false;
 
   constructor(context: EngineContext, debugServer?: DebugVisualizerServer) {
     this.context = context;
@@ -82,9 +86,14 @@ export class StateMachineRunner {
    */
   async run(): Promise<ExecutionResult> {
     this.hasRun = true;
+    this.runActive = true;
     try {
       // Emit initial state transition event
-      this.emitEvent({ type: 'StateTransition', from: 'Init', to: 'Init' });
+      this.emitEvent({
+        type: 'StateTransition',
+        from: this.state.currentState,
+        to: this.state.currentState,
+      });
 
       // Main event loop
       while (!this.isTerminalState(this.state.currentState)) {
@@ -124,7 +133,23 @@ export class StateMachineRunner {
       };
       this.emitEvent({ type: 'Shutdown', error: serializedError });
       throw error;
+    } finally {
+      this.runActive = false;
     }
+  }
+
+  requestCatalogReconciliation(ownerCheck: string) {
+    if (!this.runActive) {
+      const error = new Error('Catalog reconciliation requires an active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return this.context.journal.requestCatalogReconciliation({
+      sessionId: this.context.sessionId,
+      ownerCheck,
+    });
   }
 
   /**
@@ -231,17 +256,46 @@ export class StateMachineRunner {
    * M4: Streams events to debug visualizer for time-travel debugging
    */
   private emitEvent(event: EngineEvent): void {
-    this.state.historyLog.push(event);
+    // In Graph v2 claim mode the ordered journal is authoritative. Scheduling
+    // must be committed and projected before any mutable history, EventBus,
+    // telemetry, hook, or debug-view observation.
+    let eventForObservers = event;
+    if (event.type === 'CheckScheduled' && this.context.claimPlan?.active) {
+      if (!event.attemptId || event.fence === undefined) {
+        throw new Error(`Claim-mode CheckScheduled for ${event.checkId} lacks attempt authority`);
+      }
+      const scheduled = event.nodeGenerationId
+        ? this.context.journal.scheduleGeneratedAttempt({
+            nodeGenerationId: event.nodeGenerationId,
+            attemptId: event.attemptId,
+            fence: event.fence,
+          })
+        : event.requestId
+          ? this.context.journal.scheduleCatalogRequestAttempt({
+              requestId: event.requestId,
+              attemptId: event.attemptId,
+              fence: event.fence,
+            })
+          : this.context.journal.scheduleCheck({
+              sessionId: this.context.sessionId,
+              checkId: event.checkId,
+              scope: event.scope,
+              attemptId: event.attemptId,
+              fence: event.fence,
+            });
+      eventForObservers = { ...event, claimIds: scheduled.claimIds };
+    }
+    this.state.historyLog.push(eventForObservers);
 
     // Queue events that require processing by WavePlanning
-    if (event.type === 'ForwardRunRequested' || event.type === 'WaveRetry') {
-      this.state.eventQueue.push(event);
+    if (eventForObservers.type === 'ForwardRunRequested' || eventForObservers.type === 'WaveRetry') {
+      this.state.eventQueue.push(eventForObservers);
     }
 
     // M4: Stream event to debug visualizer for live monitoring
     if (this.debugServer) {
       try {
-        this.streamEventToDebugServer(event);
+        this.streamEventToDebugServer(eventForObservers);
       } catch (_err) {
         // Ignore debug server errors
       }
@@ -258,21 +312,21 @@ export class StateMachineRunner {
           runId: this.context.sessionId,
           workflowId: (this.context as any).workflowId,
           wave: this.state.wave,
-          payload: event,
+          payload: eventForObservers,
         };
         void bus.emit(envelope);
       }
     } catch {}
 
-    // Call onCheckComplete hook for TUI streaming updates
-    if (event.type === 'CheckCompleted') {
+    // Call onCheckComplete hook for terminal completed/errored TUI updates.
+    if (eventForObservers.type === 'CheckCompleted' || eventForObservers.type === 'CheckErrored') {
       try {
         const hook = this.context.executionContext?.hooks?.onCheckComplete;
         if (typeof hook === 'function') {
-          const checkConfig = this.context.config?.checks?.[event.checkId];
+          const checkConfig = this.context.config?.checks?.[eventForObservers.checkId];
           hook({
-            checkId: event.checkId,
-            result: event.result,
+            checkId: eventForObservers.checkId,
+            result: eventForObservers.type === 'CheckCompleted' ? eventForObservers.result : {},
             checkConfig: checkConfig
               ? {
                   type: checkConfig.type,
@@ -286,8 +340,8 @@ export class StateMachineRunner {
       } catch {}
     }
 
-    if (this.context.debug && event.type !== 'StateTransition') {
-      logger.debug(`[StateMachine] Event: ${event.type}`);
+    if (this.context.debug && eventForObservers.type !== 'StateTransition') {
+      logger.debug(`[StateMachine] Event: ${eventForObservers.type}`);
     }
   }
 
@@ -360,6 +414,96 @@ export class StateMachineRunner {
   }
 
   /**
+   * Project failures that remain at the terminal frontier from the ordered
+   * execution events.  Failed-run counters are cumulative by design and
+   * therefore cannot distinguish a handled goto retry from an unresolved
+   * failure.
+   */
+  private collectUnresolvedFailures(): ExecutionFailureDiagnostic[] {
+    const latest = new Map<string, ExecutionFailureDiagnostic | null>();
+    const outcomeKey = (checkId: string, scope: unknown): string =>
+      `${checkId}\u0000${JSON.stringify(Array.isArray(scope) ? scope : [])}`;
+    const isExecutionFailureRule = (ruleId: unknown): boolean => {
+      if (typeof ruleId !== 'string') return false;
+      return (
+        ruleId.endsWith('/error') ||
+        ruleId.includes('/execution_error') ||
+        ruleId.includes('timeout') ||
+        (ruleId.endsWith('_fail_if') && ruleId !== 'global_fail_if')
+      );
+    };
+
+    for (const event of this.state.historyLog) {
+      if (event.type === 'CheckErrored') {
+        latest.set(outcomeKey(event.checkId, event.scope), {
+          checkName: event.checkId,
+          kind: 'exception',
+          message: event.error.message,
+          ...(event.scope?.length ? { scope: event.scope } : {}),
+        });
+        continue;
+      }
+      if (event.type !== 'CheckCompleted') continue;
+
+      const skippedMarker = (event.result as any)?.__skipped;
+      const key = outcomeKey(event.checkId, event.scope);
+      if (skippedMarker === 'dependency_failed') {
+        latest.set(key, {
+          checkName: event.checkId,
+          kind: 'dependency',
+          message: `Check skipped because a dependency failed: ${event.checkId}`,
+          skipReason: 'dependency_failed',
+          ...(event.scope?.length ? { scope: event.scope } : {}),
+        });
+        continue;
+      }
+
+      const issue = (event.result?.issues || []).find((candidate: any) =>
+        isExecutionFailureRule(candidate?.ruleId)
+      ) as any;
+      if (issue) {
+        latest.set(key, {
+          checkName: event.checkId,
+          kind: 'execution',
+          message: String(issue.message || 'check execution failed'),
+          ...(typeof issue.ruleId === 'string' ? { ruleId: issue.ruleId } : {}),
+          ...(event.scope?.length ? { scope: event.scope } : {}),
+        });
+      } else {
+        // A later successful completion clears an earlier routed failure for
+        // this exact check, while unrelated waves do not affect it.
+        latest.set(key, null);
+      }
+    }
+
+    // A few scheduler paths can record stats without emitting a check event.
+    // Use those stats only as a fallback; never let a stale skipped row
+    // overwrite a later event for the same check/scope.
+    for (const stats of this.state.stats.values()) {
+      const key = outcomeKey(stats.checkName, []);
+      if (latest.has(key)) continue;
+      if (stats.skipped && stats.skipReason === 'dependency_failed') {
+        latest.set(key, {
+          checkName: stats.checkName,
+          kind: 'dependency',
+          message: `Check skipped because a dependency failed: ${stats.checkName}`,
+          skipReason: stats.skipReason,
+        });
+      } else if (stats.errorMessage) {
+        latest.set(key, {
+          checkName: stats.checkName,
+          kind: 'exception',
+          message: stats.errorMessage,
+        });
+      }
+    }
+
+    return Array.from(latest.values())
+      .filter((failure): failure is ExecutionFailureDiagnostic => failure !== null)
+      .sort((a, b) => `${a.checkName}:${JSON.stringify(a.scope || [])}`.localeCompare(`${b.checkName}:${JSON.stringify(b.scope || [])}`));
+  }
+
+  /**
    * Build the final execution result
    */
   private buildExecutionResult(): ExecutionResult {
@@ -412,6 +556,7 @@ export class StateMachineRunner {
       );
     }
 
+    const unresolvedFailures = this.collectUnresolvedFailures();
     return {
       results,
       statistics: {
@@ -422,6 +567,7 @@ export class StateMachineRunner {
         skippedChecks: stats.filter(s => s.skipped).length,
         totalDuration,
         checks: stats,
+        ...(unresolvedFailures.length > 0 ? { unresolvedFailures } : {}),
       },
     };
   }

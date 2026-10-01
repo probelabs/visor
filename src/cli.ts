@@ -7,6 +7,17 @@ import * as path from 'path';
 // Import version from package.json to avoid hardcoding
 const packageJson = require('../package.json');
 
+function parsePositiveSafeInteger(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error('graph dispatch limit must be a positive safe integer');
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error('graph dispatch limit must be a positive safe integer');
+  }
+  return parsed;
+}
+
 /**
  * CLI argument parser and command handler
  */
@@ -52,10 +63,23 @@ export class CLI {
       .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
       .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
       .option('--config <path>', 'Path to configuration file')
+      .option('--proof-bin <path>', 'Absolute trusted Proof executable for governed graph runs')
+      .option('--governed-receipt <path>', 'Write the terminal governed receipt to an absolute new file')
+      .option('--graph-checkpoint-in <path>', 'Import an existing Graph-v2 checkpoint and continue it')
+      .option('--graph-checkpoint-out <path>', 'Write a quiescent Graph-v2 checkpoint to an absolute new file')
+      .option('--graph-checkpoint-owner <check>', 'Expansion owner to reconcile when importing a Graph-v2 checkpoint')
+      .option('--graph-dispatch-owner <owner>', 'Exact compiled Graph-v2 expansion owner to bound by keyed instance')
+      .option('--graph-dispatch-limit <count>', 'Maximum keyed Graph-v2 instances admitted in this run', parsePositiveSafeInteger)
+      .option('--graph-resume-ready', 'Resume only the ready Graph-v2 frontier from an imported checkpoint')
+      .option('--graph-retry-generation <generation-id>', 'Retry one exact failed Graph-v2 generated generation')
+      .option('--graph-retry-side-effects <disposition>', 'Side-effect disposition: absent, safely_idempotent, or isolated_draft_replay')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
-        value => parseInt(value, 10)
+        'AI elapsed timeout in milliseconds (0 disables the Visor deadline; default: 1800000ms)',
+        value => {
+          const trimmed = value.trim();
+          return trimmed.length > 0 ? Number(trimmed) : Number.NaN;
+        }
       )
       .option(
         '--max-parallelism <count>',
@@ -154,6 +178,12 @@ export class CLI {
       // Ensure argv has at least the program name for commander.js
       const normalizedArgv =
         argv.length > 0 && !argv[0].startsWith('-') ? argv : ['node', 'visor', ...argv];
+      if (normalizedArgv.filter(arg => arg === '--proof-bin' || arg.startsWith('--proof-bin=')).length > 1) {
+        throw new Error('--proof-bin may be supplied only once');
+      }
+      if (normalizedArgv.filter(arg => arg === '--governed-receipt' || arg.startsWith('--governed-receipt=')).length > 1) {
+        throw new Error('--governed-receipt may be supplied only once');
+      }
 
       // Create a fresh program instance for each parse to avoid state issues
       const tempProgram = new Command();
@@ -214,6 +244,16 @@ export class CLI {
         output: options.output as OutputFormat,
         outputFile: options.outputFile,
         configPath: options.config,
+        proofBin: typeof options.proofBin === 'string' ? options.proofBin : undefined,
+        governedReceipt: typeof options.governedReceipt === 'string' ? options.governedReceipt : undefined,
+        graphCheckpointIn: typeof options.graphCheckpointIn === 'string' ? options.graphCheckpointIn : undefined,
+        graphCheckpointOut: typeof options.graphCheckpointOut === 'string' ? options.graphCheckpointOut : undefined,
+        graphCheckpointOwner: typeof options.graphCheckpointOwner === 'string' ? options.graphCheckpointOwner : undefined,
+        graphDispatchOwner: typeof options.graphDispatchOwner === 'string' ? options.graphDispatchOwner : undefined,
+        graphDispatchLimit: typeof options.graphDispatchLimit === 'number' ? options.graphDispatchLimit : undefined,
+        graphResumeReady: Boolean(options.graphResumeReady),
+        graphRetryGeneration: typeof options.graphRetryGeneration === 'string' ? options.graphRetryGeneration : undefined,
+        graphRetrySideEffects: typeof options.graphRetrySideEffects === 'string' ? options.graphRetrySideEffects as import('./types/cli').GraphRetrySideEffects : undefined,
         timeout: options.timeout,
         maxParallelism: options.maxParallelism,
         debug: options.debug,
@@ -298,11 +338,46 @@ export class CLI {
       );
     }
 
+    if (options.proofBin !== undefined && options.proofBin !== true && (typeof options.proofBin !== 'string' || !path.isAbsolute(options.proofBin))) {
+      throw new Error('--proof-bin must be an absolute executable path');
+    }
+    if (options.governedReceipt !== undefined && options.governedReceipt !== true && (typeof options.governedReceipt !== 'string' || !path.isAbsolute(options.governedReceipt))) {
+      throw new Error('--governed-receipt must be an absolute new file path');
+    }
+    for (const [key, label] of [['graphCheckpointIn', '--graph-checkpoint-in'], ['graphCheckpointOut', '--graph-checkpoint-out']] as const) {
+      const value = options[key];
+      if (value !== undefined && value !== true && (typeof value !== 'string' || !path.isAbsolute(value))) {
+        throw new Error(`${label} must be an absolute file path`);
+      }
+    }
+    if (options.graphCheckpointOwner !== undefined && (typeof options.graphCheckpointOwner !== 'string' || options.graphCheckpointOwner.length === 0)) {
+      throw new Error('--graph-checkpoint-owner must be a non-empty check name');
+    }
+    if (options.graphDispatchOwner !== undefined && (typeof options.graphDispatchOwner !== 'string' || options.graphDispatchOwner.length === 0)) {
+      throw new Error('--graph-dispatch-owner must be a non-empty compiled expansion owner');
+    }
+    if (options.graphDispatchLimit !== undefined && (typeof options.graphDispatchLimit !== 'number' || !Number.isSafeInteger(options.graphDispatchLimit) || options.graphDispatchLimit < 1)) {
+      throw new Error('--graph-dispatch-limit must be a positive safe integer');
+    }
+    if (options.graphRetryGeneration !== undefined &&
+        (typeof options.graphRetryGeneration !== 'string' || !/^[0-9a-f]{64}$/.test(options.graphRetryGeneration))) {
+      throw new Error('--graph-retry-generation must be exactly 64 lowercase hexadecimal characters');
+    }
+    const retrySideEffects = options.graphRetrySideEffects;
+    if (retrySideEffects !== undefined &&
+        (typeof retrySideEffects !== 'string' ||
+          !['absent', 'safely_idempotent', 'isolated_draft_replay'].includes(retrySideEffects))) {
+      throw new Error('--graph-retry-side-effects must be absent, safely_idempotent, or isolated_draft_replay');
+    }
     // Validate timeout
     if (options.timeout !== undefined) {
-      if (typeof options.timeout !== 'number' || isNaN(options.timeout) || options.timeout < 0) {
+      if (
+        typeof options.timeout !== 'number' ||
+        !Number.isFinite(options.timeout) ||
+        options.timeout < 0
+      ) {
         throw new Error(
-          `Invalid timeout value: ${options.timeout}. Timeout must be a positive number in milliseconds.`
+          `Invalid timeout value: ${options.timeout}. Timeout must be a finite non-negative number in milliseconds.`
         );
       }
     }

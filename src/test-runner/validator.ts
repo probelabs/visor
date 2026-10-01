@@ -352,7 +352,8 @@ const schema: any = {
       type: 'object',
       additionalProperties: false,
       properties: {
-        step: { type: 'string' },
+        step: { type: 'string', minLength: 1 },
+        logical_step: { type: 'string', minLength: 1 },
         provider: { type: 'string' },
         op: { type: 'string' },
         args: { type: 'object' },
@@ -360,6 +361,23 @@ const schema: any = {
         at_least: { type: 'number' },
         at_most: { type: 'number' },
       },
+      // A step-count call must select either the exact execution key or the
+      // logical id of generated rows. Provider calls intentionally have no
+      // step selector and remain valid for backwards compatibility.
+      anyOf: [
+        {
+          required: ['provider'],
+          not: { anyOf: [{ required: ['step'] }, { required: ['logical_step'] }] },
+        },
+        {
+          required: ['step'],
+          not: { required: ['logical_step'] },
+        },
+        {
+          required: ['logical_step'],
+          not: { required: ['step'] },
+        },
+      ],
     },
     promptsExpectation: {
       type: 'object',
@@ -587,6 +605,7 @@ const knownKeys = new Set([
   'expect.llm_judge',
   // calls
   'step',
+  'logical_step',
   'provider',
   'op',
   'exactly',

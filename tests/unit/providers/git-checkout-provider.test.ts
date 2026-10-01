@@ -69,4 +69,45 @@ describe('GitCheckoutProvider ref fallback', () => {
 
     spy.mockRestore();
   });
+
+  it('forwards persist_worktree to the worktree manager', async () => {
+    const spy = jest.spyOn(worktreeManager, 'createWorktree').mockResolvedValueOnce({
+      id: 'persisted-wt',
+      path: '/tmp/persisted-worktree',
+      ref: 'main',
+      commit: 'abcdef',
+      metadata: {
+        worktree_id: 'persisted-wt',
+        created_at: new Date().toISOString(),
+        ref: 'main',
+        commit: 'abcdef',
+        repository: 'owner/repo',
+        pid: process.pid,
+        cleanup_on_exit: false,
+        bare_repo_path: '/tmp/repos/repo.git',
+        worktree_path: '/tmp/persisted-worktree',
+      },
+      locked: false,
+    } as any);
+
+    await provider.execute(
+      prInfoStub,
+      {
+        type: 'git-checkout',
+        ref: 'main',
+        repository: 'owner/repo',
+        persist_worktree: true,
+      } as any,
+      undefined,
+      {} as any
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      'owner/repo',
+      'https://github.com/owner/repo.git',
+      'main',
+      expect.objectContaining({ persistWorktree: true })
+    );
+    spy.mockRestore();
+  });
 });

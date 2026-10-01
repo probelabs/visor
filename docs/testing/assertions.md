@@ -19,6 +19,9 @@ expect:
   calls:
     - step: overview
       exactly: 1
+    # Generated checks can be counted across all instances by logical id.
+    - logical_step: inspect-native-component
+      at_least: 1
     - provider: github
       op: labels.add
       at_least: 1
@@ -32,6 +35,12 @@ expect:
 ```
 
 Counts are consistent everywhere: `exactly`, `at_least`, `at_most`.
+
+Use exactly one of `step` or `logical_step` for execution-count assertions.
+`step` matches the exact execution key (including generated opaque hashes),
+while `logical_step` aggregates only generated rows with that logical check id.
+Logical selectors do not implicitly alias exact step names, and cannot cover a
+top-level step with the same name.
 
 Supported providers:
 - `github`: GitHub API operations (e.g., `labels.add`, `issues.createComment`, `pulls.createReview`, `checks.create`)

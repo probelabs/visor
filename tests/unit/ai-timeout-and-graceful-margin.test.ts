@@ -3,6 +3,32 @@
  * constants used when computing Probe's maxOperationTimeout from Visor's hard timeout.
  */
 
+import { EventEmitter } from 'node:events';
+import { AIReviewService } from '../../src/ai-review-service';
+import { logger } from '../../src/logger';
+import * as traceHelpers from '../../src/telemetry/trace-helpers';
+import { ProbeAgent } from '@probelabs/probe';
+
+jest.mock('@probelabs/probe', () => ({
+  ProbeAgent: jest.fn(),
+}));
+jest.mock('../../src/telemetry/trace-helpers', () => ({
+  ...jest.requireActual('../../src/telemetry/trace-helpers'),
+  addEvent: jest.fn(),
+}));
+
+const timeoutPrInfo = {
+  number: 1,
+  title: 'timeout request event test',
+  body: '',
+  author: 'test',
+  base: 'main',
+  head: 'feature',
+  files: [],
+  totalAdditions: 0,
+  totalDeletions: 0,
+};
+
 // These constants mirror the values in src/ai-review-service.ts
 const PROBE_GRACEFUL_MARGIN_MS = 90_000;
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120_000
@@ -12,7 +38,7 @@ const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120_000
  */
 function deriveProbeTimeout(visorTimeout: number, aiTimeout?: number): number {
   return (
-    aiTimeout ||
+    aiTimeout ??
     (visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
       ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
       : visorTimeout)
@@ -67,9 +93,7 @@ describe('ai_timeout and graceful margin', () => {
     });
 
     it('should prefer explicit aiTimeout=0 over default derivation', () => {
-      // aiTimeout=0 is falsy, so falls through to default derivation
-      // This is by design: 0 means "not set"
-      expect(deriveProbeTimeout(1800000, 0)).toBe(1710000);
+      expect(deriveProbeTimeout(1800000, 0)).toBe(0);
     });
   });
 
@@ -102,6 +126,17 @@ describe('ai_timeout and graceful margin', () => {
     it('should allow user to disable margin subtraction via ai_timeout = visor timeout', () => {
       const visor = 1800000;
       expect(deriveProbeTimeout(visor, visor)).toBe(visor);
+    });
+
+    it('should derive the native onboarding author and reviewer request budgets', () => {
+      // The YAML keeps the check timeout larger than the inner AI budget;
+      // governed profiles receive these derived values as Probe requestTimeout.
+      expect(deriveProbeTimeout(1500000)).toBe(1410000);
+      expect(deriveProbeTimeout(480000)).toBe(390000);
+    });
+
+    it.each([1000, 3600000])('should preserve Probe request boundary %s', requestTimeout => {
+      expect(deriveProbeTimeout(1800000, requestTimeout)).toBe(requestTimeout);
     });
   });
 
@@ -178,5 +213,559 @@ describe('ai_timeout and graceful margin', () => {
         gracefulStopDeadline: 15000,
       });
     });
+  });
+});
+
+describe('safe Probe request timeout events', () => {
+  let warningLog: jest.SpyInstance;
+  let addEvent: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    addEvent = traceHelpers.addEvent as jest.Mock;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it.each([
+    ['initialize', 'acquire'],
+    ['tools/call', 'query'],
+  ])('records only the safe %s/%s request timeout event', async (method, boundary) => {
+    const events = new EventEmitter();
+    const record = {
+      category: 'request_timeout',
+      method,
+      boundary,
+      timeout_ms: 123456,
+      profileId: 'luna-xhigh-readonly-v1',
+      sessionId: 'session-safe-1',
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      events,
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(async () => {
+        events.emit('timeout.request', record);
+        return JSON.stringify({ issues: [] });
+      }),
+    }));
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).resolves.toEqual(
+      expect.objectContaining({ issues: [] })
+    );
+
+    const timeoutLines = warningLog.mock.calls
+      .map(([message]) => message)
+      .filter((message): message is string => message.startsWith('timeout.request '));
+    expect(timeoutLines).toEqual([`timeout.request ${JSON.stringify(record)}`]);
+    expect(addEvent.mock.calls.filter(([name]) => name === 'visor.provider_request_timeout')).toEqual([
+      ['visor.provider_request_timeout', record],
+    ]);
+  });
+
+  it('ignores malformed timeout events without logging unsafe fields', async () => {
+    const events = new EventEmitter();
+    const malformed = {
+      category: 'request_timeout',
+      method: 'tools/call',
+      boundary: 'acquire',
+      timeout_ms: 123456,
+      profileId: 'luna-xhigh-readonly-v1',
+      sessionId: 'session-safe-1',
+      params: { secret: 'must-not-be-logged' },
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      events,
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(async () => {
+        events.emit('timeout.request', malformed);
+        return JSON.stringify({ issues: [] });
+      }),
+    }));
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).resolves.toEqual(
+      expect.objectContaining({ issues: [] })
+    );
+
+    expect(
+      warningLog.mock.calls.filter(([message]) =>
+        typeof message === 'string' && message.startsWith('timeout.request ')
+      )
+    ).toHaveLength(0);
+    expect(addEvent.mock.calls.some(([name]) => name === 'visor.provider_request_timeout')).toBe(
+      false
+    );
+    expect(warningLog.mock.calls.flat().join(' ')).not.toContain('must-not-be-logged');
+  });
+});
+
+describe('per-call ProbeAgent ownership cleanup', () => {
+  let warningLog: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  function profileService(timeout: number): AIReviewService {
+    return new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+      timeout,
+      aiTimeout: 1000,
+    });
+  }
+
+  it('cancels and completes exact-agent cleanup before rejecting the original timeout', async () => {
+    let cleanupCompleted = false;
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockImplementation(async () => {
+        cleanupCompleted = true;
+      }),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(25).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 25ms'
+    );
+
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+    expect(cleanupCompleted).toBe(true);
+  });
+
+  it('preserves timeout and sanitized warning when cleanup rejects', async () => {
+    const privateCleanupFailure = 'private cleanup transport payload';
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockRejectedValue(new Error(privateCleanupFailure)),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(25).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 25ms'
+    );
+
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+    expect(warningLog).toHaveBeenCalledWith('probe.agent_cleanup_failed');
+    expect(warningLog.mock.calls.flat().join(' ')).not.toContain(privateCleanupFailure);
+  });
+
+  it('bounds a hanging cleanup and still rejects with the original timeout', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockReturnValue(new Promise<string>(() => undefined)),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockReturnValue(new Promise<void>(() => undefined)),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    const startedAt = Date.now();
+    await expect(profileService(25).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 25ms'
+    );
+    const elapsed = Date.now() - startedAt;
+
+    expect(elapsed).toBeGreaterThanOrEqual(4_900);
+    expect(elapsed).toBeLessThan(6_500);
+    expect(warningLog).toHaveBeenCalledWith('probe.agent_cleanup_timed_out');
+  });
+
+  it('does not let a late answer win while timeout cleanup is settling', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(
+        () => new Promise<string>(resolve => setTimeout(() => resolve('{"issues":[]}'), 35))
+      ),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockImplementation(
+        () => new Promise<void>(resolve => setTimeout(resolve, 45))
+      ),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(20).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'AI review timed out after 20ms'
+    );
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans a newly-created agent once when answer rejects directly', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(new Error('answer failed')),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation(() => agent);
+
+    await expect(profileService(1000).executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'answer failed'
+    );
+
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves provider cancellation cleanup when the Visor timeout is zero', async () => {
+    const cancellation = Object.assign(new Error('provider cancelled'), { name: 'AbortError' });
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(cancellation),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation((options: Record<string, unknown>) => {
+      (agent as any).options = options;
+      return agent;
+    });
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+      timeout: 0,
+      aiTimeout: 0,
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).rejects.toThrow(
+      'provider cancelled'
+    );
+    expect((agent as any).options.maxOperationTimeout).toBe(0);
+    expect((agent as any).options.requestTimeout).toBe(0);
+    expect(agent.cancel).toHaveBeenCalledTimes(1);
+    expect(agent.cleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('explicit zero timeout wiring', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('forwards zero to Probe and allows a delayed response without a Visor deadline', async () => {
+    const agent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockImplementation(
+        () => new Promise<string>(resolve => setTimeout(() => resolve('{"issues":[]}'), 25))
+      ),
+      cancel: jest.fn(),
+      cleanup: jest.fn().mockResolvedValue(undefined),
+    };
+    (ProbeAgent as jest.Mock).mockImplementation((options: Record<string, unknown>) => {
+      (agent as any).options = options;
+      return agent;
+    });
+
+    const service = new AIReviewService({
+      codexExecutionProfile: 'luna-xhigh-readonly-v1',
+      path: process.cwd(),
+      timeout: 0,
+      aiTimeout: 0,
+    });
+    await expect(service.executeReview(timeoutPrInfo, 'inspect')).resolves.toEqual(
+      expect.objectContaining({ issues: [] })
+    );
+    expect((agent as any).options.maxOperationTimeout).toBe(0);
+    expect((agent as any).options.requestTimeout).toBe(0);
+    expect(agent.cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('public governed raw-item failure warning', () => {
+  let warningLog: jest.SpyInstance;
+  let consoleError: jest.SpyInstance;
+
+  function typedGovernedFailure(): Error {
+    const failure = new Error('secret raw provider payload');
+    Object.defineProperty(failure, 'name', {
+      value: 'GovernedAnswerFailure',
+      enumerable: false,
+    });
+    Object.assign(failure, {
+      answerFailureStage: 'provider_engine',
+      providerEngineFailureBoundary: 'query',
+      providerEngineDiagnostic: {
+        version: 'probe.governed-codex-exec-failure/v1',
+        code: 'GOVERNED_CODEX_EXEC_ITEM',
+        event: {
+          source: 'codex-exec-rejected-item/v1',
+          predicate: 'item_status',
+          eventType: 'item.completed',
+          itemType: 'command_execution',
+          itemStatus: 'failed',
+          eventFields: [
+            { name: 'item', type: 'object' },
+            { name: 'type', type: 'string', size: 17 },
+          ],
+          itemFields: [
+            { name: 'command', type: 'string', size: 19 },
+            { name: 'status', type: 'string', size: 6 },
+          ],
+        },
+      },
+      hostile: { token: 'must-not-cross-the-boundary' },
+    });
+    return failure;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    warningLog = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('logs one fixed warning with the governed raw-item predicate and invocation identity', async () => {
+    const failure = Object.assign(new Error('raw model payload must not be public'), {
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'call_output_pairing',
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-123'
+      )
+    ).rejects.toThrow('raw model payload must not be public');
+
+    expect(warningLog).toHaveBeenCalledTimes(1);
+    expect(warningLog).toHaveBeenCalledWith(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName: 'spec_review',
+        nodeGenerationId: 'generation-123',
+        stage: 'native_event_grammar',
+        boundary: 'raw_item_predicate',
+        predicate: 'call_output_pairing',
+      })
+    );
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'tool_event_limit',
+    'tool_call_limit',
+    'message_content_array',
+    'message_content_empty',
+    'message_content_limit',
+    'message_content_kind',
+    'message_content_text_type',
+    'message_content_text_limit',
+    'reasoning_summary_array',
+    'reasoning_summary_nonempty',
+    'reasoning_encrypted_content_type',
+    'reasoning_encrypted_content_limit',
+    'tool_output_array',
+    'tool_output_limit',
+    'tool_output_kind',
+    'tool_output_text_type',
+    'tool_output_text_limit',
+  ])
+  ('accepts the bounded %s predicate with the same public identity', async predicate => {
+    const failure = Object.assign(new Error('raw tool event payload stays private'), {
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: predicate,
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-tool-limit'
+      )
+    ).rejects.toThrow('raw tool event payload stays private');
+
+    expect(warningLog).toHaveBeenCalledWith(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName: 'spec_review',
+        nodeGenerationId: 'generation-tool-limit',
+        stage: 'native_event_grammar',
+        boundary: 'raw_item_predicate',
+        predicate,
+      })
+    );
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not normalize an unknown predicate or leak hostile error data', async () => {
+    const failure = Object.assign(new Error('secret raw payload /private/project'), {
+      name: 'SecretError',
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'secret_predicate',
+      payload: { token: 'secret-token' },
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-123'
+      )
+    ).rejects.toThrow('secret raw payload /private/project');
+
+    expect(warningLog).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the wrapped Probe failure when warning logging throws', async () => {
+    const failure = Object.assign(new Error('original governed failure'), {
+      answerFailureStage: 'native_event_grammar',
+      nativeEventFailureBoundary: 'raw_item_predicate',
+      nativeEventFailureRawItemPredicate: 'shape',
+    });
+    warningLog.mockImplementation(() => {
+      throw new Error('warning sink failed');
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-123'
+      )
+    ).rejects.toThrow('original governed failure');
+    expect(warningLog).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a closed typed governed failure and suppresses raw console output', async () => {
+    const failure = typedGovernedFailure();
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-typed'
+      )
+    ).rejects.toBe(failure);
+
+    expect(warningLog).toHaveBeenCalledWith(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName: 'spec_review',
+        nodeGenerationId: 'generation-typed',
+        failure: {
+          answerFailureStage: 'provider_engine',
+          providerEngineFailureBoundary: 'query',
+          providerEngineDiagnostic: {
+            version: 'probe.governed-codex-exec-failure/v1',
+            code: 'GOVERNED_CODEX_EXEC_ITEM',
+            event: {
+              source: 'codex-exec-rejected-item/v1',
+              predicate: 'item_status',
+              eventType: 'item.completed',
+              itemType: 'command_execution',
+              itemStatus: 'failed',
+              eventFields: [
+                { name: 'item', type: 'object' },
+                { name: 'type', type: 'string', size: 17 },
+              ],
+              itemFields: [
+                { name: 'command', type: 'string', size: 19 },
+                { name: 'status', type: 'string', size: 6 },
+              ],
+            },
+          },
+        },
+      })
+    );
+    const warning = warningLog.mock.calls[0]?.[0] as string;
+    expect(warning).not.toContain('secret raw provider payload');
+    expect(warning).not.toContain('must-not-cross-the-boundary');
+    expect(warning).not.toContain('[Object]');
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('preserves a typed governed failure when its warning sink throws', async () => {
+    const failure = typedGovernedFailure();
+    warningLog.mockImplementation(() => {
+      throw new Error('warning sink failed');
+    });
+    (ProbeAgent as jest.Mock).mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
+      answer: jest.fn().mockRejectedValue(failure),
+    }));
+
+    const service = new AIReviewService({ provider: 'mock', model: 'mock' });
+    await expect(
+      service.executeReview(
+        timeoutPrInfo,
+        'inspect',
+        undefined,
+        'spec_review',
+        undefined,
+        'generation-typed-sink'
+      )
+    ).rejects.toBe(failure);
+    expect(warningLog).toHaveBeenCalledTimes(1);
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

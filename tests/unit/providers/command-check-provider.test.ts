@@ -309,6 +309,82 @@ describe('CommandCheckProvider', () => {
 
       expect(mockExecute).toHaveBeenCalledWith('echo "static command"', expect.any(Object));
     });
+
+    it('should expose the exact immutable generated scope to Liquid templates', async () => {
+      const componentScope = Object.freeze([
+        Object.freeze({
+          kind: 'keyed',
+          expansionOwnerCheck: 'discover-native-components',
+          key: 'component-a',
+          subgraphInstanceId: 'instance-a',
+        }),
+      ]);
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'scope={{ scope | json }}',
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: `scope=${JSON.stringify(componentScope)}\n`,
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config, undefined, { scope: componentScope } as any);
+
+      expect(mockExecute).toHaveBeenCalledWith(
+        `scope=${JSON.stringify(componentScope)}`,
+        expect.any(Object)
+      );
+      expect(Object.isFrozen(componentScope)).toBe(true);
+      expect(Object.isFrozen(componentScope[0])).toBe(true);
+      expect(componentScope[0]).toMatchObject({
+        key: 'component-a',
+        subgraphInstanceId: 'instance-a',
+      });
+    });
+
+    it('should expose generated scope to the safe JavaScript template fallback', async () => {
+      const componentScope = Object.freeze([
+        Object.freeze({
+          kind: 'keyed',
+          expansionOwnerCheck: 'discover-native-components',
+          key: 'component-a',
+          subgraphInstanceId: 'instance-a',
+        }),
+      ]);
+      const rendered = (provider as any).renderWithJsExpressions(
+        'scope={{ scope?.[0]?.key }}',
+        {
+          pr: {},
+          files: [],
+          outputs: {},
+          env: {},
+          scope: componentScope,
+        }
+      );
+
+      expect(rendered).toBe('scope=component-a');
+      expect(Object.isFrozen(componentScope)).toBe(true);
+      expect(Object.isFrozen(componentScope[0])).toBe(true);
+    });
+
+    it('should render an empty scope for ordinary commands', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'scope={{ scope | json }}',
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'scope=[]\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(mockExecute).toHaveBeenCalledWith('scope=[]', expect.any(Object));
+    });
   });
 
   describe('Environment Variables', () => {
@@ -497,6 +573,63 @@ describe('CommandCheckProvider', () => {
       expect((result as any).output).toEqual({
         transformed: 'raw text',
       });
+    });
+
+    it('should keep transform snapshots local to concurrent executions', async () => {
+      const checkoutConfig: CheckProviderConfig = {
+        type: 'command',
+        exec: 'checkout-command',
+      };
+      const roleConfig: CheckProviderConfig = {
+        type: 'command',
+        exec: 'role-command',
+        transform_js: '({ text: output })',
+      };
+
+      let releaseCheckout!: () => void;
+      const checkoutReleased = new Promise<void>(resolve => {
+        releaseCheckout = resolve;
+      });
+      let signalCheckoutStarted!: () => void;
+      const checkoutStarted = new Promise<void>(resolve => {
+        signalCheckoutStarted = resolve;
+      });
+
+      mockExecute.mockImplementation(async command => {
+        if (command === 'checkout-command') {
+          signalCheckoutStarted();
+          await checkoutReleased;
+          return {
+            stdout: '{"kind":"checkout","status":"ready"}\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        if (command === 'role-command') {
+          return {
+            stdout: 'role output\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        throw new Error(`unexpected command: ${command}`);
+      });
+
+      const checkoutPromise = provider.execute(mockPRInfo, checkoutConfig);
+      await checkoutStarted;
+      await expect(provider.execute(mockPRInfo, roleConfig)).resolves.toMatchObject({
+        issues: [],
+        output: {text: 'role output'},
+      });
+
+      releaseCheckout();
+      const checkoutResult = (await checkoutPromise) as any;
+      expect(checkoutResult).toMatchObject({
+        issues: [],
+        output: {kind: 'checkout', status: 'ready'},
+      });
+      expect(checkoutResult.output).toEqual({kind: 'checkout', status: 'ready'});
+      expect(checkoutResult).not.toHaveProperty('text');
     });
   });
 

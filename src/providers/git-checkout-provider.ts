@@ -79,6 +79,14 @@ export class GitCheckoutProvider extends CheckProvider {
       }
     }
 
+    if (
+      checkoutConfig.persist_worktree !== undefined &&
+      typeof checkoutConfig.persist_worktree !== 'boolean'
+    ) {
+      logger.error('Invalid config: persist_worktree must be a boolean');
+      return false;
+    }
+
     return true;
   }
 
@@ -201,6 +209,7 @@ export class GitCheckoutProvider extends CheckProvider {
           sessionId: (context as any)?.sessionId || (context as any)?._parentContext?.sessionId,
           fetchDepth: checkoutConfig.fetch_depth,
           cloneTimeoutMs: checkoutConfig.clone_timeout_ms,
+          persistWorktree: checkoutConfig.persist_worktree,
         }
       );
 

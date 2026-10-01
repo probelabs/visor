@@ -5,6 +5,11 @@ import type { GroupedCheckResults } from '../reviewer';
  */
 export interface CheckExecutionStats {
   checkName: string;
+  /**
+   * Logical check id for a generated execution row. This is intentionally
+   * optional: legacy/top-level rows continue to be identified by checkName.
+   */
+  logicalCheckName?: string;
   totalRuns: number; // How many times the check executed (1 or forEach iterations)
   successfulRuns: number;
   failedRuns: number;
@@ -35,6 +40,21 @@ export interface CheckExecutionStats {
 }
 
 /**
+ * A failure that is still unresolved at the terminal execution frontier.
+ *
+ * This is deliberately distinct from failedRuns: routing may legitimately
+ * record an earlier failed attempt before the same check succeeds.
+ */
+export interface ExecutionFailureDiagnostic {
+  checkName: string;
+  kind: 'exception' | 'execution' | 'dependency';
+  message: string;
+  ruleId?: string;
+  skipReason?: CheckExecutionStats['skipReason'];
+  scope?: Array<{ check: string; index: number }>;
+}
+
+/**
  * Overall execution statistics for all checks
  */
 export interface ExecutionStatistics {
@@ -45,6 +65,8 @@ export interface ExecutionStatistics {
   skippedChecks: number;
   totalDuration: number;
   checks: CheckExecutionStats[];
+  /** Failures still present in the final per-check execution state. */
+  unresolvedFailures?: ExecutionFailureDiagnostic[];
 }
 
 /**

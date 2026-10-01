@@ -1,0 +1,127 @@
+version: '1.0'
+max_parallelism: 3
+workspace: {enabled: false}
+
+claim_types:
+  component.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [components]
+      properties:
+        components:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, path, revision]
+            properties:
+              id: {type: string, minLength: 1}
+              path: {type: string, minLength: 1}
+              revision: {type: integer, minimum: 1}
+
+  component.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, path, revision]
+      properties:
+        id: {type: string, minLength: 1}
+        path: {type: string, minLength: 1}
+        revision: {type: integer, minimum: 1}
+
+  spec-work.catalog@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [specs]
+      properties:
+        specs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, revision, source]
+            properties:
+              id: {type: string, minLength: 1}
+              revision: {type: integer, minimum: 1}
+              source: {type: string, minLength: 1}
+
+  spec-work.item@1:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, revision, source]
+      properties:
+        id: {type: string, minLength: 1}
+        revision: {type: integer, minimum: 1}
+        source: {type: string, minLength: 1}
+
+  spec-work.authored@1: &spec_result
+    schema:
+      type: object
+      additionalProperties: false
+      required: [id, stage]
+      properties:
+        id: {type: string, minLength: 1}
+        stage: {type: string, minLength: 1}
+  spec-work.review-1@1: *spec_result
+  spec-work.review-2@1: *spec_result
+  spec-work.hazards@1: *spec_result
+
+subgraphs:
+  onboard-component:
+    input: {name: component, claim: component.item@1}
+    checks:
+      enumerate-spec-work:
+        type: noop
+        consumes:
+          - {claim: component.item@1, as: component}
+        emits:
+          - {claim: spec-work.catalog@1, from: output}
+        expand:
+          claim: spec-work.catalog@1
+          template: review-spec
+          items_pointer: /specs
+          key_pointer: /id
+          item_claim: spec-work.item@1
+
+  review-spec:
+    input: {name: spec, claim: spec-work.item@1}
+    checks:
+      author-or-refresh:
+        type: noop
+        consumes:
+          - {claim: spec-work.item@1, as: spec}
+        emits:
+          - {claim: spec-work.authored@1, from: output}
+      spec-review-1:
+        type: noop
+        consumes:
+          - {claim: spec-work.authored@1, as: authored}
+        emits:
+          - {claim: spec-work.review-1@1, from: output}
+      spec-review-2:
+        type: noop
+        consumes:
+          - {claim: spec-work.review-1@1, as: review_1}
+        emits:
+          - {claim: spec-work.review-2@1, from: output}
+      hazard-analysis:
+        type: noop
+        consumes:
+          - {claim: spec-work.review-2@1, as: review_2}
+        emits:
+          - {claim: spec-work.hazards@1, from: output}
+
+checks:
+  discover-components:
+    type: noop
+    emits:
+      - {claim: component.catalog@1, from: output}
+    expand:
+      claim: component.catalog@1
+      template: onboard-component
+      items_pointer: /components
+      key_pointer: /id
+      item_claim: component.item@1

@@ -22,6 +22,7 @@ describe('CheckExecutionEngine', () => {
   let mockReviewer: any;
   let mockRegistry: jest.Mocked<CheckProviderRegistry>;
   let mockAIProvider: any;
+  let mockCommandProvider: any;
 
   const mockRepositoryInfo: GitRepositoryInfo = {
     title: 'Test Repository',
@@ -94,11 +95,22 @@ describe('CheckExecutionEngine', () => {
         ],
       })),
     };
+    mockCommandProvider = {
+      getName: jest.fn().mockReturnValue('command'),
+      getDescription: jest.fn().mockReturnValue('command provider'),
+      validateConfig: jest.fn().mockResolvedValue(true),
+      getSupportedConfigKeys: jest.fn().mockReturnValue([]),
+      isAvailable: jest.fn().mockResolvedValue(true),
+      getRequirements: jest.fn().mockReturnValue([]),
+      execute: jest.fn().mockResolvedValue({ issues: [] }),
+    };
 
     // Mock registry to return the AI provider
     mockRegistry = {
       hasProvider: jest.fn().mockReturnValue(true),
-      getProviderOrThrow: jest.fn().mockReturnValue(mockAIProvider),
+      getProviderOrThrow: jest.fn((providerName: string) =>
+        providerName === 'command' ? mockCommandProvider : mockAIProvider
+      ),
       getAvailableProviders: jest.fn().mockReturnValue(['ai', 'tool', 'script', 'webhook']),
     } as any;
 
@@ -222,6 +234,50 @@ describe('CheckExecutionEngine', () => {
       // Verify the execution completed successfully
       expect(result.checksExecuted).toEqual(['security']);
       expect(result.reviewSummary.issues).toBeDefined();
+    });
+
+    it('applies an explicit zero timeout only to AI dispatch', async () => {
+      const config: VisorConfig = {
+        version: '1.0',
+        checks: {
+          aiReview: {
+            type: 'ai',
+            prompt: 'Review',
+            timeout: 10,
+            ai: { timeout: 10, ai_timeout: 10 },
+          },
+          commandCheck: {
+            type: 'command',
+            exec: 'true',
+            timeout: 4321,
+          },
+        },
+      } as any;
+
+      mockAIProvider.execute.mockImplementationOnce(
+        async (_prInfo: unknown, providerConfig: { ai?: { timeout?: number } }) => {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          if ((providerConfig.ai?.timeout ?? 0) > 0 && (providerConfig.ai?.timeout ?? 0) < 50) {
+            throw new Error('authored AI timeout elapsed');
+          }
+          return { issues: [] };
+        }
+      );
+
+      await checkEngine.executeChecks({
+        checks: ['aiReview', 'commandCheck'],
+        config,
+        timeout: 0,
+        maxParallelism: 1,
+      });
+
+      expect((checkEngine as any)._lastContext.runtimeTimeoutMs).toBe(0);
+      const aiConfig = mockAIProvider.execute.mock.calls[0][1];
+      expect(aiConfig.ai).toEqual(expect.objectContaining({ timeout: 0, ai_timeout: 0 }));
+      expect(mockAIProvider.execute.mock.calls[0][3].deadline).toBeUndefined();
+
+      const commandConfig = mockCommandProvider.execute.mock.calls[0][1];
+      expect(commandConfig.timeout).toBe(4321);
     });
 
     it('should handle timeout option with default value', async () => {

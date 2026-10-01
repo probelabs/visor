@@ -1,5 +1,7 @@
 import { ProbeAgent } from '@probelabs/probe';
-import type { ProbeAgentOptions } from '@probelabs/probe';
+import type { GovernedCodexProfile, ProbeAgentOptions } from '@probelabs/probe';
+import fs from 'fs';
+import path from 'path';
 import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
@@ -12,6 +14,7 @@ import { processDiffWithOutline } from './utils/diff-processor';
 import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
 import { formatUserFacingExecutionError } from './utils/user-facing-error';
 import { extractFileSections, replaceFileSections } from './slack/markdown';
+import { sanitizeGovernedAnswerFailure } from './providers/governed-probe-runner';
 
 /**
  * Grace period (ms) subtracted from Visor's hard timeout to derive Probe's
@@ -27,6 +30,268 @@ const PROBE_GRACEFUL_MARGIN_MS = 90_000;
  * as-is because there isn't enough room for a meaningful margin.
  */
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
+const PROBE_REQUEST_TIMEOUT_MIN_MS = 1_000;
+const PROBE_REQUEST_TIMEOUT_MAX_MS = 3_600_000;
+const PROBE_AGENT_CLEANUP_TIMEOUT_MS = 5_000;
+
+const LUNA_READONLY_PROFILE = 'luna-xhigh-readonly-v1' as const;
+const LUNA_READONLY_TOOLS = ['search', 'extract', 'listFiles'] as const;
+const LUNA_READONLY_MODEL = 'gpt-5.6-luna' as const;
+const LUNA_ISOLATED_WRITER_PROFILE = 'luna-xhigh-isolated-writer-v1' as const;
+const LUNA_WRITER_PROBE_TOOLS = ['search', 'extract', 'listFiles'] as const;
+const LUNA_WRITER_CODEX_TOOLS = ['apply_patch', 'exec'] as const;
+
+/**
+ * Build the profile object consumed by Probe's existing governed Codex path.
+ * This is deliberately the v1 profile: ordinary onboarding uses Probe's
+ * regular answer() API and does not produce Proof candidate/admission data.
+ */
+function buildLunaReadonlyProfile(cwd: string): GovernedCodexProfile {
+  return {
+    version: 'probe.governed-codex-profile/v1',
+    profileId: LUNA_READONLY_PROFILE,
+    engine: 'codex',
+    model: LUNA_READONLY_MODEL,
+    reasoningEffort: 'xhigh',
+    sandbox: 'read-only',
+    approvalPolicy: 'never',
+    cwd,
+    probeTools: [...LUNA_READONLY_TOOLS],
+    fallback: false,
+    retries: 0,
+  };
+}
+
+/**
+ * Build the v3 profile consumed by Probe's isolated native writer path.
+ * The checked-in SDK may predate v3, so the narrow cast keeps this Visor
+ * consumer source-compatible until the reviewed Probe package is installed.
+ */
+function buildLunaIsolatedWriterProfile(cwd: string): GovernedCodexProfile {
+  return {
+    version: 'probe.governed-codex-profile/v3',
+    profileId: LUNA_ISOLATED_WRITER_PROFILE,
+    engine: 'codex',
+    model: LUNA_READONLY_MODEL,
+    reasoningEffort: 'xhigh',
+    sandbox: 'workspace-write',
+    approvalPolicy: 'never',
+    cwd,
+    probeMcpTools: [...LUNA_WRITER_PROBE_TOOLS],
+    codexNativeTools: [...LUNA_WRITER_CODEX_TOOLS],
+    fallback: false,
+    retries: 0,
+  } as unknown as GovernedCodexProfile;
+}
+
+function resolveLunaReadonlyCwd(config: AIReviewConfig): string {
+  const configured = config.path || config.allowedFolders?.[0] || process.cwd();
+  const candidate = path.resolve(configured);
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(candidate);
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires an existing run working directory: ${candidate}`
+    );
+  }
+  try {
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires a directory run working directory: ${resolved}`
+    );
+  }
+  return resolved;
+}
+
+function assertLunaReadonlyConfig(config: AIReviewConfig): void {
+  if (config.codexExecutionProfile !== LUNA_READONLY_PROFILE) {
+    throw new Error(
+      `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
+    );
+  }
+  if (config.codexWorkingDirectoryFrom !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects an isolated writer worktree selector`
+    );
+  }
+
+  // Probe's Codex engine honors USE_CLAUDE_CODE independently of the
+  // explicit provider option. Reject the process-level override rather than
+  // mutating global environment state in a concurrent worker.
+  if (process.env.USE_CLAUDE_CODE === 'true') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} conflicts with USE_CLAUDE_CODE=true`
+    );
+  }
+
+  // A profile-selected call cannot inherit a mutable or multi-provider path.
+  if (config.provider !== undefined && config.provider !== 'codex') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} conflicts with provider ${String(config.provider)}`
+    );
+  }
+  if (config.model !== undefined && config.model !== LUNA_READONLY_MODEL) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} conflicts with model ${String(config.model)}`
+    );
+  }
+  if (config.retry !== undefined || config.fallback !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires fallback=false and retries=0`
+    );
+  }
+  if (config.allowEdit === true || config.allowBash === true || config.bashConfig !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects edit/create/bash capabilities`
+    );
+  }
+  if (
+    config.enableDelegate === true ||
+    config.enableTasks === true ||
+    config.enableExecutePlan === true
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects delegation/tasks/execute_plan`
+    );
+  }
+  if (
+    config.disableTools === true ||
+    (config.allowedTools !== undefined &&
+      (!Array.isArray(config.allowedTools) ||
+        config.allowedTools.length !== LUNA_READONLY_TOOLS.length ||
+        config.allowedTools.some((tool, index) => tool !== LUNA_READONLY_TOOLS[index])))
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_READONLY_PROFILE} requires allowedTools exactly [search,extract,listFiles]`
+    );
+  }
+
+  const cwd = resolveLunaReadonlyCwd(config);
+  if (config.allowedFolders !== undefined) {
+    if (config.allowedFolders.length !== 1) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects extra allowed folders`
+      );
+    }
+    let folder: string;
+    try {
+      folder = fs.realpathSync(path.resolve(config.allowedFolders[0]));
+    } catch {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} rejects unresolved allowed folders`
+      );
+    }
+    if (folder !== cwd) {
+      throw new Error(
+        `codex_execution_profile ${LUNA_READONLY_PROFILE} requires allowedFolders to equal the run working directory`
+      );
+    }
+  }
+}
+
+function resolveLunaIsolatedWriterCwd(config: AIReviewConfig): string {
+  if (!config.codexWorkingDirectoryFrom) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires codex_working_directory_from`
+    );
+  }
+  if (!config.path || !config.cwd || !config.workspacePath) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires a selector-bound working directory`
+    );
+  }
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(config.path);
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires an existing worktree: ${config.path}`
+    );
+  }
+  try {
+    if (!fs.statSync(resolved).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires a directory worktree: ${resolved}`
+    );
+  }
+  if (config.cwd !== resolved || config.workspacePath !== resolved) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires cwd, path, and workspacePath to agree`
+    );
+  }
+  if (
+    !Array.isArray(config.allowedFolders) ||
+    config.allowedFolders.length !== 1 ||
+    config.allowedFolders[0] !== resolved
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires one selector-bound allowed folder`
+    );
+  }
+  return resolved;
+}
+
+function assertLunaIsolatedWriterConfig(config: AIReviewConfig): void {
+  if (config.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE) {
+    throw new Error(
+      `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
+    );
+  }
+  if (process.env.USE_CLAUDE_CODE === 'true') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} conflicts with USE_CLAUDE_CODE=true`
+    );
+  }
+  if (config.provider !== undefined && config.provider !== 'codex') {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} conflicts with provider ${String(config.provider)}`
+    );
+  }
+  if (config.model !== undefined && config.model !== LUNA_READONLY_MODEL) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} conflicts with model ${String(config.model)}`
+    );
+  }
+  if (config.retry !== undefined || config.fallback !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires fallback=false and retries=0`
+    );
+  }
+  if (config.allowEdit !== true || config.allowBash === true || config.bashConfig !== undefined) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires edit enabled and rejects Probe bash`
+    );
+  }
+  if (
+    config.enableDelegate === true ||
+    config.enableTasks === true ||
+    config.enableExecutePlan === true
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects delegation/tasks/execute_plan`
+    );
+  }
+  if (
+    config.disableTools === true ||
+    (config.allowedTools !== undefined &&
+      (!Array.isArray(config.allowedTools) ||
+        config.allowedTools.length !== LUNA_WRITER_PROBE_TOOLS.length ||
+        config.allowedTools.some((tool, index) => tool !== LUNA_WRITER_PROBE_TOOLS[index])))
+  ) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} requires allowedTools exactly [search,extract,listFiles]`
+    );
+  }
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    throw new Error(
+      `codex_execution_profile ${LUNA_ISOLATED_WRITER_PROFILE} rejects configured MCP servers`
+    );
+  }
+  resolveLunaIsolatedWriterCwd(config);
+}
 
 /**
  * Lightweight callback bridge for dynamically extending a withTimeout deadline.
@@ -45,6 +310,191 @@ class TimeoutExtender {
  */
 function log(...args: unknown[]): void {
   logger.debug(args.join(' '));
+}
+
+type SafeProviderRequestTimeout = {
+  category: 'request_timeout';
+  method: 'initialize' | 'tools/call';
+  boundary: 'acquire' | 'query';
+  timeout_ms: number;
+  profileId: typeof LUNA_READONLY_PROFILE | typeof LUNA_ISOLATED_WRITER_PROFILE;
+  sessionId: string | null;
+};
+
+const SAFE_TIMEOUT_REQUEST_KEYS = [
+  'category',
+  'method',
+  'boundary',
+  'timeout_ms',
+  'profileId',
+  'sessionId',
+] as const;
+const SAFE_TIMEOUT_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SAFE_GOVERNED_INVOCATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const GOVERNED_RAW_ITEM_FAILURE_PREDICATES = new Set([
+  'shape',
+  'type',
+  'id',
+  'duplicate',
+  'phase',
+  'content',
+  'passthrough',
+  'tool_name_or_allow',
+  'status',
+  'input',
+  'call_output_pairing',
+  'event_limit',
+  'tool_event_limit',
+  'tool_call_limit',
+  'message_content_array',
+  'message_content_empty',
+  'message_content_limit',
+  'message_content_kind',
+  'message_content_text_type',
+  'message_content_text_limit',
+  'reasoning_summary_array',
+  'reasoning_summary_nonempty',
+  'reasoning_encrypted_content_type',
+  'reasoning_encrypted_content_limit',
+  'tool_output_array',
+  'tool_output_limit',
+  'tool_output_kind',
+  'tool_output_text_type',
+  'tool_output_text_limit',
+  'final_answer_cardinality',
+]);
+
+/**
+ * Preserve the small, public part of a governed Probe raw-item rejection
+ * before callProbeAgent wraps the typed error for callers. Probe owns the
+ * closed predicate vocabulary; this projection deliberately never includes
+ * the error message, name, payload, or any transport data.
+ */
+function warnGovernedRawItemFailure(
+  error: unknown,
+  checkName?: string,
+  nodeGenerationId?: string
+): boolean {
+  const typedGovernedFailure = (() => {
+    if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return false;
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(error, 'name');
+      return !!descriptor && 'value' in descriptor && descriptor.value === 'GovernedAnswerFailure';
+    } catch {
+      return false;
+    }
+  })();
+  try {
+    if (typedGovernedFailure) {
+      const safeCheckName = typeof checkName === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(checkName)
+        ? checkName : 'unknown';
+      const safeNodeGenerationId = typeof nodeGenerationId === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
+        ? nodeGenerationId : 'unknown';
+      logger.warn(
+        JSON.stringify({
+          category: 'probe_governed_failure',
+          checkName: safeCheckName,
+          nodeGenerationId: safeNodeGenerationId,
+          failure: sanitizeGovernedAnswerFailure(error),
+        })
+      );
+      return true;
+    }
+    if (
+      error === null ||
+      (typeof error !== 'object' && typeof error !== 'function') ||
+      typeof checkName !== 'string' ||
+      !SAFE_GOVERNED_INVOCATION_ID.test(checkName) ||
+      typeof nodeGenerationId !== 'string' ||
+      !SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
+    ) {
+      return;
+    }
+
+    const descriptors = Object.getOwnPropertyDescriptors(error);
+    const ownValue = (key: string): unknown => {
+      const descriptor = descriptors[key];
+      return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+    };
+    if (
+      ownValue('answerFailureStage') !== 'native_event_grammar' ||
+      ownValue('nativeEventFailureBoundary') !== 'raw_item_predicate'
+    ) {
+      return;
+    }
+    const predicate = ownValue('nativeEventFailureRawItemPredicate');
+    if (typeof predicate !== 'string' || !GOVERNED_RAW_ITEM_FAILURE_PREDICATES.has(predicate)) {
+      return;
+    }
+
+    logger.warn(
+      JSON.stringify({
+        category: 'probe_governed_failure',
+        checkName,
+        nodeGenerationId,
+        stage: 'native_event_grammar',
+        boundary: 'raw_item_predicate',
+        predicate,
+      })
+    );
+  } catch {
+    // Failure diagnostics must never mask or alter the governed failure.
+    return typedGovernedFailure;
+  }
+  return false;
+}
+
+/**
+ * Keep provider request-timeout telemetry to a fixed, non-sensitive record.
+ * Probe events may carry transport parameters or provider diagnostics; those
+ * are deliberately rejected rather than copied into logs or spans.
+ */
+function normalizeProviderRequestTimeout(data: unknown): SafeProviderRequestTimeout | undefined {
+  try {
+    if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined;
+    const record = data as Record<string, unknown>;
+    const keys = Reflect.ownKeys(record);
+    if (
+      keys.length !== SAFE_TIMEOUT_REQUEST_KEYS.length ||
+      keys.some(
+        key =>
+          typeof key !== 'string' ||
+          !(SAFE_TIMEOUT_REQUEST_KEYS as readonly string[]).includes(key)
+      )
+    ) {
+      return undefined;
+    }
+    if (
+      record.category !== 'request_timeout' ||
+      (record.method !== 'initialize' && record.method !== 'tools/call') ||
+      (record.boundary !== 'acquire' && record.boundary !== 'query') ||
+      (record.method === 'initialize' && record.boundary !== 'acquire') ||
+      (record.method === 'tools/call' && record.boundary !== 'query') ||
+      !Number.isInteger(record.timeout_ms) ||
+      (record.timeout_ms as number) < PROBE_REQUEST_TIMEOUT_MIN_MS ||
+      (record.timeout_ms as number) > PROBE_REQUEST_TIMEOUT_MAX_MS ||
+      (record.profileId !== LUNA_READONLY_PROFILE &&
+        record.profileId !== LUNA_ISOLATED_WRITER_PROFILE)
+    ) {
+      return undefined;
+    }
+    if (
+      record.sessionId !== null &&
+      (typeof record.sessionId !== 'string' || !SAFE_TIMEOUT_SESSION_ID.test(record.sessionId))
+    ) {
+      return undefined;
+    }
+    return {
+      category: 'request_timeout',
+      method: record.method as SafeProviderRequestTimeout['method'],
+      boundary: record.boundary as SafeProviderRequestTimeout['boundary'],
+      timeout_ms: record.timeout_ms as number,
+      profileId: record.profileId as SafeProviderRequestTimeout['profileId'],
+      sessionId: record.sessionId as string | null,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -544,7 +994,17 @@ export interface AIReviewConfig {
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 1800000ms (30 minutes)
   maxIterations?: number; // Maximum tool iterations for ProbeAgent
-  provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code';
+  provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code' | 'codex';
+  /** Closed Probe/Codex execution profile for ordinary governed AI work. */
+  codexExecutionProfile?: 'luna-xhigh-readonly-v1' | 'luna-xhigh-isolated-writer-v1';
+  /** Explicit opt-in Probe transport selected by native onboarding. */
+  governedCodexTransport?: 'exec-jsonl-default-auth-v1';
+  /** Absolute caller-selected Codex executable for the selected transport. */
+  codexBin?: string;
+  /** Caller-supplied SHA-256 (bare or sha256:-prefixed). */
+  codexSha256?: string;
+  /** Internal provenance selector bound by AICheckProvider from a git-checkout dependency. */
+  codexWorkingDirectoryFrom?: string;
   debug?: boolean; // Enable debug mode
   tools?: Array<{ name: string; [key: string]: unknown }>; // (unused) Legacy tool listing
   // Pass-through MCP server configuration for ProbeAgent
@@ -583,6 +1043,8 @@ export interface AIReviewConfig {
   // When provided, these are forwarded to ProbeAgent so tools like search/query
   // operate inside the isolated workspace/projects instead of the Visor repo root.
   path?: string;
+  cwd?: string;
+  workspacePath?: string;
   allowedFolders?: string[];
   // Completion prompt for post-completion validation/review (runs after attempt_completion)
   completionPrompt?: string;
@@ -669,6 +1131,30 @@ export class AIReviewService {
       ...config,
     };
 
+    // Validate the user-selected profile before provider auto-detection can
+    // replace an omitted provider with an environment-derived one.
+    if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+      assertLunaReadonlyConfig(this.config);
+    } else if (this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE) {
+      assertLunaIsolatedWriterConfig(this.config);
+    } else if (this.config.codexExecutionProfile !== undefined) {
+      throw new Error(
+        `Unsupported codex_execution_profile: ${String(this.config.codexExecutionProfile)}`
+      );
+    }
+    if (this.config.governedCodexTransport !== undefined) {
+      if (this.config.governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+          this.config.codexExecutionProfile === undefined ||
+          typeof this.config.codexBin !== 'string' ||
+          !path.isAbsolute(this.config.codexBin) ||
+          typeof this.config.codexSha256 !== 'string' ||
+          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(this.config.codexSha256)) {
+        throw new Error('governed Codex transport requires a governed profile and validated executable identity');
+      }
+    } else if (this.config.codexBin !== undefined || this.config.codexSha256 !== undefined) {
+      throw new Error('governed Codex executable requires an explicit transport');
+    }
+
     this.sessionRegistry = SessionRegistry.getInstance();
 
     // If debug was not explicitly provided, honor standard env flags so tests/CLI
@@ -730,7 +1216,8 @@ export class AIReviewService {
     customPrompt: string,
     schema?: string | Record<string, unknown>,
     checkName?: string,
-    sessionId?: string
+    sessionId?: string,
+    nodeGenerationId?: string
   ): Promise<ReviewSummary> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
@@ -802,18 +1289,63 @@ export class AIReviewService {
       }
     }
 
+    let createdAgent: TracedProbeAgent | undefined;
+    let createdAgentCleanup: Promise<void> | undefined;
+    let createdAgentCancelRequested = false;
+    const cleanupCreatedAgent = (cancel = false): Promise<void> => {
+      const agent = createdAgent;
+      if (!agent) return Promise.resolve();
+      if (cancel && !createdAgentCancelRequested) {
+        createdAgentCancelRequested = true;
+        try {
+          agent.cancel();
+        } catch {
+          // Cleanup below still has its own abort path.
+        }
+      }
+      if (!createdAgentCleanup) {
+        createdAgentCleanup = this.cleanupProbeAgent(agent);
+      }
+      return createdAgentCleanup;
+    };
+    const profileSelected =
+      this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+      this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE;
+
     try {
       // Create an extender so withTimeout can be dynamically extended when the
       // agent's negotiated timeout observer grants more time (timeout.extended event).
       const extender = new TimeoutExtender();
-      const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId, extender);
-      const timeoutMs = Math.max(0, this.config.timeout || 0);
+      const call = this.callProbeAgent(
+        prompt,
+        schema,
+        debugInfo,
+        checkName,
+        sessionId,
+        extender,
+        nodeGenerationId,
+        agent => {
+          // callProbeAgent invokes this immediately after construction, before
+          // initialization or answer() can yield.
+          createdAgent = agent;
+        },
+        () => cleanupCreatedAgent(true)
+      );
+      const timeoutMs = Math.max(0, this.config.timeout ?? 0);
       const {
         response,
         effectiveSchema,
+        parseSchema,
         sessionId: usedSessionId,
       } = timeoutMs > 0
-        ? await this.withTimeout(call, timeoutMs, 'AI review', sessionId, extender)
+        ? await this.withTimeout(
+            call,
+            timeoutMs,
+            'AI review',
+            sessionId,
+            extender,
+            () => cleanupCreatedAgent(true)
+          )
         : await call;
       const processingTime = Date.now() - startTime;
 
@@ -823,7 +1355,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+      const result = this.parseAIResponse(response, debugInfo, parseSchema ?? effectiveSchema);
 
       // Expose the session ID used for this call so the engine can reuse it later
       try {
@@ -836,6 +1368,16 @@ export class AIReviewService {
 
       return result;
     } catch (error) {
+      // A profile-selected runtime failure must remain a failure. In
+      // particular, debug mode must not turn a missing attestation, sandbox
+      // mismatch, provider override, or cleanup failure into a completed
+      // ordinary review summary.
+      if (
+        this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+        this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+      ) {
+        throw error;
+      }
       if (debugInfo) {
         debugInfo.errors = [error instanceof Error ? error.message : String(error)];
         debugInfo.processingTime = Date.now() - startTime;
@@ -856,6 +1398,12 @@ export class AIReviewService {
         };
       }
       throw error;
+    } finally {
+      // Governed profile agents are deliberately not registered for reuse.
+      // Close the exact per-call instance once the call has settled.
+      if (profileSelected) {
+        await cleanupCreatedAgent();
+      }
     }
   }
 
@@ -871,6 +1419,14 @@ export class AIReviewService {
     checkName?: string,
     sessionMode: 'clone' | 'append' = 'clone'
   ): Promise<ReviewSummary> {
+    if (
+      this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+      this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+    ) {
+      throw new Error(
+        `codex_execution_profile ${this.config.codexExecutionProfile} rejects session reuse`
+      );
+    }
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
 
@@ -978,8 +1534,8 @@ export class AIReviewService {
         checkName,
         extender
       );
-      const timeoutMs = Math.max(0, this.config.timeout || 0);
-      const { response, effectiveSchema } =
+      const timeoutMs = Math.max(0, this.config.timeout ?? 0);
+      const { response, effectiveSchema, parseSchema } =
         timeoutMs > 0
           ? await this.withTimeout(
               call,
@@ -997,7 +1553,7 @@ export class AIReviewService {
         debugInfo.processingTime = processingTime;
       }
 
-      const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+      const result = this.parseAIResponse(response, debugInfo, parseSchema ?? effectiveSchema);
 
       // Expose the session ID used for this call so the engine can clean it up
       try {
@@ -1053,13 +1609,31 @@ export class AIReviewService {
     ms: number,
     label = 'operation',
     sessionId?: string,
-    extender?: TimeoutExtender
+    extender?: TimeoutExtender,
+    onTimeout?: () => Promise<void> | void
   ): Promise<T> {
+    // An explicit zero timeout disables Visor's elapsed-time race. Provider
+    // and transport-local safety limits remain responsible for cancellation.
+    if (ms === 0) return await p;
+
     let timer: NodeJS.Timeout | undefined;
     const startTime = Date.now();
     let deadlineMs = ms; // total ms from startTime
+    let timedOut = false;
 
     try {
+      // Once the deadline fires, the in-flight call must not win the race
+      // while its bounded cleanup is still pending.
+      const guardedCall = new Promise<T>((resolve, reject) => {
+        p.then(
+          value => {
+            if (!timedOut) resolve(value);
+          },
+          error => {
+            if (!timedOut) reject(error);
+          }
+        );
+      });
       const timeout = new Promise<never>((_, reject) => {
         const scheduleTimer = () => {
           if (timer) clearTimeout(timer);
@@ -1071,11 +1645,25 @@ export class AIReviewService {
           timer = setTimeout(() => fireTimeout(reject), remaining);
         };
 
-        const fireTimeout = (rej: (reason: Error) => void) => {
+        const fireTimeout = async (rej: (reason: Error) => void) => {
+          if (timedOut) return;
+          timedOut = true;
+          if (timer) clearTimeout(timer);
+          const timeoutError = new Error(`${label} timed out after ${deadlineMs}ms`);
+
           // Signal the agent to wind down before the hard kill.
           // This gives the agent a chance to produce partial results
           // in its bonus wind-down steps before we reject the promise.
-          if (sessionId) {
+          // A per-call cleanup owns newly-created agents and intentionally
+          // bypasses the registry, which may contain an unrelated/shared
+          // session with the same ID.
+          if (onTimeout) {
+            try {
+              await onTimeout();
+            } catch {
+              // Preserve the original timeout; cleanup failures are private.
+            }
+          } else if (sessionId) {
             try {
               const agent = this.sessionRegistry.getSession(sessionId);
               if (agent && typeof (agent as any).triggerGracefulWindDown === 'function') {
@@ -1085,7 +1673,7 @@ export class AIReviewService {
               // Best-effort: don't let registry errors block the timeout
             }
           }
-          rej(new Error(`${label} timed out after ${deadlineMs}ms`));
+          rej(timeoutError);
         };
 
         // Allow the deadline to be extended dynamically
@@ -1109,7 +1697,7 @@ export class AIReviewService {
 
         scheduleTimer();
       });
-      return (await Promise.race([p, timeout])) as T;
+      return (await Promise.race([guardedCall, timeout])) as T;
     } finally {
       if (timer) clearTimeout(timer);
       if (extender) extender._listener = undefined;
@@ -1142,6 +1730,19 @@ export class AIReviewService {
         );
       }
 
+      events.on('timeout.request', (data: unknown) => {
+        const safeRecord = normalizeProviderRequestTimeout(data);
+        if (!safeRecord) return;
+
+        // Serialize only the normalized fixed-shape record. In particular,
+        // never include the original event, transport params, or diagnostics.
+        logger.warn(`timeout.request ${JSON.stringify(safeRecord)}`);
+        try {
+          const { addEvent } = require('./telemetry/trace-helpers');
+          addEvent('visor.provider_request_timeout', safeRecord);
+        } catch {}
+      });
+
       events.on(
         'timeout.windingDown',
         (data: { reason?: string; extensionsUsed?: number; totalExtraTimeMs?: number }) => {
@@ -1161,6 +1762,50 @@ export class AIReviewService {
     } catch {
       // Best-effort: older Probe versions may not have events
     }
+  }
+
+  /**
+   * Close one newly-created ProbeAgent without allowing cleanup to replace the
+   * caller's result or keep a timed-out review pending indefinitely.
+   */
+  private cleanupProbeAgent(agent: TracedProbeAgent): Promise<void> {
+    const cleanup = (agent as any).cleanup;
+    if (typeof cleanup !== 'function') return Promise.resolve();
+
+    return new Promise<void>(resolve => {
+      let settled = false;
+      const finish = (warning?: 'failed' | 'timed_out') => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (warning) {
+          // Keep cleanup diagnostics fixed-shape and free of provider/private
+          // error payloads, which may contain transport or workspace details.
+          try {
+            logger.warn(`probe.agent_cleanup_${warning}`);
+          } catch {
+            // A warning sink must not keep the timeout or cleanup promise open.
+          }
+        }
+        resolve();
+      };
+      const timer = setTimeout(
+        () => finish('timed_out'),
+        PROBE_AGENT_CLEANUP_TIMEOUT_MS
+      );
+
+      let result: unknown;
+      try {
+        result = cleanup.call(agent);
+      } catch {
+        finish('failed');
+        return;
+      }
+      Promise.resolve(result).then(
+        () => finish(),
+        () => finish('failed')
+      );
+    });
   }
 
   /**
@@ -1885,12 +2530,12 @@ ${this.escapeXml(processedFallbackDiff)}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     extender?: TimeoutExtender
-  ): Promise<{ response: string; effectiveSchema?: string }> {
+  ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown> }> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing (session reuse)');
       const response = await this.generateMockResponse(prompt, _checkName, schema);
-      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
+      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema, parseSchema: schema };
     }
 
     log('🔄 Reusing existing ProbeAgent session for AI review...');
@@ -1899,13 +2544,14 @@ ${this.escapeXml(processedFallbackDiff)}
 
     // Update maxOperationTimeout for this reuse call (timeout may differ from original)
     // Use explicit aiTimeout if set, otherwise default to timeout - 90s
-    const reuseTimeoutMs = this.config.timeout || 0;
+    const reuseTimeoutMs = this.config.timeout ?? 0;
     const reuseAiTimeout =
-      this.config.aiTimeout ||
-      (reuseTimeoutMs > MIN_TIMEOUT_FOR_MARGIN_MS
-        ? reuseTimeoutMs - PROBE_GRACEFUL_MARGIN_MS
-        : reuseTimeoutMs);
-    if (reuseAiTimeout > 0) {
+      this.config.aiTimeout !== undefined
+        ? this.config.aiTimeout
+        : reuseTimeoutMs > MIN_TIMEOUT_FOR_MARGIN_MS
+          ? reuseTimeoutMs - PROBE_GRACEFUL_MARGIN_MS
+          : reuseTimeoutMs;
+    if (reuseAiTimeout !== undefined) {
       (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
     // Update negotiated timeout / graceful stop options on session reuse.
@@ -1937,6 +2583,7 @@ ${this.escapeXml(processedFallbackDiff)}
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
       let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
+      let parseSchema: string | Record<string, unknown> | undefined = schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -1947,6 +2594,7 @@ ${this.escapeXml(processedFallbackDiff)}
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
           effectiveSchema = undefined; // Schema loading failed, treat as no schema
+          parseSchema = undefined;
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -2282,7 +2930,7 @@ ${'='.repeat(60)}
         }
       }
 
-      return { response, effectiveSchema };
+      return { response, effectiveSchema, parseSchema };
     } catch (error) {
       logger.error(
         `❌ ProbeAgent session reuse failed: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -2302,8 +2950,11 @@ ${'='.repeat(60)}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     providedSessionId?: string,
-    extender?: TimeoutExtender
-  ): Promise<{ response: string; effectiveSchema?: string; sessionId: string }> {
+    extender?: TimeoutExtender,
+    nodeGenerationId?: string,
+    onAgentCreated?: (agent: TracedProbeAgent) => void,
+    onCallFailure?: () => Promise<void> | void
+  ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown>; sessionId: string }> {
     // Derive a stable session ID for this call so the engine can reuse it later
     const sessionId =
       providedSessionId ||
@@ -2322,6 +2973,7 @@ ${'='.repeat(60)}
         return {
           response,
           effectiveSchema: typeof schema === 'object' ? 'custom' : schema,
+          parseSchema: schema,
           sessionId,
         };
       }
@@ -2345,6 +2997,17 @@ ${'='.repeat(60)}
     };
 
     try {
+      // Generated graph nodes can execute the same check concurrently in a
+      // single millisecond. Keep their debug artifacts distinct without
+      // changing ordinary check filenames or session/registry behavior.
+      const diagnosticIdentity =
+        typeof nodeGenerationId === 'string' && nodeGenerationId.length > 0
+          ? nodeGenerationId
+          : undefined;
+      const diagnosticSuffix = diagnosticIdentity
+        ? `-${diagnosticIdentity.replace(/[^A-Za-z0-9._-]/g, '_')}`
+        : '';
+
       // Set environment variables for ProbeAgent
       // ProbeAgent SDK expects these to be in the environment
       if (this.config.provider === 'claude-code' && this.config.apiKey) {
@@ -2387,7 +3050,9 @@ If you receive a message that the time limit has been reached or your operation 
       );
 
       const options: TracedProbeAgentOptions = {
-        sessionId: sessionId,
+        ...(this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+          ? {}
+          : { sessionId }),
         // Prefer config promptType, then env override, else fallback to code-review when schema is set
         promptType:
           this.config.promptType && this.config.promptType.trim()
@@ -2461,13 +3126,14 @@ If you receive a message that the time limit has been reached or your operation 
       // Wire Probe's graceful timeout (maxOperationTimeout).
       // Use explicit aiTimeout if set, otherwise default to timeout - 90s so Probe's
       // wind-down (4 bonus steps + 60s safety net) fires before Visor's hard kill.
-      const visorTimeout = this.config.timeout || 0;
+      const visorTimeout = this.config.timeout ?? 0;
       const aiTimeout =
-        this.config.aiTimeout ||
-        (visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
-          ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
-          : visorTimeout);
-      if (aiTimeout > 0) {
+        this.config.aiTimeout !== undefined
+          ? this.config.aiTimeout
+          : visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
+            ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
+            : visorTimeout;
+      if (aiTimeout !== undefined) {
         (options as any).maxOperationTimeout = aiTimeout;
       }
 
@@ -2609,11 +3275,93 @@ If you receive a message that the time limit has been reached or your operation 
         options.model = this.config.model;
       }
 
+      // Profile-selected ordinary AI uses Probe's existing governed Codex
+      // construction, while retaining the normal answer() API. The profile
+      // is deliberately applied last so environment/provider defaults and
+      // generic options cannot weaken the boundary.
+      if (this.config.codexExecutionProfile === LUNA_READONLY_PROFILE) {
+        const cwd = resolveLunaReadonlyCwd(this.config);
+        const governedCodexProfile = buildLunaReadonlyProfile(cwd);
+        options.provider = 'codex';
+        options.model = LUNA_READONLY_MODEL;
+        options.path = cwd;
+        (options as any).cwd = cwd;
+        options.allowEdit = false;
+        (options as any).enableBash = false;
+        (options as any).bashConfig = undefined;
+        (options as any).enableDelegate = false;
+        (options as any).enableTasks = false;
+        (options as any).enableExecutePlan = false;
+        (options as any).searchDelegate = false;
+        (options as any).enableMcp = false;
+        (options as any).mcpConfig = undefined;
+        (options as any).allowedFolders = [cwd];
+        options.allowedTools = [...LUNA_READONLY_TOOLS];
+        (options as any).disableTools = false;
+        (options as any).retry = undefined;
+        (options as any).fallback = undefined;
+        options.governedCodexProfile = governedCodexProfile;
+      } else if (this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE) {
+        const cwd = resolveLunaIsolatedWriterCwd(this.config);
+        const governedCodexProfile = buildLunaIsolatedWriterProfile(cwd);
+        options.provider = 'codex';
+        options.model = LUNA_READONLY_MODEL;
+        options.path = cwd;
+        (options as any).cwd = cwd;
+        (options as any).workspacePath = cwd;
+        options.allowEdit = true;
+        (options as any).enableBash = false;
+        (options as any).bashConfig = undefined;
+        (options as any).enableDelegate = false;
+        (options as any).enableTasks = false;
+        (options as any).enableExecutePlan = false;
+        (options as any).searchDelegate = false;
+        (options as any).enableMcp = false;
+        (options as any).mcpConfig = undefined;
+        (options as any).allowedFolders = [cwd];
+        options.allowedTools = [...LUNA_WRITER_PROBE_TOOLS];
+        (options as any).disableTools = false;
+        (options as any).retry = undefined;
+        (options as any).fallback = undefined;
+        options.governedCodexProfile = governedCodexProfile;
+      }
+
+      if (this.config.governedCodexTransport !== undefined) {
+        // Probe owns the exec launch and its public JSONL receipt validator.
+        // This adapter carries only the explicit selector and caller-bound
+        // executable identity; it does not parse or recreate that receipt.
+        (options as ProbeAgentOptions & Record<string, unknown>).governedCodexTransport = this.config.governedCodexTransport;
+        (options as ProbeAgentOptions & Record<string, unknown>).codexBin = this.config.codexBin;
+        (options as ProbeAgentOptions & Record<string, unknown>).codexSha256 = this.config.codexSha256;
+      }
+
+      // Governed Codex calls must not inherit Probe's ambient REQUEST_TIMEOUT:
+      // bind the per-request timeout to the already-derived inner AI budget.
+      // Probe validates the same inclusive range, but fail closed here before
+      // constructing the agent so an invalid profile cannot dispatch or fall
+      // back to another provider.
+      if (
+        this.config.codexExecutionProfile === LUNA_READONLY_PROFILE ||
+        this.config.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE
+      ) {
+        if (
+          !Number.isInteger(aiTimeout) ||
+          (aiTimeout !== 0 && aiTimeout < PROBE_REQUEST_TIMEOUT_MIN_MS) ||
+          aiTimeout > PROBE_REQUEST_TIMEOUT_MAX_MS
+        ) {
+          throw new Error(
+            `codex_execution_profile ${this.config.codexExecutionProfile} requires Probe requestTimeout 0 or between ${PROBE_REQUEST_TIMEOUT_MIN_MS} and ${PROBE_REQUEST_TIMEOUT_MAX_MS}ms; received ${String(aiTimeout)}`
+          );
+        }
+        options.requestTimeout = aiTimeout;
+      }
+
       log(
         `🔧 ProbeAgent options: allowEdit=${(options as any).allowEdit}, enableBash=${(options as any).enableBash}, promptType=${options.promptType}`
       );
 
-      const agent = new ProbeAgent(options);
+      const agent = new ProbeAgent(options) as TracedProbeAgent;
+      onAgentCreated?.(agent);
 
       // Initialize agent to enable CLI fallback detection (claude-code/codex)
       // This must be called before agent.answer() for auto-fallback to work.
@@ -2629,6 +3377,7 @@ If you receive a message that the time limit has been reached or your operation 
       // Load and pass the actual schema content if provided (skip for plain schema)
       let schemaString: string | undefined = undefined;
       let effectiveSchema: string | undefined = typeof schema === 'object' ? 'custom' : schema;
+      let parseSchema: string | Record<string, unknown> | undefined = schema;
 
       if (schema && schema !== 'plain') {
         try {
@@ -2639,6 +3388,7 @@ If you receive a message that the time limit has been reached or your operation 
           log(`⚠️ Failed to load schema ${schema}, proceeding without schema:`, error);
           schemaString = undefined;
           effectiveSchema = undefined; // Schema loading failed, treat as no schema
+          parseSchema = undefined;
           if (debugInfo && debugInfo.errors) {
             debugInfo.errors.push(`Failed to load schema: ${error}`);
           }
@@ -2686,6 +3436,7 @@ If you receive a message that the time limit has been reached or your operation 
               isSessionReuse: false,
               isNewSession: true,
             },
+            ...(diagnosticIdentity ? { nodeGenerationId: diagnosticIdentity } : {}),
             promptLength: prompt.length,
             prompt: prompt,
           };
@@ -2727,7 +3478,7 @@ If you receive a message that the time limit has been reached or your operation 
 
           // Save to temp directory
           const tempDir = os.tmpdir();
-          const promptFile = path.join(tempDir, `visor-prompt-${timestamp}.txt`);
+          const promptFile = path.join(tempDir, `visor-prompt-${timestamp}${diagnosticSuffix}.txt`);
           fs.writeFileSync(promptFile, prompt, 'utf-8');
           log(`\n💾 Prompt saved to: ${promptFile}`);
 
@@ -2738,7 +3489,7 @@ If you receive a message that the time limit has been reached or your operation 
             // do not enforce fs permissions here
             const base = path.join(
               debugArtifactsDir,
-              `prompt-${_checkName || 'unknown'}-${timestamp}`
+              `prompt-${_checkName || 'unknown'}-${timestamp}${diagnosticSuffix}`
             );
             fs.writeFileSync(base + '.json', debugJson, 'utf-8');
             fs.writeFileSync(base + '.summary.txt', readableVersion, 'utf-8');
@@ -2830,7 +3581,7 @@ If you receive a message that the time limit has been reached or your operation 
           // Save complete session history (all messages sent and received)
           const sessionBase = path.join(
             debugArtifactsDir,
-            `session-${_checkName || 'unknown'}-${timestamp}`
+            `session-${_checkName || 'unknown'}-${timestamp}${diagnosticSuffix}`
           );
           const sessionData = {
             timestamp,
@@ -2839,6 +3590,7 @@ If you receive a message that the time limit has been reached or your operation 
             model: this.config.model || 'default',
             schema: effectiveSchema,
             totalMessages: fullHistory.length,
+            ...(diagnosticIdentity ? { nodeGenerationId: diagnosticIdentity } : {}),
           };
           fs.writeFileSync(sessionBase + '.json', JSON.stringify(sessionData, null, 2), 'utf-8');
 
@@ -2893,7 +3645,7 @@ ${'='.repeat(60)}
           // Create a response file
           const responseFile = path.join(
             debugArtifactsDir,
-            `response-${_checkName || 'unknown'}-${timestamp}.txt`
+            `response-${_checkName || 'unknown'}-${timestamp}${diagnosticSuffix}.txt`
           );
 
           let responseContent = `=============================================================\n`;
@@ -2901,6 +3653,9 @@ ${'='.repeat(60)}
           responseContent += `=============================================================\n`;
           responseContent += `Timestamp: ${timestamp}\n`;
           responseContent += `Check Name: ${_checkName || 'unknown'}\n`;
+          if (diagnosticIdentity) {
+            responseContent += `Node Generation ID: ${diagnosticIdentity}\n`;
+          }
           responseContent += `Response Length: ${response.length} characters\n`;
           responseContent += `=============================================================\n\n`;
           responseContent += `${'='.repeat(60)}\n`;
@@ -2964,14 +3719,25 @@ ${'='.repeat(60)}
       }
 
       // Register the session for potential reuse by dependent checks
-      if (_checkName) {
+      if (
+        _checkName &&
+        this.config.codexExecutionProfile !== LUNA_READONLY_PROFILE &&
+        this.config.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE
+      ) {
         // ProbeAgent.clone() will handle history filtering when this session is cloned
         this.registerSession(sessionId, agent);
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
 
-      return { response, effectiveSchema, sessionId };
+      return { response, effectiveSchema, parseSchema, sessionId };
     } catch (error) {
+      try {
+        await onCallFailure?.();
+      } catch {
+        // Preserve the original Probe failure if per-call cleanup itself fails.
+      }
+      const handledGovernedFailure = warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
+      if (handledGovernedFailure) throw error;
       console.error('❌ ProbeAgent failed:', error);
       throw new Error(formatUserFacingExecutionError(error));
     } finally {
@@ -3077,7 +3843,7 @@ ${'='.repeat(60)}
   private parseAIResponse(
     response: string,
     debugInfo?: AIDebugInfo,
-    _schema?: string
+    _schema?: string | Record<string, unknown>
   ): ReviewSummary & { output?: unknown } {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
@@ -3252,11 +4018,23 @@ ${'='.repeat(60)}
       //  - explicit custom schema
       //  - schema is any non code-review built-in like 'overview', 'issue-assistant', 'comment-assistant'
       //  - or schema is unknown/undefined but the payload clearly contains a text field
+      const isInlineSchema = !!_schema && typeof _schema === 'object';
       const isCustomSchema =
+        isInlineSchema ||
         _schema === 'custom' ||
-        (_schema && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
-        (_schema && _schema !== 'code-review' && !_schema.includes('output/')) ||
+        (typeof _schema === 'string' && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
+        (typeof _schema === 'string' && _schema !== 'code-review' && !_schema.includes('output/')) ||
         (!_schema && looksLikeTextOutput);
+
+      const inlineSchema = isInlineSchema ? _schema as Record<string, unknown> : undefined;
+      const inlineProperties = inlineSchema?.properties && typeof inlineSchema.properties === 'object' && !Array.isArray(inlineSchema.properties)
+        ? inlineSchema.properties as Record<string, unknown>
+        : undefined;
+      const allowsInlineProperty = (key: string): boolean => {
+        if (!inlineSchema) return true;
+        if (inlineProperties && Object.prototype.hasOwnProperty.call(inlineProperties, key)) return true;
+        return inlineSchema.additionalProperties !== false;
+      };
 
       const _debugSchemaLogging =
         this.config.debug === true || process.env.VISOR_DEBUG_AI_SESSIONS === 'true';
@@ -3295,7 +4073,7 @@ ${'='.repeat(60)}
 
         const hasText =
           typeof (out as any).text === 'string' && String((out as any).text).trim().length > 0;
-        if (!hasText) {
+        if (!hasText && allowsInlineProperty('text')) {
           // Build a fallback string from the raw response or issue messages if available
           let fallbackText = '';
           try {
@@ -3320,7 +4098,7 @@ ${'='.repeat(60)}
         }
 
         // Attach raw output blocks from DSL execute_plan so frontends can render them
-        if (rawOutputBlocks.length > 0) {
+        if (rawOutputBlocks.length > 0 && allowsInlineProperty('_rawOutput')) {
           (out as any)._rawOutput = rawOutputBlocks.join('\n\n');
         }
 

@@ -11,6 +11,11 @@ export type CheckType = string;
  */
 export type OutputFormat = 'table' | 'json' | 'markdown' | 'sarif';
 
+export type GraphRetrySideEffects =
+  | 'absent'
+  | 'safely_idempotent'
+  | 'isolated_draft_replay';
+
 /**
  * CLI options parsed from command line arguments
  */
@@ -21,6 +26,26 @@ export interface CliOptions {
   output: OutputFormat;
   /** Path to configuration file */
   configPath?: string;
+  /** Absolute trusted Proof executable used for role projection and admission */
+  proofBin?: string;
+  /** Absolute, controller-owned path for the terminal governed receipt */
+  governedReceipt?: string;
+  /** Absolute existing Graph-v2 checkpoint to import and continue */
+  graphCheckpointIn?: string;
+  /** Absolute absent path for the quiescent Graph-v2 checkpoint export */
+  graphCheckpointOut?: string;
+  /** Expansion owner used when continuing an imported Graph-v2 checkpoint */
+  graphCheckpointOwner?: string;
+  /** Exact compiled expansion owner whose keyed instances may be admitted */
+  graphDispatchOwner?: string;
+  /** Maximum number of keyed instances admitted in one bounded run */
+  graphDispatchLimit?: number;
+  /** Resume only the ready frontier from an imported Graph-v2 checkpoint */
+  graphResumeReady?: boolean;
+  /** Exact failed generated node-generation ID to reopen from an imported checkpoint */
+  graphRetryGeneration?: string;
+  /** Explicit external side-effect disposition for the selected failed generation */
+  graphRetrySideEffects?: GraphRetrySideEffects;
   /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */

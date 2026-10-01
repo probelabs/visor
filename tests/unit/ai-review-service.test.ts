@@ -1,4 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { AIReviewService } from '../../src/ai-review-service';
 import { PRInfo } from '../../src/pr-analyzer';
 import { ProbeAgent } from '@probelabs/probe';
@@ -254,6 +257,97 @@ describe('AIReviewService', () => {
       await expect(service.executeReview(mockPRInfo, 'chat prompt')).rejects.toThrow(
         'The AI provider failed before generating any response. This is usually caused by a provider-side limit, rate limit, or outage. Please retry.'
       );
+    });
+
+    it('keeps same-check generated debug artifacts distinct at one timestamp', async () => {
+      process.env.GOOGLE_API_KEY = 'test-key';
+      process.env.VISOR_DEBUG_AI_SESSIONS = 'true';
+      const debugArtifactsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-debug-collision-'));
+      process.env.VISOR_DEBUG_ARTIFACTS = debugArtifactsDir;
+      const frozenTime = new Date('2035-01-02T03:04:05.678Z');
+      const timestamp = frozenTime.toISOString().replace(/[:.]/g, '-');
+
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            initialize: jest.fn().mockResolvedValue(undefined),
+            answer: jest.fn().mockImplementation(async (prompt: string) =>
+              prompt.includes('TARGET-A') ? 'FINAL-A' : 'FINAL-B'
+            ),
+          }) as any
+      );
+
+      jest.useFakeTimers().setSystemTime(frozenTime);
+      try {
+        const service = new AIReviewService({ provider: 'google', model: 'test-model' });
+        await Promise.all([
+          service.executeReview(
+            mockPRInfo,
+            'TARGET-A',
+            'plain',
+            'same-check',
+            undefined,
+            'generation-A'
+          ),
+          service.executeReview(
+            mockPRInfo,
+            'TARGET-B',
+            'plain',
+            'same-check',
+            undefined,
+            'generation-B'
+          ),
+        ]);
+
+        const files = fs.readdirSync(debugArtifactsDir);
+        for (const generation of ['generation-A', 'generation-B']) {
+          expect(files).toEqual(
+            expect.arrayContaining([
+              `prompt-same-check-${timestamp}-${generation}.json`,
+              `prompt-same-check-${timestamp}-${generation}.summary.txt`,
+              `session-same-check-${timestamp}-${generation}.json`,
+              `session-same-check-${timestamp}-${generation}.summary.txt`,
+              `response-same-check-${timestamp}-${generation}.txt`,
+            ])
+          );
+          const prompt = JSON.parse(
+            fs.readFileSync(
+              path.join(debugArtifactsDir, `prompt-same-check-${timestamp}-${generation}.json`),
+              'utf8'
+            )
+          );
+          const session = JSON.parse(
+            fs.readFileSync(
+              path.join(debugArtifactsDir, `session-same-check-${timestamp}-${generation}.json`),
+              'utf8'
+            )
+          );
+          const response = fs.readFileSync(
+            path.join(debugArtifactsDir, `response-same-check-${timestamp}-${generation}.txt`),
+            'utf8'
+          );
+          expect(prompt.nodeGenerationId).toBe(generation);
+          expect(session.nodeGenerationId).toBe(generation);
+          expect(response).toContain(`Node Generation ID: ${generation}`);
+          expect(prompt.prompt).toContain(generation === 'generation-A' ? 'TARGET-A' : 'TARGET-B');
+          expect(response).toContain(generation === 'generation-A' ? 'FINAL-A' : 'FINAL-B');
+        }
+
+        const tempPrompts = [
+          `visor-prompt-${timestamp}-generation-A.txt`,
+          `visor-prompt-${timestamp}-generation-B.txt`,
+        ];
+        expect(tempPrompts.every(file => fs.existsSync(path.join(os.tmpdir(), file)))).toBe(true);
+      } finally {
+        jest.useRealTimers();
+        fs.rmSync(debugArtifactsDir, { recursive: true, force: true });
+        for (const generation of ['generation-A', 'generation-B']) {
+          fs.rmSync(
+            path.join(os.tmpdir(), `visor-prompt-${timestamp}-${generation}.txt`),
+            { force: true }
+          );
+        }
+      }
     });
   });
 

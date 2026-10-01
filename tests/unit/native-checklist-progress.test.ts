@@ -1,0 +1,2332 @@
+import { describe, expect, it } from '@jest/globals';
+import {
+  buildNativeChecklistProgress,
+  buildNativeChecklistProgressFromMilestoneBProjections,
+  buildNativeChecklistProgressFromProjections,
+  renderNativeChecklistProgress,
+} from '../../examples/agent-governance/native-onboarding/native-checklist-progress';
+import { sha256Canonical } from '../../src/state-machine/graph/claim-kernel';
+
+function snapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema_version: 'proof.checklist.show.v1',
+    checklist: 'onboard_v1',
+    active: true,
+    new_project: true,
+    definition_source: 'builtin',
+    steps_total: 3,
+    steps_pending: 2,
+    counts: { confirmed: 1, skipped: 0, not_applicable: 0, pending: 2, blocked: 0 },
+    ok: false,
+    verify_failed: [],
+    eligible_step_ids: ['research'],
+    next: { step_id: 'research', title: 'Research' },
+    steps: [
+      {
+        step_id: 'init',
+        title: 'Init',
+        when: 'new_project',
+        requires: [],
+        stamp: 'confirm+verify',
+        scope: 'repo',
+        notes_required: false,
+        invalidates: [],
+        required_checks: ['structure'],
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        applicable: true,
+        eligible: false,
+        unmet_requires: [],
+        verify_result: { exit_code: 0, passed: true, at: '2026-09-08T00:00:00Z' },
+        check_results: [{ id: 'structure', status: 'pass', at: '2026-09-08T00:00:00Z' }],
+      },
+      {
+        step_id: 'research',
+        title: 'Research',
+        when: 'new_project',
+        requires: ['init'],
+        stamp: 'confirm',
+        scope: 'repo',
+        notes_required: true,
+        invalidates: [],
+        required_checks: [],
+        stored_status: 'pending',
+        effective_status: 'pending',
+        applicable: true,
+        eligible: true,
+        unmet_requires: [],
+        check_results: [],
+      },
+      {
+        step_id: 'skeleton',
+        title: 'Skeleton <unsafe>',
+        when: 'new_project',
+        requires: ['research'],
+        stamp: 'confirm+verify',
+        scope: 'repo',
+        notes_required: false,
+        invalidates: [],
+        required_checks: ['requirements'],
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        applicable: true,
+        eligible: false,
+        unmet_requires: [],
+        verify_result: { exit_code: 1, passed: false, at: '2026-09-08T00:00:00Z' },
+        check_results: [{ id: 'requirements', status: 'pass', at: '2026-09-08T00:00:00Z' }],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function projectScope(key = 'project'): Record<string, unknown>[] {
+  return [
+    {
+      kind: 'keyed',
+      expansionOwnerCheck: 'project',
+      key,
+      subgraphInstanceId: 'd'.repeat(64),
+    },
+  ];
+}
+
+function rootClaim(
+  payload: Record<string, unknown>,
+  claimId = 'b'.repeat(64)
+): Record<string, unknown> {
+  return {
+    claimId,
+    claim: 'proof.checklist.snapshot@1',
+    payload,
+    payloadFingerprint: sha256Canonical(payload),
+    producerCheckId: 'checklist-bootstrap',
+    scope: [],
+    parentClaimIds: [],
+  };
+}
+
+function rootProjection(claims: Record<string, unknown>[]): Record<string, unknown> {
+  const byId = Object.fromEntries(claims.map(claim => [claim.claimId, claim]));
+  const activeClaimIdsByRef = Object.fromEntries(claims.map(claim => [claim.claim, claim.claimId]));
+  return { claims: byId, activeClaimIdsByRef };
+}
+
+function expandedClaim(
+  payload: Record<string, unknown>,
+  stage: 'research' | 'skeleton',
+  claimId: string,
+  scope: Record<string, unknown>[] = projectScope(),
+  parentClaimIds: string[] = []
+): Record<string, unknown> {
+  return {
+    claimId,
+    claim: `proof.checklist.${stage}-snapshot@1`,
+    payload,
+    payloadFingerprint: sha256Canonical(payload),
+    producerCheckId: `checklist-${stage}`,
+    scope,
+    parentClaimIds,
+    active: true,
+  };
+}
+
+function instanceProjection(claims: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    claimsById: Object.fromEntries(claims.map(claim => [claim.claimId, claim])),
+    generationsById: {},
+    activeGenerationIdByNode: {},
+  };
+}
+
+function nativeBatchFixture(options: {
+  finishedBatches?: number;
+  duplicateRequirementId?: boolean;
+  duplicateReceipt?: boolean;
+  malformedFinding?: boolean;
+  mismatchedReceipt?: boolean;
+  duplicateFinding?: boolean;
+  receiptBeforeTerminal?: boolean;
+} = {}): Record<string, unknown> {
+  const claimsById: Record<string, unknown> = {};
+  const generationsById: Record<string, unknown> = {};
+  const activeGenerationIdByNode: Record<string, string> = {};
+  const components = ['component-a', 'component-b', 'component-c', 'component-d', 'component-e'];
+  let claimIndex = 0;
+  let batchOrdinal = 0;
+  const claimId = () => `${(++claimIndex).toString(16).padStart(2, '0')}`.repeat(32);
+  const scopeFor = (component: string, batch?: string): Record<string, unknown>[] => [
+    {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'native-project'},
+    {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'spec-review-2'},
+    {kind: 'keyed', expansionOwnerCheck: '["native-role","enumerate-native-components"]', key: component},
+    ...(batch ? [{kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key: batch}] : []),
+  ];
+  const activate = (id: string, generation: Record<string, unknown>) => {
+    generationsById[id] = generation;
+    activeGenerationIdByNode[String(generation.nodeInstanceId)] = id;
+  };
+  activate('project-generation', {nodeGenerationId: 'project-generation', nodeInstanceId: 'project-node', checkId: 'native-project-dispatch', status: 'completed', scope: [{kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'native-project'}]});
+  components.forEach(component => {
+    const componentScope = scopeFor(component);
+    activate(`component-${component}`, {nodeGenerationId: `component-${component}`, nodeInstanceId: `component-node-${component}`, checkId: 'enumerate-native-components', status: 'completed', scope: componentScope});
+    activate(`component-finished-${component}`, {nodeGenerationId: `component-finished-${component}`, nodeInstanceId: `component-finished-node-${component}`, checkId: 'component-finished', status: 'ready', scope: componentScope});
+    const allIds = Array.from({length: 14}, (_, index) => `REQ-${component.slice(-1)}-${String(index + 1).padStart(2, '0')}`);
+    for (let batchIndex = 1; batchIndex <= 3; batchIndex++) {
+      batchOrdinal += 1;
+      const batchId = `${component}:batch:${batchIndex}`;
+      const requirementIds = allIds.slice((batchIndex - 1) * 5, batchIndex * 5);
+      if (options.duplicateRequirementId && component === 'component-b' && batchIndex === 2) requirementIds[0] = 'REQ-a-01';
+      const scope = scopeFor(component, batchId);
+      const itemClaimId = claimId();
+      const requirements = requirementIds.map(id => ({id, component}));
+      claimsById[itemClaimId] = {
+        claimId: itemClaimId,
+        claim: 'native.batch.item@1',
+        kind: 'controller-item',
+        active: true,
+        scope,
+        payload: {
+          id: batchId,
+          component_id: component,
+          requirement_ids: requirementIds,
+          all_requirement_ids: allIds,
+          requirements,
+          component_requirement_count: allIds.length,
+          batch_requirement_count: requirementIds.length,
+          batch_index: batchIndex,
+          total_batches: 3,
+          step_id: 'spec-review-2',
+          role: 'spec-review',
+          target: {path: '/tmp/target'},
+        },
+      };
+      activate(`batch-${batchId}`, {
+        nodeGenerationId: `batch-${batchId}`,
+        nodeInstanceId: `batch-node-${batchId}`,
+        checkId: 'validate-batch-current',
+        status: batchOrdinal <= (options.finishedBatches ?? 2) ? 'completed' : 'ready',
+        scope,
+      });
+      if (batchOrdinal <= (options.finishedBatches ?? 2)) {
+        const receiptClaimId = claimId();
+        const findings = requirementIds.map((id, index) => ({
+          requirement_id: id,
+          decision: component === 'component-a' && batchIndex === 1 && index < 2 ? 'approved' : 'needs_changes',
+          finding: `finding for ${id}`,
+        }));
+        if (options.malformedFinding && component === 'component-a' && batchIndex === 1) findings[0].finding = '';
+        if (options.duplicateFinding && component === 'component-a' && batchIndex === 1) findings.push({...findings[0]});
+        const receiptPayload = {
+          batch_id: batchId,
+          opened_ids: options.mismatchedReceipt && component === 'component-a' && batchIndex === 1
+            ? [...requirementIds.slice(1), 'REQ-mismatch']
+            : requirementIds,
+          component_requirement_count: allIds.length,
+          batch_requirement_count: requirementIds.length,
+          findings,
+          errors: [],
+          execution_status: 'completed',
+        };
+        claimsById[receiptClaimId] = {
+          claimId: receiptClaimId,
+          claim: 'native.batch.receipt@1',
+          kind: 'generated-output',
+          producerCheckId: 'batch-author',
+          nodeGenerationId: `author-${batchId}`,
+          active: true,
+          scope,
+          payload: receiptPayload,
+        };
+        if (options.duplicateReceipt && component === 'component-a' && batchIndex === 1) {
+          const duplicateId = claimId();
+          claimsById[duplicateId] = {...claimsById[receiptClaimId], claimId: duplicateId};
+        }
+        if (!options.receiptBeforeTerminal) {
+          activate(`author-${batchId}`, {nodeGenerationId: `author-${batchId}`, nodeInstanceId: `author-node-${batchId}`, checkId: 'batch-author', status: 'completed', scope, activeInputClaimIds: [itemClaimId]});
+          activate(`finish-${batchId}`, {nodeGenerationId: `finish-${batchId}`, nodeInstanceId: `finish-node-${batchId}`, checkId: 'batch-finished', status: 'completed', scope, activeInputClaimIds: [itemClaimId, receiptClaimId]});
+        } else {
+          activate(`author-${batchId}`, {nodeGenerationId: `author-${batchId}`, nodeInstanceId: `author-node-${batchId}`, checkId: 'batch-author', status: 'completed', scope, activeInputClaimIds: [itemClaimId]});
+          activate(`finish-${batchId}`, {nodeGenerationId: `finish-${batchId}`, nodeInstanceId: `finish-node-${batchId}`, checkId: 'batch-finished', status: 'ready', scope, activeInputClaimIds: [itemClaimId, receiptClaimId]});
+        }
+      }
+    }
+  });
+  return {claimsById, generationsById, activeGenerationIdByNode};
+}
+
+function milestoneBScope(component: string): Record<string, unknown>[] {
+  return [
+    {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: component, subgraphInstanceId: 'e'.repeat(64)},
+  ];
+}
+
+function milestoneBFanInProjection(
+  snapshots: Array<{component: string; snapshot: Record<string, unknown>}>,
+  options: {status?: string; generationId?: string; active?: boolean} = {},
+): Record<string, unknown> {
+  const claimsById: Record<string, unknown> = {};
+  const generationsById: Record<string, unknown> = {};
+  const activeGenerationIdByNode: Record<string, string> = {};
+  snapshots.forEach(({component, snapshot: checklist}, index) => {
+    const claimId = `${String.fromCharCode(97 + index)}`.repeat(64);
+    const generationId = options.generationId && snapshots.length === 1
+      ? options.generationId
+      : `fan-in-${component}`;
+    const payload = {
+      component,
+      freshness: [],
+      validation: {exit_code: 0, value: {}},
+      audit: {exit_code: 0, value: {}},
+      checklist: {exit_code: 0, value: checklist},
+      status: {exit_code: 0, value: {}},
+    };
+    claimsById[claimId] = {
+      claimId,
+      claim: 'native.component.summary@1',
+      payload,
+      payloadFingerprint: sha256Canonical(payload),
+      producerCheckId: 'wait-for-native-items',
+      nodeGenerationId: generationId,
+      subgraphInstanceId: 'e'.repeat(64),
+      scope: milestoneBScope(component),
+      parentClaimIds: [],
+      active: options.active !== false,
+    };
+    generationsById[generationId] = {
+      nodeGenerationId: generationId,
+      nodeInstanceId: `node-${component}`,
+      subgraphInstanceId: 'e'.repeat(64),
+      checkId: 'wait-for-native-items',
+      status: options.status ?? 'completed',
+      scope: milestoneBScope(component),
+      activeInputClaimIds: [],
+      completedOutputClaimIds: [claimId],
+    };
+    activeGenerationIdByNode[`node-${component}`] = generationId;
+  });
+  return {claimsById, generationsById, activeGenerationIdByNode};
+}
+
+function continuationSnapshotClaim(
+  payload: Record<string, unknown>,
+  producerCheckId: 'checklist-continuation-snapshot' | 'checklist-traces-light' | 'checklist-skeleton' | 'checklist-variables',
+): Record<string, unknown> {
+  const authorityClaimId = 'a'.repeat(64);
+  const claimId = 'c'.repeat(64);
+  return {
+    authorityClaimId,
+    claim: {
+      claimId,
+      claim: 'native.continuation.checklist_snapshot@1',
+      payload,
+      payloadFingerprint: sha256Canonical(payload),
+      producerCheckId,
+      scope: projectScope('jsonparser'),
+      parentClaimIds: [authorityClaimId],
+      active: true,
+    },
+  } as any;
+}
+
+function currentProofReadbackSnapshot(scopeKey = 'jsonparser'): Record<string, unknown> {
+  const confirmedAt = '2026-09-09T00:00:02Z';
+  const confirmedBaseSteps = (snapshot().steps as Record<string, unknown>[]).map(step => ({
+    ...step,
+    eligible: false,
+    stored_status: 'confirmed',
+    effective_status: 'confirmed',
+    unmet_requires: [],
+    ...(step.step_id === 'research'
+      ? { check_results: [] }
+      : step.step_id === 'skeleton'
+        ? {
+          check_results: [{ id: 'requirements', status: 'pass', at: confirmedAt }],
+          verify_result: { exit_code: 0, passed: true, at: confirmedAt },
+        }
+        : {}),
+  }));
+  const traceRow = {
+    step_id: 'traces-light',
+    title: 'Trace links',
+    stamp: 'confirm',
+    role: 'onboard',
+    requires: ['skeleton'],
+    scope: 'package',
+    scope_key: scopeKey,
+    applicable: true,
+    eligible: false,
+    stored_status: 'confirmed',
+    effective_status: 'confirmed',
+    required_checks: ['annotation_validity', 'orphan_code_clean'],
+    check_results: [
+      { id: 'annotation_validity', status: 'pass', at: '2026-09-09T00:00:02Z' },
+      { id: 'orphan_code_clean', status: 'pass', at: '2026-09-09T00:00:02Z' },
+    ],
+  };
+  return snapshot({
+    eligible_step_ids: ['variables'],
+    steps: [...confirmedBaseSteps, traceRow],
+    steps_total: 4,
+    steps_pending: 11,
+  });
+}
+
+function continuationProjectionWithTrace(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-traces-light');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'trace-generation',
+    nodeInstanceId: 'trace-node',
+    checkId: 'checklist-traces-light',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: { 'trace-generation': generation },
+    activeGenerationIdByNode: { 'trace-node': 'trace-generation' },
+  };
+}
+
+function continuationProjectionWithSkeleton(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-skeleton');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'skeleton-generation',
+    nodeInstanceId: 'skeleton-node',
+    checkId: 'checklist-skeleton',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: {'skeleton-generation': generation},
+    activeGenerationIdByNode: {'skeleton-node': 'skeleton-generation'},
+  };
+}
+
+function continuationProjectionWithVariables(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-variables');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'variables-generation',
+    nodeInstanceId: 'variables-node',
+    checkId: 'checklist-variables',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: {'variables-generation': generation},
+    activeGenerationIdByNode: {'variables-node': 'variables-generation'},
+  };
+}
+
+function variablesAnchorSnapshot(): Record<string, unknown> {
+  const base = snapshot();
+  const confirmedAt = '2026-09-09T00:00:02Z';
+  const checkStamp = (id: string) => ({id, status: 'pass', at: confirmedAt});
+  const skeletonChecks = ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'];
+  const traceChecks = ['annotation_validity', 'orphan_code_clean'];
+  const variableChecks = ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+  const steps = [
+    {
+      step_id: 'init', title: 'Init', stamp: 'confirm+verify', scope: 'repo', requires: [],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: ['structure'], check_results: [checkStamp('structure')],
+      verify_result: {exit_code: 0, passed: true, at: confirmedAt},
+    },
+    {
+      step_id: 'research', title: 'Research', stamp: 'confirm', scope: 'repo', requires: ['init'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: [], check_results: [],
+    },
+    {
+      step_id: 'skeleton', title: 'Four-layer skeleton', stamp: 'confirm', role: 'onboard', scope: 'repo', requires: ['research'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: skeletonChecks, check_results: skeletonChecks.map(checkStamp),
+    },
+    {
+      step_id: 'traces-light', title: 'Trace links', stamp: 'confirm', role: 'onboard', scope: 'package', scope_key: 'jsonparser', requires: ['skeleton'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed',
+      required_checks: traceChecks, check_results: traceChecks.map(checkStamp),
+    },
+    {
+      step_id: 'variables', title: 'Variables', stamp: 'confirm', role: 'onboard', scope: 'repo', requires: ['traces-light'],
+      unmet_requires: [], applicable: true, eligible: true, stored_status: 'pending', effective_status: 'pending',
+      required_checks: variableChecks, check_results: [],
+    },
+    {
+      step_id: 'spec-review-1', title: 'Specification review', stamp: 'confirm', role: 'review', scope: 'repo', requires: ['variables'],
+      unmet_requires: [], applicable: true, eligible: false, stored_status: 'pending', effective_status: 'pending',
+      required_checks: [], check_results: [],
+    },
+    ...Array.from({length: 9}, (_, index) => ({
+      step_id: `blocked-${index + 1}`, title: `Blocked ${index + 1}`, stamp: 'confirm', scope: 'repo', requires: ['spec-review-1'],
+      unmet_requires: ['spec-review-1'], applicable: true, eligible: false, stored_status: 'pending', effective_status: 'blocked',
+      required_checks: [], check_results: [],
+    })),
+  ];
+  return {
+    ...base,
+    steps,
+    steps_total: steps.length,
+    steps_pending: 10,
+    counts: {confirmed: 4, skipped: 0, not_applicable: 0, pending: 1, blocked: 9},
+    eligible_step_ids: ['variables'],
+    next: {step_id: 'variables', title: 'Variables', role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['traces-light'], required_checks: variableChecks},
+  };
+}
+
+function variablesReadbackSnapshot(): Record<string, unknown> {
+  const anchor = variablesAnchorSnapshot();
+  const confirmedAt = '2026-09-09T00:00:03Z';
+  const variableChecks = ['variable_orphans_clean', 'variables_declared', 'variable_drift'];
+  const steps = (anchor.steps as Record<string, unknown>[]).map(step => {
+    if (step.step_id === 'variables') {
+      return {
+        ...step,
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        check_results: variableChecks.map(id => ({id, status: 'pass', at: confirmedAt})),
+      };
+    }
+    if (step.step_id === 'spec-review-1') return {...step, eligible: true};
+    return step;
+  });
+  return {
+    ...anchor,
+    steps,
+    steps_pending: 10,
+    counts: {confirmed: 5, skipped: 0, not_applicable: 0, pending: 1, blocked: 9},
+    eligible_step_ids: ['spec-review-1'],
+    next: {step_id: 'spec-review-1', title: 'Specification review', role: 'review', stamp: 'confirm', scope: 'repo', requires: ['variables'], required_checks: []},
+  };
+}
+
+function specReviewReadbackSnapshot(): Record<string, unknown> {
+  const anchor = variablesReadbackSnapshot();
+  const confirmedAt = '2026-09-09T00:00:04Z';
+  const specReviewChecks = [
+    'spec_lint_decomposition_adds_refinement',
+    'spec_lint_formalization_quality',
+    'solver_modeling_opportunity',
+    'under_modeled_requirements_clean',
+  ];
+  const steps = (anchor.steps as Record<string, unknown>[]).map(step => {
+    if (step.step_id === 'spec-review-1') {
+      return {
+        ...step,
+        role: 'spec-review',
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        required_checks: specReviewChecks,
+        check_results: specReviewChecks.map(id => ({id, status: 'pass', at: confirmedAt})),
+      };
+    }
+    if (step.step_id === 'blocked-1') {
+      return {
+        ...step,
+        step_id: 'spec-review-2',
+        title: 'Spec review — deep pass with graph',
+        role: 'spec-review',
+        eligible: true,
+        unmet_requires: [],
+        effective_status: 'pending',
+        required_checks: ['spec_lint_spec_conformance_review_grounded', 'software_formalization_complete'],
+      };
+    }
+    if (step.step_id === 'blocked-2') {
+      return {
+        ...step,
+        step_id: 'surface-matrix',
+        title: 'Surface coverage matrix for declared packages',
+        role: 'surface-close',
+        scope: 'package',
+        eligible: true,
+        unmet_requires: [],
+        effective_status: 'pending',
+      };
+    }
+    return step;
+  });
+  return {
+    ...anchor,
+    steps,
+    steps_pending: 9,
+    counts: {confirmed: 6, skipped: 0, not_applicable: 0, pending: 2, blocked: 7},
+    eligible_step_ids: ['spec-review-2', 'surface-matrix'],
+    next: {
+      step_id: 'spec-review-2',
+      title: 'Spec review — deep pass with graph',
+      role: 'spec-review',
+      stamp: 'confirm',
+      scope: 'repo',
+      requires: ['spec-review-1'],
+      required_checks: ['spec_lint_spec_conformance_review_grounded', 'software_formalization_complete'],
+    },
+  };
+}
+
+function continuationProjectionWithSpecReview(
+  payload: Record<string, unknown>,
+  status: 'ready' | 'completed' = 'completed',
+): Record<string, unknown> {
+  const continuation = continuationSnapshotClaim(payload, 'checklist-variables');
+  const continuationParent = (continuation.claim.parentClaimIds as string[])[0];
+  const generation = {
+    nodeGenerationId: 'spec-review-generation',
+    nodeInstanceId: 'spec-review-node',
+    checkId: 'checklist-spec-review-1',
+    scope: projectScope('jsonparser'),
+    status,
+    activeInputClaimIds: [continuationParent],
+  };
+  return {
+    ...instanceProjection([
+      {
+        claimId: continuation.authorityClaimId,
+        claim: 'native.continuation.catalog@1',
+        payload: {},
+        active: true,
+      },
+      continuation.claim,
+    ]),
+    generationsById: {'spec-review-generation': generation},
+    activeGenerationIdByNode: {'spec-review-node': 'spec-review-generation'},
+  };
+}
+
+describe('native checklist progress projection', () => {
+  it.each(['checklist-continuation-snapshot', 'checklist-traces-light', 'checklist-variables'] as const)(
+    'projects a continuation checklist snapshot from the %s producer with full/affected/reused coverage',
+    producerCheckId => {
+      const payload = snapshot({
+        steps: [{
+          step_id: 'traces-light',
+          title: 'Trace links',
+          stamp: 'confirm',
+          applicable: true,
+          eligible: true,
+          stored_status: 'pending',
+          effective_status: 'pending',
+          required_checks: [],
+          check_results: [],
+        }],
+      });
+      const continuation = continuationSnapshotClaim(payload, producerCheckId);
+      const progress = buildNativeChecklistProgressFromProjections({
+        claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+        instanceProjection: instanceProjection([
+          {
+            claimId: continuation.authorityClaimId,
+            claim: 'native.continuation.catalog@1',
+            payload: {},
+            active: true,
+          },
+          continuation.claim,
+        ]),
+        checkpoint: {
+          frontier: {eventCount: 3, lastEventId: 3},
+          graphSemanticDigest: 'sha256:graph',
+          integrity: {digest: 'sha256:checkpoint'},
+        },
+        paused: producerCheckId === 'checklist-continuation-snapshot',
+        resumed: producerCheckId === 'checklist-traces-light',
+        retainedCatalogComponentIds: ['affected-component', 'reused-component'],
+        affectedComponentIds: ['affected-component'],
+      });
+      expect(progress.evidence.proof_snapshot.source).toBe('native.continuation.checklist_snapshot@1');
+      expect(progress.operational.catalog_coverage).toMatchObject({
+        known: true,
+        known_count: 2,
+        affected_count: 1,
+        reused_count: 1,
+        unexpanded_count: 0,
+      });
+      expect(progress.paused).toBe(producerCheckId === 'checklist-continuation-snapshot');
+      expect(progress.resumed).toBe(producerCheckId === 'checklist-traces-light');
+    },
+  );
+
+  it('uses a current confirmed Proof readback only for the completed scoped traces generation', () => {
+    const anchor = snapshot({
+      steps: [{
+        step_id: 'traces-light',
+        title: 'Trace links',
+        stamp: 'confirm',
+        applicable: true,
+        eligible: true,
+        stored_status: 'pending',
+        effective_status: 'pending',
+        required_checks: [],
+        check_results: [],
+      }],
+    });
+    const readback = currentProofReadbackSnapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: continuationProjectionWithTrace(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['affected-component', 'reused-component'],
+      affectedComponentIds: ['affected-component'],
+    });
+    expect(progress.checklist.steps_total).toBe(4);
+    expect(progress.checklist.counts.confirmed).toBe(4);
+    expect(progress.checklist.eligible_step_ids).toEqual(['variables']);
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      anchor_claim_id: 'c'.repeat(64),
+      generation_id: 'trace-generation',
+      digest: sha256Canonical(readback),
+    });
+    expect(progress.evidence.proof_snapshot).not.toHaveProperty('claim_id');
+    expect(progress.operational.catalog_coverage).toMatchObject({
+      known_count: 2,
+      affected_count: 1,
+      reused_count: 1,
+    });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=4');
+    expect(rendered.text).toContain('eligible=variables');
+    expect(rendered.html).toContain('confirmed=4');
+    expect(JSON.parse(rendered.json).evidence.proof_snapshot.source).toBe('current-proof-readback');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('uses a current confirmed Proof readback for the completed scoped skeleton generation', () => {
+    const skeletonChecks = ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected'];
+    const anchorSteps = (snapshot().steps as Record<string, unknown>[]).map(step => step.step_id === 'skeleton'
+      ? {...step, role: 'onboard', stamp: 'confirm', required_checks: skeletonChecks, eligible: true, stored_status: 'pending', effective_status: 'pending', unmet_requires: [], check_results: []}
+      : step.step_id === 'research'
+        ? {...step, eligible: false, stored_status: 'confirmed', effective_status: 'confirmed', unmet_requires: [], check_results: []}
+        : step);
+    const traceStep = {
+      step_id: 'traces-light',
+      title: 'Trace links',
+      when: 'new_project',
+      requires: ['skeleton'],
+      role: 'onboard',
+      stamp: 'confirm',
+      scope: 'package',
+      notes_required: true,
+      invalidates: [],
+      required_checks: ['annotation_validity', 'orphan_code_clean'],
+      stored_status: 'pending',
+      effective_status: 'pending',
+      applicable: true,
+      eligible: false,
+      unmet_requires: ['skeleton'],
+      check_results: [],
+    };
+    const anchor = snapshot({
+      steps: [...anchorSteps, traceStep],
+      steps_total: 4,
+      steps_pending: 2,
+      counts: {confirmed: 2, skipped: 0, not_applicable: 0, pending: 1, blocked: 1},
+      eligible_step_ids: ['skeleton'],
+      next: {step_id: 'skeleton', title: 'Four-layer STK/SYS/SW/INT breadth skeleton', role: 'onboard', stamp: 'confirm', scope: 'repo', requires: ['research'], required_checks: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']},
+    });
+    const readbackSteps = (anchor.steps as Record<string, unknown>[]).map(step => step.step_id === 'skeleton'
+      ? {
+        ...step,
+        eligible: false,
+        stored_status: 'confirmed',
+        effective_status: 'confirmed',
+        check_results: ['l0_stakeholder_complete', 'l1_system_complete', 'l2_software_complete', 'levels_connected']
+          .map(id => ({id, status: 'pass', at: '2026-09-09T06:02:00Z'})),
+      }
+      : step.step_id === 'traces-light'
+        ? {...step, eligible: true, unmet_requires: [], effective_status: 'pending'}
+        : step);
+    const readback = snapshot({
+      steps: readbackSteps,
+      steps_total: 4,
+      steps_pending: 1,
+      counts: {confirmed: 3, skipped: 0, not_applicable: 0, pending: 1, blocked: 0},
+      eligible_step_ids: ['traces-light'],
+      next: {step_id: 'traces-light', title: 'Trace links', role: 'onboard', stamp: 'confirm', scope: 'package', requires: ['skeleton'], required_checks: ['annotation_validity', 'orphan_code_clean']},
+    });
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSkeleton(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['affected-component', 'reused-component'],
+      affectedComponentIds: ['affected-component'],
+    });
+    expect(progress.checklist.steps.find(step => step.id === 'skeleton')).toMatchObject({state: 'confirmed', eligible: false});
+    expect(progress.checklist.counts.confirmed).toBe(3);
+    expect(progress.checklist.eligible_step_ids).toEqual(['traces-light']);
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      generation_id: 'skeleton-generation',
+      digest: sha256Canonical(readback),
+    });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=3');
+    expect(rendered.html).toContain('confirmed=3');
+  });
+
+  it('uses a current confirmed Proof readback for the completed variables generation', () => {
+    const anchor = variablesAnchorSnapshot();
+    const readback = variablesReadbackSnapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithVariables(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c', 'component-d'],
+      affectedComponentIds: [],
+    });
+    expect(progress.checklist.steps_total).toBe(15);
+    expect(progress.checklist.counts).toMatchObject({confirmed: 5, pending: 1, blocked: 9});
+    expect(progress.checklist.eligible_step_ids).toEqual(['spec-review-1']);
+    expect(progress.checklist.steps.find(step => step.id === 'variables')).toMatchObject({
+      state: 'confirmed',
+      effective_status: 'confirmed',
+      scope: 'repo',
+      required_checks: ['variable_orphans_clean', 'variables_declared', 'variable_drift'],
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      anchor_claim_id: 'c'.repeat(64),
+      generation_id: 'variables-generation',
+      digest: sha256Canonical(readback),
+    });
+    expect(progress.evidence.proof_snapshot).not.toHaveProperty('claim_id');
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=5');
+    expect(rendered.text).toContain('eligible=spec-review-1');
+    expect(rendered.text).toContain('operational selected workflow: state=completed');
+    expect(rendered.text).not.toContain('operational project: state=completed');
+    expect(rendered.html).toContain('confirmed=5');
+    expect(rendered.html).toContain('spec-review-1');
+    expect(rendered.html).toContain('selected workflow');
+    expect(rendered.html).toContain('<b>Checks:</b>');
+    expect(rendered.html).toContain('checklist-variables');
+    expect(rendered.html).not.toContain('<th>project</th>');
+    expect(JSON.parse(rendered.json).checklist.counts).toMatchObject({confirmed: 5, pending: 1, blocked: 9});
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('uses current Proof readback for completed spec-review-1 and reports the post-confirmation 6/15 frontier', () => {
+    const anchor = variablesAnchorSnapshot();
+    const readback = specReviewReadbackSnapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSpecReview(anchor),
+      currentProofSnapshot: readback,
+      retainedCatalogComponentIds: ['component-a', 'component-b', 'component-c', 'component-d'],
+      affectedComponentIds: [],
+    });
+    expect(progress.checklist.counts).toMatchObject({confirmed: 6, pending: 2, blocked: 7});
+    expect(progress.checklist.eligible_step_ids).toEqual(['spec-review-2', 'surface-matrix']);
+    expect(progress.checklist.steps.find(step => step.id === 'spec-review-1')).toMatchObject({
+      state: 'confirmed',
+      role: 'spec-review',
+      scope: 'repo',
+      required_checks: [
+        'spec_lint_decomposition_adds_refinement',
+        'spec_lint_formalization_quality',
+        'solver_modeling_opportunity',
+        'under_modeled_requirements_clean',
+      ],
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'current-proof-readback',
+      anchor_claim_id: 'c'.repeat(64),
+      generation_id: 'spec-review-generation',
+      digest: sha256Canonical(readback),
+    });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('confirmed=6');
+    expect(rendered.text).toContain('eligible=spec-review-2,surface-matrix');
+    expect(rendered.html).toContain('confirmed=6');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it.each([
+    ['wrong role', (step: Record<string, unknown>) => { step.role = 'review'; }],
+    ['wrong required check', (step: Record<string, unknown>) => {
+      step.required_checks = ['not-a-proof-check', ...(step.required_checks as string[]).slice(1)];
+    }],
+  ])('rejects spec-review-1 current readback with %s', (_label, mutate) => {
+    const readback = specReviewReadbackSnapshot();
+    const selected = (readback.steps as Record<string, unknown>[]).find(step => step.step_id === 'spec-review-1');
+    expect(selected).toBeDefined();
+    mutate(selected as Record<string, unknown>);
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSpecReview(variablesAnchorSnapshot()),
+      currentProofSnapshot: readback,
+    })).toThrow(/exact confirmed repository spec-review-1 evidence/);
+  });
+
+  it('rejects current spec-review-1 readback until its active generation is completed', () => {
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithSpecReview(variablesAnchorSnapshot(), 'ready'),
+      currentProofSnapshot: specReviewReadbackSnapshot(),
+    })).toThrow(/completed spec-review-1 generation/);
+  });
+
+  it('rejects a variables readback until the active variables generation is completed', () => {
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: {claims: {}, activeClaimIdsByRef: {}},
+      instanceProjection: continuationProjectionWithVariables(variablesAnchorSnapshot(), 'ready'),
+      currentProofSnapshot: variablesReadbackSnapshot(),
+    })).toThrow(/completed variables generation/);
+  });
+
+  it('rejects a current readback whose package key is not the continuation anchor key', () => {
+    const anchor = snapshot({ steps: [{
+      step_id: 'traces-light',
+      title: 'Trace links',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      required_checks: [],
+      check_results: [],
+    }] });
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: continuationProjectionWithTrace(anchor),
+      currentProofSnapshot: currentProofReadbackSnapshot('other-project'),
+    })).toThrow(/exact confirmed package evidence/);
+  });
+
+  it('rejects a current readback until the active traces generation is completed', () => {
+    const anchor = snapshot({ steps: [{
+      step_id: 'traces-light',
+      title: 'Trace links',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      required_checks: [],
+      check_results: [],
+    }] });
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: continuationProjectionWithTrace(anchor, 'ready'),
+      currentProofSnapshot: currentProofReadbackSnapshot(),
+    })).toThrow(/completed traces-light generation/);
+  });
+
+  it('rejects a same-scope current readback from an unrelated traces generation', () => {
+    const anchor = snapshot({ steps: [{
+      step_id: 'traces-light',
+      title: 'Trace links',
+      stamp: 'confirm',
+      applicable: true,
+      eligible: true,
+      stored_status: 'pending',
+      effective_status: 'pending',
+      required_checks: [],
+      check_results: [],
+    }] });
+    const projection = continuationProjectionWithTrace(anchor);
+    const generation = (projection.generationsById as Record<string, Record<string, unknown>>)['trace-generation'];
+    generation.activeInputClaimIds = ['e'.repeat(64)];
+    expect(() => buildNativeChecklistProgressFromProjections({
+      claimProjection: { claims: {}, activeClaimIdsByRef: {} },
+      instanceProjection: projection,
+      currentProofSnapshot: currentProofReadbackSnapshot(),
+    })).toThrow(/generation inputs/);
+  });
+
+  it('projects effective Proof states and validates required-check/verify evidence', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      checkpoint: {
+        frontier: { eventCount: 12, lastEventId: 12 },
+        graphSemanticDigest: 'sha256:graph',
+        integrity: { digest: 'sha256:checkpoint' },
+      },
+      paused: true,
+      instanceProjection: {
+        generationsById: {
+          project: {
+            status: 'completed',
+            checkId: 'research',
+            scope: [{ kind: 'keyed', key: 'project' }],
+          },
+          component: {
+            status: 'running',
+            checkId: 'promote-native-component',
+            scope: [
+              { kind: 'keyed', key: 'project' },
+              { kind: 'keyed', key: 'alpha' },
+            ],
+          },
+          spec: {
+            status: 'ready',
+            nodeGenerationId: 'spec',
+            checkId: 'review-native-item',
+            scope: [
+              { kind: 'keyed', key: 'project' },
+              { kind: 'keyed', key: 'alpha' },
+              { kind: 'keyed', key: 'REQ-1' },
+            ],
+          },
+        },
+        activeGenerationIdByNode: { spec: 'spec' },
+      },
+    });
+
+    expect(progress.checklist.counts).toEqual({
+      confirmed: 1,
+      skipped: 0,
+      not_applicable: 0,
+      pending: 1,
+      blocked: 0,
+      stale: 0,
+      failed: 1,
+      unknown: 0,
+    });
+    expect(progress.checklist.steps_pending).toBe(2);
+    expect(progress.checklist.steps[0].state).toBe('confirmed');
+    expect(progress.checklist.steps[1].state).toBe('pending');
+    expect(progress.checklist.steps[2].state).toBe('failed');
+    expect(progress.operational.project.state).toBe('running');
+    expect(progress.operational.components.items).toEqual([
+      { id: 'alpha', state: 'running', check_ids: ['promote-native-component'] },
+    ]);
+    expect(progress.operational.specifications.items[0].state).toBe('pending');
+    expect(progress.evidence.journal.event_count).toBe(12);
+    expect(progress.paused).toBe(true);
+    expect(progress.resumable).toBe(true);
+    expect(JSON.stringify(progress)).not.toMatch(/percent|eta/i);
+  });
+
+  it('projects JSON-qualified native batch owners consistently across JSON, text, and HTML', () => {
+    const componentScope = [
+      {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'onboard'},
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-components', key: 'component-a'},
+    ];
+    const batchScope = (key: string) => [
+      ...componentScope,
+      {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key},
+    ];
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: {
+        generationsById: {
+          project: {
+            status: 'completed',
+            checkId: 'native-project-dispatch',
+            scope: [componentScope[0]],
+          },
+          role: {
+            status: 'completed',
+            checkId: 'native-role-dispatch',
+            scope: componentScope.slice(0, 2),
+          },
+          component: {
+            status: 'completed',
+            checkId: 'enumerate-native-components',
+            scope: componentScope,
+          },
+          componentFinished: {
+            status: 'ready',
+            checkId: 'component-finished',
+            scope: componentScope,
+          },
+          completedBatch: {
+            status: 'completed',
+            checkId: 'enumerate-native-batches',
+            scope: batchScope('batch-completed'),
+          },
+          readyBatch: {
+            status: 'ready',
+            checkId: 'enumerate-native-batches',
+            scope: batchScope('batch-ready'),
+          },
+        },
+      },
+    });
+    const expectedComponent = {
+      id: 'component-a',
+      state: 'pending',
+      check_ids: ['component-finished', 'enumerate-native-components'],
+    };
+    const expectedBatches = [
+      {id: 'batch-completed', state: 'completed', check_ids: ['enumerate-native-batches']},
+      {id: 'batch-ready', state: 'pending', check_ids: ['enumerate-native-batches']},
+    ];
+    expect(progress.operational.components.items).toEqual([expectedComponent]);
+    expect(progress.operational.batches.items).toEqual(expectedBatches);
+    expect(progress.operational.specifications.items).toEqual([]);
+    expect(progress.operational.project.state).toBe('pending');
+
+    const rendered = renderNativeChecklistProgress(progress);
+    const json = JSON.parse(rendered.json) as Record<string, any>;
+    expect(json.operational.components.items).toEqual([expectedComponent]);
+    expect(json.operational.batches.items).toEqual(expectedBatches);
+    expect(rendered.text).toContain('components.component-a=pending [component-finished,enumerate-native-components]');
+    expect(progress.checklist.counts.pending).toBeGreaterThan(0);
+    expect(rendered.text).toContain('batches.batch-completed=completed [enumerate-native-batches]');
+    expect(rendered.text).toContain('batches.batch-ready=pending [enumerate-native-batches]');
+    expect(rendered.html).toContain('component-a');
+    expect(rendered.html).toContain('batch-completed');
+    expect(rendered.html).toContain('batch-ready');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
+  it('folds exact component-owned batch states into five component rows without fabricating completion', () => {
+    const componentScope = (component: string) => [
+      {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'spec-review'},
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-components', key: component},
+    ];
+    const batchScope = (component: string, batch: string) => [
+      ...componentScope(component),
+      {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key: batch},
+    ];
+    const generationsById: Record<string, unknown> = {
+      project: {status: 'completed', checkId: 'native-project-dispatch', scope: [{kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'}]},
+    };
+    const batches: Array<{component: string; id: string; status: string}> = [
+      {component: 'component-a', id: 'a-failed', status: 'failed'},
+      {component: 'component-a', id: 'a-pending', status: 'pending'},
+      {component: 'component-b', id: 'b-pending', status: 'pending'},
+      {component: 'component-c', id: 'c-pending', status: 'pending'},
+      {component: 'component-d', id: 'd-pending', status: 'pending'},
+      {component: 'component-e', id: 'e-pending', status: 'pending'},
+    ];
+    for (const component of ['component-a', 'component-b', 'component-c', 'component-d', 'component-e']) {
+      generationsById[`component-${component}`] = {
+        status: 'completed',
+        checkId: 'enumerate-native-components',
+        scope: componentScope(component),
+      };
+    }
+    for (const batch of batches) {
+      generationsById[`batch-${batch.id}`] = {
+        status: batch.status,
+        checkId: 'enumerate-native-batches',
+        scope: batchScope(batch.component, batch.id),
+      };
+    }
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: {...instanceProjection([]), generationsById},
+    });
+
+    expect(progress.operational.components).toMatchObject({
+      known: true,
+      known_count: 5,
+      completed_count: 0,
+      running_count: 0,
+      failed_count: 1,
+      pending_count: 4,
+    });
+    expect(progress.operational.components.items.map(item => [item.id, item.state])).toEqual([
+      ['component-a', 'failed'],
+      ['component-b', 'pending'],
+      ['component-c', 'pending'],
+      ['component-d', 'pending'],
+      ['component-e', 'pending'],
+    ]);
+    expect(progress.operational.batches).toMatchObject({
+      known_count: 6,
+      completed_count: 0,
+      failed_count: 1,
+      pending_count: 5,
+    });
+    expect(progress.operational.project.state).toBe('failed');
+
+    const rendered = renderNativeChecklistProgress(progress);
+    const json = JSON.parse(rendered.json);
+    expect(json.operational.components.items).toEqual(progress.operational.components.items);
+    expect(rendered.text).toContain(
+      'operational components: state=5 discovered expanded completed=0,running=0,failed=1,pending=4'
+    );
+    expect(rendered.html).toContain('<b>failed:</b> 1');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
+  it('requires an exact completed component-finished generation after all batches complete', () => {
+    const componentScope = [
+      {kind: 'keyed', expansionOwnerCheck: 'native-project-dispatch', key: 'project'},
+      {kind: 'keyed', expansionOwnerCheck: 'native-role-dispatch', key: 'spec-review'},
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-components', key: 'component-a'},
+    ];
+    const batchScope = [
+      ...componentScope,
+      {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-batches"]', key: 'batch-a'},
+    ];
+    const build = (terminalStatus?: string) => {
+      const generationsById: Record<string, unknown> = {
+        component: {status: 'completed', checkId: 'enumerate-native-components', scope: componentScope},
+        batch: {status: 'completed', checkId: 'enumerate-native-batches', scope: batchScope},
+      };
+      if (terminalStatus) {
+        generationsById.terminal = {status: terminalStatus, checkId: 'component-finished', scope: componentScope};
+      }
+      return buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        instanceProjection: {...instanceProjection([]), generationsById},
+      });
+    };
+
+    expect(build().operational.components.items).toEqual([
+      {id: 'component-a', state: 'pending', check_ids: ['enumerate-native-components']},
+    ]);
+    expect(build('ready').operational.components.items[0].state).toBe('pending');
+    expect(build('completed').operational.components.items).toEqual([
+      {id: 'component-a', state: 'completed', check_ids: ['component-finished', 'enumerate-native-components']},
+    ]);
+  });
+
+  it('marks missing or non-pass required-check evidence stale without treating snapshot ok as authority', () => {
+    const missing = snapshot({
+      ok: true,
+      steps: [
+        {
+          step_id: 'init',
+          title: 'Init',
+          stamp: 'confirm',
+          effective_status: 'confirmed',
+          stored_status: 'confirmed',
+          applicable: true,
+          eligible: false,
+          requires: [],
+          unmet_requires: [],
+          required_checks: ['structure'],
+          check_results: [],
+        },
+      ],
+    });
+    expect(buildNativeChecklistProgress({ proofSnapshot: missing }).checklist.steps[0].state).toBe(
+      'stale'
+    );
+    const warning = snapshot({
+      steps: [
+        {
+          step_id: 'init',
+          title: 'Init',
+          stamp: 'confirm',
+          effective_status: 'confirmed',
+          stored_status: 'confirmed',
+          applicable: true,
+          eligible: false,
+          requires: [],
+          unmet_requires: [],
+          required_checks: ['structure'],
+          check_results: [{ id: 'structure', status: 'warn' }],
+        },
+      ],
+    });
+    expect(buildNativeChecklistProgress({ proofSnapshot: warning }).checklist.steps[0].state).toBe(
+      'stale'
+    );
+  });
+
+  it('renders unevaluated, failed, and partial required-check evidence consistently', () => {
+    const blocked = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'skeleton',
+            title: 'Skeleton',
+            stamp: 'confirm',
+            effective_status: 'pending',
+            stored_status: 'pending',
+            applicable: true,
+            eligible: false,
+            requires: ['research'],
+            unmet_requires: ['research'],
+            required_checks: ['requirements'],
+            check_results: [],
+          },
+        ],
+      }),
+    });
+    const blockedRendered = renderNativeChecklistProgress(blocked);
+    expect(blockedRendered.text).toContain('checks=not evaluated:requirements');
+    expect(blockedRendered.html).toContain('required checks: not evaluated');
+
+    const warning = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'research',
+            title: 'Research',
+            stamp: 'confirm',
+            effective_status: 'confirmed',
+            stored_status: 'confirmed',
+            applicable: true,
+            eligible: false,
+            requires: [],
+            unmet_requires: [],
+            required_checks: ['structure'],
+            check_results: [{ id: 'structure', status: 'warn' }],
+          },
+        ],
+      }),
+    });
+    const warningRendered = renderNativeChecklistProgress(warning);
+    expect(warningRendered.text).toContain('checks=fail:structure');
+    expect(warningRendered.html).toContain('required checks: fail');
+
+    const partial = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'research',
+            title: 'Research',
+            stamp: 'confirm',
+            effective_status: 'confirmed',
+            stored_status: 'confirmed',
+            applicable: true,
+            eligible: false,
+            requires: [],
+            unmet_requires: [],
+            required_checks: ['structure', 'requirements'],
+            check_results: [{ id: 'structure', status: 'pass' }],
+          },
+        ],
+      }),
+    });
+    const partialRendered = renderNativeChecklistProgress(partial);
+    expect(partialRendered.text).toContain('checks=incomplete:structure,requirements');
+    expect(partialRendered.html).toContain('required checks: incomplete');
+  });
+
+  it('keeps skipped and not-applicable dispositions distinct from pending work', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot({
+        steps: [
+          {
+            step_id: 'skip',
+            title: 'Skip me',
+            stamp: 'confirm',
+            effective_status: 'skipped',
+            stored_status: 'skipped',
+            applicable: true,
+            eligible: false,
+            requires: [],
+            unmet_requires: [],
+            required_checks: [],
+            check_results: [],
+            skip_reason: 'operator',
+          },
+          {
+            step_id: 'na',
+            title: 'Not here',
+            stamp: 'confirm',
+            effective_status: 'not_applicable',
+            stored_status: 'pending',
+            applicable: false,
+            eligible: false,
+            requires: [],
+            unmet_requires: [],
+            required_checks: [],
+            check_results: [],
+          },
+          {
+            step_id: 'blocked',
+            title: 'Blocked',
+            stamp: 'confirm',
+            effective_status: 'pending',
+            stored_status: 'pending',
+            applicable: true,
+            eligible: false,
+            requires: ['skip'],
+            unmet_requires: ['skip'],
+            required_checks: [],
+            check_results: [],
+          },
+        ],
+      }),
+    });
+    expect(progress.checklist.steps.map(step => step.state)).toEqual([
+      'skipped',
+      'not_applicable',
+      'blocked',
+    ]);
+    expect(progress.checklist.counts).toMatchObject({ skipped: 1, not_applicable: 1, blocked: 1 });
+    expect(progress.checklist.steps_pending).toBe(2);
+  });
+
+  it('requires exact recorded pass stamps and consistent verification fields', () => {
+    const base = snapshot({
+      steps: [
+        {
+          step_id: 'init',
+          title: 'Init',
+          stamp: 'confirm+verify',
+          effective_status: 'confirmed',
+          stored_status: 'confirmed',
+          applicable: true,
+          eligible: false,
+          requires: [],
+          unmet_requires: [],
+          required_checks: ['structure'],
+          check_results: [{ id: 'structure', status: 'pass', at: '2026-09-08T00:00:00Z' }],
+          verify_result: { exit_code: 0, passed: true, at: '2026-09-08T00:00:00Z' },
+        },
+      ],
+    });
+    expect(buildNativeChecklistProgress({ proofSnapshot: base }).checklist.steps[0].state).toBe(
+      'confirmed'
+    );
+    const baseStep = (base.steps as Array<Record<string, unknown>>)[0];
+    expect(
+      buildNativeChecklistProgress({
+        proofSnapshot: snapshot({
+          steps: [
+            {
+              ...baseStep,
+              check_results: [
+                { id: 'structure', status: 'pass', at: '2026-09-08T00:00:00Z', exit_code: 0 },
+              ],
+            },
+          ],
+        }),
+      }).checklist.steps[0].state
+    ).toBe('stale');
+    expect(
+      buildNativeChecklistProgress({
+        proofSnapshot: snapshot({
+          steps: [
+            {
+              ...baseStep,
+              verify_result: { exit_code: 1, passed: true, at: '2026-09-08T00:00:00Z' },
+            },
+          ],
+        }),
+      }).checklist.steps[0].state
+    ).toBe('failed');
+  });
+
+  it('marks unsupported or absent operational expansion unknown and only resumes from a ready frontier', () => {
+    const checkpoint = {
+      frontier: { eventCount: 3, lastEventId: 3 },
+      graphSemanticDigest: 'sha256:graph',
+      integrity: { digest: 'sha256:checkpoint' },
+    };
+    const unknown = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      checkpoint,
+      paused: true,
+    });
+    expect(unknown.operational.components.known).toBe(false);
+    expect(unknown.operational.components.unexpanded_count).toBe(1);
+    expect(unknown.resumable).toBe(false);
+    const terminal = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      checkpoint,
+      paused: true,
+      instanceProjection: {
+        generationsById: {
+          done: { status: 'completed', scope: [{ kind: 'keyed', key: 'project' }] },
+        },
+      },
+    });
+    expect(terminal.resumable).toBe(false);
+    const ready = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      checkpoint,
+      paused: true,
+      instanceProjection: {
+        generationsById: {
+          next: {
+            status: 'ready',
+            nodeGenerationId: 'next',
+            scope: [
+              { kind: 'keyed', key: 'project' },
+              { kind: 'keyed', key: 'alpha' },
+            ],
+          },
+        },
+        activeGenerationIdByNode: { next: 'next' },
+      },
+    });
+    expect(ready.resumable).toBe(true);
+  });
+
+  it('keeps mixed completed and ready generations pending instead of unknown or complete', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: {
+        generationsById: {
+          done: {
+            status: 'completed',
+            checkId: 'inventory',
+            scope: [{ kind: 'keyed', key: 'project' }],
+          },
+          next: {
+            status: 'ready',
+            checkId: 'skeleton',
+            scope: [{ kind: 'keyed', key: 'project' }],
+          },
+        },
+      },
+    });
+    expect(progress.operational.project.state).toBe('pending');
+  });
+
+  it('requires a linked claim for live views and validates checkpoint timestamp', () => {
+    expect(() =>
+      buildNativeChecklistProgress({ proofSnapshot: snapshot(), requireProofSnapshotClaim: true })
+    ).toThrow(/lineage-linked/);
+    const claim = {
+      claim: 'proof.checklist.snapshot@1',
+      claimId: 'snapshot-1',
+      active: true,
+      payload: snapshot(),
+    };
+    const linkedClaim = {
+      ...claim,
+      claimId: 'a'.repeat(64),
+      payloadFingerprint: sha256Canonical(claim.payload),
+    };
+    expect(
+      buildNativeChecklistProgress({
+        proofSnapshot: claim.payload,
+        proofSnapshotClaim: linkedClaim,
+        requireProofSnapshotClaim: true,
+      }).evidence.proof_snapshot.claim_id
+    ).toBe('a'.repeat(64));
+    const researchClaim = {
+      ...linkedClaim,
+      claim: 'proof.checklist.research-snapshot@1',
+    };
+    expect(
+      buildNativeChecklistProgress({
+        proofSnapshot: claim.payload,
+        proofSnapshotClaim: researchClaim,
+        requireProofSnapshotClaim: true,
+      }).evidence.proof_snapshot
+    ).toMatchObject({
+      source: 'proof.checklist.research-snapshot@1',
+      stage: 'research',
+    });
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: claim.payload,
+      proofSnapshotClaim: claim,
+      checkpoint: { frontier: { eventCount: 0, lastEventId: 0 } },
+      checkpointTimestamp: '2026-09-08T00:00:00Z',
+    });
+    expect(progress.evidence.journal.checkpoint_timestamp).toBe('2026-09-08T00:00:00Z');
+    expect(() =>
+      buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        checkpoint: {},
+        checkpointTimestamp: 'not-a-date',
+      })
+    ).toThrow(/RFC3339/);
+  });
+
+  it('requires a lineage-linked snapshot claim when supplied', () => {
+    const proofSnapshot = snapshot();
+    const claim = {
+      claim: 'proof.checklist.snapshot@1',
+      claimId: 'snapshot-1',
+      active: true,
+      payload: proofSnapshot,
+    };
+    expect(
+      buildNativeChecklistProgress({ proofSnapshot, proofSnapshotClaim: claim }).evidence
+        .proof_snapshot.claim_id
+    ).toBe('snapshot-1');
+    expect(() =>
+      buildNativeChecklistProgress({
+        proofSnapshot,
+        proofSnapshotClaim: { ...claim, payload: snapshot({ checklist: 'other' }) },
+      })
+    ).toThrow(/does not match/);
+    expect(() =>
+      buildNativeChecklistProgress({
+        proofSnapshot,
+        proofSnapshotClaim: { ...claim, claim: 'other' },
+      })
+    ).toThrow(/active proof.checklist/);
+  });
+
+  it('selects the root bootstrap snapshot when no expanded stage exists', () => {
+    const proofSnapshot = snapshot();
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: instanceProjection([]),
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'proof.checklist.snapshot@1',
+      claim_id: 'b'.repeat(64),
+    });
+  });
+
+  it('keeps failed and running component counts aligned across CLI, HTML, and JSON', () => {
+    const proofSnapshot = snapshot();
+    const componentGeneration = (id: string, status: string) => ({
+      status,
+      checkId: 'author-native-component',
+      scope: [
+        { kind: 'keyed', key: 'project' },
+        { kind: 'keyed', key: id },
+      ],
+    });
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: {
+        ...instanceProjection([]),
+        generationsById: {
+          alpha: componentGeneration('alpha', 'failed'),
+          beta: componentGeneration('beta', 'failed'),
+          gamma: componentGeneration('gamma', 'running'),
+        },
+      },
+    });
+    expect(progress.operational.components).toMatchObject({
+      known: true,
+      known_count: 3,
+      completed_count: 0,
+      running_count: 1,
+      failed_count: 2,
+      pending_count: 0,
+      unknown_count: 0,
+      unexpanded_count: 0,
+    });
+    expect(progress.operational.components.items).toEqual([
+      { id: 'alpha', state: 'failed', check_ids: ['author-native-component'] },
+      { id: 'beta', state: 'failed', check_ids: ['author-native-component'] },
+      { id: 'gamma', state: 'running', check_ids: ['author-native-component'] },
+    ]);
+
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain(
+      'operational components: state=3 discovered expanded completed=0,running=1,failed=2,pending=0,unknown=0,unexpanded=0'
+    );
+    expect(rendered.html).toContain('<b>running:</b> 1');
+    expect(rendered.html).toContain('<b>failed:</b> 2');
+    const json = JSON.parse(rendered.json);
+    expect(json.operational.components).toMatchObject({running_count: 1, failed_count: 2});
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
+  it('keeps execution state separate from topology blockers and Proof input staleness', () => {
+    const proofSnapshot = snapshot();
+    const plan = {
+      graphSemanticDigest: 'graph',
+      templatesByName: {
+        native: {
+          templateDigest: 'template',
+          nodesByKey: {
+            review: {check: {}, dependencyNodeKeys: ['author']},
+            author: {check: {}, dependencyNodeKeys: []},
+          },
+        },
+      },
+    };
+    const scope = [{kind: 'keyed', expansionOwnerCheck: 'enumerate-native-specs', key: 'REQ-1', subgraphInstanceId: 'e'.repeat(64)}];
+    const retained = {
+      claimId: 'r'.repeat(64),
+      claim: 'native.requirement.item@1',
+      payload: {id: 'REQ-1', component_id: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'1'.repeat(64)}`},
+      active: true,
+      nodeGenerationId: 'item-generation',
+      producerCheckId: 'collect-proof-evidence',
+    };
+    const projection = {
+      lastEventId: 8,
+      instancesById: {
+        item: {
+          status: 'active', graphSemanticDigest: 'graph', templateDigest: 'template',
+          subgraphInstanceId: 'e'.repeat(64), nodeInstanceIdsByTemplateNode: {author: 'author-node', review: 'review-node'},
+        },
+      },
+      nodesById: {
+        'author-node': {nodeInstanceId: 'author-node', templateNodeKey: 'author', scope},
+        'review-node': {nodeInstanceId: 'review-node', templateNodeKey: 'review', scope},
+      },
+      generationsById: {
+        'author-generation': {nodeGenerationId: 'author-generation', nodeInstanceId: 'author-node', templateNodeKey: 'author', status: 'failed', checkId: 'author', scope},
+        'item-generation': {nodeGenerationId: 'item-generation', nodeInstanceId: 'review-node', templateNodeKey: 'review', status: 'completed', checkId: 'review', scope},
+      },
+      activeGenerationIdByNode: {'author-node': 'author-generation', 'review-node': 'item-generation'},
+      claimsById: {[`r`.repeat(64)]: retained},
+    };
+    const blocked = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: projection,
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+    });
+    const review = blocked.operational.specifications.items.find(item => item.id === 'REQ-1');
+    expect(review?.state).toBe('failed');
+    expect(review?.conditions).toBeUndefined();
+
+    const stale = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: {...projection, activeGenerationIdByNode: {'author-node': 'author-generation'}},
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+      currentProofInputs: [{id: 'REQ-1', component: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'2'.repeat(64)}`}],
+    });
+    const staleItem = stale.operational.specifications.items.find(item => item.id === 'REQ-1');
+    expect(staleItem?.conditions?.[0]).toMatchObject({state: 'stale', kind: 'changed_input'});
+    expect(stale.operational.specifications.stale_count).toBe(1);
+    const staleComponent = stale.operational.components.items.find(item => item.id === 'component-a');
+    expect(staleComponent?.conditions?.[0]).toMatchObject({state: 'stale', kind: 'changed_input', evidence: {scope: 'component'}});
+    expect(staleComponent?.conditions?.[0].evidence.component_generation_id).toBeUndefined();
+    expect(staleComponent?.check_ids).toEqual([]);
+    expect(stale.operational.components.stale_count).toBe(1);
+
+    const conditionOnlyProjection = {
+      ...projection,
+      claimsById: {
+        ...projection.claimsById,
+        [`r`.repeat(64)]: {...retained, nodeGenerationId: 'missing-generation'},
+      },
+      generationsById: {},
+      activeGenerationIdByNode: {},
+    };
+    const conditionOnly = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: conditionOnlyProjection,
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+      currentProofInputs: [{id: 'REQ-1', component: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'2'.repeat(64)}`}],
+    });
+    expect(conditionOnly.operational.specifications.items.find(item => item.id === 'REQ-1')?.state).toBe('unknown');
+
+    const readyProjection = {
+      ...conditionOnlyProjection,
+      generationsById: {
+        'ready-generation': {
+          nodeGenerationId: 'ready-generation',
+          nodeInstanceId: 'review-node',
+          templateNodeKey: 'review',
+          status: 'ready',
+          checkId: 'review',
+          scope,
+        },
+      },
+      activeGenerationIdByNode: {
+        'review-node': 'ready-generation',
+      },
+    };
+    const readyStale = buildNativeChecklistProgress({
+      proofSnapshot,
+      proofSnapshotClaim: {...rootClaim(proofSnapshot), active: true},
+      instanceProjection: readyProjection,
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+      currentProofInputs: [{id: 'REQ-1', component: 'component-a', file_path: 'specs/REQ-1.yaml', proof_file_hash: `sha256:${'2'.repeat(64)}`}],
+    });
+    const readyStaleItem = readyStale.operational.specifications.items.find(item => item.id === 'REQ-1');
+    expect(readyStaleItem?.state).toBe('pending');
+    expect(readyStaleItem?.conditions?.[0]).toMatchObject({state: 'stale', kind: 'changed_input'});
+
+    expect(stale.evidence.journal.provenance).toBe('checkpoint');
+    const rendered = renderNativeChecklistProgress(stale);
+    expect(JSON.parse(rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1] as string)).toEqual(JSON.parse(rendered.json));
+    expect(rendered.html).toContain('overflow-wrap:normal;word-break:normal');
+    expect(rendered.html).toContain('table-layout:fixed;width:100%;min-width:52rem');
+    expect(rendered.html).toContain('overflow-wrap:anywhere;word-break:break-word');
+  });
+
+  it('proves exact component/specification blocker conditions without inferring optional or inactive work', () => {
+    const componentScope = [{kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'component-a', subgraphInstanceId: 'c'.repeat(64)}];
+    const specificationScope = [
+      ...componentScope,
+      {kind: 'keyed', expansionOwnerCheck: 'enumerate-native-specs', key: 'REQ-1', subgraphInstanceId: 's'.repeat(64)},
+    ];
+    const makePlan = (targetCheck: Record<string, unknown> = {}) => ({
+      graphSemanticDigest: 'graph',
+      templatesByName: {
+        component: {templateDigest: 'component-template', nodesByKey: {
+          prerequisite: {check: {}, dependencyNodeKeys: []},
+          target: {check: targetCheck, dependencyNodeKeys: ['prerequisite']},
+        }},
+        specification: {templateDigest: 'specification-template', nodesByKey: {
+          prerequisite: {check: {}, dependencyNodeKeys: []},
+          target: {check: targetCheck, dependencyNodeKeys: ['prerequisite']},
+        }},
+      },
+    });
+    const makeProjection = (prerequisiteStatus: 'ready' | 'running' | 'failed', options: {targetActive?: boolean; inactive?: boolean} = {}) => {
+      const instancesById = {
+        component: {
+          status: options.inactive ? 'inactive' : 'active', graphSemanticDigest: 'graph', templateDigest: 'component-template',
+          subgraphInstanceId: 'c'.repeat(64), scope: componentScope, nodeInstanceIdsByTemplateNode: {prerequisite: 'component-prerequisite', target: 'component-target'},
+        },
+        specification: {
+          status: options.inactive ? 'inactive' : 'active', graphSemanticDigest: 'graph', templateDigest: 'specification-template',
+          subgraphInstanceId: 's'.repeat(64), scope: specificationScope, nodeInstanceIdsByTemplateNode: {prerequisite: 'spec-prerequisite', target: 'spec-target'},
+        },
+      };
+      const nodesById = {
+        'component-prerequisite': {nodeInstanceId: 'component-prerequisite', templateNodeKey: 'prerequisite', scope: componentScope},
+        'spec-prerequisite': {nodeInstanceId: 'spec-prerequisite', templateNodeKey: 'prerequisite', scope: specificationScope},
+      };
+      const generationsById: Record<string, Record<string, unknown>> = {
+        'component-prerequisite-generation': {nodeGenerationId: 'component-prerequisite-generation', nodeInstanceId: 'component-prerequisite', templateNodeKey: 'prerequisite', checkId: 'component-prerequisite', status: prerequisiteStatus, scope: componentScope},
+        'spec-prerequisite-generation': {nodeGenerationId: 'spec-prerequisite-generation', nodeInstanceId: 'spec-prerequisite', templateNodeKey: 'prerequisite', checkId: 'spec-prerequisite', status: prerequisiteStatus, scope: specificationScope},
+      };
+      const activeGenerationIdByNode: Record<string, string> = {
+        'component-prerequisite': 'component-prerequisite-generation',
+        'spec-prerequisite': 'spec-prerequisite-generation',
+      };
+      if (options.targetActive) {
+        generationsById['component-target-generation'] = {nodeGenerationId: 'component-target-generation', nodeInstanceId: 'component-target', templateNodeKey: 'target', checkId: 'component-target', status: 'ready', scope: componentScope};
+        generationsById['spec-target-generation'] = {nodeGenerationId: 'spec-target-generation', nodeInstanceId: 'spec-target', templateNodeKey: 'target', checkId: 'spec-target', status: 'ready', scope: specificationScope};
+        activeGenerationIdByNode['component-target'] = 'component-target-generation';
+        activeGenerationIdByNode['spec-target'] = 'spec-target-generation';
+      }
+      return {lastEventId: 8, graphSemanticDigest: 'graph', instancesById, nodesById, generationsById, activeGenerationIdByNode, claimsById: {}};
+    };
+    const build = (prerequisiteStatus: 'ready' | 'running' | 'failed', plan = makePlan(), options: {targetActive?: boolean; inactive?: boolean} = {}) =>
+      buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        proofSnapshotClaim: {...rootClaim(snapshot()), active: true},
+        instanceProjection: makeProjection(prerequisiteStatus, options),
+        checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+        expansionPlan: plan,
+      });
+
+    for (const status of ['ready', 'running'] as const) {
+      const progress = build(status);
+      const component = progress.operational.components.items.find(item => item.id === 'component-a');
+      const specification = progress.operational.specifications.items.find(item => item.id === 'REQ-1');
+      expect(component).toMatchObject({condition: {state: 'blocked', kind: 'waiting', evidence: {target_node_instance_id: 'component-target'}}});
+      expect(specification).toMatchObject({condition: {state: 'blocked', kind: 'waiting'}});
+      expect(component?.condition?.evidence.target_check_id).toBe('target');
+      expect(specification?.condition?.evidence.target_check_id).toBe('target');
+      expect(progress.operational.components.blocked_count).toBe(1);
+      expect(progress.operational.specifications.blocked_count).toBe(1);
+    }
+    const failed = build('failed');
+    expect(failed.operational.components.items.find(item => item.id === 'component-a')?.condition).toMatchObject({state: 'blocked', kind: 'failed_dependency'});
+    expect(failed.operational.specifications.items.find(item => item.id === 'REQ-1')?.condition).toMatchObject({state: 'blocked', kind: 'failed_dependency'});
+    const readyTarget = build('failed', makePlan(), {targetActive: true});
+    expect(readyTarget.operational.components.items.find(item => item.id === 'component-a')?.condition).toBeUndefined();
+    expect(readyTarget.operational.specifications.items.find(item => item.id === 'REQ-1')?.condition).toBeUndefined();
+    const conditional = build('failed', makePlan({if: 'feature-enabled'}));
+    expect(conditional.operational.components.blocked_count).toBe(0);
+    expect(conditional.operational.specifications.blocked_count).toBe(0);
+    const inactive = build('failed', makePlan(), {inactive: true});
+    expect(inactive.operational.components.blocked_count).toBe(0);
+    expect(inactive.operational.specifications.blocked_count).toBe(0);
+  });
+
+  it('keeps the absent project fan-in target in project work without fabricating a component', () => {
+    const projectScope = [{kind: 'keyed', expansionOwnerCheck: 'project', key: 'jsonparser', subgraphInstanceId: 'p'.repeat(64)}];
+    const componentScope = (id: string) => [
+      ...projectScope,
+      {kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: id, subgraphInstanceId: `${id === 'alpha' ? 'a' : id === 'beta' ? 'b' : 'c'}`.repeat(64)},
+    ];
+    const plan = {
+      graphSemanticDigest: 'graph',
+      templatesByName: {
+        project: {templateDigest: 'project-template', nodesByKey: {
+          prerequisite: {check: {}, dependencyNodeKeys: []},
+          'component-promotions-complete': {
+            check: {}, dependencyNodeKeys: ['prerequisite'],
+            waitForExpansion: {owner: 'materialize-retained-catalog', terminal_node: 'promote-native-component'},
+          },
+        }},
+        component: {templateDigest: 'component-template', nodesByKey: {
+          'author-native-component': {check: {}, dependencyNodeKeys: []},
+          'promote-native-component': {check: {}, dependencyNodeKeys: ['author-native-component']},
+        }},
+      },
+    };
+    const componentIds = ['alpha', 'beta', 'gamma'];
+    const projectInstanceId = 'p'.repeat(64);
+    const generationsById: Record<string, Record<string, unknown>> = {
+      'project-prerequisite-generation': {
+        nodeGenerationId: 'project-prerequisite-generation', nodeInstanceId: 'project-prerequisite',
+        templateNodeKey: 'prerequisite', checkId: 'prerequisite', status: 'completed', scope: projectScope,
+      },
+    };
+    const activeGenerationIdByNode: Record<string, string> = {'project-prerequisite': 'project-prerequisite-generation'};
+    const componentInstances: Record<string, Record<string, unknown>> = {};
+    const nodesById: Record<string, Record<string, unknown>> = {
+      'project-prerequisite': {nodeInstanceId: 'project-prerequisite', templateNodeKey: 'prerequisite', scope: projectScope},
+    };
+    for (const id of componentIds) {
+      const generationId = `${id}-generation`;
+      const nodeInstanceId = `${id}-node`;
+      const scope = componentScope(id);
+      generationsById[generationId] = {
+        nodeGenerationId: generationId, nodeInstanceId,
+        templateNodeKey: 'author-native-component', checkId: 'author-native-component',
+        operational_kind: 'component', unit_id: id, status: 'running', scope,
+      };
+      activeGenerationIdByNode[nodeInstanceId] = generationId;
+      nodesById[nodeInstanceId] = {nodeInstanceId, templateNodeKey: 'author-native-component', scope};
+      componentInstances[id] = {
+        status: 'active', graphSemanticDigest: 'graph', templateDigest: 'component-template',
+        subgraphInstanceId: scope[1].subgraphInstanceId, parentSubgraphInstanceId: projectInstanceId,
+        expansionOwnerCheck: 'materialize-retained-catalog', scope,
+        nodeInstanceIdsByTemplateNode: {
+          'author-native-component': nodeInstanceId,
+          'promote-native-component': `${id}-promote-node`,
+        },
+      };
+    }
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      proofSnapshotClaim: {...rootClaim(snapshot()), active: true},
+      instanceProjection: {
+        lastEventId: 8,
+        graphSemanticDigest: 'graph',
+        instancesById: {
+          project: {
+            status: 'active', graphSemanticDigest: 'graph', templateDigest: 'project-template',
+            subgraphInstanceId: projectInstanceId, scope: projectScope,
+            nodeInstanceIdsByTemplateNode: {prerequisite: 'project-prerequisite', 'component-promotions-complete': 'project-promotions'},
+          },
+          ...componentInstances,
+        },
+        nodesById,
+        generationsById,
+        activeGenerationIdByNode,
+        claimsById: {},
+      },
+      checkpoint: {frontier: {eventCount: 8, lastEventId: 8}, graphSemanticDigest: 'graph'},
+      expansionPlan: plan,
+    });
+    expect(progress.operational.project).toEqual({
+      state: 'pending', known: true, check_ids: ['component-promotions-complete', 'prerequisite'],
+    });
+    expect(progress.operational.components).toMatchObject({
+      known_count: 3, running_count: 3, pending_count: 0, blocked_count: 3,
+    });
+    expect(progress.operational.components.items.map(item => item.id)).toEqual(componentIds);
+    expect(progress.operational.components.items.every(item =>
+      item.condition?.state === 'blocked' && item.condition.kind === 'waiting'
+    )).toBe(true);
+    expect(progress.operational.components.items.some(item => item.id === 'jsonparser')).toBe(false);
+  });
+
+  it('selects research over the root bootstrap snapshot', () => {
+    const proofSnapshot = snapshot();
+    const research = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));
+    const progress = buildNativeChecklistProgressFromProjections({
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: instanceProjection([research]),
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'proof.checklist.research-snapshot@1',
+      stage: 'research',
+      claim_id: 'c'.repeat(64),
+    });
+  });
+
+  it('requires skeleton to name the active research parent at the exact project scope', () => {
+    const proofSnapshot = snapshot();
+    const scope = projectScope();
+    const researchId = 'c'.repeat(64);
+    const research = expandedClaim(proofSnapshot, 'research', researchId, scope);
+    const skeletonId = 'd'.repeat(64);
+    const skeleton = expandedClaim(proofSnapshot, 'skeleton', skeletonId, scope, [researchId]);
+    const input = {
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: instanceProjection([research, skeleton]),
+    };
+    expect(
+      buildNativeChecklistProgressFromProjections(input).evidence.proof_snapshot
+    ).toMatchObject({
+      source: 'proof.checklist.skeleton-snapshot@1',
+      stage: 'skeleton',
+      claim_id: skeletonId,
+    });
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        ...input,
+        instanceProjection: instanceProjection([
+          research,
+          expandedClaim(proofSnapshot, 'skeleton', skeletonId, scope, ['e'.repeat(64)]),
+        ]),
+      })
+    ).toThrow(/active research parent/);
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        ...input,
+        instanceProjection: instanceProjection([
+          research,
+          expandedClaim(proofSnapshot, 'skeleton', skeletonId, projectScope('other'), [researchId]),
+        ]),
+      })
+    ).toThrow(/active research parent/);
+  });
+
+  it('fails closed on inactive, duplicate, and foreign supported candidates', () => {
+    const proofSnapshot = snapshot();
+    const inactive = expandedClaim(proofSnapshot, 'research', 'c'.repeat(64));
+    inactive.active = false;
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([inactive]),
+      })
+    ).not.toThrow();
+
+    const activeResearch = expandedClaim(proofSnapshot, 'research', 'a'.repeat(64));
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([]),
+        instanceProjection: instanceProjection([activeResearch]),
+      })
+    ).toThrow(/active root bootstrap/);
+
+    const duplicateResearch = expandedClaim(proofSnapshot, 'research', 'a'.repeat(64));
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([inactive, duplicateResearch]),
+      })
+    ).not.toThrow();
+    const duplicateResearch2 = expandedClaim(
+      proofSnapshot,
+      'research',
+      'f'.repeat(64),
+      projectScope('other')
+    );
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([duplicateResearch, duplicateResearch2]),
+      })
+    ).toThrow(/duplicate active expanded checklist research/);
+
+    const foreign = expandedClaim(proofSnapshot, 'research', '0'.repeat(64));
+    foreign.producerCheckId = 'foreign';
+    expect(() =>
+      buildNativeChecklistProgressFromProjections({
+        claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+        instanceProjection: instanceProjection([foreign]),
+      })
+    ).toThrow(/invalid producer/);
+  });
+
+  it('keeps rendered JSON identical across restored projections and options', () => {
+    const proofSnapshot = snapshot();
+    const researchId = 'c'.repeat(64);
+    const research = expandedClaim(proofSnapshot, 'research', researchId);
+    const input = {
+      claimProjection: rootProjection([rootClaim(proofSnapshot)]),
+      instanceProjection: {
+        ...instanceProjection([research]),
+        generationsById: {
+          next: {
+            nodeGenerationId: 'next',
+            status: 'ready',
+            scope: projectScope(),
+          },
+        },
+        activeGenerationIdByNode: { next: 'next' },
+      },
+      checkpoint: {
+        sessionId: 'session',
+        frontier: { eventCount: 4, lastEventId: 4 },
+        graphSemanticDigest: 'graph',
+        integrity: { digest: 'integrity' },
+      },
+      checkpointTimestamp: '2026-09-08T00:00:00Z',
+      paused: true,
+      resumed: true,
+    };
+    const first = buildNativeChecklistProgressFromProjections(input);
+    const restored = buildNativeChecklistProgressFromProjections(JSON.parse(JSON.stringify(input)));
+    expect(renderNativeChecklistProgress(first).json).toBe(
+      renderNativeChecklistProgress(restored).json
+    );
+    expect(first.resumable).toBe(true);
+  });
+
+  it('renders deterministic text and escaped HTML without changing the JSON payload', () => {
+    const progress = buildNativeChecklistProgress({ proofSnapshot: snapshot() });
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.json).toBe(renderNativeChecklistProgress(JSON.parse(rendered.json)).json);
+    expect(rendered.text).toContain('onboard_v1 (3 steps)');
+    expect(rendered.html).toContain('data-native-checklist-progress="v1"');
+    expect(rendered.html).toContain('Skeleton &lt;unsafe&gt;');
+    expect(rendered.html).not.toContain('<unsafe>');
+    expect(rendered.html).toContain('\\u003c');
+    expect(rendered.text).toContain('checks=none');
+    expect(rendered.html).toContain('required checks: none / not required');
+    expect(rendered.html).not.toContain('required checks: pass</td>');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(embedded).toBeDefined();
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('renders validated Proof catalog drift as unknown without synthetic stale work', () => {
+    const drift = {
+      retained_ids: ['REQ-A', 'REQ-B'],
+      current_ids: ['REQ-A', 'REQ-C'],
+      added_ids: ['REQ-C'],
+      removed_ids: ['REQ-B'],
+    };
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      proofCatalogDrift: drift,
+    });
+    expect(progress.evidence.catalog_drift).toEqual(drift);
+    expect(progress.unknown).toContain(
+      'Proof catalog changed during resume (added: REQ-C; removed: REQ-B)',
+    );
+    expect(progress.operational.components.items).toEqual([]);
+    expect(progress.operational.specifications.items).toEqual([]);
+    expect(progress.operational.components.stale_count).toBe(0);
+    expect(progress.operational.specifications.stale_count).toBe(0);
+    const rendered = renderNativeChecklistProgress(progress);
+    expect(rendered.text).toContain('Proof catalog changed during resume (added: REQ-C; removed: REQ-B)');
+    expect(rendered.html).toContain('Proof catalog changed during resume (added: REQ-C; removed: REQ-B)');
+    const embedded = rendered.html.match(
+      /<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/
+    )?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+
+    for (const malformed of [
+      {...drift, added_ids: ['REQ-C', 'REQ-C']},
+      {...drift, retained_ids: ['REQ-B', 'REQ-A']},
+      {...drift, added_ids: []},
+    ]) {
+      expect(() => buildNativeChecklistProgress({
+        proofSnapshot: snapshot(),
+        proofCatalogDrift: malformed,
+      })).toThrow(/catalog drift/i);
+    }
+  });
+
+  it('rejects an unversioned or malformed Proof snapshot', () => {
+    expect(() =>
+      buildNativeChecklistProgress({ proofSnapshot: { schema_version: 'old' } })
+    ).toThrow(/proof.checklist.show.v1/);
+    expect(() =>
+      buildNativeChecklistProgress({ proofSnapshot: snapshot({ steps: ['not-an-object'] }) })
+    ).toThrow(/steps must be an array/);
+  });
+
+  it('projects Milestone B progress only from completed component fan-in summaries', () => {
+    const proofSnapshot = snapshot();
+    const projection = milestoneBFanInProjection([
+      {component: 'jsonparser-core', snapshot: proofSnapshot},
+      {component: 'jsonparser-benchmark-suite', snapshot: proofSnapshot},
+    ]);
+    Object.assign(projection.generationsById, {
+      'sibling-spec': {
+        nodeGenerationId: 'sibling-spec', nodeInstanceId: 'sibling-spec-node',
+        subgraphInstanceId: '1'.repeat(64),
+        checkId: 'review-native-item', status: 'completed',
+        scope: [{kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'jsonparser-benchmark-suite', subgraphInstanceId: 'e'.repeat(64)}, {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-specs"]', key: 'REQ-S', subgraphInstanceId: '1'.repeat(64)}],
+      },
+      'held-spec': {
+        nodeGenerationId: 'held-spec', nodeInstanceId: 'held-spec-node',
+        subgraphInstanceId: '2'.repeat(64),
+        checkId: 'review-native-item', status: 'ready',
+        scope: [{kind: 'keyed', expansionOwnerCheck: 'discover-native-components', key: 'jsonparser-core', subgraphInstanceId: 'e'.repeat(64)}, {kind: 'keyed', expansionOwnerCheck: '["native-component","enumerate-native-specs"]', key: 'REQ-H', subgraphInstanceId: '2'.repeat(64)}],
+      },
+    });
+    const progress = buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: projection,
+      checkpoint: {frontier: {eventCount: 4, lastEventId: 4}, graphSemanticDigest: 'graph', integrity: {digest: 'integrity'}},
+      paused: true,
+      retainedCatalogComponentIds: ['jsonparser-core', 'jsonparser-benchmark-suite', 'retained-unexpanded'],
+      affectedComponentIds: ['jsonparser-core', 'jsonparser-benchmark-suite'],
+    });
+    expect(progress.evidence.proof_snapshot).toMatchObject({
+      source: 'native.component.summary@1',
+      claim_ids: ['b'.repeat(64), 'a'.repeat(64)],
+      component_ids: ['jsonparser-benchmark-suite', 'jsonparser-core'],
+      digest: sha256Canonical(proofSnapshot),
+    });
+    expect(progress.operational.specifications.items).toEqual([
+      {id: 'REQ-H', state: 'pending', check_ids: ['review-native-item']},
+      {id: 'REQ-S', state: 'completed', check_ids: ['review-native-item']},
+    ]);
+    expect(progress.operational.catalog_coverage).toMatchObject({known_count: 3, affected_count: 2, reused_count: 1});
+    const rendered = renderNativeChecklistProgress(progress);
+    const embedded = rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(JSON.parse(rendered.json));
+  });
+
+  it('preserves native checklist identity booleans and rejects malformed values', () => {
+    const falseProjection = milestoneBFanInProjection([
+      {component: 'jsonparser-core', snapshot: snapshot({active: false, new_project: false})},
+    ]);
+    const progress = buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: falseProjection,
+    });
+    expect(progress.checklist.active).toBe(false);
+    expect(progress.checklist.new_project).toBe(false);
+
+    for (const field of ['active', 'new_project'] as const) {
+      const missing = snapshot();
+      delete missing[field];
+      expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
+        instanceProjection: milestoneBFanInProjection([
+          {component: 'jsonparser-core', snapshot: missing},
+        ]),
+      })).toThrow(/wrong Proof checklist identity/);
+      expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
+        instanceProjection: milestoneBFanInProjection([
+          {component: 'jsonparser-core', snapshot: snapshot({[field]: 'false'})},
+        ]),
+      })).toThrow(/wrong Proof checklist identity/);
+    }
+  });
+
+  it.each([
+    ['missing', () => ({claimsById: {}, generationsById: {}, activeGenerationIdByNode: {}})],
+    ['divergent', () => milestoneBFanInProjection([
+      {component: 'a', snapshot: snapshot()},
+      {component: 'b', snapshot: snapshot({checklist: 'other'})},
+    ])],
+    ['stale', () => milestoneBFanInProjection([{component: 'a', snapshot: snapshot()}], {status: 'ready'})],
+    ['unbound', () => {
+      const value = milestoneBFanInProjection([{component: 'a', snapshot: snapshot()}]);
+      const claim = Object.values(value.claimsById as Record<string, Record<string, unknown>>)[0];
+      claim.nodeGenerationId = 'missing-generation';
+      return value;
+    }],
+  ])('fails closed for a Milestone B %s fan-in summary', (_label, makeProjection) => {
+    expect(() => buildNativeChecklistProgressFromMilestoneBProjections({
+      instanceProjection: makeProjection(),
+    })).toThrow();
+  });
+
+  it('materializes the exact 70-item batch catalog and separates execution from receipt decisions', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: nativeBatchFixture(),
+    });
+    const specifications = progress.operational.specifications;
+    expect(specifications).toMatchObject({
+      known: true,
+      known_count: 70,
+      completed_count: 10,
+      pending_count: 60,
+      unknown_count: 0,
+      receipt_decisions: {approved: 2, needs_changes: 8, unreviewed: 60, unknown: 0},
+    });
+    expect(progress.operational.components.items.map(item => [item.id, item.state])).toEqual([
+      ['component-a', 'pending'], ['component-b', 'pending'], ['component-c', 'pending'], ['component-d', 'pending'], ['component-e', 'pending'],
+    ]);
+    expect(specifications.items.filter(item => item.state === 'completed')).toHaveLength(10);
+    expect(specifications.items.every(item => item.component_id && item.batch_id && item.receipt_decision)).toBe(true);
+    const rendered = renderNativeChecklistProgress(progress);
+    const json = JSON.parse(rendered.json) as Record<string, any>;
+    expect(json.operational.specifications).toEqual(specifications);
+    expect(rendered.text).toContain('RECEIPT DECISION approved=2,needs_changes=8,unreviewed=60,unknown=0');
+    expect(rendered.html).toContain('RECEIPT DECISION approved:</b> 2');
+    expect(rendered.html).toContain('needs_changes:</b> 8');
+    expect(rendered.html).toContain('unreviewed:</b> 60');
+    expect(rendered.html).toContain('unknown:</b> 0');
+    const embedded = rendered.html.match(/<script type="application\/json" id="native-checklist-progress">([\s\S]*)<\/script>/)?.[1];
+    expect(JSON.parse(embedded as string)).toEqual(json);
+  });
+
+  it.each([
+    ['missing terminal', {receiptBeforeTerminal: true}, 0],
+    ['duplicate receipt', {duplicateReceipt: true}, 5],
+    ['malformed finding', {malformedFinding: true}, 5],
+    ['mismatched receipt', {mismatchedReceipt: true}, 5],
+    ['duplicate finding', {duplicateFinding: true}, 5],
+  ] as const)('fails closed for %s batch evidence', (_label, options, completedCount) => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: nativeBatchFixture(options),
+    });
+    expect(progress.operational.specifications.completed_count).toBe(completedCount);
+    if (options.duplicateReceipt || options.malformedFinding || options.mismatchedReceipt || options.duplicateFinding) {
+      expect(progress.operational.specifications.receipt_decisions?.unknown).toBeGreaterThan(0);
+    }
+  });
+
+  it('rejects duplicate requirement ownership instead of claiming a completed spec row', () => {
+    const progress = buildNativeChecklistProgress({
+      proofSnapshot: snapshot(),
+      instanceProjection: nativeBatchFixture({duplicateRequirementId: true}),
+    });
+    expect(progress.operational.specifications.items.find(item => item.id === 'REQ-a-01')?.state).toBe('unknown');
+    expect(progress.unknown.some(reason => reason.includes('requirement'))).toBe(true);
+  });
+
+  it('rejects a mixed-type batch scope instead of treating the claim as completed catalog work', () => {
+    const projection = nativeBatchFixture();
+    const batchClaim = Object.values(projection.claimsById as Record<string, Record<string, unknown>>)
+      .find(claim => (claim.payload as Record<string, unknown>)?.id === 'component-a:batch:1');
+    expect(batchClaim).toBeDefined();
+    batchClaim!.scope = [...(batchClaim!.scope as unknown[]), 'malformed-scope-entry'];
+    const progress = buildNativeChecklistProgress({proofSnapshot: snapshot(), instanceProjection: projection});
+    expect(progress.operational.specifications.known_count).toBe(65);
+    expect(progress.operational.specifications.completed_count).toBe(5);
+    expect(progress.unknown.some(reason => reason.includes('invalid component/batch scope'))).toBe(true);
+  });
+});

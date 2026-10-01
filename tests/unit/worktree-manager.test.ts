@@ -30,6 +30,12 @@ describe('WorktreeManager', () => {
       fs.rmSync(basePath, { recursive: true, force: true });
     }
     fs.mkdirSync(basePath, { recursive: true });
+    WorktreeManager.getInstance().configure({
+      enabled: true,
+      base_path: basePath,
+      cleanup_on_exit: true,
+      max_age_hours: 24,
+    });
   });
 
   afterEach(() => {
@@ -172,21 +178,30 @@ describe('WorktreeManager', () => {
     const repo = 'TykTechnologies/tyk-docs';
     const repoUrl = `https://github.com/${repo}.git`;
     const ref = 'main';
+    const manager = WorktreeManager.getInstance();
+    const configuredBasePath = manager.getConfig().base_path;
 
-    const reposDir = `${basePath}/repos`;
-    const worktreesDir = `${basePath}/worktrees`;
+    const reposDir = `${configuredBasePath}/repos`;
+    const worktreesDir = `${configuredBasePath}/worktrees`;
     fs.mkdirSync(reposDir, { recursive: true });
     fs.mkdirSync(worktreesDir, { recursive: true });
 
     const bareRepoPath = `${reposDir}/${repo.replace(/\//g, '-')}.git`;
     fs.mkdirSync(bareRepoPath, { recursive: true });
 
-    const worktreePath = `${worktreesDir}/existing-worktree`;
-    fs.mkdirSync(worktreePath, { recursive: true });
+    const requestedWorktreePath = `${worktreesDir}/existing-worktree`;
+    fs.mkdirSync(requestedWorktreePath, { recursive: true });
+    const worktreePath = fs.realpathSync(requestedWorktreePath);
+    const worktreeId = (manager as any).generateWorktreeIdForDirectory(
+      repo,
+      ref,
+      undefined,
+      worktreePath
+    );
     fs.writeFileSync(
       `${worktreePath}/.visor-metadata.json`,
       JSON.stringify({
-        worktree_id: 'existing-id',
+        worktree_id: worktreeId,
         created_at: new Date().toISOString(),
         workflow_id: 'wf',
         ref,
@@ -203,13 +218,14 @@ describe('WorktreeManager', () => {
       if (cmd.includes('remote get-url')) {
         return { stdout: repoUrl, stderr: '', exitCode: 0 };
       }
+      if (cmd.includes('--git-common-dir')) {
+        return { stdout: `${bareRepoPath}\n`, stderr: '', exitCode: 0 };
+      }
       if (cmd.includes('rev-parse')) {
         return { stdout: 'newsha\n', stderr: '', exitCode: 0 };
       }
       return { stdout: '', stderr: '', exitCode: 0 };
     });
-
-    const manager = WorktreeManager.getInstance();
 
     await manager.createWorktree(repo, repoUrl, ref, { workingDirectory: worktreePath });
 
