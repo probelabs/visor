@@ -198,6 +198,10 @@ async function handleStart(
   const engine = new StateMachineExecutionEngine();
   scheduler.setEngine(engine);
 
+  // Scheduler daemon is automation: allow owned-only branch cleanup in reused workspaces
+  const { setWorkspaceBranchCleanupPolicy } = await import('../utils/workspace-manager');
+  setWorkspaceBranchCleanupPolicy('owned-only', 'scheduler daemon');
+
   // Start scheduler
   try {
     await scheduler.start();

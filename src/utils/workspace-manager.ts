@@ -35,12 +35,55 @@ function sanitizePathComponent(name: string): string {
   ); // Ensure non-empty result
 }
 
+/** File (inside a linked worktree's private git dir) holding the branch baseline. */
+const BRANCH_BASELINE_FILE = 'visor-branch-baseline.json';
+
+interface BranchBaseline {
+  /** Unix seconds when the snapshot was taken. */
+  recordedAt: number;
+  /** Local branches that existed at that moment (never deleted by cleanup). */
+  branches: string[];
+}
+
+/**
+ * Whether Visor may delete branches when it refreshes a reused workspace.
+ *  - 'never'      : no branch is ever deleted (local CLI / library use on a developer checkout).
+ *  - 'owned-only' : delete only branches created inside Visor's own worktree
+ *                   (automation: GitHub Action, Slack/Telegram/MCP/... runners, scheduler daemon).
+ */
+export type WorkspaceBranchCleanupPolicy = 'never' | 'owned-only';
+
+let branchCleanupPolicy: { policy: WorkspaceBranchCleanupPolicy; reason: string } = {
+  policy: 'never',
+  reason: 'no automation runner opted in (local CLI or library use)',
+};
+
+/**
+ * Set the process-wide branch cleanup policy. Automation entry points opt in to
+ * 'owned-only'; the local CLI sets 'never'. The default is 'never'.
+ */
+export function setWorkspaceBranchCleanupPolicy(
+  policy: WorkspaceBranchCleanupPolicy,
+  reason: string
+): void {
+  branchCleanupPolicy = { policy, reason };
+}
+
+export function getWorkspaceBranchCleanupPolicy(): {
+  policy: WorkspaceBranchCleanupPolicy;
+  reason: string;
+} {
+  return { ...branchCleanupPolicy };
+}
+
 export interface WorkspaceConfig {
   enabled: boolean;
   basePath: string;
   cleanupOnExit: boolean;
   name?: string;
   mainProjectName?: string;
+  /** Per-instance override of the process-wide branch cleanup policy. */
+  branchCleanup?: WorkspaceBranchCleanupPolicy;
 }
 
 export interface WorkspaceInfo {
@@ -232,9 +275,7 @@ export class WorkspaceManager {
     // Without this, the worktree list grows unboundedly and can slow git operations.
     if (isGitRepo) {
       try {
-        await commandExecutor.execute(`git -C ${shellEscape(this.originalPath)} worktree prune`, {
-          timeout: 15000,
-        });
+        await this.pruneOwnStaleWorktrees();
       } catch {
         // Best-effort — don't fail workspace init if prune fails
       }
@@ -272,10 +313,7 @@ export class WorkspaceManager {
           logger.warn(`[Workspace] Existing path is not a valid git dir, recreating`);
           await fsp.rm(mainProjectPath, { recursive: true, force: true });
           try {
-            await commandExecutor.execute(
-              `git -C ${shellEscape(this.originalPath)} worktree prune`,
-              { timeout: 10000 }
-            );
+            await this.pruneOwnStaleWorktrees();
           } catch {}
           await this.createMainProjectWorktree(mainProjectPath);
         } else {
@@ -711,8 +749,13 @@ export class WorkspaceManager {
   private async fetchAndResolveUpstream(): Promise<{ upstreamRef: string; targetSha: string }> {
     // Fetch latest from origin
     logger.debug(`[Workspace] Fetching latest from origin`);
+    // Never prune the user's remote-tracking refs from a developer checkout
+    // (`--no-prune` also overrides a global fetch.prune=true); `--prune` is only
+    // used by automation that owns its checkout.
+    const pruneFlag =
+      this.getBranchCleanupPolicy().policy === 'owned-only' ? ' --prune' : ' --no-prune';
     const fetchResult = await commandExecutor.execute(
-      `git -C ${shellEscape(this.originalPath)} fetch origin --prune 2>&1`,
+      `git -C ${shellEscape(this.originalPath)} fetch origin${pruneFlag} 2>&1`,
       { timeout: 120000 }
     );
     if (fetchResult.exitCode !== 0) {
@@ -745,12 +788,72 @@ export class WorkspaceManager {
     return { upstreamRef: 'HEAD', targetSha: headResult.stdout.trim() };
   }
 
+  /** Effective branch cleanup policy (instance override > process-wide policy). */
+  private getBranchCleanupPolicy(): { policy: WorkspaceBranchCleanupPolicy; reason: string } {
+    if (this.config.branchCleanup) {
+      return { policy: this.config.branchCleanup, reason: 'workspace config' };
+    }
+    return getWorkspaceBranchCleanupPolicy();
+  }
+
+  /**
+   * Remove stale worktree entries that VISOR created (their path is under the
+   * workspace base path and no longer exists). Unlike a repo-wide
+   * `git worktree prune`, this never touches the user's own worktrees (e.g. on
+   * an unmounted drive).
+   */
+  private async pruneOwnStaleWorktrees(): Promise<void> {
+    const list = await commandExecutor.execute(
+      `git -C ${shellEscape(this.originalPath)} worktree list --porcelain`,
+      { timeout: 15000 }
+    );
+    if (list.exitCode !== 0) return;
+    const bases = new Set<string>([path.resolve(this.basePath)]);
+    try {
+      bases.add(fs.realpathSync(this.basePath));
+    } catch {}
+    const isUnderBase = (p: string) =>
+      [...bases].some(b => p === b || p.startsWith(b.endsWith(path.sep) ? b : b + path.sep));
+    let current: string | null = null;
+    for (const line of list.stdout.split('\n')) {
+      if (line.startsWith('worktree ')) {
+        current = line.slice('worktree '.length).trim();
+      } else if (line.startsWith('prunable') && current && isUnderBase(current)) {
+        await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} worktree remove --force ${shellEscape(current)}`,
+          { timeout: 10000 }
+        );
+      }
+    }
+  }
+
   /**
    * Reset a worktree to a specific commit and clean all modifications.
+   *
+   * NOTE: this deliberately does NOT touch branches. A linked worktree shares
+   * `refs/heads/*` with the user's repository, so a blanket "delete local
+   * branches" here deletes the user's real branches (see
+   * deleteBranchesCreatedInWorktree for the narrowly-scoped cleanup).
    */
   private async resetAndCleanWorktree(worktreePath: string, targetSha: string): Promise<void> {
     const escapedPath = shellEscape(worktreePath);
     const escapedSha = shellEscape(targetSha);
+
+    // `reset --hard` moves whatever branch HEAD is on. Visor's worktree must be
+    // detached; if something left it on a (possibly user-owned) branch, detach
+    // first and refuse to reset if that fails, so no branch is ever moved.
+    const attachedBranch = await this.getCheckedOutBranch(worktreePath);
+    if (attachedBranch) {
+      await commandExecutor.execute(`git -C ${escapedPath} checkout --detach`, {
+        timeout: 30000,
+      });
+      if (await this.getCheckedOutBranch(worktreePath)) {
+        logger.warn(
+          `[Workspace] Worktree ${worktreePath} is on branch '${attachedBranch}' and could not be detached; skipping reset to avoid moving that branch`
+        );
+        return;
+      }
+    }
 
     const resetResult = await commandExecutor.execute(
       `git -C ${escapedPath} reset --hard ${escapedSha}`,
@@ -766,64 +869,170 @@ export class WorkspaceManager {
     if (cleanResult.exitCode !== 0) {
       logger.warn(`[Workspace] clean -fdx failed: ${cleanResult.stderr}`);
     }
-
-    // Delete all local branches to prevent leakage between runs.
-    // Worktrees should always be in detached HEAD state; any local branches
-    // were created by AI agents and must not persist.
-    await this.deleteLocalBranches(worktreePath);
   }
 
   /**
-   * Delete local branches in a worktree that are safe to remove.
-   * IMPORTANT: Git worktrees share the branch namespace with the main repo
-   * and all other worktrees. We must NOT delete branches that are checked out
-   * in the main working tree or any other worktree — doing so would destroy
-   * the user's work.
+   * Absolute path of the git admin dir private to a LINKED worktree
+   * (`<repo>/.git/worktrees/<name>`). Files stored there are invisible to the
+   * work tree (survive `clean -fdx`) and are removed by `git worktree remove`.
+   * Returns null for anything that is not a linked worktree, so we never write
+   * into a user's main `.git` directory.
    */
-  private async deleteLocalBranches(worktreePath: string): Promise<void> {
-    const escapedPath = shellEscape(worktreePath);
+  private async getLinkedWorktreeGitDir(worktreePath: string): Promise<string | null> {
+    const result = await commandExecutor.execute(
+      `git -C ${shellEscape(worktreePath)} rev-parse --absolute-git-dir`,
+      { timeout: 5000 }
+    );
+    if (result.exitCode !== 0) return null;
+    const gitDir = result.stdout.trim();
+    if (!gitDir || !/[\\/]worktrees[\\/][^\\/]+$/.test(gitDir)) return null;
+    return gitDir;
+  }
 
-    // First, discover which branches are checked out in ANY worktree (including main).
-    // `git worktree list --porcelain` output contains "branch refs/heads/<name>" lines.
-    const worktreeListResult = await commandExecutor.execute(
-      `git -C ${escapedPath} worktree list --porcelain`,
+  /** All local branch names (shared namespace of the repo and all its worktrees). */
+  private async listLocalBranches(repoPath: string): Promise<string[] | null> {
+    const result = await commandExecutor.execute(
+      `git -C ${shellEscape(repoPath)} for-each-ref --format='%(refname:short)' refs/heads`,
       { timeout: 10000 }
     );
-    const protectedBranches = new Set<string>();
-    if (worktreeListResult.exitCode === 0) {
-      for (const line of worktreeListResult.stdout.split('\n')) {
-        const match = line.match(/^branch refs\/heads\/(.+)$/);
-        if (match) {
-          protectedBranches.add(match[1]);
-        }
-      }
-    }
-
-    const listResult = await commandExecutor.execute(
-      `git -C ${escapedPath} branch --list --format='%(refname:short)'`,
-      { timeout: 10000 }
-    );
-    if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
-      return;
-    }
-
-    const branches = listResult.stdout
-      .trim()
+    if (result.exitCode !== 0) return null;
+    return result.stdout
       .split('\n')
       .map(b => b.trim())
       .filter(b => b.length > 0);
+  }
 
-    for (const branch of branches) {
-      if (protectedBranches.has(branch)) {
-        logger.debug(`[Workspace] Skipping branch '${branch}' — checked out in another worktree`);
-        continue;
+  /**
+   * Snapshot the branches that exist right now, so a later cleanup can tell
+   * branches created inside Visor's worktree apart from the user's own branches.
+   */
+  private async recordBranchBaseline(worktreePath: string): Promise<void> {
+    try {
+      const gitDir = await this.getLinkedWorktreeGitDir(worktreePath);
+      if (!gitDir) return;
+      const branches = await this.listLocalBranches(worktreePath);
+      if (!branches) return;
+      const baseline: BranchBaseline = {
+        recordedAt: Math.floor(Date.now() / 1000),
+        branches,
+      };
+      await fsp.writeFile(path.join(gitDir, BRANCH_BASELINE_FILE), JSON.stringify(baseline));
+    } catch (error) {
+      logger.debug(`[Workspace] Could not record branch baseline: ${error}`);
+    }
+  }
+
+  private async readBranchBaseline(worktreePath: string): Promise<BranchBaseline | null> {
+    try {
+      const gitDir = await this.getLinkedWorktreeGitDir(worktreePath);
+      if (!gitDir) return null;
+      const raw = await fsp.readFile(path.join(gitDir, BRANCH_BASELINE_FILE), 'utf8');
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.recordedAt !== 'number' || !Array.isArray(parsed?.branches)) return null;
+      return parsed as BranchBaseline;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Branch currently checked out in the worktree, or null when HEAD is detached. */
+  private async getCheckedOutBranch(worktreePath: string): Promise<string | null> {
+    const result = await commandExecutor.execute(
+      `git -C ${shellEscape(worktreePath)} symbolic-ref -q --short HEAD`,
+      { timeout: 5000 }
+    );
+    if (result.exitCode !== 0) return null;
+    return result.stdout.trim() || null;
+  }
+
+  /**
+   * Branch names that were checked out IN THIS WORKTREE since `sinceEpoch`,
+   * read from the worktree's private HEAD reflog (`git checkout -b`/`switch -c`
+   * inside Visor's worktree is recorded there, never in the user's own HEAD log).
+   */
+  private async branchesCheckedOutInWorktreeSince(
+    worktreePath: string,
+    sinceEpoch: number
+  ): Promise<Set<string>> {
+    const names = new Set<string>();
+    const result = await commandExecutor.execute(
+      `git -C ${shellEscape(worktreePath)} reflog show --date=unix --format='%gd%x09%gs' HEAD`,
+      { timeout: 10000 }
+    );
+    if (result.exitCode !== 0) return names;
+    for (const line of result.stdout.split('\n')) {
+      const [selector, subject] = line.split('\t');
+      const ts = Number(/@\{(\d+)\}$/.exec(selector || '')?.[1]);
+      if (!subject || !Number.isFinite(ts) || ts < sinceEpoch) continue;
+      const moving = /^checkout: moving from (\S+) to (\S+)$/.exec(subject);
+      if (moving) {
+        names.add(moving[1]);
+        names.add(moving[2]);
       }
+      const returning = /returning to refs\/heads\/(\S+)$/.exec(subject);
+      if (returning) names.add(returning[1]);
+    }
+    return names;
+  }
+
+  /**
+   * Delete ONLY branches an AI agent / command created inside Visor's worktree.
+   *
+   * Git worktrees share the branch namespace with the user's repository, so a
+   * branch is deleted only if ALL of the following hold:
+   *  1. it did not exist when Visor recorded the baseline (worktree creation or
+   *     the previous refresh) — so pre-existing user branches are never touched;
+   *  2. it was checked out inside THIS worktree (its private HEAD reflog, or
+   *     the branch HEAD pointed at before we re-detached it);
+   *  3. it is not currently checked out in any worktree (including the main one).
+   * Without a baseline (e.g. a worktree created by an older Visor) nothing is
+   * deleted. Branches an agent created without checking them out are left
+   * alone: they are inert refs, unlike a deleted user branch.
+   */
+  private async deleteBranchesCreatedInWorktree(
+    worktreePath: string,
+    headBranchBeforeReset: string | null
+  ): Promise<void> {
+    const { policy, reason } = this.getBranchCleanupPolicy();
+    if (policy !== 'owned-only') {
+      logger.debug(
+        `[Workspace] Branch cleanup skipped for ${worktreePath}: policy '${policy}' (${reason}); no branch will be deleted`
+      );
+      return;
+    }
+    const baseline = await this.readBranchBaseline(worktreePath);
+    if (!baseline) {
+      logger.debug(`[Workspace] No branch baseline for ${worktreePath}; not deleting any branch`);
+      return;
+    }
+    const existing = await this.listLocalBranches(worktreePath);
+    if (!existing || existing.length === 0) return;
+
+    const touched = await this.branchesCheckedOutInWorktreeSince(worktreePath, baseline.recordedAt);
+    if (headBranchBeforeReset) touched.add(headBranchBeforeReset);
+
+    const protectedBranches = new Set<string>(baseline.branches);
+    const worktreeListResult = await commandExecutor.execute(
+      `git -C ${shellEscape(worktreePath)} worktree list --porcelain`,
+      { timeout: 10000 }
+    );
+    if (worktreeListResult.exitCode !== 0) {
+      logger.debug('[Workspace] worktree list failed; not deleting any branch');
+      return;
+    }
+    for (const line of worktreeListResult.stdout.split('\n')) {
+      const match = line.match(/^branch refs\/heads\/(.+)$/);
+      if (match) protectedBranches.add(match[1]);
+    }
+
+    for (const branch of existing) {
+      if (!touched.has(branch) || protectedBranches.has(branch)) continue;
       const deleteResult = await commandExecutor.execute(
-        `git -C ${escapedPath} branch -D ${shellEscape(branch)}`,
+        `git -C ${shellEscape(worktreePath)} branch -D ${shellEscape(branch)}`,
         { timeout: 10000 }
       );
       if (deleteResult.exitCode === 0) {
-        logger.debug(`[Workspace] Deleted local branch '${branch}' from worktree`);
+        logger.info(`[Workspace] Deleted branch '${branch}' created inside Visor's worktree`);
       }
     }
   }
@@ -836,6 +1045,8 @@ export class WorkspaceManager {
     logger.info(`[Workspace] Refreshing worktree to latest upstream: ${worktreePath}`);
 
     try {
+      // Remember which branch (if any) an agent left the worktree on, before re-detaching.
+      const headBranchBeforeReset = await this.getCheckedOutBranch(worktreePath);
       const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
 
       // Point worktree to the upstream commit
@@ -854,6 +1065,11 @@ export class WorkspaceManager {
 
       // Reset and clean
       await this.resetAndCleanWorktree(worktreePath, targetSha);
+
+      // Remove only branches created inside this worktree since the last baseline,
+      // then re-baseline so branches the user created meanwhile are protected.
+      await this.deleteBranchesCreatedInWorktree(worktreePath, headBranchBeforeReset);
+      await this.recordBranchBaseline(worktreePath);
 
       logger.info(`[Workspace] Worktree updated to ${upstreamRef} (${targetSha.slice(0, 8)})`);
     } catch (error) {
@@ -879,8 +1095,10 @@ export class WorkspaceManager {
       throw new Error(`Failed to create main project worktree: ${result.stderr}`);
     }
 
-    // Clean (shouldn't be needed in a fresh worktree, but defense in depth)
+    // Clean (shouldn't be needed in a fresh worktree, but defense in depth).
+    // A fresh detached worktree has created no branches, so nothing is deleted here.
     await this.resetAndCleanWorktree(targetPath, targetSha);
+    await this.recordBranchBaseline(targetPath);
 
     logger.info(
       `Created main project worktree at ${targetPath} (${upstreamRef} -> ${targetSha.slice(0, 8)})`

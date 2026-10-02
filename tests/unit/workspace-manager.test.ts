@@ -529,36 +529,38 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, worktree list, branch --list)
-      // Second init: refreshWorktreeToUpstream (fetch, resolve, sha, checkout, reset, clean, worktree list, branch --list)
+      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, record branch baseline)
+      // Second init: refreshWorktreeToUpstream (symbolic-ref, fetch, resolve, sha, checkout, reset, clean, read+record branch baseline)
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // rev-parse --absolute-git-dir (record baseline; not a linked worktree)
         // --- Second init: reuse path → refreshWorktreeToUpstream ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) on 2nd init
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(mainProject) valid
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // checkout --detach
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // rev-parse --absolute-git-dir (read baseline → none, delete nothing)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // rev-parse --absolute-git-dir (record baseline)
 
       const manager1 = WorkspaceManager.getInstance('reuse-git-1', testOriginalPath, {
         basePath: testBasePath,
@@ -604,37 +606,37 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, worktree list, branch --list)
+      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, record branch baseline)
       // Second init: invalid path → prune → createMainProjectWorktree again
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // rev-parse --absolute-git-dir (record baseline; not a linked worktree)
         // --- Second init: invalid worktree → recreate ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) 2nd
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // isGitRepository(mainProject) = INVALID
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin (recreate)
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add (recreate)
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // rev-parse --absolute-git-dir (record baseline; not a linked worktree)
 
       const manager1 = WorkspaceManager.getInstance('invalid-wt-1', testOriginalPath, {
         basePath: testBasePath,
@@ -669,11 +671,16 @@ describe('WorkspaceManager', () => {
       );
       expect(worktreeAddCalls.length).toBe(2);
 
-      // Should have called worktree prune
+      // Stale-worktree pruning is targeted (worktree list + remove of Visor's own
+      // entries); a repo-wide `git worktree prune` is never run on the user's repo.
       const pruneCalls = executeCalls.filter((call: any[]) =>
         String(call[0]).includes('worktree prune')
       );
-      expect(pruneCalls.length).toBe(3);
+      expect(pruneCalls.length).toBe(0);
+      const listCalls = executeCalls.filter((call: any[]) =>
+        String(call[0]).includes('worktree list --porcelain')
+      );
+      expect(listCalls.length).toBe(3);
 
       // Cleanup
       fs.rmSync(workspacePath, { recursive: true, force: true });
@@ -845,13 +852,14 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'fatal: no remote' }) // fetch origin FAILS
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
@@ -875,7 +883,7 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
@@ -883,6 +891,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'master-sha\n', stderr: '' }) // rev-parse origin/master
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'master-sha\n', stderr: '' }) // rev-parse origin/master (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
@@ -913,7 +922,7 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'no remote' }) // fetch origin fails
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
@@ -921,6 +930,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // rev-parse origin/master fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'local-head\n', stderr: '' }) // rev-parse HEAD (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
@@ -951,7 +961,7 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({
@@ -961,6 +971,7 @@ describe('WorkspaceManager', () => {
         }) // symbolic-ref → origin/develop
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'develop-sha\n', stderr: '' }) // rev-parse origin/develop (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
@@ -991,7 +1002,7 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
@@ -999,6 +1010,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'bad ref' }) // rev-parse origin/main (SHA) FAILS
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'head-sha\n', stderr: '' }) // rev-parse HEAD fallback
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
@@ -1031,31 +1043,31 @@ describe('WorkspaceManager', () => {
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // rev-parse --absolute-git-dir (record baseline; not a linked worktree)
         // --- Second init: refreshWorktreeToUpstream with checkout failure ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(mainProject)
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'checkout failed' }) // checkout --detach FAILS
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard HEAD (cleanup fallback)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
       const manager1 = WorkspaceManager.getInstance('checkout-fail-1', testOriginalPath, {
         basePath: testBasePath,
@@ -1096,17 +1108,17 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'reset failed' }) // reset --hard FAILS
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'clean failed' }) // clean -fdx FAILS
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // rev-parse --absolute-git-dir (record baseline; not a linked worktree)
 
       const manager = WorkspaceManager.getInstance('reset-fail-1', testOriginalPath, {
         basePath: testBasePath,
@@ -1138,13 +1150,14 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: gitRoot + '\n', stderr: '' }) // rev-parse --show-toplevel (different from original!)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
@@ -1181,13 +1194,14 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (prune own stale worktrees)
         .mockResolvedValueOnce({ exitCode: 0, stdout: testOriginalPath + '\n', stderr: '' }) // rev-parse --show-toplevel (same as original)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref -q --short HEAD (detached; reset guard)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
