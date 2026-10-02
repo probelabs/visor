@@ -47,6 +47,9 @@ jobs:
 | `--exclude-tags <tags>` | Skip checks with these tags | `--exclude-tags slow` |
 | `--event <type>` | Simulate GitHub event type | `--event pr_opened` |
 | `--analyze-branch-diff` | Analyze diff vs base branch | `--analyze-branch-diff` |
+| `--base-branch <ref>` | Base branch/ref to diff against | `--base-branch release/1.2` |
+| `--pr-title <text>` | PR title for checks (`pr.title`) | `--pr-title "Fix login race"` |
+| `--pr-body <text>` / `--pr-body-file <path>` | PR description for checks (`pr.description`) | `--pr-body-file pr.md` |
 | `--debug` | Enable debug output | `--debug` |
 | `-v, --verbose` | Increase verbosity | `--verbose` |
 | `-q, --quiet` | Reduce output to warnings/errors | `--quiet` |

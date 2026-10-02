@@ -2473,7 +2473,9 @@ export async function main(): Promise<void> {
       if (!options.debugServer) {
         logger.step('Analyzing repository');
       }
-      repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff);
+      repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff, {
+        baseBranch: options.baseBranch,
+      });
     } catch (error) {
       if (requiresGit) {
         logger.error(
@@ -2497,6 +2499,25 @@ export async function main(): Promise<void> {
         isGitRepository: false,
         workingDirectory: process.cwd(),
       };
+    }
+
+    // Apply --pr-title / --pr-body / --pr-body-file so local runs carry real PR context
+    if (
+      options.prTitle !== undefined ||
+      options.prBody !== undefined ||
+      options.prBodyFile !== undefined
+    ) {
+      const { applyPrContextOverrides } = await import('./git-repository-analyzer');
+      try {
+        repositoryInfo = applyPrContextOverrides(repositoryInfo, {
+          prTitle: options.prTitle,
+          prBody: options.prBody,
+          prBodyFile: options.prBodyFile,
+        });
+      } catch (error) {
+        logger.error('❌ ' + (error instanceof Error ? error.message : String(error)));
+        process.exit(1);
+      }
     }
 
     // Check if we're in a git repository (only required when code context is needed)

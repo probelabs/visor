@@ -31,6 +31,41 @@ export interface GitRepositoryInfo {
   workingDirectory: string;
 }
 
+export interface PrContextOverrides {
+  prTitle?: string;
+  prBody?: string;
+  prBodyFile?: string;
+}
+
+/**
+ * Apply user-supplied PR title/description (CLI `--pr-title`, `--pr-body`,
+ * `--pr-body-file`) on top of the generated local-analysis values, so a local
+ * run sees the same `pr.title` / `pr.description` a GitHub-mode run would.
+ */
+export function applyPrContextOverrides(
+  info: GitRepositoryInfo,
+  overrides: PrContextOverrides
+): GitRepositoryInfo {
+  if (overrides.prBody !== undefined && overrides.prBodyFile !== undefined) {
+    throw new Error('--pr-body and --pr-body-file are mutually exclusive');
+  }
+  let body = overrides.prBody;
+  if (overrides.prBodyFile !== undefined) {
+    try {
+      body = fs.readFileSync(overrides.prBodyFile, 'utf8');
+    } catch (error) {
+      throw new Error(
+        `Cannot read --pr-body-file ${overrides.prBodyFile}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  return {
+    ...info,
+    title: overrides.prTitle !== undefined ? overrides.prTitle : info.title,
+    body: body !== undefined ? body : info.body,
+  };
+}
+
 export class GitRepositoryAnalyzer {
   private git: SimpleGit;
   private cwd: string;
@@ -47,7 +82,8 @@ export class GitRepositoryAnalyzer {
    */
   async analyzeRepository(
     includeContext: boolean = true,
-    enableBranchDiff: boolean = false
+    enableBranchDiff: boolean = false,
+    options: { baseBranch?: string } = {}
   ): Promise<GitRepositoryInfo> {
     // Check if we're in a git repository
     const isRepo = await this.isGitRepository();
@@ -57,15 +93,18 @@ export class GitRepositoryAnalyzer {
 
     try {
       // Get current branch and status
+      const explicitBase = options.baseBranch?.trim() || undefined;
       const [status, currentBranch, baseBranch] = await Promise.all([
         this.git.status(),
         this.getCurrentBranch(),
-        this.getBaseBranch(),
+        explicitBase ? Promise.resolve(explicitBase) : this.getBaseBranch(),
       ]);
 
-      // Determine if we're on a feature branch
+      // Determine if we're on a feature branch. With an explicit base, any other
+      // branch (even one named main/master) is diffed against it.
       const isFeatureBranch =
-        currentBranch !== baseBranch && currentBranch !== 'main' && currentBranch !== 'master';
+        currentBranch !== baseBranch &&
+        (explicitBase !== undefined || (currentBranch !== 'main' && currentBranch !== 'master'));
 
       // Get uncommitted changes first
       let uncommittedFiles = await this.getUncommittedChanges(includeContext);
