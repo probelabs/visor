@@ -1,5 +1,56 @@
 # Current: native Proof checklist loop (standard Visor CLI)
 
+## Direct Codex CLI entry (minimal)
+
+[`visor-codex-exec-onboarding.yaml`](./visor-codex-exec-onboarding.yaml) is a
+separate, minimal three-step route for running local `codex exec` directly from
+a Visor command step, followed by an independent Proof audit and native
+checklist readback. It bypasses Probe; it does not configure a Probe provider or
+cloud execution. The existing graph configuration below remains available for
+its richer dispatch/checkpoint behavior, but is not the minimal direct-exec
+entry.
+
+Prerequisites: Visor is installed and on `PATH`; `codex`, `proof`, and `jq` are
+installed and authenticated/configured as needed; the target is a disposable
+repository; and `VISOR_CONFIG` points to this YAML in a Visor checkout or
+release containing the example. Create `PRIVATE_DIR` as a real private `0700`
+directory outside both the target and any protected/original checkout. Set all
+three variables to absolute paths, then run:
+
+```sh
+TARGET_ROOT=/absolute/path/to/disposable-subject
+VISOR_CONFIG=/absolute/path/to/visor/examples/agent-governance/native-onboarding/visor-codex-exec-onboarding.yaml
+PRIVATE_DIR=/absolute/path/to/existing-private-0700-directory
+
+(
+  cd "$TARGET_ROOT" &&
+  umask 077 &&
+  target_real="$(pwd -P)" &&
+  private_real="$(cd "$PRIVATE_DIR" && pwd -P)" &&
+  case "$private_real/" in "$target_real/"*) echo "PRIVATE_DIR must be outside TARGET_ROOT" >&2; exit 2 ;; esac &&
+  run_dir="$(mktemp -d "$PRIVATE_DIR/onboarding.XXXXXX")" &&
+  mkdir "$run_dir/onboard-logs" "$run_dir/visor-traces" &&
+  VISOR_ONBOARD_LOG_DIR="$run_dir/onboard-logs" \
+  VISOR_TRACE_DIR="$run_dir/visor-traces" \
+    visor --config "$VISOR_CONFIG" --output json
+)
+```
+
+The workflow invokes `codex --ask-for-approval never exec` locally with the
+`workspace-write` sandbox. Its author step has a 24-hour timeout cap, not a
+runtime guarantee; CLI or environment limits may stop it sooner. Keep the
+target disposable and review Codex's changes. A successful Visor run means
+these configured audit/checklist gates passed; it is not a claim that every
+possible onboarding task is complete. The native mock tests below exercise
+workflow routing only; they do not launch Codex or Proof or validate the live
+shell path. Run them with the source CLI from the Visor repository:
+
+```sh
+TS_NODE_TRANSPILE_ONLY=1 node -r ./node_modules/ts-node/register/transpile-only \
+  ./src/index.ts test \
+  --config examples/agent-governance/native-onboarding/visor-codex-exec-onboarding.tests.yaml
+```
+
 The canonical onboarding entry is the ordinary Visor configuration
 [`visor-native-checklist-loop.yaml`](./visor-native-checklist-loop.yaml). It
 uses native Proof checklist state as its authority: a bootstrap/native-state

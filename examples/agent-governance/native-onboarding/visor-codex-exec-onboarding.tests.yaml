@@ -1,0 +1,69 @@
+version: "1.0"
+extends: "./visor-codex-exec-onboarding.yaml"
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+    fail_on_unexpected_calls: true
+    frontends: []
+
+  cases:
+    - name: clean-onboarding
+      event: manual
+      fixture: local.minimal
+      mocks:
+        author: { output: '{"log_dir":"/private/tmp/logs/codex.test","exit_code":0}' }
+        audit: { ok: true }
+        checklist: { stdout: '{"checklist":"onboard_v1","active":true,"steps_pending":0,"next":null}', exit_code: 0 }
+      expect:
+        calls:
+          - { step: author, exactly: 1 }
+          - { step: audit, exactly: 1 }
+          - { step: checklist, exactly: 1 }
+
+    - name: audit-warning-routes-back-to-author
+      event: manual
+      fixture: local.minimal
+      mocks:
+        author[]:
+          - { output: '{"log_dir":"/private/tmp/logs/codex.first","exit_code":0}' }
+          - { output: '{"log_dir":"/private/tmp/logs/codex.second","exit_code":0}' }
+        audit[]:
+          - { stdout: '{"event":"check_done","check":"req_coverage","status":"warn","summary":"AUDIT_FIX_TOKEN"}', exit_code: 1 }
+          - { stdout: "", exit_code: 0 }
+        checklist: { stdout: '{"checklist":"onboard_v1","active":true,"steps_pending":0,"next":null}', exit_code: 0 }
+      expect:
+        calls:
+          - { step: author, exactly: 2 }
+          - { step: audit, exactly: 2 }
+          - { step: checklist, exactly: 1 }
+
+    - name: checklist-incomplete-routes-back-to-author
+      event: manual
+      fixture: local.minimal
+      mocks:
+        author[]:
+          - { output: '{"log_dir":"/private/tmp/logs/codex.first","exit_code":0}' }
+          - { output: '{"log_dir":"/private/tmp/logs/codex.second","exit_code":0}' }
+        audit: { ok: true }
+        checklist[]:
+          - { stdout: "CHECKLIST_FIX_TOKEN", exit_code: 1 }
+          - { stdout: '{"checklist":"onboard_v1","active":true,"steps_pending":0,"next":null}', exit_code: 0 }
+      expect:
+        calls:
+          - { step: author, exactly: 2 }
+          - { step: audit, exactly: 2 }
+          - { step: checklist, exactly: 2 }
+
+    - name: command-infrastructure-failure-stays-failed
+      event: manual
+      fixture: local.minimal
+      mocks:
+        author: { stdout: "CODEX_EXEC_FAILED", exit_code: 127 }
+      expect:
+        fail: { message_contains: "127" }
+        calls:
+          - { step: author, exactly: 1 }
+          - { step: audit, exactly: 0 }
+          - { step: checklist, exactly: 0 }
