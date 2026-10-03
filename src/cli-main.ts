@@ -2114,6 +2114,23 @@ export async function main(): Promise<void> {
     if (options.whatsapp) requestedRunners.push('whatsapp');
     if (options.teams) requestedRunners.push('teams');
 
+    // Branch cleanup in reused workspaces is for automation that owns its
+    // checkout. A plain local CLI run must never delete a developer's branches.
+    {
+      const { setWorkspaceBranchCleanupPolicy } = await import('./utils/workspace-manager');
+      if (requestedRunners.length > 0) {
+        setWorkspaceBranchCleanupPolicy(
+          'owned-only',
+          `runner mode (${requestedRunners.join(', ')})`
+        );
+      } else {
+        setWorkspaceBranchCleanupPolicy(
+          'never',
+          'local CLI run (--mode cli) on a developer checkout'
+        );
+      }
+    }
+
     if (requestedRunners.length > 0) {
       const { RunnerHost } = await import('./runners/runner-host');
       const { createRunner } = await import('./runners/runner-factory');

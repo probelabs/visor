@@ -73,6 +73,11 @@ async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authTyp
 
 export async function run(): Promise<void> {
   try {
+    // GitHub Action: Visor owns this checkout, so reused workspaces may drop
+    // branches created inside Visor's own worktree (never pre-existing ones).
+    const { setWorkspaceBranchCleanupPolicy } = await import('./utils/workspace-manager');
+    setWorkspaceBranchCleanupPolicy('owned-only', 'GitHub Action run');
+
     const { octokit, authType } = await createAuthenticatedOctokit();
     console.log(`✅ Authenticated successfully using ${authType}`);
 
