@@ -74,6 +74,14 @@ export interface CliOptions {
   outputFile?: string;
   /** Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas) */
   analyzeBranchDiff?: boolean;
+  /** PR title for CLI runs (overrides the generated "Local Analysis: ..." title) */
+  prTitle?: string;
+  /** PR description for CLI runs (mutually exclusive with prBodyFile) */
+  prBody?: string;
+  /** Path to a file holding the PR description for CLI runs */
+  prBodyFile?: string;
+  /** Base branch/ref to diff against in CLI runs (overrides origin main/master/develop detection) */
+  baseBranch?: string;
   /** Simulate GitHub event type for event-based filtering ('all' runs checks regardless of event triggers) */
   event?: EventTrigger | 'all';
   /** Enable debug visualizer server for live debugging */

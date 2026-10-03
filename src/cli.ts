@@ -103,6 +103,13 @@ export class CLI {
         '--analyze-branch-diff',
         'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
       )
+      .option('--pr-title <text>', 'PR title to review with in CLI mode (default: generated)')
+      .option('--pr-body <text>', 'PR description to review with in CLI mode (default: generated)')
+      .option('--pr-body-file <path>', 'Read the PR description from a file (CLI mode)')
+      .option(
+        '--base-branch <ref>',
+        'Base branch/ref to diff against in CLI mode (default: origin main/master/develop)'
+      )
       .option(
         '--event <type>',
         'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
@@ -269,6 +276,10 @@ export class CLI {
         debugServer: options.debugServer || false,
         debugPort: options.debugPort,
         analyzeBranchDiff: options.analyzeBranchDiff,
+        prTitle: typeof options.prTitle === 'string' ? options.prTitle : undefined,
+        prBody: typeof options.prBody === 'string' ? options.prBody : undefined,
+        prBodyFile: typeof options.prBodyFile === 'string' ? options.prBodyFile : undefined,
+        baseBranch: typeof options.baseBranch === 'string' ? options.baseBranch : undefined,
         event: options.event,
         message: options.message,
         githubV2: false,

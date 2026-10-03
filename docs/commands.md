@@ -254,6 +254,12 @@ See [Tag Filtering](tag-filtering.md) for detailed tag filtering documentation.
 - `--enable-code-context` - Force include code diffs in analysis
 - `--disable-code-context` - Force exclude code diffs from analysis
 - `--analyze-branch-diff` - Analyze diff vs base branch (auto-enabled for code-review schemas)
+- `--base-branch <ref>` - Base branch/ref to diff against (default: `origin/main`, `origin/master` or `origin/develop`, else `main`)
+
+#### PR Context (CLI mode)
+- `--pr-title <text>` - PR title seen by checks as `pr.title` (default: generated "Local Analysis: ..." title)
+- `--pr-body <text>` - PR description seen by checks as `pr.description` / `<description>`
+- `--pr-body-file <path>` - Read the PR description from a file (mutually exclusive with `--pr-body`)
 
 #### Event Simulation
 - `--event <type>` - Simulate GitHub event: `pr_opened`, `pr_updated`, `issue_opened`, `issue_comment`, `manual`, `all`
