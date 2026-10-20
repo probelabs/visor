@@ -167,6 +167,13 @@ inputs:
     schema:
       type: string
 
+  - name: max_iterations
+    required: false
+    description: Maximum AI tool iterations for the engineer task
+    default: 100
+    schema:
+      type: number
+
 outputs:
   - name: summary
     description: The engineer's response/summary
@@ -277,7 +284,7 @@ steps:
       allowEdit: true
       enableDelegate: true
       enableTasks: true
-      max_iterations: 100
+      max_iterations: "{{ inputs.max_iterations }}"
       bashConfig:
         disableDefaultAllow: true
         disableDefaultDeny: true

@@ -130,6 +130,13 @@ inputs:
     schema:
       type: string
 
+  - name: max_iterations
+    required: false
+    description: Maximum AI tool iterations for the exploration step
+    default: 100
+    schema:
+      type: number
+
 outputs:
   - name: answer
     description: The answer object with text
@@ -324,7 +331,7 @@ steps:
       enableDelegate: true
       enableTasks: true
       enableExecutePlan: false
-      max_iterations: 100
+      max_iterations: "{{ inputs.max_iterations }}"
       prompt_type: code-explorer
       allowBash: true
       bashConfig:
