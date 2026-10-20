@@ -19,6 +19,7 @@ import type {
   EngineState,
   EngineEvent,
   DispatchRecord,
+  GeneratedDispatchGateDecision,
 } from '../../types/engine';
 import { logger } from '../../logger';
 import { realpathSync, statSync } from 'fs';

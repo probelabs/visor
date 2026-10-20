@@ -375,7 +375,7 @@ function warnGovernedRawItemFailure(
   checkName?: string,
   nodeGenerationId?: string
 ): boolean {
-  const typedGovernedFailure = (() => {
+  const typedGovernedFailure: boolean = (() => {
     if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return false;
     try {
       const descriptor = Object.getOwnPropertyDescriptor(error, 'name');
@@ -408,7 +408,7 @@ function warnGovernedRawItemFailure(
       typeof nodeGenerationId !== 'string' ||
       !SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
     ) {
-      return;
+      return false;
     }
 
     const descriptors = Object.getOwnPropertyDescriptors(error);
@@ -420,11 +420,11 @@ function warnGovernedRawItemFailure(
       ownValue('answerFailureStage') !== 'native_event_grammar' ||
       ownValue('nativeEventFailureBoundary') !== 'raw_item_predicate'
     ) {
-      return;
+      return false;
     }
     const predicate = ownValue('nativeEventFailureRawItemPredicate');
     if (typeof predicate !== 'string' || !GOVERNED_RAW_ITEM_FAILURE_PREDICATES.has(predicate)) {
-      return;
+      return false;
     }
 
     logger.warn(

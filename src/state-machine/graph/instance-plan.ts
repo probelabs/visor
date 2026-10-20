@@ -1082,8 +1082,8 @@ function validateReservedProofAdmissionTemplate(
         typeof wait !== 'object' ||
         Array.isArray(wait) ||
         !hasExactKeys(wait, ['owner', 'terminal_node']) ||
-        (wait as Record<string, unknown>).owner !== 'materialize_catalog' ||
-        (wait as Record<string, unknown>).terminal_node !== 'verify'
+        (wait as unknown as Record<string, unknown>).owner !== 'materialize_catalog' ||
+        (wait as unknown as Record<string, unknown>).terminal_node !== 'verify'
       ) {
         rejectReservedProfile(
           name,

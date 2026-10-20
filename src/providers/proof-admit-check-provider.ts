@@ -141,11 +141,15 @@ function proofAdmissionChildRequest(request: ManagedRunStartRequest): ProofAdmis
   if (!plain(candidate) || candidate.claim !== protocol.candidateClaim || candidate.producerCheckId !== protocol.candidateProducer || candidate.provenance !== 'attempt' || typeof candidate.attemptId !== 'string' || !Number.isSafeInteger(candidate.fence)) {
     invalid('candidate claim authority is invalid');
   }
+  if (typeof request.proofAdmissionRequest !== 'string') invalid('proof admission request is missing');
+  const proofAdmissionRequest = request.proofAdmissionRequest;
   try {
-    const extracted = extractProofAdmissionCandidate(request.proofAdmissionRequest);
-    const invocation = extracted.candidate.Invocation as Record<string, unknown>;
+    const extracted = extractProofAdmissionCandidate(proofAdmissionRequest);
+    const candidateRecord = extracted.candidate;
+    const invocation = candidateRecord.Invocation as Record<string, unknown>;
     const staged = Object.prototype.hasOwnProperty.call(invocation, 'onboarding_stage');
-    if (staged !== (protocol === STAGED_PROTOCOL) || extracted.candidate.Publication.CheckID !== protocol.candidateProducer || extracted.candidate.Publication.Claim !== protocol.candidateClaim || !candidateMatchesExecutionClaim(candidate, extracted, request.binding)) {
+    const publication = candidateRecord.Publication as Record<string, unknown>;
+    if (staged !== (protocol === STAGED_PROTOCOL) || publication.CheckID !== protocol.candidateProducer || publication.Claim !== protocol.candidateClaim || !candidateMatchesExecutionClaim(candidate, extracted, request.binding)) {
       invalid('candidate evidence protocol is detached');
     }
   } catch {

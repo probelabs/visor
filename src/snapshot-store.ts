@@ -624,7 +624,7 @@ function validateComponentAdmissionProtocol(
     const expectedPayload = { ...receipt, [PROOF_ADMISSION_WIRE_FIELD]: admissionWire };
     if (!isRecord(admissionPayload) || canonicalJson(admissionPayload) !== canonicalJson(expectedPayload) ||
         canonicalJson(extracted.candidate.Publication) !== canonicalJson({
-          ...extracted.candidate.Publication,
+          ...(extracted.candidate.Publication as Record<string, unknown>),
           ClaimID: candidate.claimId,
           Claim: candidate.claim,
           PayloadFingerprint: candidate.payloadFingerprint,
@@ -662,6 +662,7 @@ function validateComponentAdmissionProtocol(
       canonicalJson(priorAdmission.parentClaimIds) !== canonicalJson([priorCandidate.claimId])) {
     componentAuthorityFailure('spec_review candidate parents are not the exact WorkItem/candidate/admission lineage');
   }
+  if (!stageCandidate.proofCandidateEvidence) componentAuthorityFailure('spec_review candidate has no governed evidence');
   const invocation = stageCandidate.proofCandidateEvidence.role.invocation as Record<string, unknown>;
   const stage = invocation.onboarding_stage;
   if (!isRecord(stage) || typeof stage.prior_candidate !== 'string' || typeof stage.prior_admission !== 'string' ||
@@ -737,7 +738,7 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
   // derivable only from its validated governed evidence invocation.
   if (event.type === 'ClaimPublished' && eventHasNodeDiscriminator(event) && !hasOwn(event, 'wireMode')) {
     let wireMode: GovernedWireMode = 'generic';
-    if (isGovernedCandidateClaim(event.claim)) {
+    if (typeof event.claim === 'string' && isGovernedCandidateClaim(event.claim)) {
       try {
         wireMode = governedWireModeFromEvidence(validateProofCandidateEvidence(event.proofCandidateEvidence));
       } catch (error) {
@@ -925,8 +926,9 @@ function validateCheckpointEventShape(value: unknown): CheckpointRuntimeEvent {
     case 'ClaimPublished': {
       const node = eventHasNodeDiscriminator(event);
       if (eventHasRequestDiscriminator(event)) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'ClaimPublished cannot carry requestId');
-      const sidecar = isGovernedCandidateClaim(event.claim) && hasOwn(event, 'proofCandidateEvidence');
-      if (isGovernedCandidateClaim(event.claim) && (!sidecar || !hasOwn(event, 'proofCandidateEvidenceFingerprint')) || !isGovernedCandidateClaim(event.claim) && (hasOwn(event, 'proofCandidateEvidence') || hasOwn(event, 'proofCandidateEvidenceFingerprint'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof evidence sidecar fields are not paired or reserved');
+      const claimStr = typeof event.claim === 'string' ? event.claim : '';
+      const sidecar = isGovernedCandidateClaim(claimStr) && hasOwn(event, 'proofCandidateEvidence');
+      if (isGovernedCandidateClaim(claimStr) && (!sidecar || !hasOwn(event, 'proofCandidateEvidenceFingerprint')) || !isGovernedCandidateClaim(claimStr) && (hasOwn(event, 'proofCandidateEvidence') || hasOwn(event, 'proofCandidateEvidenceFingerprint'))) throw new GraphJournalCheckpointError('INVALID_CHECKPOINT_PREFIX', 'Proof evidence sidecar fields are not paired or reserved');
       const evidenceKeys = sidecar ? ['proofCandidateEvidence', 'proofCandidateEvidenceFingerprint'] : [];
       const keys = node
         ? [...ATTEMPT_BASE_KEYS, 'nodeInstanceId', 'nodeGenerationId', 'claimId', 'claim', 'payload', 'payloadFingerprint', 'producerCheckId', 'parentClaimIds', 'wireMode', ...evidenceKeys]

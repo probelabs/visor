@@ -146,6 +146,7 @@ export function evaluateCalls(
 
     validateCounts(call);
     const selected = selector === 'step' ? call.step : call.logical_step;
+    if (selected === undefined) continue;
     const counts = selector === 'step' ? executed : logicalExecuted;
     const actual = counts[selected] || 0;
     const label = selector === 'step' ? 'step' : 'logical_step';

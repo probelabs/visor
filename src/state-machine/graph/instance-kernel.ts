@@ -1025,6 +1025,10 @@ export function deriveProofProjectReconciliationParentClaimIds(
     if (nativeReviewed && reviewedParent) currentCompletedGeneratedOutput(projection, reviewedParent, 'component-reviewed', child.subgraphInstanceId);
     if (!staged) return admission.claimId;
 
+    if (!stageCandidate || !stageAdmission) {
+      return invalidProjectReconciliationParents(`Component ${child.itemKey} staged inputs missing`);
+    }
+
     currentCompletedGeneratedOutput(
       projection,
       stageCandidate,

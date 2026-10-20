@@ -634,6 +634,7 @@ function validateStagedCandidateLineage(candidate: Record<string, unknown>, stag
   const currentPublication = candidate.Publication as Record<string, unknown>;
   const currentBinding = candidate.Binding as Record<string, unknown>;
   const priorBinding = prior.Binding as Record<string, unknown>;
+  const parentClaimIDs = currentPublication.ParentClaimIDs as readonly unknown[];
   if (!plain(admission) || admission.status !== 'ADMITTED' || !plain(admission.receipt) ||
       !plain(priorInvocation) || Object.prototype.hasOwnProperty.call(priorInvocation, 'onboarding_stage') || priorInvocation.role_id !== 'onboard' ||
       !plain(priorPublication) || !plain(priorBinding) || priorPublication.CheckID !== 'inspect' || priorPublication.Claim !== 'proof.candidate@1' ||
@@ -644,7 +645,7 @@ function validateStagedCandidateLineage(candidate: Record<string, unknown>, stag
       currentBinding.AttemptID === priorBinding.AttemptID || currentPublication.ClaimID === priorPublication.ClaimID ||
       typeof priorPublication.ClaimID !== 'string' || !/^[0-9a-f]{64}$/.test(priorPublication.ClaimID) ||
       typeof stage.prior_admission_claim_id !== 'string' || stage.prior_admission_claim_id === priorPublication.ClaimID ||
-      !currentPublication.ParentClaimIDs.includes(priorPublication.ClaimID) || !currentPublication.ParentClaimIDs.includes(stage.prior_admission_claim_id as string)) {
+      !parentClaimIDs?.includes(priorPublication.ClaimID) || !parentClaimIDs?.includes(stage.prior_admission_claim_id as string)) {
     fail('staged candidate predecessor lineage is invalid');
   }
 }
