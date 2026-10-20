@@ -1,6 +1,6 @@
 {
   "name": "@probelabs/visor",
-  "version": "0.1.42",
+  "version": "0.1.44",
   "main": "dist/index.js",
   "bin": {
     "visor": "./dist/index.js"
