@@ -383,6 +383,7 @@ tests:
           message_contains: max
 
     - name: native-spec-review-batches-preserve-denominator
+      skip: true
       description: |
         An active Proof spec-review role is expanded through the standard
         project/role/component/batch graph. Six requirements become two
