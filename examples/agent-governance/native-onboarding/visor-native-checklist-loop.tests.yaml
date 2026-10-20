@@ -560,20 +560,20 @@ tests:
           - {step: target-binding, exactly: 1}
           - {step: native-state, exactly: 1}
           - {step: native-project-dispatch, exactly: 1}
-          - {logical_step: native-role-dispatch, exactly: 1}
-          - {logical_step: enumerate-native-components, exactly: 1}
-          - {logical_step: enumerate-native-batches, exactly: 1}
-          - {logical_step: validate-batch-current, exactly: 2}
-          - {logical_step: batch-author, exactly: 2}
-          - {logical_step: batch-finished, exactly: 2}
-          - {logical_step: role-finisher, exactly: 1}
-          - {logical_step: role-readback, exactly: 1}
-          - {logical_step: role-finished, exactly: 1}
-          - {logical_step: native-role-barrier, exactly: 1}
-          - {logical_step: component-barrier, exactly: 1}
-          - {logical_step: component-finished, exactly: 1}
-          - {logical_step: batch-binding, exactly: 2}
-          - {logical_step: role-binding, exactly: 1}
+          - {step: native-role-dispatch, exactly: 1}
+          - {step: enumerate-native-components, exactly: 1}
+          - {step: enumerate-native-batches, exactly: 1}
+          - {step: validate-batch-current, exactly: 2}
+          - {step: batch-author, exactly: 2}
+          - {step: batch-finished, exactly: 2}
+          - {step: role-finisher, exactly: 1}
+          - {step: role-readback, exactly: 1}
+          - {step: role-finished, exactly: 1}
+          - {step: native-role-barrier, exactly: 1}
+          - {step: component-barrier, exactly: 1}
+          - {step: component-finished, exactly: 1}
+          - {step: batch-binding, exactly: 2}
+          - {step: role-binding, exactly: 1}
           - {step: author, exactly: 0}
           - {step: proof-audit, exactly: 0}
           - {step: native-completion, exactly: 0}
