@@ -432,3 +432,267 @@ describe('round-2 review repros (real git)', () => {
     ).toThrow(/--debug-server/);
   });
 });
+
+/**
+ * Round-3 review (PR #607): an uncommitted review must show the real uncommitted delta
+ * (vs HEAD) for every tracked change, not `git diff` (worktree vs index), which is empty
+ * for anything already staged, for deletions and for renames.
+ */
+describe('uncommitted patches are diffed against HEAD (real git)', () => {
+  let repo: string;
+
+  beforeEach(() => {
+    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visor-diff-mode-r3-')));
+    git(repo, 'init', '--quiet', '-b', 'main');
+    git(repo, 'config', 'user.email', 'visor-test@example.invalid');
+    git(repo, 'config', 'user.name', 'Visor test');
+    commitFile(repo, 'base.txt', 'line one\nline two\nline three\n');
+  });
+
+  afterEach(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  const write = (name: string, body: string) => fs.writeFileSync(path.join(repo, name), body);
+
+  interface Scenario {
+    name: string;
+    act: () => void;
+    filename: string;
+    status: 'added' | 'removed' | 'modified' | 'renamed';
+    patchHas: string[];
+    additions: number;
+    deletions: number;
+  }
+
+  const scenarios: Scenario[] = [
+    {
+      name: 'staged edit',
+      act: () => {
+        write('base.txt', 'line one\nline two\nline three\nstaged-edit\n');
+        git(repo, 'add', 'base.txt');
+      },
+      filename: 'base.txt',
+      status: 'modified',
+      patchHas: ['+staged-edit'],
+      additions: 1,
+      deletions: 0,
+    },
+    {
+      name: 'unstaged edit',
+      act: () => write('base.txt', 'line one\nline 2\nline three\n'),
+      filename: 'base.txt',
+      status: 'modified',
+      patchHas: ['-line two', '+line 2'],
+      additions: 1,
+      deletions: 1,
+    },
+    {
+      name: 'staged + unstaged edit of the same file',
+      act: () => {
+        write('base.txt', 'line one\nline two\nline three\nstaged-hunk\n');
+        git(repo, 'add', 'base.txt');
+        write('base.txt', 'line one\nline two\nline three\nstaged-hunk\nunstaged-hunk\n');
+      },
+      filename: 'base.txt',
+      status: 'modified',
+      patchHas: ['+staged-hunk', '+unstaged-hunk'],
+      additions: 2,
+      deletions: 0,
+    },
+    {
+      name: 'git rm',
+      act: () => git(repo, 'rm', '--quiet', 'base.txt'),
+      filename: 'base.txt',
+      status: 'removed',
+      patchHas: ['deleted file mode', '-line one', '-line two', '-line three'],
+      additions: 0,
+      deletions: 3,
+    },
+    {
+      name: 'unstaged delete (rm without git)',
+      act: () => fs.unlinkSync(path.join(repo, 'base.txt')),
+      filename: 'base.txt',
+      status: 'removed',
+      patchHas: ['-line one', '-line three'],
+      additions: 0,
+      deletions: 3,
+    },
+    {
+      name: 'git mv without content change',
+      act: () => git(repo, 'mv', 'base.txt', 'renamed.txt'),
+      filename: 'renamed.txt',
+      status: 'renamed',
+      patchHas: ['rename from base.txt', 'rename to renamed.txt'],
+      additions: 0,
+      deletions: 0,
+    },
+    {
+      name: 'git mv with a content change',
+      act: () => {
+        git(repo, 'mv', 'base.txt', 'renamed.txt');
+        write('renamed.txt', 'line one\nline two\nline three\nafter-rename\n');
+      },
+      filename: 'renamed.txt',
+      status: 'renamed',
+      patchHas: ['rename from base.txt', 'rename to renamed.txt', '+after-rename'],
+      additions: 1,
+      deletions: 0,
+    },
+    {
+      name: 'newly staged file',
+      act: () => {
+        write('new.txt', 'brand new\n');
+        git(repo, 'add', 'new.txt');
+      },
+      filename: 'new.txt',
+      status: 'added',
+      patchHas: ['new file mode', '+brand new'],
+      additions: 1,
+      deletions: 0,
+    },
+    {
+      name: 'newly staged file edited again (AM)',
+      act: () => {
+        write('new.txt', 'brand new\n');
+        git(repo, 'add', 'new.txt');
+        write('new.txt', 'brand new\nedited after add\n');
+      },
+      filename: 'new.txt',
+      status: 'added',
+      patchHas: ['+brand new', '+edited after add'],
+      additions: 2,
+      deletions: 0,
+    },
+  ];
+
+  function expectRealPatch(info: GitRepositoryInfo, sc: Scenario): void {
+    expect(info.diffSource).toBe('uncommitted');
+    // Exactly one entry for the path (no AM / RM duplicates).
+    expect(info.files.map(f => f.filename)).toEqual([sc.filename]);
+    const file = info.files[0];
+    expect(file.status).toBe(sc.status);
+    expect(file.patch).toBeTruthy();
+    for (const fragment of sc.patchHas) expect(file.patch).toContain(fragment);
+    expect(file.additions).toBe(sc.additions);
+    expect(file.deletions).toBe(sc.deletions);
+    // ...and it reaches what checks see as the PR diff.
+    const pr = new GitRepositoryAnalyzer(repo).toPRInfo(info, true);
+    for (const fragment of sc.patchHas) expect(pr.fullDiff).toContain(fragment);
+  }
+
+  describe.each(scenarios.map(sc => [sc.name, sc] as const))('%s', (_name, sc) => {
+    it('on a code-review feature branch (auto) shows the real patch, not the branch diff', async () => {
+      git(repo, 'checkout', '--quiet', '-b', 'feat/x');
+      commitFile(repo, 'committed.txt', 'committed on the branch\n');
+      sc.act();
+      const { info } = await review(repo, {});
+      expectRealPatch(info, sc);
+    });
+
+    it('with --uncommitted shows the real patch', async () => {
+      git(repo, 'checkout', '--quiet', '-b', 'feat/x');
+      sc.act();
+      const { info } = await review(repo, { uncommitted: true });
+      expectRealPatch(info, sc);
+    });
+
+    it('on main via the default analyzeRepository() (SDK/bots) shows the real patch', async () => {
+      sc.act();
+      const { info } = await capture(() => new GitRepositoryAnalyzer(repo).analyzeRepository());
+      expectRealPatch(info, sc);
+    });
+  });
+
+  it('a repo with no commits keeps the disk-read path for staged files', async () => {
+    const fresh = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visor-diff-mode-r3-0-')));
+    try {
+      git(fresh, 'init', '--quiet', '-b', 'main');
+      fs.writeFileSync(path.join(fresh, 'first.txt'), 'first\n');
+      git(fresh, 'add', 'first.txt');
+      const { info } = await capture(() => new GitRepositoryAnalyzer(fresh).analyzeRepository());
+      expect(info.files).toHaveLength(1);
+      expect(info.files[0]).toMatchObject({
+        filename: 'first.txt',
+        status: 'added',
+        patch: 'first\n',
+      });
+    } finally {
+      fs.rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
+  it('titles describe the reviewed set', async () => {
+    write('base.txt', 'changed\n');
+    git(repo, 'add', 'base.txt');
+    write('new.txt', 'n\n');
+    git(repo, 'add', 'new.txt');
+    write('new.txt', 'n\nn2\n');
+    expect((await review(repo, {})).info.title).toBe('Local Analysis: main (1 added, 1 modified)');
+    git(repo, 'commit', '--quiet', '-am', 'commit');
+    git(repo, 'checkout', '--quiet', '-b', 'feat/x');
+    commitFile(repo, 'committed.txt', 'c\n');
+    fs.mkdirSync(path.join(repo, '.visor'));
+    write('.visor/config.db', 'x');
+    expect((await review(repo, {})).info.title).toBe(
+      'Local Analysis: feat/x (1 file(s) changed vs main)'
+    );
+  });
+});
+
+describe('round-3 residuals (real git)', () => {
+  let repo: string;
+  const savedEnv = { ...process.env };
+
+  beforeEach(() => {
+    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visor-diff-mode-r3r-')));
+    git(repo, 'init', '--quiet', '-b', 'main');
+    git(repo, 'config', 'user.email', 'visor-test@example.invalid');
+    git(repo, 'config', 'user.name', 'Visor test');
+    commitFile(repo, 'base.txt', 'base\n');
+    delete process.env.VISOR_FALLBACK_TRACE_FILE;
+  });
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('auto branch fallback says which untracked files it leaves out', async () => {
+    git(repo, 'checkout', '--quiet', '-b', 'feat/x');
+    commitFile(repo, 'committed.txt', 'c\n');
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'scratch\n');
+    const { info, log } = await review(repo, {});
+    expect(info.diffSource).toBe('branch');
+    expect(log).toContain('Not including 1 untracked file(s)');
+  });
+
+  it('more secret-looking untracked names stay out of the prompt', async () => {
+    fs.writeFileSync(path.join(repo, 'base.txt'), 'base\nedited\n');
+    for (const name of ['.envrc', '.netrc', '.npmrc', '.pypirc', '.git-credentials']) {
+      fs.writeFileSync(path.join(repo, name), 'export OPENAI_API_KEY=sk-envrc\n');
+    }
+    fs.mkdirSync(path.join(repo, '.aws'));
+    fs.writeFileSync(path.join(repo, '.aws', 'credentials'), 'aws_secret_access_key=sk-aws\n');
+    const { info } = await review(repo, {});
+    expect(names(info)).toEqual(['base.txt']);
+    expect(patchText(info)).not.toMatch(/sk-envrc|sk-aws/);
+  });
+
+  it('a fallback trace file in src/ drops only trace files, not the whole dir', async () => {
+    fs.mkdirSync(path.join(repo, 'src'));
+    fs.writeFileSync(path.join(repo, 'src', 'trace.ndjson'), '{}\n');
+    fs.writeFileSync(path.join(repo, 'src', 'other-run.ndjson'), '{}\n');
+    fs.writeFileSync(path.join(repo, 'src', 'feature.ts'), 'export {};\n');
+    process.env.VISOR_FALLBACK_TRACE_FILE = path.join(repo, 'src', 'trace.ndjson');
+    const { info } = await review(repo, { uncommitted: true });
+    expect(names(info)).toEqual(['src/feature.ts']);
+  });
+
+  it('an untracked file of exactly 1MB is skipped (no empty-patch entry)', async () => {
+    fs.writeFileSync(path.join(repo, 'exact.txt'), 'x'.repeat(1024 * 1024));
+    fs.writeFileSync(path.join(repo, 'small.txt'), 'x\n');
+    const { info } = await review(repo, { uncommitted: true });
+    expect(names(info)).toEqual(['small.txt']);
+  });
+});

@@ -18,7 +18,7 @@ export interface GitFileChange {
 // Maximum patch size in bytes (50KB) - helps prevent token limit issues
 const MAX_PATCH_SIZE = 50 * 1024;
 
-// Untracked files above this size are not reviewed (same 1MB cap analyzeFileChange uses).
+// Untracked files of this size or more are not reviewed (analyzeFileChange reads only < 1MB).
 const MAX_UNTRACKED_FILE_SIZE = 1024 * 1024;
 // Dependency/build dirs (at any depth) whose untracked files are never review input,
 // on top of FileExclusionHelper's defaults (node_modules/, dist/, build/, ...).
@@ -30,11 +30,23 @@ const SECRET_FILE_NAMES = new Set([
   'id_ecdsa',
   'id_ed25519',
   'credentials.json',
+  '.envrc',
+  '.netrc',
+  '.npmrc',
+  '.pypirc',
+  '.pgpass',
+  '.git-credentials',
 ]);
+// Untracked files inside these dirs (at any depth) are never read into a prompt.
+const SECRET_DIRS = new Set(['.aws', '.ssh', '.gnupg']);
 
 interface WorkingTreeEntry {
   file: string;
   status: 'added' | 'removed' | 'modified' | 'renamed';
+  /** Original path of a rename (tracked renames only). */
+  from?: string;
+  /** Never `git add`-ed: its content is read from disk, not diffed. */
+  untracked?: boolean;
 }
 
 export interface GitRepositoryInfo {
@@ -214,7 +226,7 @@ export class GitRepositoryAnalyzer {
       let untrackedReviewed = 0;
       if (useBranchDiff) {
         console.error(`📊 Feature branch detected: ${currentBranch}`);
-        if (forceBranchDiff && untracked.length > 0) {
+        if (untracked.length > 0) {
           console.error(
             `⚠️  Not including ${untracked.length} untracked file(s): a branch diff covers tracked files only (tracked uncommitted edits stay in it)`
           );
@@ -275,7 +287,7 @@ export class GitRepositoryAnalyzer {
 
       // Create repository info
       const repositoryInfo: GitRepositoryInfo = {
-        title: this.generateTitle(status, currentBranch, untrackedReviewed),
+        title: this.generateTitle(currentBranch, files, diffSource, baseBranch, untrackedReviewed),
         body: this.generateDescription(status, lastCommit),
         author,
         base: baseBranch,
@@ -416,6 +428,8 @@ export class GitRepositoryAnalyzer {
     const cwd = path.resolve(this.cwd);
     const dirs: string[] = [];
     const files: string[] = [];
+    // Dirs whose *.ndjson files are Visor traces (the fallback trace file's siblings).
+    const traceFileDirs: string[] = [];
     const addDir = (dir: string | undefined) => {
       if (!dir) return;
       const abs = path.resolve(cwd, dir);
@@ -429,13 +443,19 @@ export class GitRepositoryAnalyzer {
     addDir(process.env.VISOR_TRACE_DIR || path.join('output', 'traces'));
     const fallbackTrace = process.env.VISOR_FALLBACK_TRACE_FILE;
     if (fallbackTrace) {
+      // Only the trace file and its sibling *.ndjson traces: the fallback file may sit in
+      // a source dir, which must not be swallowed whole.
       files.push(path.resolve(cwd, fallbackTrace));
-      addDir(path.dirname(fallbackTrace));
+      traceFileDirs.push(path.dirname(path.resolve(cwd, fallbackTrace)));
     }
     if (outputFile) files.push(path.resolve(cwd, outputFile));
     return (file: string) => {
       const abs = path.resolve(cwd, file);
-      return files.includes(abs) || dirs.some(dir => abs === dir || abs.startsWith(dir + path.sep));
+      return (
+        files.includes(abs) ||
+        dirs.some(dir => abs === dir || abs.startsWith(dir + path.sep)) ||
+        (abs.endsWith('.ndjson') && traceFileDirs.includes(path.dirname(abs)))
+      );
     };
   }
 
@@ -460,7 +480,8 @@ export class GitRepositoryAnalyzer {
       base.startsWith('.env.') ||
       base.endsWith('.pem') ||
       base.endsWith('.key') ||
-      SECRET_FILE_NAMES.has(base)
+      SECRET_FILE_NAMES.has(base) ||
+      dirSegments.some(seg => SECRET_DIRS.has(seg))
     ) {
       return 'secret-looking name';
     }
@@ -468,7 +489,7 @@ export class GitRepositoryAnalyzer {
       const filePath = path.join(this.cwd, file);
       const stats = fs.lstatSync(filePath);
       if (!stats.isFile()) return 'not a regular file';
-      if (stats.size > MAX_UNTRACKED_FILE_SIZE) return 'too large';
+      if (stats.size >= MAX_UNTRACKED_FILE_SIZE) return 'too large';
       const fd = fs.openSync(filePath, 'r');
       try {
         const head = Buffer.alloc(Math.min(stats.size, 8000));
@@ -509,15 +530,21 @@ export class GitRepositoryAnalyzer {
       return true;
     };
 
-    const tracked: WorkingTreeEntry[] = [
-      ...status.created.map(f => ({ file: f, status: 'added' as const })),
-      ...status.deleted.map(f => ({ file: f, status: 'removed' as const })),
-      ...status.modified.map(f => ({ file: f, status: 'modified' as const })),
-      ...status.renamed.map(f => ({
-        file: typeof f === 'string' ? f : f.to || f.from,
-        status: 'renamed' as const,
-      })),
-    ].filter(entry => keep(entry.file));
+    // One entry per path. git reports e.g. `AM` (staged new file, edited again) in both
+    // `created` and `modified`, and `RM` in both `renamed` and `modified`; the most
+    // specific status wins: renamed > added > removed > modified.
+    const byFile = new Map<string, WorkingTreeEntry>();
+    const add = (entry: WorkingTreeEntry) => {
+      if (!byFile.has(entry.file)) byFile.set(entry.file, entry);
+    };
+    for (const f of status.renamed) {
+      if (typeof f === 'string') add({ file: f, status: 'renamed' });
+      else add({ file: f.to || f.from, from: f.to ? f.from : undefined, status: 'renamed' });
+    }
+    status.created.forEach(f => add({ file: f, status: 'added' }));
+    status.deleted.forEach(f => add({ file: f, status: 'removed' }));
+    status.modified.forEach(f => add({ file: f, status: 'modified' }));
+    const tracked = [...byFile.values()].filter(entry => keep(entry.file));
 
     const untracked: WorkingTreeEntry[] = [];
     if (includeUntracked) {
@@ -528,7 +555,7 @@ export class GitRepositoryAnalyzer {
           skip(reason);
           continue;
         }
-        untracked.push({ file, status: 'added' });
+        untracked.push({ file, status: 'added', untracked: true });
       }
     }
 
@@ -544,12 +571,72 @@ export class GitRepositoryAnalyzer {
     entries: WorkingTreeEntry[],
     includeContext: boolean
   ): Promise<GitFileChange[]> {
+    // Tracked changes are diffed against HEAD, so staged hunks, deletions and renames
+    // carry their real patch (a plain `git diff` compares the worktree with the index,
+    // which is empty for anything already staged). A repo with no commits yet has no
+    // HEAD to diff against and keeps the worktree/disk path.
+    const hasHead = await this.hasHeadCommit();
     const changes: GitFileChange[] = [];
-    for (const { file, status } of entries) {
-      const filePath = path.join(this.cwd, file);
-      changes.push(await this.analyzeFileChange(file, status, filePath, includeContext));
+    for (const entry of entries) {
+      if (hasHead && !entry.untracked) {
+        changes.push(await this.analyzeTrackedChangeVsHead(entry, includeContext));
+      } else {
+        const filePath = path.join(this.cwd, entry.file);
+        changes.push(
+          await this.analyzeFileChange(entry.file, entry.status, filePath, includeContext)
+        );
+      }
     }
     return changes;
+  }
+
+  private async hasHeadCommit(): Promise<boolean> {
+    try {
+      const out = await this.git.raw(['rev-parse', '--verify', '--quiet', 'HEAD']);
+      return typeof out === 'string' && out.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The uncommitted delta of one tracked path: `git diff HEAD` (staged + unstaged), with
+   * rename detection across the old and new path. Works for paths that no longer exist.
+   */
+  private async analyzeTrackedChangeVsHead(
+    entry: WorkingTreeEntry,
+    includeContext: boolean
+  ): Promise<GitFileChange> {
+    const pathspec = entry.from ? [entry.from, entry.file] : [entry.file];
+    let raw = '';
+    try {
+      raw = await this.git.diff(['--no-color', '--no-ext-diff', '-M', 'HEAD', '--', ...pathspec]);
+    } catch (error) {
+      console.error(`Error diffing ${entry.file} against HEAD:`, error);
+    }
+    raw = raw || '';
+    let additions = 0;
+    let deletions = 0;
+    for (const line of raw.split('\n')) {
+      if (line.startsWith('+') && !line.startsWith('+++')) additions++;
+      else if (line.startsWith('-') && !line.startsWith('---')) deletions++;
+    }
+    let patch: string | undefined;
+    let truncated = false;
+    if (includeContext && raw) {
+      const result = this.truncatePatch(raw, entry.file);
+      patch = result.patch;
+      truncated = result.truncated;
+    }
+    return {
+      filename: entry.file,
+      status: entry.status,
+      additions,
+      deletions,
+      changes: additions + deletions,
+      patch,
+      truncated,
+    };
   }
 
   /**
@@ -755,20 +842,28 @@ export class GitRepositoryAnalyzer {
     };
   }
 
+  /** Title from the change set actually reviewed (not raw `git status`). */
   private generateTitle(
-    status: import('simple-git').StatusResult,
     branch: string,
+    files: GitFileChange[],
+    diffSource: 'uncommitted' | 'branch',
+    base: string,
     untrackedReviewed: number = 0
   ): string {
-    if (status.files.length === 0) {
+    if (files.length === 0) {
       return `Local Analysis: ${branch} (No changes)`;
     }
+    if (diffSource === 'branch') {
+      return `Local Analysis: ${branch} (${files.length} file(s) changed vs ${base})`;
+    }
 
+    const count = (st: GitFileChange['status']) => files.filter(f => f.status === st).length;
     const changeTypes = [];
-    if (status.created.length > 0) changeTypes.push(`${status.created.length} added`);
-    if (status.modified.length > 0) changeTypes.push(`${status.modified.length} modified`);
-    if (status.deleted.length > 0) changeTypes.push(`${status.deleted.length} deleted`);
-    if (status.renamed.length > 0) changeTypes.push(`${status.renamed.length} renamed`);
+    const added = count('added') - untrackedReviewed;
+    if (added > 0) changeTypes.push(`${added} added`);
+    if (count('modified') > 0) changeTypes.push(`${count('modified')} modified`);
+    if (count('removed') > 0) changeTypes.push(`${count('removed')} deleted`);
+    if (count('renamed') > 0) changeTypes.push(`${count('renamed')} renamed`);
     if (untrackedReviewed > 0) changeTypes.push(`${untrackedReviewed} untracked`);
 
     return `Local Analysis: ${branch} (${changeTypes.join(', ')})`;

@@ -2500,8 +2500,9 @@ export async function main(): Promise<void> {
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff, {
         baseBranch: options.baseBranch,
         diffMode,
-        // Local CLI reviews include untracked files alongside tracked edits.
-        includeUntracked: true,
+        // Local CLI reviews include untracked files alongside tracked edits (not under the
+        // debug server, which skips diff analysis).
+        includeUntracked: !options.debugServer,
         outputFile: options.outputFile,
       });
     } catch (error) {
