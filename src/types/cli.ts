@@ -75,10 +75,10 @@ export interface CliOptions {
   /**
    * Explicit --analyze-branch-diff: on a feature branch, review the diff vs the base
    * branch even when there are uncommitted changes. (Branch diff is also auto-enabled
-   * for code-review schemas, but then only when the working tree is clean.)
+   * for code-review schemas, but then only when there are no tracked uncommitted edits.)
    */
   analyzeBranchDiff?: boolean;
-  /** --uncommitted: review only the uncommitted (staged, unstaged, untracked) changes */
+  /** --uncommitted: review only the uncommitted changes (tracked edits + screened untracked files) */
   uncommitted?: boolean;
   /** PR title for CLI runs (overrides the generated "Local Analysis: ..." title) */
   prTitle?: string;

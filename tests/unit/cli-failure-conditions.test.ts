@@ -13,7 +13,15 @@ jest.mock('../../src/config');
 jest.mock('../../src/cli');
 jest.mock('../../src/output-formatters');
 jest.mock('../../src/reviewer');
-jest.mock('../../src/git-repository-analyzer');
+jest.mock('../../src/git-repository-analyzer', () => {
+  // Keep the pure helpers real: cli-main calls them outside the analyzer's try block.
+  const actual = jest.requireActual('../../src/git-repository-analyzer');
+  return {
+    GitRepositoryAnalyzer: jest.fn(),
+    resolveLocalDiffSelection: actual.resolveLocalDiffSelection,
+    applyPrContextOverrides: actual.applyPrContextOverrides,
+  };
+});
 
 const mockCheckExecutionEngine = CheckExecutionEngine as jest.MockedClass<
   typeof CheckExecutionEngine
@@ -32,6 +40,22 @@ const mockOutputFormatters = OutputFormatters as jest.MockedClass<typeof OutputF
 const mockGitRepositoryAnalyzer = GitRepositoryAnalyzer as jest.MockedClass<
   typeof GitRepositoryAnalyzer
 >;
+
+/**
+ * Guard against these exit-code tests passing for the wrong reason: main() must get
+ * through repository analysis (diff selection + analyzeRepository + toPRInfo) before
+ * it exits, rather than crashing on a half-mocked analyzer module.
+ */
+function expectRepositoryAnalysisCompleted(): void {
+  const instance = mockGitRepositoryAnalyzer.mock.results[0]?.value as any;
+  expect(instance).toBeDefined();
+  expect(instance.analyzeRepository).toHaveBeenCalledWith(
+    expect.any(Boolean),
+    expect.any(Boolean),
+    expect.objectContaining({ diffMode: 'auto', includeUntracked: true })
+  );
+  expect(instance.toPRInfo).toHaveBeenCalled();
+}
 
 describe('CLI Failure Conditions Integration', () => {
   let mockExecuteChecks: jest.Mock;
@@ -163,6 +187,7 @@ describe('CLI Failure Conditions Integration', () => {
     (reviewer.calculateCriticalIssues as jest.Mock) = jest.fn().mockReturnValue(0);
 
     // Setup GitRepositoryAnalyzer mock
+    mockGitRepositoryAnalyzer.mockClear();
     mockGitRepositoryAnalyzer.mockImplementation(
       () =>
         ({
@@ -179,6 +204,17 @@ describe('CLI Failure Conditions Integration', () => {
             author: 'test-user',
             workingDirectory: process.cwd(),
           }),
+          toPRInfo: jest.fn((info: any) => ({
+            number: 0,
+            title: info.title,
+            body: info.body,
+            author: info.author,
+            base: info.base,
+            head: info.head,
+            files: info.files,
+            totalAdditions: info.totalAdditions,
+            totalDeletions: info.totalDeletions,
+          })),
         }) as any
     );
   });
@@ -305,6 +341,7 @@ describe('CLI Failure Conditions Integration', () => {
     }
 
     expect(exitCode).toBe(1);
+    expectRepositoryAnalysisCompleted();
   });
 
   it('should exit with code 2 for configuration/execution errors', async () => {
@@ -338,6 +375,7 @@ describe('CLI Failure Conditions Integration', () => {
     }
 
     expect(exitCode).toBe(1); // Current implementation uses 1 for all errors
+    expectRepositoryAnalysisCompleted();
   });
 
   it('should handle --fail-fast flag correctly', async () => {
@@ -401,6 +439,7 @@ describe('CLI Failure Conditions Integration', () => {
     }
 
     expect(exitCode).toBe(1);
+    expectRepositoryAnalysisCompleted();
   });
 
   it.skip('should include failure condition results in JSON output', async () => {

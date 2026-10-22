@@ -18,6 +18,25 @@ export interface GitFileChange {
 // Maximum patch size in bytes (50KB) - helps prevent token limit issues
 const MAX_PATCH_SIZE = 50 * 1024;
 
+// Untracked files above this size are not reviewed (same 1MB cap analyzeFileChange uses).
+const MAX_UNTRACKED_FILE_SIZE = 1024 * 1024;
+// Dependency/build dirs (at any depth) whose untracked files are never review input,
+// on top of FileExclusionHelper's defaults (node_modules/, dist/, build/, ...).
+const UNTRACKED_EXCLUDED_DIRS = new Set(['vendor', '.venv', 'venv', 'target', '__pycache__']);
+// Untracked files with these names are never read into a prompt.
+const SECRET_FILE_NAMES = new Set([
+  'id_rsa',
+  'id_dsa',
+  'id_ecdsa',
+  'id_ed25519',
+  'credentials.json',
+]);
+
+interface WorkingTreeEntry {
+  file: string;
+  status: 'added' | 'removed' | 'modified' | 'renamed';
+}
+
 export interface GitRepositoryInfo {
   title: string;
   body: string;
@@ -35,9 +54,10 @@ export interface GitRepositoryInfo {
 
 /**
  * How a local (CLI) run picks the change set to review.
- * - `auto` (default): review uncommitted changes when there are any; on a feature
- *   branch with a clean working tree, fall back to the branch diff when branch diff
- *   is enabled (e.g. auto-enabled for code-review schemas).
+ * - `auto`: review tracked uncommitted changes when there are any (untracked files
+ *   ride along when `includeUntracked`, but never decide the mode); on a feature
+ *   branch with no tracked uncommitted changes, fall back to the branch diff when
+ *   branch diff is enabled (e.g. auto-enabled for code-review schemas).
  * - `branch`: explicit `--analyze-branch-diff` — on a feature branch, always review
  *   the diff vs the base branch, even when there are uncommitted changes.
  * - `uncommitted`: explicit `--uncommitted` — always review only the uncommitted
@@ -47,7 +67,18 @@ export type LocalDiffMode = 'auto' | 'branch' | 'uncommitted';
 
 export interface AnalyzeRepositoryOptions {
   baseBranch?: string;
+  /**
+   * Defaults to 'branch' when `enableBranchDiff` is true (the historical "force the
+   * branch diff" meaning of that argument) and 'auto' otherwise.
+   */
   diffMode?: LocalDiffMode;
+  /**
+   * Review untracked files alongside tracked uncommitted edits (always on for
+   * 'uncommitted'). Off by default so SDK/bot/scheduler callers keep their file set.
+   */
+  includeUntracked?: boolean;
+  /** This run's --output-file; never reviewed as a change. */
+  outputFile?: string;
 }
 
 /**
@@ -63,6 +94,9 @@ export function resolveLocalDiffSelection(opts: {
 }): { enableBranchDiff: boolean; diffMode: LocalDiffMode } {
   if (opts.analyzeBranchDiff && opts.uncommitted) {
     throw new Error('--uncommitted and --analyze-branch-diff are mutually exclusive');
+  }
+  if (opts.debugServer && opts.uncommitted) {
+    throw new Error('--uncommitted cannot be used with --debug-server (it skips diff analysis)');
   }
   // Skip git diff analysis when the debug server is active (not needed for debugging).
   if (opts.debugServer) return { enableBranchDiff: false, diffMode: 'auto' };
@@ -146,47 +180,72 @@ export class GitRepositoryAnalyzer {
         currentBranch !== baseBranch &&
         (explicitBase !== undefined || (currentBranch !== 'main' && currentBranch !== 'master'));
 
-      // Get uncommitted changes first
-      let uncommittedFiles = await this.getUncommittedChanges(includeContext);
-      let diffSource: 'uncommitted' | 'branch' = 'uncommitted';
-
-      // Pick the change set. Only an EXPLICIT --analyze-branch-diff (diffMode 'branch')
-      // overrides uncommitted work; when branch diff is merely auto-enabled (code-review
-      // schema) uncommitted changes win and the branch diff is the clean-tree fallback.
-      const diffMode: LocalDiffMode = options.diffMode ?? 'auto';
+      // Pick the change set.
+      // - 'branch' (explicit --analyze-branch-diff, or a legacy `enableBranchDiff=true`
+      //   caller with no diffMode): on a feature branch, always the branch diff.
+      // - 'auto': tracked uncommitted edits win; on a feature branch with no tracked edits
+      //   the branch diff is the fallback when enabled (code-review schema). Untracked
+      //   files ride along with tracked edits but never decide the mode on their own.
+      // - 'uncommitted' (--uncommitted): the working tree only, untracked files included.
+      const diffMode: LocalDiffMode = options.diffMode ?? (enableBranchDiff ? 'branch' : 'auto');
       const forceBranchDiff = diffMode === 'branch';
       const branchDiffAllowed = diffMode !== 'uncommitted' && (enableBranchDiff || forceBranchDiff);
+      const includeUntracked = diffMode === 'uncommitted' || options.includeUntracked === true;
+
+      let tracked: WorkingTreeEntry[] = [];
+      let untracked: WorkingTreeEntry[] = [];
+      try {
+        ({ tracked, untracked } = await this.listWorkingTreeChanges(
+          includeUntracked,
+          options.outputFile
+        ));
+      } catch (error) {
+        console.error('Error getting uncommitted changes:', error);
+      }
+
       const useBranchDiff =
         isFeatureBranch &&
         includeContext &&
         branchDiffAllowed &&
-        (forceBranchDiff || uncommittedFiles.length === 0);
+        (forceBranchDiff || tracked.length === 0);
 
+      let files: GitFileChange[] = [];
+      let diffSource: 'uncommitted' | 'branch' = 'uncommitted';
+      let untrackedReviewed = 0;
       if (useBranchDiff) {
         console.error(`📊 Feature branch detected: ${currentBranch}`);
-        if (uncommittedFiles.length > 0) {
+        if (forceBranchDiff && untracked.length > 0) {
           console.error(
-            `⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) (forced by --analyze-branch-diff)`
+            `⚠️  Not including ${untracked.length} untracked file(s): a branch diff covers tracked files only (tracked uncommitted edits stay in it)`
           );
         }
         console.error(
-          `📂 Analyzing diff vs ${baseBranch} (${forceBranchDiff ? 'forced by --analyze-branch-diff' : 'auto: clean working tree on a feature branch'})`
+          `📂 Analyzing diff vs ${baseBranch} (${forceBranchDiff ? 'forced by --analyze-branch-diff' : 'auto: no tracked uncommitted changes on a feature branch'})`
         );
-        uncommittedFiles = await this.getBranchDiff(baseBranch, includeContext);
+        files = await this.getBranchDiff(baseBranch, includeContext, options.outputFile);
         diffSource = 'branch';
-      } else if (uncommittedFiles.length > 0) {
+      } else if (tracked.length > 0 || diffMode === 'uncommitted') {
+        const entries = [...tracked, ...untracked];
+        untrackedReviewed = untracked.length;
+        files = await this.analyzeWorkingTreeEntries(entries, includeContext);
         let reason = '';
         if (diffMode === 'uncommitted') {
           reason = ' (forced by --uncommitted)';
         } else if (isFeatureBranch && includeContext && branchDiffAllowed) {
           reason =
-            ' (auto: uncommitted changes present; pass --analyze-branch-diff to review the branch diff instead)';
+            ' (auto: tracked uncommitted changes present; pass --analyze-branch-diff to review the branch diff instead)';
         }
-        console.error(
-          `📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)${reason}`
-        );
-      } else if (diffMode === 'uncommitted') {
-        console.error('📝 No uncommitted changes to analyze (--uncommitted)');
+        if (files.length > 0) {
+          const breakdown =
+            untracked.length > 0
+              ? `: ${tracked.length} tracked, ${untracked.length} untracked`
+              : '';
+          console.error(
+            `📝 Analyzing uncommitted changes (${files.length} files${breakdown})${reason}`
+          );
+        } else {
+          console.error('📝 No uncommitted changes to analyze (--uncommitted)');
+        }
       }
 
       // Get recent commit info (handle repos with no commits)
@@ -216,14 +275,14 @@ export class GitRepositoryAnalyzer {
 
       // Create repository info
       const repositoryInfo: GitRepositoryInfo = {
-        title: this.generateTitle(status, currentBranch),
+        title: this.generateTitle(status, currentBranch, untrackedReviewed),
         body: this.generateDescription(status, lastCommit),
         author,
         base: baseBranch,
         head: currentBranch,
-        files: uncommittedFiles,
-        totalAdditions: uncommittedFiles.reduce((sum, file) => sum + file.additions, 0),
-        totalDeletions: uncommittedFiles.reduce((sum, file) => sum + file.deletions, 0),
+        files,
+        totalAdditions: files.reduce((sum, file) => sum + file.additions, 0),
+        totalDeletions: files.reduce((sum, file) => sum + file.deletions, 0),
         isGitRepository: true,
         workingDirectory: this.cwd,
         diffSource,
@@ -347,65 +406,150 @@ export class GitRepositoryAnalyzer {
   }
 
   /**
-   * Drop untracked files Visor itself writes into the working directory (NDJSON run
-   * traces under VISOR_TRACE_DIR, default `output/traces`), so a run never reviews its
-   * own — or a previous run's — trace output.
+   * Paths Visor itself writes into the working directory before (or while) it analyzes
+   * it: its state dir `.visor/` (config snapshot DB + WAL, schedules, tasks, worktrees,
+   * snapshots), run traces (VISOR_TRACE_DIR, default `output/traces`), the fallback trace
+   * file, and this run's `--output-file`. They are never review input, whether or not the
+   * user's .gitignore covers them.
    */
-  private withoutVisorArtifacts(untracked: string[]): string[] {
-    const traceDir = path.resolve(this.cwd, process.env.VISOR_TRACE_DIR || 'output/traces');
-    const kept = untracked.filter(file => {
-      const abs = path.resolve(this.cwd, file);
-      return abs !== traceDir && !abs.startsWith(traceDir + path.sep);
-    });
-    if (kept.length < untracked.length) {
-      console.error(
-        `⏭️  Skipping ${untracked.length - kept.length} untracked Visor trace file(s) in ${path.relative(this.cwd, traceDir) || '.'}`
-      );
+  private visorOwnedMatcher(outputFile?: string): (file: string) => boolean {
+    const cwd = path.resolve(this.cwd);
+    const dirs: string[] = [];
+    const files: string[] = [];
+    const addDir = (dir: string | undefined) => {
+      if (!dir) return;
+      const abs = path.resolve(cwd, dir);
+      // Never let a dir that is the repo root (or above it) swallow the whole tree.
+      if (abs === cwd || cwd.startsWith(abs + path.sep)) return;
+      dirs.push(abs);
+    };
+    addDir('.visor');
+    addDir(process.env.VISOR_SNAPSHOT_DIR);
+    addDir(process.env.VISOR_WORKTREE_PATH);
+    addDir(process.env.VISOR_TRACE_DIR || path.join('output', 'traces'));
+    const fallbackTrace = process.env.VISOR_FALLBACK_TRACE_FILE;
+    if (fallbackTrace) {
+      files.push(path.resolve(cwd, fallbackTrace));
+      addDir(path.dirname(fallbackTrace));
     }
-    return kept;
+    if (outputFile) files.push(path.resolve(cwd, outputFile));
+    return (file: string) => {
+      const abs = path.resolve(cwd, file);
+      return files.includes(abs) || dirs.some(dir => abs === dir || abs.startsWith(dir + path.sep));
+    };
   }
 
-  private async getUncommittedChanges(includeContext: boolean = true): Promise<GitFileChange[]> {
+  /**
+   * Why an untracked file must not be read into a review (or count as uncommitted work),
+   * or null when it may. Untracked files have never been looked at by git, so on top of
+   * .gitignore + FileExclusionHelper they also skip dependency/build dirs, a root
+   * `output/` dir (`--output-file` targets), secret-looking names, binaries and big files.
+   */
+  private untrackedSkipReason(file: string): string | null {
+    const segments = file.split('/');
+    const dirSegments = segments.slice(0, -1);
+    const base = segments[segments.length - 1];
+    if (
+      dirSegments.some(seg => UNTRACKED_EXCLUDED_DIRS.has(seg)) ||
+      (segments.length > 1 && segments[0] === 'output')
+    ) {
+      return 'dependency/build/output dir';
+    }
+    if (
+      base === '.env' ||
+      base.startsWith('.env.') ||
+      base.endsWith('.pem') ||
+      base.endsWith('.key') ||
+      SECRET_FILE_NAMES.has(base)
+    ) {
+      return 'secret-looking name';
+    }
     try {
-      const status = await this.git.status();
-      const changes: GitFileChange[] = [];
+      const filePath = path.join(this.cwd, file);
+      const stats = fs.lstatSync(filePath);
+      if (!stats.isFile()) return 'not a regular file';
+      if (stats.size > MAX_UNTRACKED_FILE_SIZE) return 'too large';
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const head = Buffer.alloc(Math.min(stats.size, 8000));
+        fs.readSync(fd, head, 0, head.length, 0);
+        if (head.includes(0)) return 'binary';
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return 'unreadable';
+    }
+    return null;
+  }
 
-      // Process different types of changes
-      const fileChanges = [
-        ...status.created.map(f => ({ file: f, status: 'added' as const })),
-        // Untracked (never `git add`-ed) files are uncommitted work too. git status already
-        // leaves out .gitignore'd paths; FileExclusionHelper below filters the rest. Visor's
-        // own run traces (written into the cwd before this analysis) are never review input.
-        ...this.withoutVisorArtifacts(status.not_added).map(f => ({
-          file: f,
-          status: 'added' as const,
-        })),
-        ...status.deleted.map(f => ({ file: f, status: 'removed' as const })),
-        ...status.modified.map(f => ({ file: f, status: 'modified' as const })),
-        ...status.renamed.map(f => ({
-          file: typeof f === 'string' ? f : f.to || f.from,
-          status: 'renamed' as const,
-        })),
-      ];
+  /**
+   * List the working-tree changes, split into tracked (staged/unstaged edits, deletes,
+   * renames, staged new files) and untracked files. Visor-owned paths are dropped from
+   * both; untracked files are additionally screened by untrackedSkipReason().
+   */
+  private async listWorkingTreeChanges(
+    includeUntracked: boolean,
+    outputFile?: string
+  ): Promise<{ tracked: WorkingTreeEntry[]; untracked: WorkingTreeEntry[] }> {
+    const status = await this.git.status();
+    const isVisorOwned = this.visorOwnedMatcher(outputFile);
+    const skipped = new Map<string, number>();
+    const skip = (reason: string) => skipped.set(reason, (skipped.get(reason) || 0) + 1);
+    const keep = (file: string): boolean => {
+      if (isVisorOwned(file)) {
+        skip('Visor state/output');
+        return false;
+      }
+      // FileExclusionHelper uses .gitignore patterns + common build-artifact dirs
+      if (this.fileExclusionHelper.shouldExcludeFile(file)) {
+        console.error(`⏭️  Skipping excluded file: ${file}`);
+        return false;
+      }
+      return true;
+    };
 
-      for (const { file, status } of fileChanges) {
-        // Skip files that should be excluded from analysis
-        // FileExclusionHelper uses .gitignore patterns, which is sufficient
-        if (this.fileExclusionHelper.shouldExcludeFile(file)) {
-          console.error(`⏭️  Skipping excluded file: ${file}`);
+    const tracked: WorkingTreeEntry[] = [
+      ...status.created.map(f => ({ file: f, status: 'added' as const })),
+      ...status.deleted.map(f => ({ file: f, status: 'removed' as const })),
+      ...status.modified.map(f => ({ file: f, status: 'modified' as const })),
+      ...status.renamed.map(f => ({
+        file: typeof f === 'string' ? f : f.to || f.from,
+        status: 'renamed' as const,
+      })),
+    ].filter(entry => keep(entry.file));
+
+    const untracked: WorkingTreeEntry[] = [];
+    if (includeUntracked) {
+      for (const file of status.not_added || []) {
+        if (!keep(file)) continue;
+        const reason = this.untrackedSkipReason(file);
+        if (reason) {
+          skip(reason);
           continue;
         }
-
-        const filePath = path.join(this.cwd, file);
-        const fileChange = await this.analyzeFileChange(file, status, filePath, includeContext);
-        changes.push(fileChange);
+        untracked.push({ file, status: 'added' });
       }
-
-      return changes;
-    } catch (error) {
-      console.error('Error getting uncommitted changes:', error);
-      return [];
     }
+
+    if (skipped.size > 0) {
+      const total = [...skipped.values()].reduce((a, b) => a + b, 0);
+      const detail = [...skipped.entries()].map(([reason, n]) => `${n} ${reason}`).join(', ');
+      console.error(`⏭️  Not reviewing ${total} working-tree file(s): ${detail}`);
+    }
+    return { tracked, untracked };
+  }
+
+  private async analyzeWorkingTreeEntries(
+    entries: WorkingTreeEntry[],
+    includeContext: boolean
+  ): Promise<GitFileChange[]> {
+    const changes: GitFileChange[] = [];
+    for (const { file, status } of entries) {
+      const filePath = path.join(this.cwd, file);
+      changes.push(await this.analyzeFileChange(file, status, filePath, includeContext));
+    }
+    return changes;
   }
 
   /**
@@ -450,7 +594,8 @@ export class GitRepositoryAnalyzer {
 
   private async getBranchDiff(
     baseBranch: string,
-    includeContext: boolean = true
+    includeContext: boolean = true,
+    outputFile?: string
   ): Promise<GitFileChange[]> {
     try {
       // Resolve the base branch to an available local ref (handles CI shallow clones)
@@ -467,7 +612,12 @@ export class GitRepositoryAnalyzer {
         return [];
       }
 
+      const isVisorOwned = this.visorOwnedMatcher(outputFile);
       for (const file of diffSummary.files) {
+        if (isVisorOwned(file.file)) {
+          console.error(`⏭️  Skipping Visor state/output file: ${file.file}`);
+          continue;
+        }
         // Skip files that should be excluded from analysis
         // FileExclusionHelper uses .gitignore patterns, which is sufficient
         if (this.fileExclusionHelper.shouldExcludeFile(file.file)) {
@@ -605,7 +755,11 @@ export class GitRepositoryAnalyzer {
     };
   }
 
-  private generateTitle(status: import('simple-git').StatusResult, branch: string): string {
+  private generateTitle(
+    status: import('simple-git').StatusResult,
+    branch: string,
+    untrackedReviewed: number = 0
+  ): string {
     if (status.files.length === 0) {
       return `Local Analysis: ${branch} (No changes)`;
     }
@@ -615,7 +769,7 @@ export class GitRepositoryAnalyzer {
     if (status.modified.length > 0) changeTypes.push(`${status.modified.length} modified`);
     if (status.deleted.length > 0) changeTypes.push(`${status.deleted.length} deleted`);
     if (status.renamed.length > 0) changeTypes.push(`${status.renamed.length} renamed`);
-    if (status.not_added.length > 0) changeTypes.push(`${status.not_added.length} untracked`);
+    if (untrackedReviewed > 0) changeTypes.push(`${untrackedReviewed} untracked`);
 
     return `Local Analysis: ${branch} (${changeTypes.join(', ')})`;
   }

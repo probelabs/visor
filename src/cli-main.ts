@@ -2500,6 +2500,9 @@ export async function main(): Promise<void> {
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff, {
         baseBranch: options.baseBranch,
         diffMode,
+        // Local CLI reviews include untracked files alongside tracked edits.
+        includeUntracked: true,
+        outputFile: options.outputFile,
       });
     } catch (error) {
       if (requiresGit) {

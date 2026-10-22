@@ -101,11 +101,11 @@ export class CLI {
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .option(
         '--analyze-branch-diff',
-        'Force reviewing the diff vs the base branch on a feature branch, even with uncommitted changes (auto-enabled for code-review schemas only when the working tree is clean)'
+        'Force reviewing the diff vs the base branch on a feature branch, even with uncommitted edits (auto-enabled for code-review schemas only when there are no tracked uncommitted edits)'
       )
       .option(
         '--uncommitted',
-        'Review only uncommitted changes (staged, unstaged and untracked), on any branch; conflicts with --analyze-branch-diff'
+        'Review only uncommitted changes (tracked edits + untracked files, minus secrets/binaries/build dirs), on any branch; conflicts with --analyze-branch-diff'
       )
       .option('--pr-title <text>', 'PR title to review with in CLI mode (default: generated)')
       .option('--pr-body <text>', 'PR description to review with in CLI mode (default: generated)')
@@ -350,6 +350,12 @@ export class CLI {
     if (options.uncommitted && options.analyzeBranchDiff) {
       throw new Error(
         '--uncommitted and --analyze-branch-diff are mutually exclusive: --uncommitted reviews only the working-tree changes, --analyze-branch-diff reviews the branch diff vs its base'
+      );
+    }
+
+    if (options.uncommitted && options.debugServer) {
+      throw new Error(
+        '--uncommitted cannot be used with --debug-server (the debug server skips diff analysis)'
       );
     }
 

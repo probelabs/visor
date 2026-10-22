@@ -39,25 +39,40 @@ function names(info: GitRepositoryInfo): string[] {
 /** Run the analyzer the way cli-main does for the given flags. */
 async function review(
   repo: string,
-  flags: { analyzeBranchDiff?: boolean; uncommitted?: boolean },
+  flags: { analyzeBranchDiff?: boolean; uncommitted?: boolean; outputFile?: string },
   hasCodeReviewSchema = true
 ): Promise<{ info: GitRepositoryInfo; log: string }> {
   const { enableBranchDiff, diffMode } = resolveLocalDiffSelection({
-    ...flags,
+    analyzeBranchDiff: flags.analyzeBranchDiff,
+    uncommitted: flags.uncommitted,
     hasCodeReviewSchema,
   });
+  return capture(() =>
+    new GitRepositoryAnalyzer(repo).analyzeRepository(true, enableBranchDiff, {
+      diffMode,
+      includeUntracked: true,
+      outputFile: flags.outputFile,
+    })
+  );
+}
+
+async function capture(
+  run: () => Promise<GitRepositoryInfo>
+): Promise<{ info: GitRepositoryInfo; log: string }> {
   const lines: string[] = [];
   const spy = jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
     lines.push(args.map(String).join(' '));
   });
   try {
-    const info = await new GitRepositoryAnalyzer(repo).analyzeRepository(true, enableBranchDiff, {
-      diffMode,
-    });
+    const info = await run();
     return { info, log: lines.join('\n') };
   } finally {
     spy.mockRestore();
   }
+}
+
+function patchText(info: GitRepositoryInfo): string {
+  return info.files.map(f => `${f.patch || ''}${f.content || ''}`).join('\n');
 }
 
 describe('local review diff selection (real git)', () => {
@@ -90,7 +105,7 @@ describe('local review diff selection (real git)', () => {
     const { info, log } = await review(repo, {});
     expect(info.diffSource).toBe('uncommitted');
     expect(names(info)).toEqual(['base.txt', 'staged.txt', 'untracked.txt']);
-    expect(log).toContain('auto: uncommitted changes present');
+    expect(log).toContain('auto: tracked uncommitted changes present');
     expect(log).not.toContain('forced by --analyze-branch-diff');
     expect(log).not.toContain('Ignoring');
   });
@@ -102,7 +117,7 @@ describe('local review diff selection (real git)', () => {
     expect(info.diffSource).toBe('branch');
     expect(info.base).toBe('main');
     expect(names(info)).toEqual(['committed.txt']);
-    expect(log).toContain('auto: clean working tree on a feature branch');
+    expect(log).toContain('auto: no tracked uncommitted changes on a feature branch');
     expect(log).not.toContain('forced by --analyze-branch-diff');
   });
 
@@ -121,7 +136,9 @@ describe('local review diff selection (real git)', () => {
     // untracked files are not part of a branch diff.
     expect(names(info)).toEqual(['base.txt', 'committed.txt', 'staged.txt']);
     expect(log).toContain('forced by --analyze-branch-diff');
-    expect(log).toContain('Ignoring 3 uncommitted file(s)');
+    // Only the untracked file is left out; tracked edits are still in the branch diff.
+    expect(log).toContain('Not including 1 untracked file(s)');
+    expect(log).not.toContain('Ignoring');
   });
 
   it('explicit --analyze-branch-diff on a clean feature branch says it was forced', async () => {
@@ -164,13 +181,16 @@ describe('local review diff selection (real git)', () => {
     expect(log).toContain('forced by --uncommitted');
   });
 
-  it("never reviews Visor's own untracked run traces", async () => {
+  it("never reviews Visor's own untracked run traces or a root output/ dir", async () => {
     fs.mkdirSync(path.join(repo, 'output', 'traces'), { recursive: true });
     fs.writeFileSync(path.join(repo, 'output', 'traces', 'run-1.ndjson'), '{}\n');
-    fs.writeFileSync(path.join(repo, 'output', 'notes.md'), 'mine\n');
+    fs.writeFileSync(path.join(repo, 'output', 'review.md'), 'previous --output-file\n');
+    fs.mkdirSync(path.join(repo, 'docs', 'output'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'docs', 'output', 'notes.md'), 'mine\n');
     const { info, log } = await review(repo, { uncommitted: true });
-    expect(names(info)).toEqual(['output/notes.md']);
-    expect(log).toContain('Skipping 1 untracked Visor trace file(s) in output/traces');
+    expect(names(info)).toEqual(['docs/output/notes.md']);
+    expect(log).toContain('1 Visor state/output');
+    expect(log).toContain('1 dependency/build/output dir');
   });
 
   it('leaves .gitignore-d untracked files out', async () => {
@@ -239,5 +259,176 @@ describe('CLI parsing of --uncommitted / --analyze-branch-diff', () => {
     const help = new CLI().getHelpText();
     expect(help).toContain('--uncommitted');
     expect(help).toContain('--analyze-branch-diff');
+  });
+});
+
+/**
+ * Round-2 review repros (PR #607): Visor-owned files, untracked-only dirt, secrets and
+ * binaries, and the legacy boolean `enableBranchDiff` contract.
+ */
+describe('round-2 review repros (real git)', () => {
+  let repo: string;
+  const savedEnv = { ...process.env };
+
+  beforeEach(() => {
+    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visor-diff-mode-r2-')));
+    git(repo, 'init', '--quiet', '-b', 'main');
+    git(repo, 'config', 'user.email', 'visor-test@example.invalid');
+    git(repo, 'config', 'user.name', 'Visor test');
+    commitFile(repo, 'base.txt', 'base\n');
+    delete process.env.VISOR_TRACE_DIR;
+    delete process.env.VISOR_FALLBACK_TRACE_FILE;
+  });
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  function cleanFeatureBranch(): void {
+    git(repo, 'checkout', '--quiet', '-b', 'feat/x');
+    commitFile(repo, 'committed.txt', 'committed on the branch\n');
+  }
+
+  function plantVisorSnapshot(): void {
+    fs.mkdirSync(path.join(repo, '.visor'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.visor', 'config.db'), 'api_key: sk-secret\n');
+    fs.writeFileSync(path.join(repo, '.visor', 'config.db-wal'), 'api_key: sk-secret\n');
+  }
+
+  it('P0: .visor/config.db (+wal) on a clean feature branch keeps the branch diff', async () => {
+    cleanFeatureBranch();
+    plantVisorSnapshot();
+    const { info } = await review(repo, {});
+    expect(info.diffSource).toBe('branch');
+    expect(names(info)).toEqual(['committed.txt']);
+    expect(patchText(info)).not.toContain('sk-secret');
+  });
+
+  it('P0: .visor/ on a clean main is still "no changes", even with --uncommitted', async () => {
+    plantVisorSnapshot();
+    expect((await review(repo, {})).info.files).toEqual([]);
+    const { info } = await review(repo, { uncommitted: true });
+    expect(info.files).toEqual([]);
+  });
+
+  it('P0: Visor-owned paths are dropped even when they are tracked', async () => {
+    plantVisorSnapshot();
+    git(repo, 'add', '.visor');
+    git(repo, 'commit', '--quiet', '-m', 'oops, committed visor state');
+    fs.writeFileSync(path.join(repo, '.visor', 'config.db'), 'api_key: sk-changed\n');
+    cleanFeatureBranch();
+    const { info } = await review(repo, {});
+    expect(info.diffSource).toBe('branch');
+    expect(names(info)).toEqual(['committed.txt']);
+  });
+
+  it('P0: the fallback trace file dir is Visor-owned, but never the repo root', async () => {
+    fs.mkdirSync(path.join(repo, 'e2e-traces'));
+    fs.writeFileSync(path.join(repo, 'e2e-traces', 'fallback.ndjson'), '{}\n');
+    fs.writeFileSync(path.join(repo, 'mine.txt'), 'mine\n');
+    process.env.VISOR_FALLBACK_TRACE_FILE = path.join(repo, 'e2e-traces', 'fallback.ndjson');
+    expect(names((await review(repo, { uncommitted: true })).info)).toEqual(['mine.txt']);
+    process.env.VISOR_FALLBACK_TRACE_FILE = 'root-fallback.ndjson';
+    fs.writeFileSync(path.join(repo, 'root-fallback.ndjson'), '{}\n');
+    expect(names((await review(repo, { uncommitted: true })).info)).toEqual([
+      'e2e-traces/fallback.ndjson',
+      'mine.txt',
+    ]);
+  });
+
+  it("P0: this run's --output-file is never reviewed", async () => {
+    fs.writeFileSync(path.join(repo, 'review.md'), 'last run output\n');
+    fs.writeFileSync(path.join(repo, 'mine.txt'), 'mine\n');
+    const { info } = await review(repo, { uncommitted: true, outputFile: 'review.md' });
+    expect(names(info)).toEqual(['mine.txt']);
+  });
+
+  it('P1: untracked-only dirt does not turn off the auto branch-diff fallback', async () => {
+    cleanFeatureBranch();
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'scratch\n');
+    const { info, log } = await review(repo, {});
+    expect(info.diffSource).toBe('branch');
+    expect(names(info)).toEqual(['committed.txt']);
+    expect(log).toContain('auto: no tracked uncommitted changes');
+  });
+
+  it('P1: an untracked .env neither replaces the branch diff nor reaches the prompt', async () => {
+    cleanFeatureBranch();
+    fs.writeFileSync(path.join(repo, '.env'), 'OPENAI_API_KEY=sk-live-secret\n');
+    const auto = await review(repo, {});
+    expect(auto.info.diffSource).toBe('branch');
+    expect(names(auto.info)).toEqual(['committed.txt']);
+    const forced = await review(repo, { uncommitted: true });
+    expect(forced.info.files).toEqual([]);
+    expect(patchText(forced.info)).not.toContain('sk-live-secret');
+    expect(forced.log).toContain('1 secret-looking name');
+  });
+
+  it('P1: secret names, NUL binaries, big files and dependency dirs are skipped; real work stays', async () => {
+    fs.writeFileSync(path.join(repo, 'base.txt'), 'base\nedited\n');
+    const untracked: Record<string, string | Buffer> = {
+      '.env.local': 'TOKEN=x\n',
+      'server.pem': '-----BEGIN PRIVATE KEY-----\n',
+      'deploy.key': 'k\n',
+      id_rsa: 'k\n',
+      'credentials.json': '{}\n',
+      'blob.bin': Buffer.from([0x50, 0x4b, 0x00, 0x01]),
+      'big.txt': 'x'.repeat(2 * 1024 * 1024),
+      'vendor/lib.js': 'vendored\n',
+      '.venv/lib/site.py': 'x = 1\n',
+      'target/debug/out.txt': 'x\n',
+      'pkg/__pycache__/m.pyc': 'x\n',
+      'src/new.ts': 'export const x = 1;\n',
+    };
+    for (const [name, body] of Object.entries(untracked)) {
+      fs.mkdirSync(path.dirname(path.join(repo, name)), { recursive: true });
+      fs.writeFileSync(path.join(repo, name), body);
+    }
+    const { info } = await review(repo, {});
+    expect(info.diffSource).toBe('uncommitted');
+    expect(names(info)).toEqual(['base.txt', 'src/new.ts']);
+  });
+
+  it('P1: analyzeRepository(_, true) without diffMode still forces the branch diff', async () => {
+    cleanFeatureBranch();
+    fs.writeFileSync(path.join(repo, 'base.txt'), 'base\nedited\n');
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'scratch\n');
+    const { info } = await capture(() =>
+      new GitRepositoryAnalyzer(repo).analyzeRepository(true, true)
+    );
+    expect(info.diffSource).toBe('branch');
+    expect(names(info)).toEqual(['base.txt', 'committed.txt']);
+  });
+
+  it('P1: default callers (SDK/bots/scheduler) keep the tracked-only file set', async () => {
+    cleanFeatureBranch();
+    fs.writeFileSync(path.join(repo, 'base.txt'), 'base\nedited\n');
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'scratch\n');
+    plantVisorSnapshot();
+    const dirty = await capture(() => new GitRepositoryAnalyzer(repo).analyzeRepository());
+    expect(names(dirty.info)).toEqual(['base.txt']);
+    git(repo, 'checkout', '--quiet', '--', 'base.txt');
+    const untrackedOnly = await capture(() => new GitRepositoryAnalyzer(repo).analyzeRepository());
+    expect(untrackedOnly.info.files).toEqual([]);
+  });
+
+  it('P2: --analyze-branch-diff reports only the untracked files it leaves out', async () => {
+    cleanFeatureBranch();
+    fs.writeFileSync(path.join(repo, 'base.txt'), 'base\nedited\n');
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'scratch\n');
+    const { info, log } = await review(repo, { analyzeBranchDiff: true });
+    expect(names(info)).toEqual(['base.txt', 'committed.txt']);
+    expect(log).toContain('Not including 1 untracked file(s)');
+    expect(log).not.toMatch(/Ignoring \d+ uncommitted/);
+  });
+
+  it('P3: --uncommitted with --debug-server is rejected instead of silently dropped', () => {
+    expect(() => new CLI().parseArgs(['node', 'visor', '--uncommitted', '--debug-server'])).toThrow(
+      /--uncommitted cannot be used with --debug-server/
+    );
+    expect(() =>
+      resolveLocalDiffSelection({ uncommitted: true, debugServer: true, hasCodeReviewSchema: true })
+    ).toThrow(/--debug-server/);
   });
 });

@@ -222,7 +222,7 @@ visor validate                                # Validate config
 visor test --progress compact                 # Run integration tests
 ```
 
-**What a local run reviews:** uncommitted changes when there are any; on a feature branch with a clean working tree (and a code-review schema) the diff vs the base branch. `--analyze-branch-diff` forces the branch diff, `--uncommitted` forces the working-tree changes; the two are mutually exclusive. See [docs/ci-cli-mode.md](docs/ci-cli-mode.md#which-changes-a-local-run-reviews).
+**What a local run reviews:** uncommitted changes when there are tracked edits (untracked files ride along); on a feature branch without tracked edits (and with a code-review schema) the diff vs the base branch. `--analyze-branch-diff` forces the branch diff, `--uncommitted` forces the working-tree changes; the two are mutually exclusive. See [docs/ci-cli-mode.md](docs/ci-cli-mode.md#which-changes-a-local-run-reviews).
 
 **Run modes:** Default is CLI mode everywhere. For GitHub-specific behavior (comments, checks, annotations), run with `--mode github-actions` or set `mode: github-actions` in the Action. Force CLI mode inside Actions with `VISOR_MODE=cli`.
 
