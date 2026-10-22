@@ -131,7 +131,7 @@
     "acorn-walk": "^8.3.5",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^12.10.0",
     "blessed": "^0.1.81",
     "botbuilder": "^4.23.3",
     "botframework-connector": "^4.23.3",
