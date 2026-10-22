@@ -46,7 +46,8 @@ jobs:
 | `--tags <tags>` | Run only checks with these tags (comma-separated) | `--tags security,fast` |
 | `--exclude-tags <tags>` | Skip checks with these tags | `--exclude-tags slow` |
 | `--event <type>` | Simulate GitHub event type | `--event pr_opened` |
-| `--analyze-branch-diff` | Analyze diff vs base branch | `--analyze-branch-diff` |
+| `--analyze-branch-diff` | Force the diff vs base branch on a feature branch, even with uncommitted changes | `--analyze-branch-diff` |
+| `--uncommitted` | Review only uncommitted changes (staged, unstaged, untracked); conflicts with `--analyze-branch-diff` | `--uncommitted` |
 | `--base-branch <ref>` | Base branch/ref to diff against | `--base-branch release/1.2` |
 | `--pr-title <text>` | PR title for checks (`pr.title`) | `--pr-title "Fix login race"` |
 | `--pr-body <text>` / `--pr-body-file <path>` | PR description for checks (`pr.description`) | `--pr-body-file pr.md` |
@@ -54,6 +55,29 @@ jobs:
 | `-v, --verbose` | Increase verbosity | `--verbose` |
 | `-q, --quiet` | Reduce output to warnings/errors | `--quiet` |
 | `--mode <mode>` | Run mode: `cli` or `github-actions` | `--mode github-actions` |
+
+## Which Changes a Local Run Reviews
+
+In CLI mode Visor picks one change set to review:
+
+| Situation | Reviewed | Log line |
+|-----------|----------|----------|
+| Uncommitted changes present (no flag; on main/master the log has no "auto:" suffix) | Uncommitted changes | `📝 Analyzing uncommitted changes (N files) (auto: uncommitted changes present; ...)` |
+| Feature branch, clean working tree, code-review schema (no flag) | Diff vs base branch | `📂 Analyzing diff vs main (auto: clean working tree on a feature branch)` |
+| `--analyze-branch-diff` on a feature branch | Diff vs base branch, even with uncommitted changes | `📂 Analyzing diff vs main (forced by --analyze-branch-diff)` |
+| `--uncommitted` (any branch) | Uncommitted changes only, never the branch diff | `📝 Analyzing uncommitted changes (N files) (forced by --uncommitted)` |
+
+- "Uncommitted changes" means staged, unstaged and untracked files (`.gitignore`d paths are skipped).
+- The branch diff is `git diff <base>` against the working tree: tracked edits ride along, untracked files do not.
+- A code-review schema auto-enables the branch diff only as the clean-tree fallback; it never discards uncommitted work. Only an explicit `--analyze-branch-diff` does.
+- `--uncommitted` and `--analyze-branch-diff` are mutually exclusive; passing both is an error.
+- Whether the diffs (patches) are sent to checks is controlled separately by code context (`--enable-code-context` / `--disable-code-context`, auto-enabled for code-review schemas).
+
+```bash
+visor --output markdown                         # on feat/x with edits: reviews the edits
+visor --uncommitted --output markdown           # always just the working-tree changes
+visor --analyze-branch-diff --output markdown   # the whole branch vs main, edits included
+```
 
 ## SARIF Output for GitHub Code Scanning
 

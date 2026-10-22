@@ -29,6 +29,46 @@ export interface GitRepositoryInfo {
   totalDeletions: number;
   isGitRepository: boolean;
   workingDirectory: string;
+  /** Which change set `files` holds: the working tree vs HEAD, or the branch vs its base. */
+  diffSource?: 'uncommitted' | 'branch';
+}
+
+/**
+ * How a local (CLI) run picks the change set to review.
+ * - `auto` (default): review uncommitted changes when there are any; on a feature
+ *   branch with a clean working tree, fall back to the branch diff when branch diff
+ *   is enabled (e.g. auto-enabled for code-review schemas).
+ * - `branch`: explicit `--analyze-branch-diff` — on a feature branch, always review
+ *   the diff vs the base branch, even when there are uncommitted changes.
+ * - `uncommitted`: explicit `--uncommitted` — always review only the uncommitted
+ *   changes (staged, unstaged and untracked), on any branch.
+ */
+export type LocalDiffMode = 'auto' | 'branch' | 'uncommitted';
+
+export interface AnalyzeRepositoryOptions {
+  baseBranch?: string;
+  diffMode?: LocalDiffMode;
+}
+
+/**
+ * Map CLI flags to the analyzer's inputs. `--analyze-branch-diff` is the only thing that
+ * forces the branch diff over uncommitted changes; a code-review schema merely enables it
+ * as the clean-tree fallback; `--uncommitted` always reviews only the working tree.
+ */
+export function resolveLocalDiffSelection(opts: {
+  analyzeBranchDiff?: boolean;
+  uncommitted?: boolean;
+  hasCodeReviewSchema: boolean;
+  debugServer?: boolean;
+}): { enableBranchDiff: boolean; diffMode: LocalDiffMode } {
+  if (opts.analyzeBranchDiff && opts.uncommitted) {
+    throw new Error('--uncommitted and --analyze-branch-diff are mutually exclusive');
+  }
+  // Skip git diff analysis when the debug server is active (not needed for debugging).
+  if (opts.debugServer) return { enableBranchDiff: false, diffMode: 'auto' };
+  if (opts.uncommitted) return { enableBranchDiff: false, diffMode: 'uncommitted' };
+  if (opts.analyzeBranchDiff) return { enableBranchDiff: true, diffMode: 'branch' };
+  return { enableBranchDiff: opts.hasCodeReviewSchema, diffMode: 'auto' };
 }
 
 export interface PrContextOverrides {
@@ -83,7 +123,7 @@ export class GitRepositoryAnalyzer {
   async analyzeRepository(
     includeContext: boolean = true,
     enableBranchDiff: boolean = false,
-    options: { baseBranch?: string } = {}
+    options: AnalyzeRepositoryOptions = {}
   ): Promise<GitRepositoryInfo> {
     // Check if we're in a git repository
     const isRepo = await this.isGitRepository();
@@ -108,24 +148,45 @@ export class GitRepositoryAnalyzer {
 
       // Get uncommitted changes first
       let uncommittedFiles = await this.getUncommittedChanges(includeContext);
+      let diffSource: 'uncommitted' | 'branch' = 'uncommitted';
 
-      // If branch diff is explicitly enabled, use branch diff (ignoring uncommitted changes)
-      // Otherwise, if on a feature branch with no uncommitted changes AND branch diff is enabled, get diff vs base branch
-      if (isFeatureBranch && includeContext && enableBranchDiff) {
+      // Pick the change set. Only an EXPLICIT --analyze-branch-diff (diffMode 'branch')
+      // overrides uncommitted work; when branch diff is merely auto-enabled (code-review
+      // schema) uncommitted changes win and the branch diff is the clean-tree fallback.
+      const diffMode: LocalDiffMode = options.diffMode ?? 'auto';
+      const forceBranchDiff = diffMode === 'branch';
+      const branchDiffAllowed = diffMode !== 'uncommitted' && (enableBranchDiff || forceBranchDiff);
+      const useBranchDiff =
+        isFeatureBranch &&
+        includeContext &&
+        branchDiffAllowed &&
+        (forceBranchDiff || uncommittedFiles.length === 0);
+
+      if (useBranchDiff) {
+        console.error(`📊 Feature branch detected: ${currentBranch}`);
         if (uncommittedFiles.length > 0) {
-          console.error(`📊 Feature branch detected: ${currentBranch}`);
           console.error(
-            `⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) due to --analyze-branch-diff flag`
+            `⚠️  Ignoring ${uncommittedFiles.length} uncommitted file(s) (forced by --analyze-branch-diff)`
           );
-        } else {
-          console.error(`📊 Feature branch detected: ${currentBranch}`);
         }
         console.error(
-          `📂 Analyzing diff vs ${baseBranch} (${uncommittedFiles.length > 0 ? 'forced by --analyze-branch-diff' : 'auto-enabled for code-review schemas'})`
+          `📂 Analyzing diff vs ${baseBranch} (${forceBranchDiff ? 'forced by --analyze-branch-diff' : 'auto: clean working tree on a feature branch'})`
         );
         uncommittedFiles = await this.getBranchDiff(baseBranch, includeContext);
+        diffSource = 'branch';
       } else if (uncommittedFiles.length > 0) {
-        console.error(`📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)`);
+        let reason = '';
+        if (diffMode === 'uncommitted') {
+          reason = ' (forced by --uncommitted)';
+        } else if (isFeatureBranch && includeContext && branchDiffAllowed) {
+          reason =
+            ' (auto: uncommitted changes present; pass --analyze-branch-diff to review the branch diff instead)';
+        }
+        console.error(
+          `📝 Analyzing uncommitted changes (${uncommittedFiles.length} files)${reason}`
+        );
+      } else if (diffMode === 'uncommitted') {
+        console.error('📝 No uncommitted changes to analyze (--uncommitted)');
       }
 
       // Get recent commit info (handle repos with no commits)
@@ -165,6 +226,7 @@ export class GitRepositoryAnalyzer {
         totalDeletions: uncommittedFiles.reduce((sum, file) => sum + file.deletions, 0),
         isGitRepository: true,
         workingDirectory: this.cwd,
+        diffSource,
       };
 
       return repositoryInfo;
@@ -284,6 +346,25 @@ export class GitRepositoryAnalyzer {
     }
   }
 
+  /**
+   * Drop untracked files Visor itself writes into the working directory (NDJSON run
+   * traces under VISOR_TRACE_DIR, default `output/traces`), so a run never reviews its
+   * own — or a previous run's — trace output.
+   */
+  private withoutVisorArtifacts(untracked: string[]): string[] {
+    const traceDir = path.resolve(this.cwd, process.env.VISOR_TRACE_DIR || 'output/traces');
+    const kept = untracked.filter(file => {
+      const abs = path.resolve(this.cwd, file);
+      return abs !== traceDir && !abs.startsWith(traceDir + path.sep);
+    });
+    if (kept.length < untracked.length) {
+      console.error(
+        `⏭️  Skipping ${untracked.length - kept.length} untracked Visor trace file(s) in ${path.relative(this.cwd, traceDir) || '.'}`
+      );
+    }
+    return kept;
+  }
+
   private async getUncommittedChanges(includeContext: boolean = true): Promise<GitFileChange[]> {
     try {
       const status = await this.git.status();
@@ -292,6 +373,13 @@ export class GitRepositoryAnalyzer {
       // Process different types of changes
       const fileChanges = [
         ...status.created.map(f => ({ file: f, status: 'added' as const })),
+        // Untracked (never `git add`-ed) files are uncommitted work too. git status already
+        // leaves out .gitignore'd paths; FileExclusionHelper below filters the rest. Visor's
+        // own run traces (written into the cwd before this analysis) are never review input.
+        ...this.withoutVisorArtifacts(status.not_added).map(f => ({
+          file: f,
+          status: 'added' as const,
+        })),
         ...status.deleted.map(f => ({ file: f, status: 'removed' as const })),
         ...status.modified.map(f => ({ file: f, status: 'modified' as const })),
         ...status.renamed.map(f => ({
@@ -527,6 +615,7 @@ export class GitRepositoryAnalyzer {
     if (status.modified.length > 0) changeTypes.push(`${status.modified.length} modified`);
     if (status.deleted.length > 0) changeTypes.push(`${status.deleted.length} deleted`);
     if (status.renamed.length > 0) changeTypes.push(`${status.renamed.length} renamed`);
+    if (status.not_added.length > 0) changeTypes.push(`${status.not_added.length} untracked`);
 
     return `Local Analysis: ${branch} (${changeTypes.join(', ')})`;
   }

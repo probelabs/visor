@@ -72,8 +72,14 @@ export interface CliOptions {
   codeContext?: 'auto' | 'enabled' | 'disabled';
   /** When set, write formatted output to this file instead of stdout */
   outputFile?: string;
-  /** Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas) */
+  /**
+   * Explicit --analyze-branch-diff: on a feature branch, review the diff vs the base
+   * branch even when there are uncommitted changes. (Branch diff is also auto-enabled
+   * for code-review schemas, but then only when the working tree is clean.)
+   */
   analyzeBranchDiff?: boolean;
+  /** --uncommitted: review only the uncommitted (staged, unstaged, untracked) changes */
+  uncommitted?: boolean;
   /** PR title for CLI runs (overrides the generated "Local Analysis: ..." title) */
   prTitle?: string;
   /** PR description for CLI runs (mutually exclusive with prBodyFile) */

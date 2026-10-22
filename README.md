@@ -212,7 +212,8 @@ Additional modes:
 # CLI examples
 visor --check all --output table
 visor --tags fast,local --max-parallelism 5
-visor --analyze-branch-diff                   # PR-style diff analysis
+visor --uncommitted                           # Review only uncommitted (incl. untracked) changes
+visor --analyze-branch-diff                   # PR-style diff vs base branch, even with uncommitted edits
 visor --event pr_updated                      # Simulate GitHub events
 visor --tui --config ./workflow.yaml          # Interactive TUI
 visor --debug-server --debug-port 3456        # Live web debugger
@@ -220,6 +221,8 @@ visor config snapshots                        # Config version history
 visor validate                                # Validate config
 visor test --progress compact                 # Run integration tests
 ```
+
+**What a local run reviews:** uncommitted changes when there are any; on a feature branch with a clean working tree (and a code-review schema) the diff vs the base branch. `--analyze-branch-diff` forces the branch diff, `--uncommitted` forces the working-tree changes; the two are mutually exclusive. See [docs/ci-cli-mode.md](docs/ci-cli-mode.md#which-changes-a-local-run-reviews).
 
 **Run modes:** Default is CLI mode everywhere. For GitHub-specific behavior (comments, checks, annotations), run with `--mode github-actions` or set `mode: github-actions` in the Action. Force CLI mode inside Actions with `VISOR_MODE=cli`.
 

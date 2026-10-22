@@ -101,7 +101,11 @@ export class CLI {
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .option(
         '--analyze-branch-diff',
-        'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
+        'Force reviewing the diff vs the base branch on a feature branch, even with uncommitted changes (auto-enabled for code-review schemas only when the working tree is clean)'
+      )
+      .option(
+        '--uncommitted',
+        'Review only uncommitted changes (staged, unstaged and untracked), on any branch; conflicts with --analyze-branch-diff'
       )
       .option('--pr-title <text>', 'PR title to review with in CLI mode (default: generated)')
       .option('--pr-body <text>', 'PR description to review with in CLI mode (default: generated)')
@@ -276,6 +280,7 @@ export class CLI {
         debugServer: options.debugServer || false,
         debugPort: options.debugPort,
         analyzeBranchDiff: options.analyzeBranchDiff,
+        uncommitted: Boolean(options.uncommitted),
         prTitle: typeof options.prTitle === 'string' ? options.prTitle : undefined,
         prBody: typeof options.prBody === 'string' ? options.prBody : undefined,
         prBodyFile: typeof options.prBodyFile === 'string' ? options.prBodyFile : undefined,
@@ -341,6 +346,12 @@ export class CLI {
   private validateOptions(options: Record<string, unknown>): void {
     // Skip check name validation here - it will be validated against the actual loaded config
     // This allows both built-in checks and config-defined checks to work properly
+
+    if (options.uncommitted && options.analyzeBranchDiff) {
+      throw new Error(
+        '--uncommitted and --analyze-branch-diff are mutually exclusive: --uncommitted reviews only the working-tree changes, --analyze-branch-diff reviews the branch diff vs its base'
+      );
+    }
 
     // Validate output format
     if (options.output && !this.validOutputs.includes(options.output as OutputFormat)) {
