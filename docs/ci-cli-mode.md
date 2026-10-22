@@ -46,7 +46,8 @@ jobs:
 | `--tags <tags>` | Run only checks with these tags (comma-separated) | `--tags security,fast` |
 | `--exclude-tags <tags>` | Skip checks with these tags | `--exclude-tags slow` |
 | `--event <type>` | Simulate GitHub event type | `--event pr_opened` |
-| `--analyze-branch-diff` | Analyze diff vs base branch | `--analyze-branch-diff` |
+| `--analyze-branch-diff` | Force the diff vs base branch on a feature branch, even with tracked uncommitted edits | `--analyze-branch-diff` |
+| `--uncommitted` | Review only uncommitted changes (tracked edits + screened untracked files); conflicts with `--analyze-branch-diff` | `--uncommitted` |
 | `--base-branch <ref>` | Base branch/ref to diff against | `--base-branch release/1.2` |
 | `--pr-title <text>` | PR title for checks (`pr.title`) | `--pr-title "Fix login race"` |
 | `--pr-body <text>` / `--pr-body-file <path>` | PR description for checks (`pr.description`) | `--pr-body-file pr.md` |
@@ -54,6 +55,33 @@ jobs:
 | `-v, --verbose` | Increase verbosity | `--verbose` |
 | `-q, --quiet` | Reduce output to warnings/errors | `--quiet` |
 | `--mode <mode>` | Run mode: `cli` or `github-actions` | `--mode github-actions` |
+
+## Which Changes a Local Run Reviews
+
+In CLI mode Visor picks one change set to review:
+
+| Situation | Reviewed | Log line |
+|-----------|----------|----------|
+| Feature branch, tracked uncommitted edits (no flag) | Uncommitted changes (tracked edits + untracked files) | `📝 Analyzing uncommitted changes (N files...) (auto: tracked uncommitted changes present; ...)` |
+| main/master, tracked uncommitted edits (no flag) | Uncommitted changes (tracked edits + untracked files) | `📝 Analyzing uncommitted changes (N files...)` |
+| Feature branch, no tracked edits (clean, or only untracked files), code-review schema (no flag) | Diff vs base branch | `📂 Analyzing diff vs main (auto: no tracked uncommitted changes on a feature branch)` |
+| main/master, no tracked edits (no flag) | Nothing ("No changes to analyze") | |
+| `--analyze-branch-diff` on a feature branch | Diff vs base branch, even with uncommitted edits | `📂 Analyzing diff vs main (forced by --analyze-branch-diff)` |
+| `--uncommitted` (any branch) | Uncommitted changes only (tracked + untracked), never the branch diff | `📝 Analyzing uncommitted changes (N files...) (forced by --uncommitted)` |
+
+- **Tracked** uncommitted changes (staged or unstaged edits, deletes, renames, `git add`-ed new files) decide the mode. Their patches are the delta against `HEAD` (`git diff HEAD`, with rename detection), so staged hunks, deletions and renames are shown in full; a repo with no commits yet reads new files from disk. **Untracked** files ride along in an uncommitted review but never decide it on their own, so stray scratch files do not replace a feature-branch review. Use `--uncommitted` to review untracked-only work.
+- Untracked files are screened before anything is read: `.gitignore`d paths, dependency/build dirs (`node_modules/`, `dist/`, `build/`, `vendor/`, `.venv/`, `target/`, `__pycache__/`, ...), a root `output/` dir, secret-looking names (`.env`, `.env.*`, `.envrc`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials`, `*.pem`, `*.key`, `id_rsa`, `credentials.json`, anything under `.aws/`, `.ssh/`, `.gnupg/`), binaries and files of 1MB or more are skipped and logged as a count. Tracked files are reviewed as committed history has them; screening applies to untracked files only.
+- Visor's own files are never reviewed, tracked or not and whatever your `.gitignore` says: `.visor/` (config snapshot DB, schedules, worktrees), run traces (`VISOR_TRACE_DIR`, default `output/traces`), the `VISOR_FALLBACK_TRACE_FILE` and its sibling `*.ndjson` traces, and this run's `--output-file`.
+- The branch diff is `git diff <base>` against the working tree: tracked edits ride along, untracked files do not (the branch-diff log says how many untracked files it leaves out).
+- A code-review schema auto-enables the branch diff only as the fallback when there are no tracked edits; it never discards tracked work. Only an explicit `--analyze-branch-diff` does.
+- `--uncommitted` and `--analyze-branch-diff` are mutually exclusive, and `--uncommitted` cannot be combined with `--debug-server` (which skips diff analysis); both combinations are errors.
+- Whether the diffs (patches) are sent to checks is controlled separately by code context (`--enable-code-context` / `--disable-code-context`, auto-enabled for code-review schemas).
+
+```bash
+visor --output markdown                         # on feat/x with edits: reviews the edits
+visor --uncommitted --output markdown           # always just the working-tree changes
+visor --analyze-branch-diff --output markdown   # the whole branch vs main, edits included
+```
 
 ## SARIF Output for GitHub Code Scanning
 

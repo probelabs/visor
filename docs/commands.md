@@ -253,7 +253,8 @@ See [Tag Filtering](tag-filtering.md) for detailed tag filtering documentation.
 #### Code Context
 - `--enable-code-context` - Force include code diffs in analysis
 - `--disable-code-context` - Force exclude code diffs from analysis
-- `--analyze-branch-diff` - Analyze diff vs base branch (auto-enabled for code-review schemas)
+- `--analyze-branch-diff` - Force the diff vs base branch on a feature branch, even with uncommitted changes (code-review schemas auto-enable it only when there are no tracked uncommitted edits)
+- `--uncommitted` - Review only uncommitted changes (tracked edits + screened untracked files) on any branch; mutually exclusive with `--analyze-branch-diff` and `--debug-server`
 - `--base-branch <ref>` - Base branch/ref to diff against (default: `origin/main`, `origin/master` or `origin/develop`, else `main`)
 
 #### PR Context (CLI mode)

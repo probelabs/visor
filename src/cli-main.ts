@@ -2471,27 +2471,39 @@ export async function main(): Promise<void> {
     }
 
     // Get repository info using GitRepositoryAnalyzer
-    const { GitRepositoryAnalyzer } = await import('./git-repository-analyzer');
+    const { GitRepositoryAnalyzer, resolveLocalDiffSelection } = await import(
+      './git-repository-analyzer'
+    );
     const analyzer = new GitRepositoryAnalyzer(process.cwd());
 
-    // Determine if we should analyze branch diff
-    // Skip git diff analysis when debug server is active (not needed for debugging execution flow)
-    // Auto-enable when: --analyze-branch-diff flag OR code-review schema detected
+    // Determine which change set to review (uncommitted vs branch diff).
+    // Branch diff is allowed when: --analyze-branch-diff flag OR code-review schema detected.
+    // Only the EXPLICIT flag forces it over uncommitted changes; when it is merely
+    // auto-enabled, uncommitted changes win and the branch diff is the clean-tree fallback.
+    // --uncommitted always reviews only the working-tree changes. Skipped under --debug-server.
     const hasCodeReviewSchema = checksToRun.some(
       check => config.checks?.[check]?.schema === 'code-review'
     );
-    const analyzeBranchDiff = options.debugServer
-      ? false // Skip git diff when debug server is active
-      : options.analyzeBranchDiff || hasCodeReviewSchema;
+    const { enableBranchDiff: analyzeBranchDiff, diffMode } = resolveLocalDiffSelection({
+      analyzeBranchDiff: options.analyzeBranchDiff,
+      uncommitted: options.uncommitted,
+      hasCodeReviewSchema,
+      debugServer: options.debugServer,
+    });
 
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
-    const requiresGit = includeCodeContext || analyzeBranchDiff;
+    const requiresGit = includeCodeContext || analyzeBranchDiff || diffMode === 'uncommitted';
     try {
       if (!options.debugServer) {
         logger.step('Analyzing repository');
       }
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff, {
         baseBranch: options.baseBranch,
+        diffMode,
+        // Local CLI reviews include untracked files alongside tracked edits (not under the
+        // debug server, which skips diff analysis).
+        includeUntracked: !options.debugServer,
+        outputFile: options.outputFile,
       });
     } catch (error) {
       if (requiresGit) {

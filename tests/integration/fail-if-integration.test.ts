@@ -127,6 +127,11 @@ jest.mock('../../src/state-machine/context/build-engine-context', () => {
 
 // Mock git analyzer
 jest.mock('../../src/git-repository-analyzer', () => ({
+  // Pure helpers stay real (cli-main calls them outside the analyzer).
+  resolveLocalDiffSelection: jest.requireActual('../../src/git-repository-analyzer')
+    .resolveLocalDiffSelection,
+  applyPrContextOverrides: jest.requireActual('../../src/git-repository-analyzer')
+    .applyPrContextOverrides,
   GitRepositoryAnalyzer: jest.fn().mockImplementation(() => ({
     analyzeRepository: jest.fn().mockResolvedValue({
       isGitRepository: true,
