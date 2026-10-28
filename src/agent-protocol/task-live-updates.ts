@@ -644,6 +644,18 @@ export async function summarizeTaskProgress(
   if (input.config.model) agentOptions.model = input.config.model;
   if (input.config.provider) agentOptions.provider = input.config.provider;
 
+  // Inject AI gateway session tracking header when configured
+  const sessionHeaderName = process.env.AI_GATEWAY_SESSION_HEADER;
+  if (sessionHeaderName) {
+    try {
+      const { trace } = require('@opentelemetry/api');
+      const traceId = trace.getActiveSpan?.()?.spanContext?.()?.traceId;
+      if (traceId) {
+        (agentOptions as any).providerHeaders = { [sessionHeaderName]: traceId };
+      }
+    } catch {}
+  }
+
   const agent = new ProbeAgent(agentOptions);
   if (typeof agent.initialize === 'function') {
     await agent.initialize();

@@ -283,6 +283,17 @@ export async function evaluateTask(
     process.env[envKey] = config.apiKey;
   }
 
+  const sessionHeaderName = process.env.AI_GATEWAY_SESSION_HEADER;
+  if (sessionHeaderName) {
+    try {
+      const { trace } = require('@opentelemetry/api');
+      const traceId = trace.getActiveSpan?.()?.spanContext?.()?.traceId;
+      if (traceId) {
+        (agentOptions as any).providerHeaders = { [sessionHeaderName]: traceId };
+      }
+    } catch {}
+  }
+
   const agent = new ProbeAgent(agentOptions);
   if (typeof agent.initialize === 'function') {
     await agent.initialize();

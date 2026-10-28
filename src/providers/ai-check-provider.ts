@@ -48,8 +48,10 @@ function gitOutput(worktreePath: string, args: string[]): string {
 function resolveIsolatedWriterWorktree(
   selector: string,
   dependencyResults: Map<string, ReviewSummary> | undefined,
-  sessionInfo: { parentSessionId?: string; reuseSession?: boolean } &
-    import('./check-provider.interface').ExecutionContext,
+  sessionInfo: {
+    parentSessionId?: string;
+    reuseSession?: boolean;
+  } & import('./check-provider.interface').ExecutionContext,
   aiConfig: AIReviewConfig
 ): string {
   if (
@@ -291,8 +293,7 @@ export class AICheckProvider extends CheckProvider {
           (Array.isArray(profileAi.extra_allowed_folders) &&
             profileAi.extra_allowed_folders.length > 0) ||
           (profileAi.mcpServers && Object.keys(profileAi.mcpServers).length > 0) ||
-          ((cfg as any).ai_mcp_servers &&
-            Object.keys((cfg as any).ai_mcp_servers).length > 0) ||
+          ((cfg as any).ai_mcp_servers && Object.keys((cfg as any).ai_mcp_servers).length > 0) ||
           (cfg as any).ai_mcp_servers_js ||
           (cfg as any).ai_custom_tools ||
           (cfg as any).ai_custom_tools_js ||
@@ -334,8 +335,8 @@ export class AICheckProvider extends CheckProvider {
           profileAi.workspacePath !== undefined ||
           profileAi.allowedFolders !== undefined ||
           (cfg as any).workingDirectory !== undefined ||
-          (cfg as any).ai_provider !== undefined && (cfg as any).ai_provider !== 'codex' ||
-          (cfg as any).ai_model !== undefined && (cfg as any).ai_model !== 'gpt-5.6-luna' ||
+          ((cfg as any).ai_provider !== undefined && (cfg as any).ai_provider !== 'codex') ||
+          ((cfg as any).ai_model !== undefined && (cfg as any).ai_model !== 'gpt-5.6-luna') ||
           (cfg as any).reuse_ai_session === true ||
           typeof (cfg as any).reuse_ai_session === 'string' ||
           (cfg as any).ai_mcp_servers ||
@@ -369,8 +370,7 @@ export class AICheckProvider extends CheckProvider {
       (cfg.ai?.codex_execution_profile === LUNA_READONLY_PROFILE ||
         cfg.ai?.codex_execution_profile === LUNA_ISOLATED_WRITER_PROFILE) &&
       (((cfg as any).ai_provider !== undefined && (cfg as any).ai_provider !== 'codex') ||
-        ((cfg as any).ai_model !== undefined &&
-          (cfg as any).ai_model !== 'gpt-5.6-luna') ||
+        ((cfg as any).ai_model !== undefined && (cfg as any).ai_model !== 'gpt-5.6-luna') ||
         (cfg as any).reuse_ai_session === true ||
         typeof (cfg as any).reuse_ai_session === 'string')
     ) {
@@ -1068,11 +1068,13 @@ export class AICheckProvider extends CheckProvider {
     const codexBin = sessionInfo?.codexBin;
     const codexSha256 = sessionInfo?.codexSha256;
     if (governedCodexTransport !== undefined) {
-      if (governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
-          typeof codexBin !== 'string' ||
-          !path.isAbsolute(codexBin) ||
-          typeof codexSha256 !== 'string' ||
-          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(codexSha256)) {
+      if (
+        governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+        typeof codexBin !== 'string' ||
+        !path.isAbsolute(codexBin) ||
+        typeof codexSha256 !== 'string' ||
+        !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(codexSha256)
+      ) {
         throw new Error('governed Codex transport identity is invalid');
       }
       aiConfig.governedCodexTransport = governedCodexTransport;
@@ -1208,12 +1210,8 @@ export class AICheckProvider extends CheckProvider {
         // service-owned policy mutable without changing the source config.
         aiConfig.bashConfig = {
           ...staticBashConfig,
-          ...(Array.isArray(staticBashConfig.allow)
-            ? { allow: [...staticBashConfig.allow] }
-            : {}),
-          ...(Array.isArray(staticBashConfig.deny)
-            ? { deny: [...staticBashConfig.deny] }
-            : {}),
+          ...(Array.isArray(staticBashConfig.allow) ? { allow: [...staticBashConfig.allow] } : {}),
+          ...(Array.isArray(staticBashConfig.deny) ? { deny: [...staticBashConfig.deny] } : {}),
         };
       }
       if (aiAny.search_delegate_provider !== undefined) {
@@ -1228,6 +1226,17 @@ export class AICheckProvider extends CheckProvider {
       }
       if (aiAny.completion_prompt !== undefined) {
         aiConfig.completionPrompt = aiAny.completion_prompt as string;
+      }
+      if (aiAny.headers !== undefined && typeof aiAny.headers === 'object') {
+        const headers: Record<string, string> = {};
+        for (const [key, value] of Object.entries(aiAny.headers)) {
+          if (typeof value === 'string') {
+            headers[key] = String(EnvironmentResolver.resolveValue(value));
+          }
+        }
+        if (Object.keys(headers).length > 0) {
+          aiConfig.headers = headers;
+        }
       }
       if (aiAny.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1286,8 +1295,10 @@ export class AICheckProvider extends CheckProvider {
         resolveIsolatedWriterWorktree(
           writerSelector,
           _dependencyResults,
-          sessionInfo as { parentSessionId?: string; reuseSession?: boolean } &
-            import('./check-provider.interface').ExecutionContext,
+          sessionInfo as {
+            parentSessionId?: string;
+            reuseSession?: boolean;
+          } & import('./check-provider.interface').ExecutionContext,
           aiConfig
         );
         if (aiConfig.allowEdit === false) {
@@ -1336,8 +1347,7 @@ export class AICheckProvider extends CheckProvider {
       // worktree above.  Workspace projects may include sibling checkouts, so
       // applying the generic workspace folders here would widen that closed
       // boundary and overwrite its selected cwd.
-      const writerWorktreeIsBound =
-        aiConfig.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE;
+      const writerWorktreeIsBound = aiConfig.codexExecutionProfile === LUNA_ISOLATED_WRITER_PROFILE;
 
       if (
         !writerWorktreeIsBound &&
@@ -1417,7 +1427,11 @@ export class AICheckProvider extends CheckProvider {
           logger.debug(`[AI Provider]   workspaceRoot: ${workspaceRoot}`);
           logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
         }
-      } else if (!writerWorktreeIsBound && parentCtx && typeof parentCtx.workingDirectory === 'string') {
+      } else if (
+        !writerWorktreeIsBound &&
+        parentCtx &&
+        typeof parentCtx.workingDirectory === 'string'
+      ) {
         // Fallback: when workspace is not available (or disabled), still
         // constrain tools to the engine's working directory so ProbeAgent
         // operates inside the same logical root as the state machine. This
@@ -1506,7 +1520,11 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.retry !== undefined || aiAny.fallback !== undefined) {
         reject('requires fallback=false and retries=0');
       }
-      if (aiConfig.allowEdit === true || aiConfig.allowBash === true || aiAny.bashConfig !== undefined) {
+      if (
+        aiConfig.allowEdit === true ||
+        aiConfig.allowBash === true ||
+        aiAny.bashConfig !== undefined
+      ) {
         reject('rejects edit/create/bash capabilities');
       }
       if (
@@ -1527,7 +1545,10 @@ export class AICheckProvider extends CheckProvider {
       ) {
         reject('requires allowedTools exactly [search,extract,listFiles]');
       }
-      if ((config as any).reuse_ai_session === true || typeof (config as any).reuse_ai_session === 'string') {
+      if (
+        (config as any).reuse_ai_session === true ||
+        typeof (config as any).reuse_ai_session === 'string'
+      ) {
         reject('rejects session reuse');
       }
       if (sessionInfo?.reuseSession || sessionInfo?.parentSessionId) {
@@ -1869,10 +1890,7 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    if (
-      aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE &&
-      customToolsToLoad.length > 0
-    ) {
+    if (aiConfig.codexExecutionProfile === LUNA_READONLY_PROFILE && customToolsToLoad.length > 0) {
       throw new Error(
         `codex_execution_profile ${LUNA_READONLY_PROFILE} requires only Probe tools [search,extract,listFiles]`
       );
@@ -2265,16 +2283,10 @@ export class AICheckProvider extends CheckProvider {
           }
         : {};
       if (dynamicBashConfig.allow?.length) {
-        baseBashConfig.allow = [
-          ...(baseBashConfig.allow || []),
-          ...dynamicBashConfig.allow,
-        ];
+        baseBashConfig.allow = [...(baseBashConfig.allow || []), ...dynamicBashConfig.allow];
       }
       if (dynamicBashConfig.deny?.length) {
-        baseBashConfig.deny = [
-          ...(baseBashConfig.deny || []),
-          ...dynamicBashConfig.deny,
-        ];
+        baseBashConfig.deny = [...(baseBashConfig.deny || []), ...dynamicBashConfig.deny];
       }
       aiConfig.bashConfig = baseBashConfig;
       // Also enable bash if dynamic config provides commands

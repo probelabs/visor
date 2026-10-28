@@ -107,9 +107,7 @@ function resolveLunaReadonlyCwd(config: AIReviewConfig): string {
 
 function assertLunaReadonlyConfig(config: AIReviewConfig): void {
   if (config.codexExecutionProfile !== LUNA_READONLY_PROFILE) {
-    throw new Error(
-      `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
-    );
+    throw new Error(`Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`);
   }
   if (config.codexWorkingDirectoryFrom !== undefined) {
     throw new Error(
@@ -236,9 +234,7 @@ function resolveLunaIsolatedWriterCwd(config: AIReviewConfig): string {
 
 function assertLunaIsolatedWriterConfig(config: AIReviewConfig): void {
   if (config.codexExecutionProfile !== LUNA_ISOLATED_WRITER_PROFILE) {
-    throw new Error(
-      `Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`
-    );
+    throw new Error(`Unsupported codex_execution_profile: ${String(config.codexExecutionProfile)}`);
   }
   if (process.env.USE_CLAUDE_CODE === 'true') {
     throw new Error(
@@ -386,10 +382,14 @@ function warnGovernedRawItemFailure(
   })();
   try {
     if (typedGovernedFailure) {
-      const safeCheckName = typeof checkName === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(checkName)
-        ? checkName : 'unknown';
-      const safeNodeGenerationId = typeof nodeGenerationId === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
-        ? nodeGenerationId : 'unknown';
+      const safeCheckName =
+        typeof checkName === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(checkName)
+          ? checkName
+          : 'unknown';
+      const safeNodeGenerationId =
+        typeof nodeGenerationId === 'string' && SAFE_GOVERNED_INVOCATION_ID.test(nodeGenerationId)
+          ? nodeGenerationId
+          : 'unknown';
       logger.warn(
         JSON.stringify({
           category: 'probe_governed_failure',
@@ -458,8 +458,7 @@ function normalizeProviderRequestTimeout(data: unknown): SafeProviderRequestTime
       keys.length !== SAFE_TIMEOUT_REQUEST_KEYS.length ||
       keys.some(
         key =>
-          typeof key !== 'string' ||
-          !(SAFE_TIMEOUT_REQUEST_KEYS as readonly string[]).includes(key)
+          typeof key !== 'string' || !(SAFE_TIMEOUT_REQUEST_KEYS as readonly string[]).includes(key)
       )
     ) {
       return undefined;
@@ -1059,6 +1058,8 @@ export interface AIReviewConfig {
   negotiatedTimeoutMaxRequests?: number;
   negotiatedTimeoutMaxPerRequest?: number;
   gracefulStopDeadline?: number;
+  /** Custom headers to include in AI provider HTTP requests (e.g., for API gateway session tracking). */
+  headers?: Record<string, string>;
 }
 
 export interface AIDebugInfo {
@@ -1143,13 +1144,17 @@ export class AIReviewService {
       );
     }
     if (this.config.governedCodexTransport !== undefined) {
-      if (this.config.governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
-          this.config.codexExecutionProfile === undefined ||
-          typeof this.config.codexBin !== 'string' ||
-          !path.isAbsolute(this.config.codexBin) ||
-          typeof this.config.codexSha256 !== 'string' ||
-          !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(this.config.codexSha256)) {
-        throw new Error('governed Codex transport requires a governed profile and validated executable identity');
+      if (
+        this.config.governedCodexTransport !== 'exec-jsonl-default-auth-v1' ||
+        this.config.codexExecutionProfile === undefined ||
+        typeof this.config.codexBin !== 'string' ||
+        !path.isAbsolute(this.config.codexBin) ||
+        typeof this.config.codexSha256 !== 'string' ||
+        !/^(?:[0-9a-f]{64}|sha256:[0-9a-f]{64})$/.test(this.config.codexSha256)
+      ) {
+        throw new Error(
+          'governed Codex transport requires a governed profile and validated executable identity'
+        );
       }
     } else if (this.config.codexBin !== undefined || this.config.codexSha256 !== undefined) {
       throw new Error('governed Codex executable requires an explicit transport');
@@ -1338,13 +1343,8 @@ export class AIReviewService {
         parseSchema,
         sessionId: usedSessionId,
       } = timeoutMs > 0
-        ? await this.withTimeout(
-            call,
-            timeoutMs,
-            'AI review',
-            sessionId,
-            extender,
-            () => cleanupCreatedAgent(true)
+        ? await this.withTimeout(call, timeoutMs, 'AI review', sessionId, extender, () =>
+            cleanupCreatedAgent(true)
           )
         : await call;
       const processingTime = Date.now() - startTime;
@@ -1789,10 +1789,7 @@ export class AIReviewService {
         }
         resolve();
       };
-      const timer = setTimeout(
-        () => finish('timed_out'),
-        PROBE_AGENT_CLEANUP_TIMEOUT_MS
-      );
+      const timer = setTimeout(() => finish('timed_out'), PROBE_AGENT_CLEANUP_TIMEOUT_MS);
 
       let result: unknown;
       try {
@@ -2530,12 +2527,20 @@ ${this.escapeXml(processedFallbackDiff)}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     extender?: TimeoutExtender
-  ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown> }> {
+  ): Promise<{
+    response: string;
+    effectiveSchema?: string;
+    parseSchema?: string | Record<string, unknown>;
+  }> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       log('🎭 Using mock AI model/provider for testing (session reuse)');
       const response = await this.generateMockResponse(prompt, _checkName, schema);
-      return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema, parseSchema: schema };
+      return {
+        response,
+        effectiveSchema: typeof schema === 'object' ? 'custom' : schema,
+        parseSchema: schema,
+      };
     }
 
     log('🔄 Reusing existing ProbeAgent session for AI review...');
@@ -2954,7 +2959,12 @@ ${'='.repeat(60)}
     nodeGenerationId?: string,
     onAgentCreated?: (agent: TracedProbeAgent) => void,
     onCallFailure?: () => Promise<void> | void
-  ): Promise<{ response: string; effectiveSchema?: string; parseSchema?: string | Record<string, unknown>; sessionId: string }> {
+  ): Promise<{
+    response: string;
+    effectiveSchema?: string;
+    parseSchema?: string | Record<string, unknown>;
+    sessionId: string;
+  }> {
     // Derive a stable session ID for this call so the engine can reuse it later
     const sessionId =
       providedSessionId ||
@@ -3117,7 +3127,43 @@ If you receive a message that the time limit has been reached or your operation 
         (options as any).fallback = this.config.fallback;
       }
 
-      // Enable Edit and Create tools if configured
+      // Pass custom headers to ProbeAgent (resolve dynamic placeholders)
+      // Headers come from config (ai.headers in YAML) or env var AI_PROVIDER_HEADERS (JSON)
+      {
+        let rawHeaders: Record<string, string> | undefined = this.config.headers;
+        if (!rawHeaders || Object.keys(rawHeaders).length === 0) {
+          const envHeaders = process.env.AI_PROVIDER_HEADERS;
+          if (envHeaders) {
+            try {
+              rawHeaders = JSON.parse(envHeaders);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        if (rawHeaders && Object.keys(rawHeaders).length > 0) {
+          const resolvedHeaders: Record<string, string> = {};
+          for (const [key, value] of Object.entries(rawHeaders)) {
+            let resolved = value;
+            if (resolved.includes('${OTEL_TRACE_ID}')) {
+              try {
+                const span = otTrace.getSpan(require('@opentelemetry/api').context.active());
+                const traceId = span?.spanContext()?.traceId || '';
+                resolved = resolved.replace(/\$\{OTEL_TRACE_ID\}/g, traceId);
+              } catch {
+                resolved = resolved.replace(/\$\{OTEL_TRACE_ID\}/g, '');
+              }
+            }
+            if (resolved) {
+              resolvedHeaders[key] = resolved;
+            }
+          }
+          if (Object.keys(resolvedHeaders).length > 0) {
+            (options as any).providerHeaders = resolvedHeaders;
+          }
+        }
+      }
+
       // Enable Edit and Create tools if configured
       if (this.config.allowEdit !== undefined) {
         (options as any).allowEdit = this.config.allowEdit;
@@ -3275,6 +3321,19 @@ If you receive a message that the time limit has been reached or your operation 
         options.model = this.config.model;
       }
 
+      // Auto-inject AI gateway session tracking header when configured
+      const sessionHeaderName = process.env.AI_GATEWAY_SESSION_HEADER;
+      if (sessionHeaderName) {
+        try {
+          const activeSpan = otTrace.getActiveSpan();
+          const traceId = activeSpan?.spanContext?.()?.traceId;
+          if (traceId) {
+            const existing = (options as any).providerHeaders || {};
+            (options as any).providerHeaders = { ...existing, [sessionHeaderName]: traceId };
+          }
+        } catch {}
+      }
+
       // Profile-selected ordinary AI uses Probe's existing governed Codex
       // construction, while retaining the normal answer() API. The profile
       // is deliberately applied last so environment/provider defaults and
@@ -3330,9 +3389,11 @@ If you receive a message that the time limit has been reached or your operation 
         // Probe owns the exec launch and its public JSONL receipt validator.
         // This adapter carries only the explicit selector and caller-bound
         // executable identity; it does not parse or recreate that receipt.
-        (options as ProbeAgentOptions & Record<string, unknown>).governedCodexTransport = this.config.governedCodexTransport;
+        (options as ProbeAgentOptions & Record<string, unknown>).governedCodexTransport =
+          this.config.governedCodexTransport;
         (options as ProbeAgentOptions & Record<string, unknown>).codexBin = this.config.codexBin;
-        (options as ProbeAgentOptions & Record<string, unknown>).codexSha256 = this.config.codexSha256;
+        (options as ProbeAgentOptions & Record<string, unknown>).codexSha256 =
+          this.config.codexSha256;
       }
 
       // Governed Codex calls must not inherit Probe's ambient REQUEST_TIMEOUT:
@@ -3736,7 +3797,11 @@ ${'='.repeat(60)}
       } catch {
         // Preserve the original Probe failure if per-call cleanup itself fails.
       }
-      const handledGovernedFailure = warnGovernedRawItemFailure(error, _checkName, nodeGenerationId);
+      const handledGovernedFailure = warnGovernedRawItemFailure(
+        error,
+        _checkName,
+        nodeGenerationId
+      );
       if (handledGovernedFailure) throw error;
       console.error('❌ ProbeAgent failed:', error);
       throw new Error(formatUserFacingExecutionError(error));
@@ -4023,16 +4088,22 @@ ${'='.repeat(60)}
         isInlineSchema ||
         _schema === 'custom' ||
         (typeof _schema === 'string' && (_schema.startsWith('./') || _schema.endsWith('.json'))) ||
-        (typeof _schema === 'string' && _schema !== 'code-review' && !_schema.includes('output/')) ||
+        (typeof _schema === 'string' &&
+          _schema !== 'code-review' &&
+          !_schema.includes('output/')) ||
         (!_schema && looksLikeTextOutput);
 
-      const inlineSchema = isInlineSchema ? _schema as Record<string, unknown> : undefined;
-      const inlineProperties = inlineSchema?.properties && typeof inlineSchema.properties === 'object' && !Array.isArray(inlineSchema.properties)
-        ? inlineSchema.properties as Record<string, unknown>
-        : undefined;
+      const inlineSchema = isInlineSchema ? (_schema as Record<string, unknown>) : undefined;
+      const inlineProperties =
+        inlineSchema?.properties &&
+        typeof inlineSchema.properties === 'object' &&
+        !Array.isArray(inlineSchema.properties)
+          ? (inlineSchema.properties as Record<string, unknown>)
+          : undefined;
       const allowsInlineProperty = (key: string): boolean => {
         if (!inlineSchema) return true;
-        if (inlineProperties && Object.prototype.hasOwnProperty.call(inlineProperties, key)) return true;
+        if (inlineProperties && Object.prototype.hasOwnProperty.call(inlineProperties, key))
+          return true;
         return inlineSchema.additionalProperties !== false;
       };
 
