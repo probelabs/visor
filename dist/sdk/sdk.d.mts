@@ -1,3 +1,41 @@
+import * as _octokit_rest from '@octokit/rest';
+
+interface PRDiff {
+    filename: string;
+    additions: number;
+    deletions: number;
+    changes: number;
+    patch?: string;
+    status: 'added' | 'removed' | 'modified' | 'renamed';
+}
+interface PRComment {
+    id: number;
+    author: string;
+    body: string;
+    createdAt: string;
+    updatedAt: string;
+}
+interface PRInfo {
+    number: number;
+    title: string;
+    body: string;
+    author: string;
+    authorAssociation?: string;
+    base: string;
+    head: string;
+    files: PRDiff[];
+    totalAdditions: number;
+    totalDeletions: number;
+    eventType?: EventTrigger;
+    fullDiff?: string;
+    commitDiff?: string;
+    isIncremental?: boolean;
+    isIssue?: boolean;
+    eventContext?: Record<string, unknown>;
+    comments?: PRComment[];
+    labels?: string[];
+}
+
 interface AIDebugInfo {
     /** The prompt sent to the AI */
     prompt: string;
@@ -55,6 +93,17 @@ interface ReviewIssue {
     timestamp?: number;
     suggestion?: string;
     replacement?: string;
+}
+interface CheckResult {
+    checkName: string;
+    content: string;
+    group: string;
+    output?: unknown;
+    debug?: AIDebugInfo;
+    issues?: ReviewIssue[];
+}
+interface GroupedCheckResults {
+    [groupName: string]: CheckResult[];
 }
 interface ReviewSummary {
     issues?: ReviewIssue[];
@@ -435,7 +484,7 @@ interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout' | 'a2a' | 'utcp';
+type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout' | 'a2a' | 'utcp' | 'proof-admit' | 'proof-structural-inventory' | 'proof-catalog-revalidate' | 'proof-admitted-catalog' | 'governed-proof-inspect' | 'proof-project-reconcile';
 /**
  * Valid event triggers for checks
  */
@@ -536,6 +585,10 @@ interface AIProviderConfig {
     provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
     /** Model name to use */
     model?: string;
+    /** Closed execution profile for ordinary governed Luna workers. */
+    codex_execution_profile?: 'luna-xhigh-readonly-v1' | 'luna-xhigh-isolated-writer-v1';
+    /** Exact dependency check id that produced the isolated writer worktree. */
+    codex_working_directory_from?: string;
     /** API key (usually from environment variables) */
     apiKey?: string;
     /** Request timeout in milliseconds */
@@ -608,6 +661,8 @@ interface AIProviderConfig {
     negotiated_timeout_max_per_request?: number;
     /** Wind-down deadline in ms for sub-agents after graceful stop is triggered */
     graceful_stop_deadline?: number;
+    /** Custom headers to include in AI provider HTTP requests (e.g., for API gateway session tracking). Values support env var resolution (e.g., "${MY_VAR}") and the special placeholder "${OTEL_TRACE_ID}" for the current OTEL trace ID. */
+    headers?: Record<string, string>;
 }
 /**
  * Unified MCP server/tool entry - type detected by which properties are present
@@ -629,6 +684,8 @@ interface McpServerConfig {
     url?: string;
     /** Transport type */
     transport?: 'stdio' | 'sse' | 'http';
+    /** HTTP headers for SSE/HTTP transport (e.g. Authorization) */
+    headers?: Record<string, string>;
     /** Workflow ID or path (presence indicates workflow tool) */
     workflow?: string;
     /** Inputs to pass to workflow */
@@ -682,6 +739,66 @@ interface RateLimitConfig {
     backoff?: 'fixed' | 'exponential';
     /** Base delay for backoff in ms (default: 1000) */
     initial_delay_ms?: number;
+}
+/** A schema-bound candidate claim declaration. */
+interface ClaimTypeConfig {
+    /** JSON Schema used for strict candidate publication validation. */
+    schema: Record<string, unknown>;
+}
+/** Publish the raw terminal provider output as an exact claim type/version. */
+interface ClaimEmissionConfig {
+    claim: string;
+    from: 'output';
+}
+/** Require one active candidate claim of an exact type/version. */
+interface ClaimConsumptionConfig {
+    claim: string;
+    /** C1 root declarations require this explicitly; C2 templates default it to one. */
+    cardinality?: 'one';
+    /** Immutable provider-context binding used by generated template checks. */
+    as?: string;
+}
+/** Compile one terminal catalog claim into stable keyed template instances. */
+interface ExpansionConfig {
+    /** Catalog claim emitted by this same root check. */
+    claim: string;
+    /** Named subgraph template to instantiate for every keyed catalog item. */
+    template: string;
+    /** RFC 6901 pointer from the catalog payload to its item array. */
+    items_pointer: string;
+    /** RFC 6901 pointer, relative to one item, to its stable key. */
+    key_pointer: string;
+    /** Claim published by the controller for one schema-valid item. */
+    item_claim: string;
+    /** Optional deterministic terminal coverage projection for the selected catalog. */
+    coverage?: {
+        /** Claim emitted exactly once by the template's terminal sink operation. */
+        outcome_claim: string;
+        /** RFC 6901 pointer from the outcome payload to its terminal class. */
+        class_pointer: string;
+    };
+}
+/**
+ * Hold one parent-template node open until the terminal node of every
+ * current child instance produced by a sibling expansion has completed.
+ * This is deliberately limited to one sibling expansion owner and one child
+ * terminal node; it is not a general fan-in/cardinality declaration.
+ */
+interface WaitForExpansionConfig {
+    /** Sibling node in this template that owns the depth-2 expansion. */
+    owner: string;
+    /** Terminal node key in the owner's child template. */
+    terminal_node: string;
+}
+/** One externally supplied claim binding for a generated subgraph template. */
+interface SubgraphInputConfig {
+    name: string;
+    claim: string;
+}
+/** A statically compiled, one-level generated subgraph template. */
+interface SubgraphConfig {
+    input: SubgraphInputConfig;
+    checks: Record<string, CheckConfig>;
 }
 /**
  * Configuration for a single check
@@ -813,8 +930,24 @@ interface CheckConfig {
     timeout?: number;
     /** Check IDs that this check depends on (optional). Accepts single string or array. */
     depends_on?: string | string[];
+    /**
+     * Candidate claims emitted from this check's raw terminal output.
+     * @minItems 1
+     */
+    emits?: ClaimEmissionConfig[];
+    /**
+     * Exact candidate claims required before this check may run.
+     * @minItems 1
+     */
+    consumes?: ClaimConsumptionConfig[];
+    /** Optional C2 keyed expansion owned by this root check. */
+    expand?: ExpansionConfig;
+    /** Optional bounded completion barrier for a nested expansion. */
+    wait_for_expansion?: WaitForExpansionConfig;
     /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
     group?: string;
+    /** Static Graph-v2 generated-attempt resource group; at most one runs at a time. */
+    resource_group?: string;
     /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
     schema?: string | Record<string, unknown>;
     /**
@@ -838,6 +971,18 @@ interface CheckConfig {
     failure_conditions?: FailureConditions;
     /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
     tags?: string[];
+    /**
+     * Debounce window in milliseconds. When set, multiple invocations of this
+     * step (across concurrent engine instances) within the window are coalesced
+     * — only the last invocation actually executes after the window expires.
+     * Useful for steps that should run once after a burst of triggers settles.
+     *
+     * The debounce key defaults to the step's fully-qualified check ID.
+     * Use `debounce_key` to group different steps under the same debounce.
+     */
+    debounce?: number;
+    /** Custom debounce key. Steps sharing the same key share the same debounce window. */
+    debounce_key?: string;
     /**
      * Operational criticality of this step. Drives default safety policies
      * (contracts, retries, loop budgets) at load time. Behavior can still be
@@ -897,6 +1042,12 @@ interface CheckConfig {
      */
     /** Message template for log checks */
     message?: string;
+    /** Closed governed Proof inspection invocation fields. */
+    instructions?: string;
+    invocation?: Record<string, unknown>;
+    invocation_digest?: string;
+    result_schema?: string;
+    profile?: string;
     /** Log level for log checks */
     level?: 'debug' | 'info' | 'warn' | 'error';
     /** Include PR context in log output */
@@ -1538,8 +1689,8 @@ interface SlackMessageTrigger {
 interface StaticCronJob {
     /** Cron expression (e.g., "0 9 * * 1" for every Monday at 9am) */
     schedule: string;
-    /** Workflow/check ID to run */
-    workflow: string;
+    /** Workflow/check ID to run. Omit to treat inputs.text as a user message through the full pipeline. */
+    workflow?: string;
     /** Optional workflow inputs */
     inputs?: Record<string, unknown>;
     /** Output destination configuration */
@@ -1704,6 +1855,10 @@ interface VisorConfig {
     steps?: Record<string, CheckConfig>;
     /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */
     checks?: Record<string, CheckConfig>;
+    /** Exact versioned candidate-claim schemas. Presence activates Graph v2 C1 semantics. */
+    claim_types?: Record<string, ClaimTypeConfig>;
+    /** Named one-level templates used by C2 keyed expansion declarations. */
+    subgraphs?: Record<string, SubgraphConfig>;
     /** Output configuration (optional - defaults provided) */
     output?: OutputConfig;
     /** HTTP server configuration for receiving webhooks */
@@ -1879,6 +2034,11 @@ interface SlackTelemetryConfig {
  */
 interface CheckExecutionStats {
     checkName: string;
+    /**
+     * Logical check id for a generated execution row. This is intentionally
+     * optional: legacy/top-level rows continue to be identified by checkName.
+     */
+    logicalCheckName?: string;
     totalRuns: number;
     successfulRuns: number;
     failedRuns: number;
@@ -1901,6 +2061,23 @@ interface CheckExecutionStats {
     forEachPreview?: string[];
 }
 /**
+ * A failure that is still unresolved at the terminal execution frontier.
+ *
+ * This is deliberately distinct from failedRuns: routing may legitimately
+ * record an earlier failed attempt before the same check succeeds.
+ */
+interface ExecutionFailureDiagnostic {
+    checkName: string;
+    kind: 'exception' | 'execution' | 'dependency';
+    message: string;
+    ruleId?: string;
+    skipReason?: CheckExecutionStats['skipReason'];
+    scope?: Array<{
+        check: string;
+        index: number;
+    }>;
+}
+/**
  * Overall execution statistics for all checks
  */
 interface ExecutionStatistics {
@@ -1911,56 +2088,41 @@ interface ExecutionStatistics {
     skippedChecks: number;
     totalDuration: number;
     checks: CheckExecutionStats[];
+    /** Failures still present in the final per-check execution state. */
+    unresolvedFailures?: ExecutionFailureDiagnostic[];
 }
-
-interface GitFileChange {
-    filename: string;
-    status: 'added' | 'removed' | 'modified' | 'renamed';
-    additions: number;
-    deletions: number;
-    changes: number;
-    content?: string;
-    patch?: string;
-    truncated?: boolean;
+/**
+ * Result of executing checks, including both the grouped results and execution statistics
+ */
+interface ExecutionResult {
+    results: GroupedCheckResults;
+    statistics: ExecutionStatistics;
 }
-interface GitRepositoryInfo {
-    title: string;
-    body: string;
-    author: string;
-    base: string;
-    head: string;
-    files: GitFileChange[];
-    totalAdditions: number;
-    totalDeletions: number;
-    isGitRepository: boolean;
-    workingDirectory: string;
-}
-
-interface AnalysisResult {
-    repositoryInfo: GitRepositoryInfo;
-    reviewSummary: ReviewSummary;
-    executionTime: number;
-    timestamp: string;
-    checksExecuted: string[];
-    executionStatistics?: ExecutionStatistics;
-    debug?: DebugInfo;
-    failureConditions?: FailureConditionResult[];
-    isCodeReview?: boolean;
-}
-interface DebugInfo {
-    provider?: string;
-    model?: string;
-    processingTime?: number;
-    parallelExecution?: boolean;
-    checksExecuted?: string[];
-    totalApiCalls?: number;
-    apiCallDetails?: Array<{
-        checkName: string;
-        provider: string;
-        model: string;
-        processingTime: number;
-        success: boolean;
-    }>;
+/**
+ * Options for executing checks
+ */
+interface CheckExecutionOptions {
+    checks: string[];
+    workingDirectory?: string;
+    showDetails?: boolean;
+    timeout?: number;
+    maxParallelism?: number;
+    failFast?: boolean;
+    outputFormat?: string;
+    config?: VisorConfig;
+    debug?: boolean;
+    tagFilter?: TagFilter;
+    webhookContext?: {
+        webhookData: Map<string, unknown>;
+    };
+    githubChecks?: {
+        enabled: boolean;
+        octokit?: _octokit_rest.Octokit;
+        owner?: string;
+        repo?: string;
+        headSha?: string;
+        prNumber?: number;
+    };
 }
 
 interface EventEnvelope<T = any> {
@@ -1993,10 +2155,143 @@ declare class EventBus {
     emit(event: AnyEvent | EventEnvelope): Promise<void>;
 }
 
+type GovernedWireMode = 'generic' | 'proof';
+
+/** Proof roles constants: request max includes bytes before execution; output max includes LF. */
+declare const PROOF_ONBOARDING_STAGE_CONTEXT_VERSION = "proof.onboarding-stage-context/v1";
+declare const PROOF_ONBOARDING_STAGE_SPEC_REVIEW = "spec_review";
+type OnboardingStageContextV1 = Readonly<{
+    version: typeof PROOF_ONBOARDING_STAGE_CONTEXT_VERSION;
+    stage_id: typeof PROOF_ONBOARDING_STAGE_SPEC_REVIEW;
+    prior_candidate: Record<string, unknown> | string;
+    prior_admission: Record<string, unknown> | string;
+    prior_admission_claim_id: string;
+    prior_admission_payload_fingerprint: string;
+}>;
+
+declare const GOVERNED_PROOF_CONTEXT_VERSION = "visor.proof-runtime-context/v1";
+declare const GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION = "visor.proof-component-reinspection-context/v1";
+/** Closed context used by the native component admission suffix.  It is
+ * deliberately separate from the legacy one-WorkItem envelope so old
+ * checkpoints cannot acquire a reviewed aggregate implicitly. */
+declare const GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION = "visor.proof-reviewed-component-context/v1";
+declare const GOVERNED_PROOF_PROJECT_CONTEXT_VERSION = "visor.proof-project-discovery-context/v1";
+interface ProofComponentInvocationAuthorityV1 {
+    readonly work_item_digest: string;
+    readonly subject: Readonly<Record<string, unknown>>;
+    readonly candidate: unknown;
+    readonly admission: unknown;
+    readonly work_item: unknown;
+    readonly catalog_revalidation_receipt: unknown;
+}
+interface GovernedProofRuntimeContextClaimV1 {
+    readonly claimId: string;
+    readonly claim: string;
+    readonly payloadFingerprint: string;
+    readonly scope: Readonly<ManagedRunBindingV1['scope']>;
+    readonly payload: unknown;
+}
+interface GovernedProofRuntimeContextV1 {
+    readonly version: typeof GOVERNED_PROOF_CONTEXT_VERSION;
+    readonly component: GovernedProofRuntimeContextClaimV1;
+    readonly authority: GovernedProofRuntimeContextClaimV1;
+}
+interface GovernedProofComponentReinspectionContextV1 {
+    readonly version: typeof GOVERNED_PROOF_REINSPECTION_CONTEXT_VERSION;
+    readonly component_id: string;
+    readonly changed_paths: readonly string[];
+    readonly historical_work_item: {
+        readonly claim_id: string;
+        readonly payload_fingerprint: string;
+    };
+    readonly current_work_item: {
+        readonly claim_id: string;
+        readonly payload_fingerprint: string;
+    };
+    readonly prior_candidate: {
+        readonly claim_id: string;
+        readonly payload_fingerprint: string;
+        readonly result_digest: string;
+        readonly payload: unknown;
+    };
+    readonly prior_admission: {
+        readonly claim_id: string;
+        readonly payload_fingerprint: string;
+    };
+}
+interface GovernedProofProjectDiscoveryContextV1 {
+    readonly version: typeof GOVERNED_PROOF_PROJECT_CONTEXT_VERSION;
+    readonly project: GovernedProofRuntimeContextClaimV1;
+    readonly current_inventory: GovernedProofRuntimeContextClaimV1;
+}
+interface GovernedProofReviewedComponentContextV1 {
+    readonly version: typeof GOVERNED_PROOF_REVIEWED_COMPONENT_CONTEXT_VERSION;
+    readonly component: GovernedProofRuntimeContextClaimV1;
+    readonly reviewed: GovernedProofRuntimeContextClaimV1;
+}
+type GovernedProofRuntimeContext = GovernedProofRuntimeContextV1 | GovernedProofProjectDiscoveryContextV1 | GovernedProofReviewedComponentContextV1;
+/**
+ * Candidate evidence remains v1 for wire compatibility; the optional context
+ * fields are mandatory for the two-claim onboarding profile. Legacy one-claim
+ * EXP-0208 runs intentionally continue to validate without them.
+ */
+interface ProofCandidateEvidenceV1 {
+    readonly version: 'visor.proof-candidate-evidence/v1';
+    readonly role: {
+        readonly invocation: Record<string, unknown>;
+        readonly invocationDigest: string;
+    };
+    readonly probe: {
+        readonly attestation: Record<string, unknown>;
+        readonly resultIdentity: Record<string, unknown>;
+    };
+    readonly context?: GovernedProofRuntimeContext;
+    readonly contextDigest?: string;
+    readonly reinspectionContext?: GovernedProofComponentReinspectionContextV1;
+    readonly reinspectionContextDigest?: string;
+}
+
+interface CandidateClaimInputBase {
+    readonly claimId: string;
+    readonly claim: string;
+    readonly payload: unknown;
+    readonly payloadFingerprint: string;
+    readonly producerCheckId: string;
+    readonly scope: Readonly<ScopePath> | KeyedScopePath;
+    readonly parentClaimIds: readonly string[];
+    /** Generated claim payload wire mode; absent only on legacy root claim views. */
+    readonly wireMode?: GovernedWireMode;
+    /** Graph-owned governed evidence, present only for an admitted candidate claim. */
+    readonly proofAdmission?: ProofCandidateEvidenceV1;
+}
+/** Exact, immutable candidate claim view granted to a consuming provider. */
+type CandidateClaimInput = CandidateClaimInputBase & ({
+    /** Root and generated claims retain their actual producer attempt authority. */
+    readonly provenance?: 'attempt';
+    readonly attemptId: string;
+    readonly fence: number;
+} | {
+    /** Controller item claims are derived from an expansion and have no fake attempt. */
+    readonly provenance: 'controller';
+    readonly catalogClaimId: string;
+    readonly incarnation: number;
+    readonly attemptId?: never;
+    readonly fence?: never;
+});
 /**
  * Execution context passed to check providers
  */
 interface ExecutionContext {
+    /**
+     * Explicit run-scoped governed Codex transport.  This is intentionally a
+     * closed selector rather than a provider/config switch: ordinary checks
+     * remain on their existing Probe transport when it is absent.
+     */
+    governedCodexTransport?: 'exec-jsonl-default-auth-v1';
+    /** Absolute caller-selected Codex executable for the governed exec transport. */
+    codexBin?: string;
+    /** Caller-supplied SHA-256 (bare or sha256:-prefixed); Probe revalidates it. */
+    codexSha256?: string;
     /** Session information for AI session reuse */
     parentSessionId?: string;
     reuseSession?: boolean;
@@ -2016,6 +2311,19 @@ interface ExecutionContext {
     workflowInputs?: Record<string, unknown>;
     /** Custom arguments passed from on_init 'with' directive */
     args?: Record<string, unknown>;
+    /** Exact declared candidate claims. No global/nearest output fallback is applied. */
+    claims?: Readonly<Record<string, CandidateClaimInput>>;
+    /** Journal-derived dynamic node identity; present only for generated C2 work. */
+    nodeInstanceId?: string;
+    /** Journal-derived active generation identity; present only for generated C2 work. */
+    nodeGenerationId?: string;
+    /** Exact immutable keyed scope for generated C2 work. */
+    scope?: Readonly<ScopePath> | KeyedScopePath;
+    /** Controller-owned, activation-time Proof component authority. It is never
+     * read from authored config or a caller-provided provider option. */
+    proofComponentAuthority?: ProofComponentInvocationAuthorityV1;
+    /** Controller-only Proof P1 context for the exact spec-review stage. */
+    proofOnboardingStageContext?: OnboardingStageContextV1;
     /** SDK hooks for human input and check completion */
     hooks?: {
         onHumanInput?: (request: HumanInputRequest) => Promise<string>;
@@ -2027,7 +2335,7 @@ interface ExecutionContext {
         mockForStep?: (step: string) => unknown | undefined;
         /** Returns true if the mock for a step has been consumed (for loop termination) */
         isMockExhausted?: (step: string) => boolean;
-        /** Called when a check completes - useful for streaming TUI updates */
+        /** Called when a check reaches a terminal completed/errored state - useful for streaming TUI updates */
         onCheckComplete?: (info: {
             checkId: string;
             result: {
@@ -2076,6 +2384,955 @@ interface ExecutionContext {
     responseCapture?: (text: string) => void;
 }
 
+type ClaimRuntimeEvent = AttemptStartedEvent | ClaimPublishedEvent | CheckScheduledEvent | AttemptCompletedEvent | AttemptFailedEvent;
+interface RuntimeEventBase {
+    readonly version: 1;
+    readonly eventId: number;
+    readonly sessionId: string;
+    readonly checkId: string;
+    readonly scope: ScopePath;
+    readonly attemptId: string;
+    readonly fence: number;
+}
+interface AttemptStartedEvent extends RuntimeEventBase {
+    readonly type: 'AttemptStarted';
+}
+interface ClaimPublishedEvent extends RuntimeEventBase {
+    readonly type: 'ClaimPublished';
+    readonly claimId: string;
+    readonly claim: string;
+    readonly payload: unknown;
+    readonly payloadFingerprint: string;
+    readonly producerCheckId: string;
+    readonly parentClaimIds: readonly string[];
+}
+interface CheckScheduledEvent extends RuntimeEventBase {
+    readonly type: 'CheckScheduled';
+    readonly claimIds: readonly string[];
+}
+interface AttemptCompletedEvent extends RuntimeEventBase {
+    readonly type: 'AttemptCompleted';
+}
+interface AttemptFailedEvent extends RuntimeEventBase {
+    readonly type: 'AttemptFailed';
+    readonly reason: string;
+}
+
+interface IndexedScopeSegment {
+    readonly kind: 'indexed';
+    readonly check: string;
+    readonly index: number;
+}
+interface KeyedScopeSegment {
+    readonly kind: 'keyed';
+    readonly expansionOwnerCheck: string;
+    readonly key: string;
+    readonly subgraphInstanceId: string;
+}
+type TaggedScopeSegment = IndexedScopeSegment | KeyedScopeSegment;
+type TaggedScopePath = readonly TaggedScopeSegment[];
+type RootScopePath = readonly [];
+type LevelOneKeyedScopePath = readonly [KeyedScopeSegment];
+/** A generated instance has one keyed segment per expansion ancestor. */
+type KeyedScopePath = readonly [KeyedScopeSegment, ...KeyedScopeSegment[]];
+type NodeGenerationStatus = 'ready' | 'running' | 'completed' | 'failed' | 'inactive';
+type CatalogRequestStatus = 'pending' | 'running' | 'completed' | 'failed';
+interface ManagedRunBindingV1 {
+    readonly managedRunId: string;
+    readonly sessionId: string;
+    readonly checkId: string;
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly attemptId: string;
+    readonly fence: number;
+}
+type ManagedRunCleanupStatus = 'clean' | 'unverified';
+type ManagedRunControllerDecision = 'completed' | 'failed';
+type ManagedRunFailureCode = 'MANAGED_HANDLE_INVALID' | 'MANAGED_BINDING_MISMATCH' | 'MANAGED_START_FAILED' | 'MANAGED_STARTED_RECEIPT_INVALID' | 'MANAGED_OUTCOME_FAILED' | 'MANAGED_OUTCOME_RECEIPT_INVALID' | 'MANAGED_DEADLINE_EXCEEDED' | 'MANAGED_CANCEL_FAILED' | 'MANAGED_CANCEL_RECEIPT_INVALID' | 'MANAGED_CLOSE_FAILED' | 'MANAGED_CLEANUP_RECEIPT_INVALID' | 'MANAGED_SANDBOX_UNSUPPORTED' | 'MANAGED_DEBOUNCE_UNSUPPORTED' | 'MANAGED_FATAL_SUMMARY' | 'MANAGED_FAIL_IF' | 'MANAGED_HALT_EXECUTION' | 'MANAGED_CLAIM_VALIDATION_FAILED' | 'MANAGED_POST_PROVIDER_FAILED';
+type ManagedRunAcquisitionFailureCode = 'MANAGED_HANDLE_INVALID' | 'MANAGED_BINDING_MISMATCH' | 'MANAGED_START_FAILED' | 'MANAGED_SANDBOX_UNSUPPORTED' | 'MANAGED_DEBOUNCE_UNSUPPORTED';
+interface InstanceEventBase {
+    readonly version: 1;
+    readonly eventId: number;
+    readonly sessionId: string;
+    readonly scope: TaggedScopePath;
+}
+interface CatalogReconciliationRequestedEvent extends InstanceEventBase {
+    readonly type: 'CatalogReconciliationRequested';
+    readonly scope: RootScopePath;
+    readonly requestId: string;
+    readonly requestOrdinal: number;
+    readonly expansionOwnerCheck: string;
+    readonly status: 'pending';
+}
+interface SubgraphExpandedEvent extends InstanceEventBase {
+    readonly type: 'SubgraphExpanded';
+    readonly scope: KeyedScopePath;
+    readonly expansionOwnerCheck: string;
+    readonly graphSemanticDigest: string;
+    readonly expansionSpecDigest: string;
+    readonly templateDigest: string;
+    readonly parentSubgraphInstanceId: string | null;
+    readonly expansionOwnerNodeInstanceId?: string;
+    readonly catalogClaimRef?: string;
+    readonly catalogClaimId: string;
+    readonly itemKey: string;
+    readonly subgraphInstanceId: string;
+    readonly nodeInstanceIdsByTemplateNode: Readonly<Record<string, string>>;
+}
+/** One authenticated aggregate record for the current Proof catalog. */
+interface ProofCurrentCatalogAuthorityRecordedEvent extends InstanceEventBase {
+    readonly type: 'ProofCurrentCatalogAuthorityRecorded';
+    readonly scope: LevelOneKeyedScopePath;
+    readonly projectSubgraphInstanceId: string;
+    readonly sourceCatalogClaimId: string;
+    readonly previousAuthorityId: string;
+    readonly authorityId: string;
+    readonly revalidationBytesBase64: string;
+    readonly workItemsBytesBase64: string;
+}
+/** Atomic marker for the replacement suffix derived from one current Proof
+ * authority. The following mutationEventCount events are part of this batch. */
+interface ProofCurrentCatalogAuthorityAppliedEvent extends InstanceEventBase {
+    readonly type: 'ProofCurrentCatalogAuthorityApplied';
+    readonly scope: LevelOneKeyedScopePath;
+    readonly projectSubgraphInstanceId: string;
+    readonly authorityId: string;
+    readonly mutationEventCount: number;
+    readonly mutationEventsDigest: string;
+}
+interface ControllerItemClaimPublishedEvent extends InstanceEventBase {
+    readonly type: 'ControllerItemClaimPublished';
+    readonly scope: KeyedScopePath;
+    readonly expansionOwnerCheck: string;
+    readonly expansionSpecDigest: string;
+    readonly catalogClaimId: string;
+    readonly itemKey: string;
+    readonly subgraphInstanceId: string;
+    readonly incarnation: number;
+    readonly claimId: string;
+    readonly claim: string;
+    readonly payload: unknown;
+    readonly payloadFingerprint: string;
+    readonly parentClaimIds: readonly [string];
+}
+interface NodeGenerationInactivatedEvent extends InstanceEventBase {
+    readonly type: 'NodeGenerationInactivated';
+    readonly scope: KeyedScopePath;
+    readonly subgraphInstanceId: string;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly incarnation: number;
+    readonly outputClaimIds: readonly string[];
+    readonly reason: 'superseded';
+}
+interface NodeGenerationActivatedEvent extends InstanceEventBase {
+    readonly type: 'NodeGenerationActivated';
+    readonly scope: KeyedScopePath;
+    readonly subgraphInstanceId: string;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly templateNodeKey: string;
+    readonly checkId: string;
+    readonly incarnation: number;
+    readonly itemFingerprint: string;
+    readonly executionConfigDigest: string;
+    readonly activeInputClaimIds: readonly string[];
+    readonly nestedExpansionCatalogClaimRef?: string;
+    readonly expansionBarrierDigest?: string;
+}
+interface SubgraphTombstonedEvent extends InstanceEventBase {
+    readonly type: 'SubgraphTombstoned';
+    readonly scope: KeyedScopePath;
+    readonly expansionOwnerCheck: string;
+    readonly sourceCatalogClaimId: string;
+    readonly itemKey: string;
+    readonly subgraphInstanceId: string;
+    readonly lastIncarnation: number;
+    readonly nodeGenerationIds: readonly string[];
+    readonly outputClaimIds: readonly string[];
+}
+interface BoundAttemptEventBase extends InstanceEventBase {
+    readonly checkId: string;
+    readonly attemptId: string;
+    readonly fence: number;
+}
+interface GeneratedAttemptStartedEvent extends BoundAttemptEventBase {
+    readonly type: 'AttemptStarted';
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+}
+interface GeneratedCheckScheduledEvent extends BoundAttemptEventBase {
+    readonly type: 'CheckScheduled';
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly claimIds: readonly string[];
+}
+interface GeneratedClaimPublishedEvent extends BoundAttemptEventBase {
+    readonly type: 'ClaimPublished';
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly claimId: string;
+    readonly claim: string;
+    readonly payload: unknown;
+    readonly payloadFingerprint: string;
+    readonly producerCheckId: string;
+    readonly parentClaimIds: readonly string[];
+    readonly wireMode: GovernedWireMode;
+    readonly proofCandidateEvidence?: ProofCandidateEvidenceV1;
+    readonly proofCandidateEvidenceFingerprint?: string;
+}
+interface GeneratedAttemptCompletedEvent extends BoundAttemptEventBase {
+    readonly type: 'AttemptCompleted';
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+}
+interface GeneratedAttemptFailedEvent extends BoundAttemptEventBase {
+    readonly type: 'AttemptFailed';
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly reason: string;
+}
+/**
+ * Explicit operator-authorized retry of one failed generated attempt.  This
+ * event never rewrites the failed attempt: it records the exact failed
+ * generation/input identity and only reopens that generation for a fresh
+ * allocator-issued attempt.  The caller must explicitly classify the prior
+ * boundary as absent, safely idempotent, or an isolated draft replay.  The
+ * latter records a retained disposable writer checkout; it does not claim
+ * byte convergence, approval, or absence of side effects.
+ */
+type GeneratedAttemptRetrySideEffects = 'absent' | 'safely_idempotent' | 'isolated_draft_replay';
+interface GeneratedAttemptRetryRequestedEvent extends InstanceEventBase {
+    readonly type: 'AttemptRetryRequested';
+    readonly scope: KeyedScopePath;
+    readonly nodeInstanceId: string;
+    readonly nodeGenerationId: string;
+    readonly checkId: string;
+    readonly incarnation: number;
+    readonly itemFingerprint: string;
+    readonly executionConfigDigest: string;
+    readonly activeInputClaimIds: readonly string[];
+    readonly priorAttemptId: string;
+    readonly priorFence: number;
+    readonly priorFailureReason: string;
+    readonly externalSideEffects: GeneratedAttemptRetrySideEffects;
+}
+interface ManagedRunEventBase extends InstanceEventBase {
+    readonly scope: KeyedScopePath;
+    readonly binding: ManagedRunBindingV1;
+}
+interface ManagedRunAcquisitionFailedEvent extends ManagedRunEventBase {
+    readonly type: 'ManagedRunAcquisitionFailed';
+    readonly failureCode: ManagedRunAcquisitionFailureCode;
+}
+interface ManagedRunAcquiredEvent extends ManagedRunEventBase {
+    readonly type: 'ManagedRunAcquired';
+}
+interface ManagedRunStartedEvent extends ManagedRunEventBase {
+    readonly type: 'ManagedRunStarted';
+}
+interface ManagedRunCancelRequestedEvent extends ManagedRunEventBase {
+    readonly type: 'ManagedRunCancelRequested';
+    readonly reason: 'deadline';
+}
+interface ManagedRunTerminatedEvent extends ManagedRunEventBase {
+    readonly type: 'ManagedRunTerminated';
+    readonly cleanupStatus: ManagedRunCleanupStatus;
+    readonly controllerDecision: ManagedRunControllerDecision;
+    readonly failureCode: ManagedRunFailureCode | null;
+}
+interface CatalogRequestAttemptStartedEvent extends BoundAttemptEventBase {
+    readonly type: 'AttemptStarted';
+    readonly scope: RootScopePath;
+    readonly requestId: string;
+}
+interface CatalogRequestCheckScheduledEvent extends BoundAttemptEventBase {
+    readonly type: 'CheckScheduled';
+    readonly scope: RootScopePath;
+    readonly requestId: string;
+    readonly claimIds: readonly string[];
+}
+interface CatalogRequestAttemptCompletedEvent extends BoundAttemptEventBase {
+    readonly type: 'AttemptCompleted';
+    readonly scope: RootScopePath;
+    readonly requestId: string;
+    readonly catalogClaimId: string;
+}
+interface CatalogRequestAttemptFailedEvent extends BoundAttemptEventBase {
+    readonly type: 'AttemptFailed';
+    readonly scope: RootScopePath;
+    readonly requestId: string;
+    readonly reason: string;
+}
+type InstanceRuntimeEvent = CatalogReconciliationRequestedEvent | SubgraphExpandedEvent | ProofCurrentCatalogAuthorityRecordedEvent | ProofCurrentCatalogAuthorityAppliedEvent | ControllerItemClaimPublishedEvent | NodeGenerationInactivatedEvent | NodeGenerationActivatedEvent | SubgraphTombstonedEvent | GeneratedAttemptStartedEvent | GeneratedCheckScheduledEvent | GeneratedClaimPublishedEvent | GeneratedAttemptCompletedEvent | GeneratedAttemptFailedEvent | GeneratedAttemptRetryRequestedEvent | ManagedRunAcquisitionFailedEvent | ManagedRunAcquiredEvent | ManagedRunStartedEvent | ManagedRunCancelRequestedEvent | ManagedRunTerminatedEvent | CatalogRequestAttemptStartedEvent | CatalogRequestCheckScheduledEvent | CatalogRequestAttemptCompletedEvent | CatalogRequestAttemptFailedEvent;
+interface CatalogSelectedItem {
+    readonly key: string;
+    readonly itemFingerprint: string;
+}
+interface CatalogRequestProjection {
+    readonly requestId: string;
+    readonly requestOrdinal: number;
+    readonly sessionId: string;
+    readonly expansionOwnerCheck: string;
+    readonly status: CatalogRequestStatus;
+    readonly catalogClaimId?: string;
+    readonly attemptId?: string;
+    readonly fence?: number;
+    readonly reason?: string;
+}
+interface SubgraphInstanceProjection {
+    readonly sessionId: string;
+    readonly expansionOwnerCheck: string;
+    readonly graphSemanticDigest: string;
+    readonly expansionSpecDigest: string;
+    readonly templateDigest: string;
+    readonly itemKey: string;
+    readonly subgraphInstanceId: string;
+    readonly scope: KeyedScopePath;
+    readonly catalogClaimId: string;
+    readonly parentSubgraphInstanceId?: string;
+    readonly expansionOwnerNodeInstanceId?: string;
+    readonly catalogClaimRef?: string;
+    readonly catalogProducerNodeGenerationId?: string;
+    readonly nodeInstanceIdsByTemplateNode: Readonly<Record<string, string>>;
+    readonly status: 'active' | 'tombstoned';
+    readonly incarnation: number;
+    readonly activeItemClaimId?: string;
+    readonly tombstoneCatalogClaimId?: string;
+}
+interface NodeInstanceProjection {
+    readonly nodeInstanceId: string;
+    readonly subgraphInstanceId: string;
+    readonly templateNodeKey: string;
+    readonly scope: KeyedScopePath;
+}
+interface NodeGenerationProjection {
+    readonly nodeGenerationId: string;
+    readonly nodeInstanceId: string;
+    readonly subgraphInstanceId: string;
+    readonly templateNodeKey: string;
+    readonly checkId: string;
+    readonly scope: KeyedScopePath;
+    readonly incarnation: number;
+    readonly itemFingerprint: string;
+    readonly executionConfigDigest: string;
+    readonly activeInputClaimIds: readonly string[];
+    readonly nestedExpansionCatalogClaimRef?: string;
+    readonly expansionBarrierDigest?: string;
+    readonly status: NodeGenerationStatus;
+    readonly attemptId?: string;
+    readonly fence?: number;
+    readonly scheduled: boolean;
+    readonly completedOutputClaimIds: readonly string[];
+    readonly reason?: string;
+}
+interface InstanceClaimProjection {
+    readonly claimId: string;
+    readonly claim: string;
+    readonly payload: unknown;
+    readonly payloadFingerprint: string;
+    readonly producerCheckId: string;
+    readonly producerAttemptId?: string;
+    readonly producerFence?: number;
+    readonly controllerCatalogClaimId?: string;
+    readonly parentClaimIds: readonly string[];
+    readonly wireMode: GovernedWireMode;
+    readonly scope: KeyedScopePath;
+    readonly active: boolean;
+    readonly kind: 'controller-item' | 'generated-output';
+    readonly subgraphInstanceId: string;
+    readonly incarnation: number;
+    readonly nodeGenerationId?: string;
+    readonly proofCandidateEvidence?: ProofCandidateEvidenceV1;
+    readonly proofCandidateEvidenceFingerprint?: string;
+}
+interface ManagedRunProjection {
+    readonly binding: ManagedRunBindingV1;
+    readonly status: 'acquisition_failed' | 'acquired' | 'started' | 'cancel_requested' | 'terminated';
+    readonly cleanupStatus?: ManagedRunCleanupStatus;
+    readonly controllerDecision?: ManagedRunControllerDecision;
+    readonly failureCode?: ManagedRunFailureCode;
+    readonly cancellationRequested?: true;
+}
+interface InstanceProjection {
+    readonly lastEventId: number;
+    readonly requestsById: Readonly<Record<string, CatalogRequestProjection>>;
+    readonly requestOrder: readonly string[];
+    readonly instancesById: Readonly<Record<string, SubgraphInstanceProjection>>;
+    readonly instanceIdByOwnerAndKey: Readonly<Record<string, string>>;
+    readonly nodesById: Readonly<Record<string, NodeInstanceProjection>>;
+    readonly generationsById: Readonly<Record<string, NodeGenerationProjection>>;
+    readonly activeGenerationIdByNode: Readonly<Record<string, string>>;
+    readonly claimsById: Readonly<Record<string, InstanceClaimProjection>>;
+    readonly attemptBindingsById: Readonly<Record<string, string>>;
+    readonly managedRunsByAttemptId: Readonly<Record<string, ManagedRunProjection>>;
+    readonly currentProofCatalogAuthorityByProject: Readonly<Record<string, ProofCurrentCatalogAuthorityProjection>>;
+    /** The exact authority accepted by the last sealed application. Keeping the
+     * immutable projection here avoids having to scan journal events when a
+     * later authority is recorded. */
+    readonly appliedProofCatalogAuthorityByProject: Readonly<Record<string, ProofCurrentCatalogAuthorityProjection>>;
+    /** Claim IDs admitted by the sealed application suffix. This is narrowly
+     * scoped provenance for Proof WorkItems, not a claim-name based mode. */
+    readonly proofApplicationClaimIds: Readonly<Record<string, true>>;
+}
+interface ProofCurrentCatalogAuthorityComponentProjection {
+    readonly componentId: string;
+    readonly subgraphInstanceId: string;
+    readonly historicalItemClaimId: string;
+    readonly historicalItemFingerprint: string;
+    readonly currentItemFingerprint: string;
+    readonly comparison: 'unchanged' | 'changed';
+}
+interface ProofCurrentCatalogAuthorityProjection {
+    readonly projectSubgraphInstanceId: string;
+    readonly sourceCatalogClaimId: string;
+    readonly previousAuthorityId: string;
+    readonly authorityId: string;
+    readonly revalidationBytesBase64: string;
+    readonly workItemsBytesBase64: string;
+    readonly components: readonly ProofCurrentCatalogAuthorityComponentProjection[];
+}
+type ExpansionCoverageClass = 'completed_clean' | 'completed_with_findings' | 'error' | 'guardrail_blocked' | 'cancelled';
+interface ExpansionCoverageProjection {
+    readonly requestId: string;
+    readonly expansionOwnerCheck: string;
+    readonly denominator: readonly CatalogSelectedItem[];
+    readonly items: readonly Readonly<{
+        key: string;
+        itemFingerprint: string;
+        terminalClass: ExpansionCoverageClass | null;
+        outcomeClaimId: string | null;
+        outcomePayloadFingerprint: string | null;
+    }>[];
+    readonly closure: 'open' | 'closed';
+    readonly disposition: 'clean' | 'findings' | 'unverifiable';
+    readonly terminalItems: number;
+    readonly diagnostics: readonly string[];
+    readonly semanticDigest: string;
+    readonly provenance: Readonly<{
+        catalogClaimId?: string;
+        lastEventId: number;
+    }>;
+}
+
+type ScopePath = Array<{
+    check: string;
+    index: number;
+}>;
+/** The portable, canonical Graph-v2 runtime prefix. */
+interface GraphJournalCheckpointV1 {
+    readonly kind: 'visor.graph-journal-checkpoint';
+    readonly version: 1;
+    readonly sessionId: string;
+    readonly graphSemanticDigest: string;
+    readonly frontier: {
+        readonly eventCount: number;
+        readonly lastEventId: number;
+    };
+    readonly events: readonly (ClaimRuntimeEvent | InstanceRuntimeEvent)[];
+    readonly integrity: {
+        readonly algorithm: 'sha256';
+        readonly digest: string;
+    };
+}
+
+interface GitFileChange {
+    filename: string;
+    status: 'added' | 'removed' | 'modified' | 'renamed';
+    additions: number;
+    deletions: number;
+    changes: number;
+    content?: string;
+    patch?: string;
+    truncated?: boolean;
+}
+interface GitRepositoryInfo {
+    title: string;
+    body: string;
+    author: string;
+    base: string;
+    head: string;
+    files: GitFileChange[];
+    totalAdditions: number;
+    totalDeletions: number;
+    isGitRepository: boolean;
+    workingDirectory: string;
+    /** Which change set `files` holds: the working tree vs HEAD, or the branch vs its base. */
+    diffSource?: 'uncommitted' | 'branch';
+}
+
+interface AnalysisResult {
+    repositoryInfo: GitRepositoryInfo;
+    reviewSummary: ReviewSummary;
+    executionTime: number;
+    timestamp: string;
+    checksExecuted: string[];
+    executionStatistics?: ExecutionStatistics;
+    debug?: DebugInfo;
+    failureConditions?: FailureConditionResult[];
+    isCodeReview?: boolean;
+}
+interface DebugInfo {
+    provider?: string;
+    model?: string;
+    processingTime?: number;
+    parallelExecution?: boolean;
+    checksExecuted?: string[];
+    totalApiCalls?: number;
+    apiCallDetails?: Array<{
+        checkName: string;
+        provider: string;
+        model: string;
+        processingTime: number;
+        success: boolean;
+    }>;
+}
+
+/**
+ * Journal-derived decision for one ready generated node.  The gate may only
+ * choose whether this exact generation is dispatched or left at the ready
+ * frontier; it cannot replace any graph authority.
+ */
+type GeneratedDispatchGateDecision = 'dispatch' | 'defer';
+type GeneratedDispatchGate = (generation: NodeGenerationProjection) => GeneratedDispatchGateDecision | void | Promise<GeneratedDispatchGateDecision | void>;
+
+/**
+ * HTTP Server for Live Debug Visualization
+ *
+ * Provides HTTP endpoints for polling OpenTelemetry spans,
+ * enabling live visualization of visor execution via simple HTTP requests.
+ *
+ * Milestone 4: Live Streaming Server (Updated to HTTP polling)
+ */
+interface ProcessedSpan {
+    traceId: string;
+    spanId: string;
+    parentSpanId?: string;
+    name: string;
+    startTime: [number, number];
+    endTime: [number, number];
+    duration: number;
+    attributes: Record<string, any>;
+    events: Array<{
+        name: string;
+        time: [number, number];
+        timestamp?: string;
+        attributes?: Record<string, any>;
+    }>;
+    status: 'ok' | 'error';
+}
+/**
+ * HTTP server for polling OTEL spans to debug visualizer UI
+ */
+declare class DebugVisualizerServer {
+    private httpServer;
+    private port;
+    private isRunning;
+    private config;
+    private spans;
+    private results;
+    private startExecutionPromise;
+    private startExecutionResolver;
+    private startExecutionTimeout;
+    private executionState;
+    private pausePromise;
+    private pauseResolver;
+    /**
+     * Start the HTTP server
+     */
+    start(port?: number): Promise<void>;
+    /**
+     * Stop the HTTP server
+     */
+    stop(): Promise<void>;
+    /**
+     * Wait for the user to click "Start Execution" in the UI
+     */
+    waitForStartSignal(): Promise<void>;
+    /**
+     * Clear spans for a new run (but keep server alive).
+     * Note: Does NOT reset executionState - that's managed by waitForStartSignal/api/start.
+     */
+    clearSpans(): void;
+    /**
+     * Full reset - clear spans AND reset execution state to idle.
+     * Called by /api/reset when user wants to start fresh.
+     */
+    reset(): void;
+    /**
+     * Store a span for HTTP polling clients
+     */
+    emitSpan(span: ProcessedSpan): void;
+    /**
+     * Set the configuration to be sent to clients
+     */
+    setConfig(config: any): void;
+    /**
+     * Set the execution results to be sent to clients
+     */
+    setResults(results: any): void;
+    /**
+     * Handle HTTP requests (serve UI and API endpoints)
+     */
+    private handleHttpRequest;
+    /**
+     * Serve the UI HTML file
+     */
+    private serveUI;
+    /**
+     * Check if server is running
+     */
+    isServerRunning(): boolean;
+    /**
+     * Get server port
+     */
+    getPort(): number;
+    /**
+     * Get span count
+     */
+    getSpanCount(): number;
+    /** Return current execution state */
+    getExecutionState(): 'idle' | 'running' | 'paused' | 'stopped';
+    /** Await while paused; returns immediately if not paused */
+    waitWhilePaused(): Promise<void>;
+}
+
+declare const GOVERNED_GRAPH_TERMINAL_RECEIPT_SCHEMA = "visor.governed-graph-terminal-receipt/v1";
+/** Multi-component extension; v1 remains the wire shape for one-component callers. */
+declare const GOVERNED_GRAPH_MULTI_TERMINAL_RECEIPT_SCHEMA = "visor.governed-graph-terminal-receipt/v2";
+interface GovernedGraphTerminalReceipt {
+    readonly version: typeof GOVERNED_GRAPH_TERMINAL_RECEIPT_SCHEMA;
+    readonly status: 'passed' | 'failed';
+    readonly sourceConfigSha256: string;
+    readonly sessionId: string;
+    readonly graphSemanticDigest: string;
+    readonly componentCount: number;
+    readonly nodes: Readonly<Record<'inspect' | 'proof_admit' | 'verify', {
+        terminalCount: number;
+        status: 'completed' | 'failed' | 'nonterminal' | 'absent';
+    }>>;
+    readonly attestation: Readonly<{
+        version: string;
+        profileId: string;
+        dispatch: {
+            source: string;
+            tool: string;
+        };
+        eventCount: number;
+        usage: {
+            status: 'unavailable' | 'observed';
+        };
+    }> | null;
+    readonly candidateClaimId: string | null;
+    readonly admittedReceiptClaimId: string | null;
+    readonly verifyInputClaimIds: readonly string[];
+    readonly providerCleanupStatus: 'clean' | 'unclean';
+    readonly managedUncleanTerminalCount: number;
+    readonly activeChildren: number;
+    readonly activeResources: number;
+    readonly memoryStatus: 'clean' | 'failed';
+    readonly projectionReplayEqual: boolean;
+    readonly failureCode: string | null;
+    readonly exitStatus: 0 | 1;
+}
+interface GovernedGraphComponentTerminalReceiptEntry {
+    readonly componentKey: string;
+    readonly scope: readonly unknown[];
+    readonly workItemClaimId: string;
+    readonly candidateClaimId: string;
+    readonly admittedReceiptClaimId: string | null;
+    readonly generation: Readonly<Record<'inspect' | 'proof_admit' | 'verify', {
+        generationId: string | null;
+        status: 'completed' | 'failed' | 'nonterminal' | 'absent';
+    }>>;
+    readonly verifyInputClaimIds: readonly string[];
+    readonly attestation: GovernedGraphTerminalReceipt['attestation'];
+    readonly status: 'passed' | 'failed';
+    readonly cleanupStatus: 'clean';
+}
+interface GovernedGraphDiscoveryTerminalReceiptEntry {
+    readonly candidateClaimId: string;
+    readonly admittedReceiptClaimId: string;
+    readonly verifyInputClaimIds: readonly string[];
+    readonly structuralInventoryClaimId: string;
+    readonly catalogRevalidationClaimId: string;
+    readonly projectReconciliationClaimId: string;
+    readonly projectReconciliationInputClaimIds: readonly string[];
+    readonly attestation: GovernedGraphTerminalReceipt['attestation'];
+    readonly status: 'completed';
+}
+interface GovernedGraphMultiTerminalReceipt {
+    readonly version: typeof GOVERNED_GRAPH_MULTI_TERMINAL_RECEIPT_SCHEMA;
+    readonly status: 'passed' | 'failed';
+    readonly sourceConfigSha256: string;
+    readonly sessionId: string;
+    readonly graphSemanticDigest: string;
+    readonly componentCount: number;
+    readonly nodes: GovernedGraphTerminalReceipt['nodes'];
+    readonly discovery: GovernedGraphDiscoveryTerminalReceiptEntry;
+    readonly components: readonly GovernedGraphComponentTerminalReceiptEntry[];
+    readonly providerCleanupStatus: 'clean' | 'unclean';
+    readonly managedUncleanTerminalCount: number;
+    readonly activeChildren: number;
+    readonly activeResources: number;
+    readonly memoryStatus: 'clean' | 'failed';
+    readonly projectionReplayEqual: boolean;
+    readonly failureCode: string | null;
+    readonly exitStatus: 0 | 1;
+}
+type GovernedGraphTerminalReceiptDraft = Omit<GovernedGraphTerminalReceipt, 'status' | 'memoryStatus' | 'exitStatus'>;
+type GovernedGraphMultiTerminalReceiptDraft = Omit<GovernedGraphMultiTerminalReceipt, 'status' | 'memoryStatus' | 'exitStatus'>;
+type GovernedGraphAnyTerminalReceipt = GovernedGraphTerminalReceipt | GovernedGraphMultiTerminalReceipt;
+type GovernedGraphAnyTerminalReceiptDraft = GovernedGraphTerminalReceiptDraft | GovernedGraphMultiTerminalReceiptDraft;
+
+interface GraphCheckpointContinuationInput {
+    checkpoint: unknown;
+    expansionOwnerCheck: string;
+    config: VisorConfig;
+    prInfo: PRInfo;
+    debug?: boolean;
+    maxParallelism?: number;
+    failFast?: boolean;
+}
+interface GraphCheckpointContinuationResult {
+    requestId: string;
+    result: ExecutionResult;
+    checkpoint: GraphJournalCheckpointV1;
+}
+interface GraphCheckpointResumeInput {
+    checkpoint: unknown;
+    config: VisorConfig;
+    prInfo: PRInfo;
+    generatedDispatchGate?: GeneratedDispatchGate;
+    debug?: boolean;
+    maxParallelism?: number;
+    failFast?: boolean;
+    /** Explicit CLI/runtime timeout override; omitted preserves authored/default behavior. */
+    timeout?: number;
+}
+type GraphCheckpointResumeResult = Omit<GraphCheckpointContinuationResult, 'requestId'>;
+interface GraphCheckpointRetryInput extends GraphCheckpointResumeInput {
+    /** Exact failed generated node-generation IDs selected by the operator. */
+    retryGenerationIds: readonly string[];
+    /** External side effects were checked before reopening the generation. */
+    externalSideEffects: GeneratedAttemptRetrySideEffects;
+    /** Persist the retry prefix before resumed dispatch is allowed to start. */
+    onRetryCheckpoint: (checkpoint: GraphJournalCheckpointV1) => void | Promise<void>;
+}
+interface GraphCheckpointRetryResult extends GraphCheckpointResumeResult {
+    /** The immutable old checkpoint prefix plus retry transition events, before dispatch. */
+    retryCheckpoint: GraphJournalCheckpointV1;
+}
+interface ProofCurrentCatalogCheckpointInput {
+    checkpoint: unknown;
+    projectSubgraphInstanceId: string;
+    /** Exact Proof CanonicalJSON bytes returned by Proof revalidation. */
+    revalidationBytes: string | Uint8Array;
+    /** Exact Proof CanonicalJSON bytes returned by Proof work-items materialization. */
+    workItemsBytes: string | Uint8Array;
+    config: VisorConfig;
+    prInfo: PRInfo;
+    debug?: boolean;
+    maxParallelism?: number;
+    failFast?: boolean;
+}
+interface ProofCurrentCatalogCheckpointResult {
+    authorityId: string;
+    mutationEventCount: number;
+    result: ExecutionResult;
+    checkpoint: GraphJournalCheckpointV1;
+}
+/**
+ * State machine-based execution engine
+ *
+ * Production-ready state machine implementation with full observability support.
+ * M4: Includes OTEL telemetry and debug visualizer event streaming.
+ */
+declare class StateMachineExecutionEngine {
+    private workingDirectory;
+    private executionContext?;
+    private debugServer?;
+    private _lastContext?;
+    private _lastRunner?;
+    constructor(workingDirectory?: string, octokit?: _octokit_rest.Octokit, debugServer?: DebugVisualizerServer);
+    /**
+     * Execute checks using the state machine engine
+     *
+     * Converts CheckExecutionOptions -> executeGroupedChecks() -> AnalysisResult
+     */
+    executeChecks(options: CheckExecutionOptions): Promise<AnalysisResult>;
+    /**
+     * Get execution context (used by state machine to propagate hooks)
+     */
+    protected getExecutionContext(): ExecutionContext | undefined;
+    /**
+     * Set execution context for external callers
+     */
+    setExecutionContext(context: ExecutionContext | undefined): void;
+    /**
+     * Reset per-run state (no-op for state machine engine)
+     *
+     * The state machine engine is stateless per-run by design.
+     * Each execution creates a fresh journal and context.
+     * This method exists only for backward compatibility with test framework.
+     *
+     * @deprecated This is a no-op. State machine engine doesn't maintain per-run state.
+     */
+    resetPerRunState(): void;
+    /**
+     * Execute grouped checks using the state machine engine
+     *
+     * M4: Production-ready with full telemetry and debug server support
+     */
+    executeGroupedChecks(prInfo: PRInfo, checks: string[], timeout?: number, config?: VisorConfig, outputFormat?: string, debug?: boolean, maxParallelism?: number, failFast?: boolean, tagFilter?: TagFilter, generatedDispatchGate?: GeneratedDispatchGate): Promise<ExecutionResult>;
+    private executeGroupedChecksInternal;
+    /**
+     * Build the engine context for state machine execution
+     */
+    private buildEngineContext;
+    /**
+     * Reconcile one compiled catalog owner from a quiescent Graph-v2 checkpoint.
+     * This operation intentionally has no legacy snapshot or runner-state path.
+     */
+    continueGraphCheckpoint(input: GraphCheckpointContinuationInput): Promise<GraphCheckpointContinuationResult>;
+    /** Restore and dispatch a ready-only checkpoint without appending a request
+     * or Proof authority event. The journal owns all checkpoint validation. */
+    resumeGraphCheckpoint(input: GraphCheckpointResumeInput): Promise<GraphCheckpointResumeResult>;
+    /**
+     * Explicitly reopen selected failed generated leaves, then use the normal
+     * ready-frontier runner in a fresh engine process.  No failed author or
+     * arbitrary generation is inferred; the journal validates the exact IDs and
+     * side-effect confirmation before any provider dispatch.
+     */
+    retryGraphCheckpoint(input: GraphCheckpointRetryInput): Promise<GraphCheckpointRetryResult>;
+    /**
+     * Continue a quiescent Proof-backed graph checkpoint with exact Proof
+     * outputs.  The private bootstrap restores and validates the checkpoint,
+     * records the supplied bytes, and applies the journal-owned replacement
+     * batch before the runner or any provider is visible.  Only the changed
+     * component generations released by that batch are dispatched.
+     */
+    continueProofCurrentCatalogCheckpoint(input: ProofCurrentCatalogCheckpointInput): Promise<ProofCurrentCatalogCheckpointResult>;
+    /**
+     * Export the last Graph-v2 run through the public engine boundary.
+     *
+     * ExecutionJournal deliberately keeps its low-level export primitive
+     * available to the state machine and tests.  The public engine contract is
+     * stricter: it re-validates the exported prefix through the same restore
+     * path, which enforces graph authority, replay, allocator, and quiescence
+     * checks before callers are allowed to persist it.
+     */
+    exportGraphCheckpoint(): GraphJournalCheckpointV1;
+    /**
+     * Validate and canonicalize an imported checkpoint before any provider or
+     * run service is initialized. This is intentionally separate from
+     * continueGraphCheckpoint so CLI/SDK callers can fail closed early.
+     */
+    validateGraphCheckpoint(input: unknown, config: VisorConfig): GraphJournalCheckpointV1;
+    /** Queue a compiled catalog owner on the currently active runner/journal. */
+    requestCatalogReconciliation(ownerCheck: string): CatalogReconciliationRequestedEvent;
+    getInstanceProjection(): InstanceProjection;
+    replayInstanceProjection(): InstanceProjection;
+    /** Narrow, read-only terminal receipt projection; never exposes the journal. */
+    getGovernedGraphTerminalReceiptDraft(sourceConfigSha256: string): GovernedGraphAnyTerminalReceiptDraft;
+    /** Read the deterministic request-bound expansion coverage projection. */
+    getExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection;
+    getExpansionCoverageRequestIds(ownerCheck?: string): readonly string[];
+    replayExpansionCoverageProjection(requestId: string): ExpansionCoverageProjection;
+    /**
+     * Get output history snapshot for test framework compatibility
+     * Extracts output history from the journal
+     */
+    getOutputHistorySnapshot(): Record<string, unknown[]>;
+    /**
+     * Save a JSON snapshot of the last run's state and journal to a file (experimental).
+     * Does not include secrets. Intended for debugging and future resume support.
+     */
+    saveSnapshotToFile(filePath: string): Promise<void>;
+    /**
+     * Load a snapshot JSON from file and return it. Resume support can build on this.
+     */
+    loadSnapshotFromFile<T = unknown>(filePath: string): Promise<T>;
+    /**
+     * Filter checks by tag filter
+     */
+    private filterChecksByTags;
+    /**
+     * Create an error result in AnalysisResult format
+     */
+    private createErrorResult;
+    /**
+     * Convert GroupedCheckResults to ReviewSummary
+     * Aggregates all check results into a single ReviewSummary
+     */
+    private convertGroupedResultsToReviewSummary;
+    private webhookContextHasConversation;
+    /**
+     * Evaluate failure conditions for a check result
+     *
+     * This method provides backward compatibility with the legacy engine by
+     * delegating to the FailureConditionEvaluator.
+     *
+     * @param checkName - The name of the check being evaluated
+     * @param reviewSummary - The review summary containing check results
+     * @param config - The Visor configuration containing failure conditions
+     * @param previousOutputs - Optional previous check outputs for cross-check conditions
+     * @param authorAssociation - Optional GitHub author association for permission checks
+     * @returns Array of failure condition evaluation results
+     */
+    evaluateFailureConditions(checkName: string, reviewSummary: ReviewSummary, config: VisorConfig, previousOutputs?: Record<string, ReviewSummary>, authorAssociation?: string): Promise<FailureConditionResult[]>;
+    /**
+     * Get repository status
+     * @returns Repository status information
+     */
+    getRepositoryStatus(): Promise<{
+        isGitRepository: boolean;
+        branch?: string;
+        hasChanges: boolean;
+        filesChanged?: number;
+    }>;
+    /**
+     * Check if current directory is a git repository
+     * @returns True if git repository, false otherwise
+     */
+    isGitRepository(): Promise<boolean>;
+    /**
+     * Get list of available check types
+     * @returns Array of check type names
+     */
+    static getAvailableCheckTypes(): string[];
+    /**
+     * Validate check types and return valid/invalid lists
+     * @param checks - Array of check type names to validate
+     * @returns Object with valid and invalid check types
+     */
+    static validateCheckTypes(checks: string[]): {
+        valid: string[];
+        invalid: string[];
+    };
+    /**
+     * Format the status column for execution statistics
+     * Used by execution-statistics-formatting tests
+     */
+    private formatStatusColumn;
+    /**
+     * Format the details column for execution statistics
+     * Used by execution-statistics-formatting tests
+     */
+    private formatDetailsColumn;
+    /**
+     * Truncate a string to a maximum length
+     * Used by formatDetailsColumn
+     */
+    private truncate;
+}
+
 interface VisorOptions {
     cwd?: string;
     debug?: boolean;
@@ -2113,4 +3370,4 @@ declare function resolveChecks(checkIds: string[], config: VisorConfig | undefin
  */
 declare function runChecks(opts?: RunOptions): Promise<AnalysisResult>;
 
-export { type ExecutionContext, type HumanInputRequest, type RunOptions, type TagFilter, type VisorConfig, type VisorOptions, loadConfig, resolveChecks, runChecks };
+export { type ExecutionContext, type ExpansionCoverageProjection, type GeneratedDispatchGate, type GeneratedDispatchGateDecision, type GovernedGraphAnyTerminalReceipt, type GovernedGraphAnyTerminalReceiptDraft, type GovernedGraphComponentTerminalReceiptEntry, type GovernedGraphDiscoveryTerminalReceiptEntry, type GovernedGraphMultiTerminalReceipt, type GovernedGraphMultiTerminalReceiptDraft, type GovernedGraphTerminalReceipt, type GovernedGraphTerminalReceiptDraft, type GraphCheckpointContinuationInput, type GraphCheckpointContinuationResult, type GraphCheckpointResumeInput, type GraphCheckpointResumeResult, type GraphJournalCheckpointV1, type HumanInputRequest, type InstanceClaimProjection, type InstanceProjection, type ProofCurrentCatalogCheckpointInput, type ProofCurrentCatalogCheckpointResult, type RunOptions, StateMachineExecutionEngine, type TagFilter, type VisorConfig, type VisorOptions, loadConfig, resolveChecks, runChecks };

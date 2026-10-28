@@ -68,6 +68,14 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
                     readonly description: "Check configurations (legacy, use 'steps' instead) - always populated after normalization";
                 };
+                readonly claim_types: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CClaimTypeConfig%3E";
+                    readonly description: "Exact versioned candidate-claim schemas. Presence activates Graph v2 C1 semantics.";
+                };
+                readonly subgraphs: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CSubgraphConfig%3E";
+                    readonly description: "Named one-level templates used by C2 keyed expansion declarations.";
+                };
                 readonly output: {
                     readonly $ref: "#/definitions/OutputConfig";
                     readonly description: "Output configuration (optional - defaults provided)";
@@ -804,9 +812,40 @@ export declare const configSchema: {
                     }];
                     readonly description: "Check IDs that this check depends on (optional). Accepts single string or array.";
                 };
+                readonly emits: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/ClaimEmissionConfig";
+                    };
+                    readonly description: "Candidate claims emitted from this check's raw terminal output.";
+                    readonly minItems: 1;
+                };
+                readonly consumes: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/ClaimConsumptionConfig";
+                    };
+                    readonly description: "Exact candidate claims required before this check may run.";
+                    readonly minItems: 1;
+                };
+                readonly expand: {
+                    readonly $ref: "#/definitions/ExpansionConfig";
+                    readonly description: "Optional C2 keyed expansion owned by this root check.";
+                };
+                readonly wait_for_expansion: {
+                    readonly $ref: "#/definitions/WaitForExpansionConfig";
+                    readonly description: "Optional bounded completion barrier for a nested expansion.";
+                };
                 readonly group: {
                     readonly type: "string";
                     readonly description: "Group name for comment separation (e.g., \"code-review\", \"pr-overview\") - optional";
+                };
+                readonly resource_group: {
+                    readonly type: "string";
+                    readonly minLength: 1;
+                    readonly maxLength: 64;
+                    readonly pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$";
+                    readonly description: "Static Graph-v2 generated-attempt resource group; at most one runs at a time.";
                 };
                 readonly schema: {
                     readonly anyOf: readonly [{
@@ -851,6 +890,14 @@ export declare const configSchema: {
                         readonly type: "string";
                     };
                     readonly description: "Tags for categorizing and filtering checks (e.g., [\"local\", \"fast\", \"security\"])";
+                };
+                readonly debounce: {
+                    readonly type: "number";
+                    readonly description: "Debounce window in milliseconds. When set, multiple invocations of this step (across concurrent engine instances) within the window are coalesced — only the last invocation actually executes after the window expires. Useful for steps that should run once after a burst of triggers settles.\n\nThe debounce key defaults to the step's fully-qualified check ID. Use `debounce_key` to group different steps under the same debounce.";
+                };
+                readonly debounce_key: {
+                    readonly type: "string";
+                    readonly description: "Custom debounce key. Steps sharing the same key share the same debounce window.";
                 };
                 readonly criticality: {
                     readonly type: "string";
@@ -919,6 +966,69 @@ export declare const configSchema: {
                 readonly message: {
                     readonly type: "string";
                     readonly description: "Message template for log checks";
+                };
+                readonly instructions: {
+                    readonly type: "string";
+                };
+                readonly invocation: {
+                    readonly type: "object";
+                    readonly additionalProperties: false;
+                    readonly required: readonly ["role_id", "stance", "subject", "output_schema_id", "output_schema"];
+                    readonly properties: {
+                        readonly role_id: {
+                            readonly type: "string";
+                        };
+                        readonly stance: {
+                            readonly type: "string";
+                            readonly enum: readonly ["owner", "external-review"];
+                        };
+                        readonly subject: {
+                            readonly anyOf: readonly [{
+                                readonly type: "object";
+                                readonly additionalProperties: false;
+                                readonly required: readonly ["kind", "id", "fingerprint"];
+                                readonly properties: {
+                                    readonly kind: {
+                                        readonly type: "string";
+                                        readonly enum: readonly ["project", "requirement"];
+                                    };
+                                    readonly id: {
+                                        readonly type: "string";
+                                    };
+                                    readonly fingerprint: {
+                                        readonly type: "string";
+                                        readonly pattern: "^sha256:[0-9a-f]{64}$";
+                                    };
+                                };
+                            }, {
+                                readonly type: "object";
+                                readonly additionalProperties: false;
+                                readonly required: readonly ["kind"];
+                                readonly properties: {
+                                    readonly kind: {
+                                        readonly const: "component";
+                                    };
+                                };
+                            }];
+                        };
+                        readonly output_schema_id: {
+                            readonly type: "string";
+                        };
+                        readonly output_schema: {
+                            readonly type: "string";
+                        };
+                    };
+                };
+                readonly invocation_digest: {
+                    readonly type: "string";
+                    readonly pattern: "^sha256:[0-9a-f]{64}$";
+                };
+                readonly result_schema: {
+                    readonly type: "string";
+                };
+                readonly profile: {
+                    readonly type: "string";
+                    readonly const: "luna-xhigh-readonly-v1";
                 };
                 readonly level: {
                     readonly type: "string";
@@ -1049,7 +1159,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18762-35235-src_types_config.ts-0-67392%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1065,7 +1175,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18762-35235-src_types_config.ts-0-67392%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1149,7 +1259,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout", "a2a", "utcp"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout", "a2a", "utcp", "proof-admit", "proof-structural-inventory", "proof-catalog-revalidate", "proof-admitted-catalog", "governed-proof-inspect", "proof-project-reconcile"];
             readonly description: "Valid check types in configuration";
         };
         readonly 'Record<string,McpServerConfig>': {
@@ -1184,6 +1294,10 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly enum: readonly ["stdio", "sse", "http"];
                     readonly description: "Transport type";
+                };
+                readonly headers: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "HTTP headers for SSE/HTTP transport (e.g. Authorization)";
                 };
                 readonly workflow: {
                     readonly type: "string";
@@ -1234,6 +1348,16 @@ export declare const configSchema: {
                 readonly model: {
                     readonly type: "string";
                     readonly description: "Model name to use";
+                };
+                readonly codex_execution_profile: {
+                    readonly type: "string";
+                    readonly enum: readonly ["luna-xhigh-readonly-v1", "luna-xhigh-isolated-writer-v1"];
+                    readonly description: "Closed execution profile for ordinary governed Luna workers.";
+                };
+                readonly codex_working_directory_from: {
+                    readonly type: "string";
+                    readonly minLength: 1;
+                    readonly description: "Exact dependency check id whose successful git-checkout output supplies the isolated writer worktree.";
                 };
                 readonly apiKey: {
                     readonly type: "string";
@@ -1362,6 +1486,10 @@ export declare const configSchema: {
                 readonly graceful_stop_deadline: {
                     readonly type: "number";
                     readonly description: "Wind-down deadline in ms for sub-agents after graceful stop is triggered";
+                };
+                readonly headers: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Custom headers to include in AI provider HTTP requests (e.g., for API gateway session tracking). Values support env var resolution (e.g., \"${MY_VAR}\") and the special placeholder \"${OTEL_TRACE_ID}\" for the current OTEL trace ID.";
                 };
             };
             readonly additionalProperties: false;
@@ -1579,6 +1707,116 @@ export declare const configSchema: {
             };
             readonly description: "Environment variable reference configuration";
         };
+        readonly ClaimEmissionConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly claim: {
+                    readonly type: "string";
+                };
+                readonly from: {
+                    readonly type: "string";
+                    readonly const: "output";
+                };
+            };
+            readonly required: readonly ["claim", "from"];
+            readonly additionalProperties: false;
+            readonly description: "Publish the raw terminal provider output as an exact claim type/version.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly ClaimConsumptionConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly claim: {
+                    readonly type: "string";
+                };
+                readonly cardinality: {
+                    readonly type: "string";
+                    readonly const: "one";
+                    readonly description: "C1 root declarations require this explicitly; C2 templates default it to one.";
+                };
+                readonly as: {
+                    readonly type: "string";
+                    readonly description: "Immutable provider-context binding used by generated template checks.";
+                };
+            };
+            readonly required: readonly ["claim"];
+            readonly additionalProperties: false;
+            readonly description: "Require one active candidate claim of an exact type/version.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly ExpansionConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly claim: {
+                    readonly type: "string";
+                    readonly description: "Catalog claim emitted by this same root check.";
+                };
+                readonly template: {
+                    readonly type: "string";
+                    readonly description: "Named subgraph template to instantiate for every keyed catalog item.";
+                };
+                readonly items_pointer: {
+                    readonly type: "string";
+                    readonly description: "RFC 6901 pointer from the catalog payload to its item array.";
+                };
+                readonly key_pointer: {
+                    readonly type: "string";
+                    readonly description: "RFC 6901 pointer, relative to one item, to its stable key.";
+                };
+                readonly item_claim: {
+                    readonly type: "string";
+                    readonly description: "Claim published by the controller for one schema-valid item.";
+                };
+                readonly coverage: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly outcome_claim: {
+                            readonly type: "string";
+                            readonly description: "Claim emitted exactly once by the template's terminal sink operation.";
+                        };
+                        readonly class_pointer: {
+                            readonly type: "string";
+                            readonly description: "RFC 6901 pointer from the outcome payload to its terminal class.";
+                        };
+                    };
+                    readonly required: readonly ["outcome_claim", "class_pointer"];
+                    readonly additionalProperties: false;
+                    readonly description: "Optional deterministic terminal coverage projection for the selected catalog.";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+            };
+            readonly required: readonly ["claim", "template", "items_pointer", "key_pointer", "item_claim"];
+            readonly additionalProperties: false;
+            readonly description: "Compile one terminal catalog claim into stable keyed template instances.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly WaitForExpansionConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly owner: {
+                    readonly type: "string";
+                    readonly description: "Sibling node in this template that owns the depth-2 expansion.";
+                };
+                readonly terminal_node: {
+                    readonly type: "string";
+                    readonly description: "Terminal node key in the owner's child template.";
+                };
+            };
+            readonly required: readonly ["owner", "terminal_node"];
+            readonly additionalProperties: false;
+            readonly description: "Hold one parent-template node open until the terminal node of every current child instance produced by a sibling expansion has completed. This is deliberately limited to one sibling expansion owner and one child terminal node; it is not a general fan-in/cardinality declaration.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
         readonly CustomTemplateConfig: {
             readonly type: "object";
             readonly properties: {
@@ -1750,7 +1988,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-18762-35235-src_types_config.ts-0-67392%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1765,13 +2003,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-18762-35235-src_types_config.ts-0-67392>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-18762-35235-src_types_config.ts-0-67392%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422>': {
+        readonly 'Partial<interface-src_types_config.ts-18762-35235-src_types_config.ts-0-67392>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1996,6 +2234,67 @@ export declare const configSchema: {
                 };
             };
             readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,ClaimTypeConfig>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/ClaimTypeConfig";
+            };
+        };
+        readonly ClaimTypeConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly schema: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "JSON Schema used for strict candidate publication validation.";
+                };
+            };
+            readonly required: readonly ["schema"];
+            readonly additionalProperties: false;
+            readonly description: "A schema-bound candidate claim declaration.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,SubgraphConfig>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/SubgraphConfig";
+            };
+        };
+        readonly SubgraphConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly input: {
+                    readonly $ref: "#/definitions/SubgraphInputConfig";
+                };
+                readonly checks: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
+                };
+            };
+            readonly required: readonly ["input", "checks"];
+            readonly additionalProperties: false;
+            readonly description: "A statically compiled, one-level generated subgraph template.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SubgraphInputConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly name: {
+                    readonly type: "string";
+                };
+                readonly claim: {
+                    readonly type: "string";
+                };
+            };
+            readonly required: readonly ["name", "claim"];
+            readonly additionalProperties: false;
+            readonly description: "One externally supplied claim binding for a generated subgraph template.";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -3127,7 +3426,7 @@ export declare const configSchema: {
                 };
                 readonly workflow: {
                     readonly type: "string";
-                    readonly description: "Workflow/check ID to run";
+                    readonly description: "Workflow/check ID to run. Omit to treat inputs.text as a user message through the full pipeline.";
                 };
                 readonly inputs: {
                     readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
@@ -3170,7 +3469,7 @@ export declare const configSchema: {
                     readonly description: "Timezone for schedule (default: UTC or scheduler default)";
                 };
             };
-            readonly required: readonly ["schedule", "workflow"];
+            readonly required: readonly ["schedule"];
             readonly additionalProperties: false;
             readonly description: "Static cron job defined in YAML configuration These are always executed by the scheduler daemon";
             readonly patternProperties: {
