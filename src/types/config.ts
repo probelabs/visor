@@ -350,9 +350,7 @@ export interface AIProviderConfig {
   /** Model name to use */
   model?: string;
   /** Closed execution profile for ordinary governed Luna workers. */
-  codex_execution_profile?:
-    | 'luna-xhigh-readonly-v1'
-    | 'luna-xhigh-isolated-writer-v1';
+  codex_execution_profile?: 'luna-xhigh-readonly-v1' | 'luna-xhigh-isolated-writer-v1';
   /** Exact dependency check id that produced the isolated writer worktree. */
   codex_working_directory_from?: string;
   /** API key (usually from environment variables) */
@@ -427,6 +425,8 @@ export interface AIProviderConfig {
   negotiated_timeout_max_per_request?: number;
   /** Wind-down deadline in ms for sub-agents after graceful stop is triggered */
   graceful_stop_deadline?: number;
+  /** Custom headers to include in AI provider HTTP requests (e.g., for API gateway session tracking). Values support env var resolution (e.g., "${MY_VAR}") and the special placeholder "${OTEL_TRACE_ID}" for the current OTEL trace ID. */
+  headers?: Record<string, string>;
 }
 
 /**
