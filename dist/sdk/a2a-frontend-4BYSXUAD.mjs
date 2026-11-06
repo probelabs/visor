@@ -12,8 +12,8 @@ import {
 import {
   init_trace_helpers,
   withActiveSpan
-} from "./chunk-L7D6UUXI.mjs";
-import "./chunk-7GFXBFZT.mjs";
+} from "./chunk-GBGLIILP.mjs";
+import "./chunk-FZ2DOZTS.mjs";
 import "./chunk-FWWLD555.mjs";
 import {
   init_logger,
@@ -1748,4 +1748,4 @@ export {
   messageToWorkflowInput,
   resultToArtifacts
 };
-//# sourceMappingURL=a2a-frontend-LBZTUE2J.mjs.map
+//# sourceMappingURL=a2a-frontend-4BYSXUAD.mjs.map

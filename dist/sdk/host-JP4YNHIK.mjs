@@ -24,7 +24,7 @@ var init_host = __esm({
             const { NdjsonSink } = await import("./ndjson-sink-FD2PSXGD.mjs");
             this.frontends.push(new NdjsonSink(spec.config));
           } else if (spec.name === "github") {
-            const { GitHubFrontend } = await import("./github-frontend-HOI5C4AV.mjs");
+            const { GitHubFrontend } = await import("./github-frontend-GYW22DWT.mjs");
             this.frontends.push(new GitHubFrontend());
           } else if (spec.name === "slack") {
             const { SlackFrontend } = await import("./slack-frontend-FZC664ZC.mjs");
@@ -45,7 +45,7 @@ var init_host = __esm({
             const { TeamsFrontend } = await import("./teams-frontend-IXT666DY.mjs");
             this.frontends.push(new TeamsFrontend(spec.config));
           } else if (spec.name === "a2a") {
-            const { A2AFrontend } = await import("./a2a-frontend-LBZTUE2J.mjs");
+            const { A2AFrontend } = await import("./a2a-frontend-4BYSXUAD.mjs");
             this.frontends.push(new A2AFrontend(spec.config));
           } else {
             this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
@@ -84,4 +84,4 @@ export {
   FrontendsHost,
   isActiveFrontend
 };
-//# sourceMappingURL=host-QCUKIRYS.mjs.map
+//# sourceMappingURL=host-JP4YNHIK.mjs.map
