@@ -2,7 +2,7 @@ import {
   getInstanceId,
   init_instance_id,
   require_package
-} from "./chunk-FZ2DOZTS.mjs";
+} from "./chunk-D3EYGYM4.mjs";
 import {
   init_metrics,
   metrics_exports
@@ -1147,4 +1147,4 @@ export {
   trace_helpers_exports,
   init_trace_helpers
 };
-//# sourceMappingURL=chunk-GBGLIILP.mjs.map
+//# sourceMappingURL=chunk-GLAUV47M.mjs.map

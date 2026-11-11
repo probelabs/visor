@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 process.env.VISOR_VERSION = '0.1.42';
-process.env.PROBE_VERSION = '0.6.0-rc345';
+process.env.PROBE_VERSION = '0.6.0-rc346';
 process.env.VISOR_COMMIT_SHA = 'unknown';
 process.env.VISOR_COMMIT_SHORT = 'unknown';
 /******/ (() => { // webpackBootstrap
@@ -542809,6 +542809,12 @@ async function fetchWithValidatedRedirects({
     if (REDIRECT_STATUS_CODES.has(response.status) && location) {
       void cancelResponseBody(response);
       const nextUrl = new URL(location, currentUrl).toString();
+      if (new URL(currentUrl).protocol === "https:" && new URL(nextUrl).protocol === "http:") {
+        throw new DownloadError({
+          url: url2,
+          message: "Redirect from HTTPS to HTTP was blocked"
+        });
+      }
       if (currentHeaders !== void 0 && !isSameOrigin(nextUrl, currentUrl)) {
         const userAgent = currentHeaders.get("user-agent");
         currentHeaders = new Headers(
@@ -544389,7 +544395,7 @@ var init_dist3 = __esm({
       "UND_ERR_BODY_TIMEOUT",
       "UND_ERR_CONNECT_TIMEOUT"
     ]);
-    VERSION =  true ? "4.0.64" : 0;
+    VERSION =  true ? "4.0.66" : 0;
     getOriginalFetch = () => globalThis.fetch;
     getFromApi = async ({
       url: url2,
@@ -545682,10 +545688,10 @@ function getResponseMetadata({
     timestamp: created != null ? new Date(created * 1e3) : void 0
   };
 }
-function mapOpenAICompatibleFinishReason(finishReason) {
+function mapOpenAICompatibleFinishReason(finishReason, { hasRefusal = false } = {}) {
   switch (finishReason) {
     case "stop":
-      return "stop";
+      return hasRefusal ? "content-filter" : "stop";
     case "length":
       return "length";
     case "content_filter":
@@ -546053,9 +546059,9 @@ var init_dist4 = __esm({
         var _a17, _b16, _c;
         return (_c = (_b16 = (_a17 = this.config).supportedUrls) == null ? void 0 : _b16.call(_a17)) != null ? _c : {};
       }
-      transformRequestBody(args) {
+      transformRequestBody(args, warnings) {
         var _a17, _b16, _c;
-        return (_c = (_b16 = (_a17 = this.config).transformRequestBody) == null ? void 0 : _b16.call(_a17, args)) != null ? _c : args;
+        return (_c = (_b16 = (_a17 = this.config).transformRequestBody) == null ? void 0 : _b16.call(_a17, args, warnings)) != null ? _c : args;
       }
       convertUsage(usage) {
         var _a17, _b16, _c;
@@ -546180,7 +546186,7 @@ var init_dist4 = __esm({
       async doGenerate(options) {
         var _a17, _b16, _c, _d, _e, _f, _g, _h;
         const { args, warnings, metadataKey } = await this.getArgs({ ...options });
-        const transformedBody = this.transformRequestBody(args);
+        const transformedBody = this.transformRequestBody(args, warnings);
         const body = JSON.stringify(transformedBody);
         const {
           responseHeaders,
@@ -546216,6 +546222,11 @@ var init_dist4 = __esm({
           });
         }
         content.push(...convertOpenAICompatibleContent(choice.message.content));
+        const refusal = choice.message.refusal;
+        const hasRefusal = refusal != null && refusal.length > 0;
+        if (hasRefusal) {
+          content.push({ type: "text", text: refusal });
+        }
         if (choice.message.tool_calls != null) {
           for (const toolCall of choice.message.tool_calls) {
             const thoughtSignature = (_c = (_b16 = toolCall.extra_content) == null ? void 0 : _b16.google) == null ? void 0 : _c.thought_signature;
@@ -546248,7 +546259,9 @@ var init_dist4 = __esm({
         return {
           content,
           finishReason: {
-            unified: mapOpenAICompatibleFinishReason(choice.finish_reason),
+            unified: mapOpenAICompatibleFinishReason(choice.finish_reason, {
+              hasRefusal
+            }),
             raw: (_h = choice.finish_reason) != null ? _h : void 0
           },
           usage: this.convertUsage(responseBody.usage),
@@ -546265,12 +546278,15 @@ var init_dist4 = __esm({
       async doStream(options) {
         var _a17;
         const { args, warnings, metadataKey } = await this.getArgs({ ...options });
-        const body = this.transformRequestBody({
-          ...args,
-          stream: true,
-          // only include stream_options when in strict compatibility mode:
-          stream_options: this.config.includeUsage ? { include_usage: true } : void 0
-        });
+        const body = this.transformRequestBody(
+          {
+            ...args,
+            stream: true,
+            // only include stream_options when in strict compatibility mode:
+            stream_options: this.config.includeUsage ? { include_usage: true } : void 0
+          },
+          warnings
+        );
         const metadataExtractor = (_a17 = this.config.metadataExtractor) == null ? void 0 : _a17.createStreamExtractor();
         const { responseHeaders, value: response } = await postJsonToApi({
           url: this.config.url({
@@ -546333,10 +546349,12 @@ var init_dist4 = __esm({
           }
         };
         let finishReason;
+        let rawFinishReason = void 0;
         let usage = void 0;
         let isFirstChunk = true;
         let isActiveReasoning = false;
         let isActiveText = false;
+        let hasRefusal = false;
         const convertUsage = (usage2) => this.convertUsage(usage2);
         return {
           stream: response.pipeThrough(
@@ -546357,7 +546375,7 @@ var init_dist4 = __esm({
                 controller.enqueue({ type: "stream-start", warnings });
               },
               transform(chunk, controller) {
-                var _a22, _b16;
+                var _a22;
                 if (options.includeRawChunks) {
                   controller.enqueue({ type: "raw", rawValue: chunk.rawValue });
                 }
@@ -546388,10 +546406,7 @@ var init_dist4 = __esm({
                 }
                 const choice = value.choices[0];
                 if ((choice == null ? void 0 : choice.finish_reason) != null) {
-                  finishReason = {
-                    unified: mapOpenAICompatibleFinishReason(choice.finish_reason),
-                    raw: (_a22 = choice.finish_reason) != null ? _a22 : void 0
-                  };
+                  rawFinishReason = choice.finish_reason;
                 }
                 if ((choice == null ? void 0 : choice.delta) == null) {
                   return;
@@ -546433,7 +546448,7 @@ var init_dist4 = __esm({
                     delta: textDelta
                   });
                 };
-                const reasoningContent = (_b16 = delta.reasoning_content) != null ? _b16 : delta.reasoning;
+                const reasoningContent = (_a22 = delta.reasoning_content) != null ? _a22 : delta.reasoning;
                 if (reasoningContent) {
                   enqueueReasoningDelta(reasoningContent);
                 }
@@ -546445,6 +546460,11 @@ var init_dist4 = __esm({
                   } else {
                     enqueueTextDelta(contentPart.text);
                   }
+                }
+                const refusal = delta.refusal;
+                if (refusal != null && refusal.length > 0) {
+                  hasRefusal = true;
+                  enqueueTextDelta(refusal);
                 }
                 if (delta.tool_calls != null && delta.tool_calls.length > 0) {
                   if (isActiveReasoning) {
@@ -546476,6 +546496,14 @@ var init_dist4 = __esm({
                 }
                 pendingToolCalls.clear();
                 toolCallTracker.flush();
+                if (rawFinishReason != null) {
+                  finishReason = {
+                    unified: mapOpenAICompatibleFinishReason(rawFinishReason, {
+                      hasRefusal
+                    }),
+                    raw: rawFinishReason
+                  };
+                }
                 if (finishReason == null) {
                   finishReason = { unified: "error", raw: void 0 };
                   controller.enqueue({
@@ -546542,6 +546570,12 @@ var init_dist4 = __esm({
               message: external_exports.object({
                 role: external_exports.literal("assistant").nullish(),
                 content: openAICompatibleContentSchema(),
+                // set instead of `content` when the model refuses to answer. Some
+                // OpenAI-compatible servers send non-string values (e.g. `false`),
+                // which are ignored instead of failing the whole response:
+                refusal: external_exports.unknown().nullish().transform(
+                  (value) => typeof value === "string" ? value : void 0
+                ),
                 reasoning_content: external_exports.string().nullish(),
                 reasoning: external_exports.string().nullish(),
                 tool_calls: external_exports.array(
@@ -546576,6 +546610,12 @@ var init_dist4 = __esm({
           delta: external_exports.object({
             role: external_exports.enum(["assistant", ""]).nullish(),
             content: openAICompatibleContentSchema(),
+            // set instead of `content` when the model refuses to answer. Some
+            // OpenAI-compatible servers send non-string values (e.g. `false`),
+            // which are ignored instead of failing the whole response:
+            refusal: external_exports.unknown().nullish().transform(
+              (value) => typeof value === "string" ? value : void 0
+            ),
             // Most openai-compatible models set `reasoning_content`, but some
             // providers serving `gpt-oss` set `reasoning`. See #7866
             reasoning_content: external_exports.string().nullish(),
@@ -547190,7 +547230,7 @@ var init_dist4 = __esm({
         })
       )
     );
-    VERSION2 =  true ? "2.0.90" : 0;
+    VERSION2 =  true ? "2.0.93" : 0;
   }
 });
 
@@ -554535,7 +554575,7 @@ var init_dist5 = __esm({
         })
       )
     );
-    VERSION3 =  true ? "4.0.209" : 0;
+    VERSION3 =  true ? "4.0.214" : 0;
     bedrockRerankingResponseSchema = lazySchema(
       () => zodSchema(
         external_exports.object({
@@ -569363,15 +569403,17 @@ var require_brace_expansion = __commonJS({
   "node_modules/brace-expansion/index.js"(exports2, module2) {
     var balanced = require_balanced_match();
     module2.exports = expandTop;
-    var escSlash = "\0SLASH" + Math.random() + "\0";
-    var escOpen = "\0OPEN" + Math.random() + "\0";
-    var escClose = "\0CLOSE" + Math.random() + "\0";
-    var escComma = "\0COMMA" + Math.random() + "\0";
-    var escPeriod = "\0PERIOD" + Math.random() + "\0";
+    var escSlash = "\0SLASH" + Math.random().toFixed(16) + "\0";
+    var escOpen = "\0OPEN" + Math.random().toFixed(16) + "\0";
+    var escClose = "\0CLOSE" + Math.random().toFixed(16) + "\0";
+    var escComma = "\0COMMA" + Math.random().toFixed(16) + "\0";
+    var escPeriod = "\0PERIOD" + Math.random().toFixed(16) + "\0";
     var EXPANSION_MAX = 1e5;
     var EXPANSION_MAX_LENGTH = 4e6;
     var EXPANSION_MAX_DEPTH = 1e3;
     var EXPANSION_MAX_REWRITES = 1e3;
+    var EXPANSION_MAX_STEPS = 2e7;
+    var CALL_STEPS = 16;
     function numeric(str) {
       return parseInt(str, 10) == str ? parseInt(str, 10) : str.charCodeAt(0);
     }
@@ -569386,11 +569428,69 @@ var require_brace_expansion = __commonJS({
         target.push(items[i]);
       }
     }
-    function parseCommaParts(str) {
+    function balancedWithBudget(str, masked, budget) {
+      if (budget.remaining < 0) {
+        return void 0;
+      }
+      var r = balanced.range("{", "}", masked);
+      var unmatched = r !== void 0 && masked.indexOf("{") < r[0];
+      budget.remaining -= r && !unmatched ? r[1] + 1 : str.length;
+      if (!r || budget.remaining < 0) {
+        return void 0;
+      }
+      return {
+        end: r[1],
+        pre: str.slice(0, r[0]),
+        body: str.slice(r[0] + 1, r[1]),
+        post: str.slice(r[1] + 1),
+        unmatched
+      };
+    }
+    function maskUnmatchedOpens(masked, budget) {
+      budget.remaining -= masked.length;
+      var open = [];
+      for (var i = 0; i < masked.length; i++) {
+        var c = masked.charCodeAt(i);
+        if (c === 123) {
+          open.push(i);
+        } else if (c === 125 && open.length) {
+          open.pop();
+        }
+      }
+      var out = "";
+      var last2 = 0;
+      for (var j = 0; j < open.length; j++) {
+        out += masked.slice(last2, open[j]) + "\0";
+        last2 = open[j] + 1;
+      }
+      return out + masked.slice(last2);
+    }
+    function commaSetFollows(str, budget) {
+      budget.remaining -= str.length;
+      if (budget.remaining < 0) {
+        return false;
+      }
+      var close = false;
+      for (var i = str.length - 1; i >= 0; i--) {
+        var c = str.charCodeAt(i);
+        if (c === 125) {
+          close = true;
+        } else if (c === 10 || c === 13 || c === 8232 || c === 8233) {
+          close = false;
+        } else if (c === 44 && close && str.charCodeAt(i + 1) !== 44) {
+          return true;
+        }
+      }
+      return false;
+    }
+    function parseCommaParts(str, budget) {
       var parts = [];
       var carry = "";
       for (; ; ) {
-        var m = balanced("{", "}", str);
+        var m = balancedWithBudget(str, str, budget);
+        if (budget.remaining < 0) {
+          return void 0;
+        }
         if (!m) {
           var tail = str.split(",");
           tail[0] = carry + tail[0];
@@ -569412,18 +569512,30 @@ var require_brace_expansion = __commonJS({
         str = post;
       }
     }
+    function bound(value, fallback) {
+      return value == null || isNaN(value) ? fallback : value;
+    }
     function expandTop(str, options) {
-      if (!str)
-        return [];
+      if (!str) return [];
       options = options || {};
-      var max = options.max == null ? EXPANSION_MAX : options.max;
-      var maxLength = options.maxLength == null ? EXPANSION_MAX_LENGTH : options.maxLength;
-      var maxDepth = options.maxDepth == null ? EXPANSION_MAX_DEPTH : options.maxDepth;
-      var maxRewrites = options.maxRewrites == null ? EXPANSION_MAX_REWRITES : options.maxRewrites;
+      var max = bound(options.max, EXPANSION_MAX);
+      var maxLength = bound(options.maxLength, EXPANSION_MAX_LENGTH);
+      var maxDepth = bound(options.maxDepth, EXPANSION_MAX_DEPTH);
+      var maxRewrites = bound(options.maxRewrites, EXPANSION_MAX_REWRITES);
+      var maxSteps = bound(options.maxSteps, EXPANSION_MAX_STEPS);
       if (str.substr(0, 2) === "{}") {
         str = "\\{\\}" + str.substr(2);
       }
-      return expand2(escapeBraces(str), max, maxLength, maxDepth, 0, maxRewrites, true).map(unescapeBraces);
+      return expand2(
+        escapeBraces(str),
+        max,
+        maxLength,
+        maxDepth,
+        0,
+        maxRewrites,
+        { remaining: maxSteps },
+        true
+      ).map(unescapeBraces);
     }
     function embrace(str) {
       return "{" + str + "}";
@@ -569437,22 +569549,29 @@ var require_brace_expansion = __commonJS({
     function gte(i, y) {
       return i >= y;
     }
-    function combine(acc, pre, values2, max, maxLength, dropEmpties) {
+    function combine(acc, pre, values2, max, maxLength, dropEmpties, budget) {
       var out = [];
       var length = 0;
-      for (var a = 0; a < acc.length; a++) {
-        for (var v = 0; v < values2.length; v++) {
-          if (out.length >= max) return out;
-          var expansion = acc[a] + pre + values2[v];
-          if (dropEmpties && !expansion) continue;
-          if (length + expansion.length > maxLength) return out;
+      var nonEmpty;
+      outer: for (var a = 0; a < acc.length; a++) {
+        var prefix = acc[a] + pre;
+        var vs = values2;
+        if (dropEmpties && !prefix) {
+          if (!nonEmpty) nonEmpty = values2.filter(Boolean);
+          vs = nonEmpty;
+        }
+        for (var v = 0; v < vs.length; v++) {
+          if (out.length >= max) break outer;
+          var expansion = prefix + vs[v];
+          if (length + expansion.length > maxLength) break outer;
           out.push(expansion);
           length += expansion.length;
         }
       }
+      budget.remaining -= out.length;
       return out;
     }
-    function expandSequence(body, isAlphaSequence, max, maxLength) {
+    function expandSequence(body, isAlphaSequence, max, maxLength, budget) {
       var n = body.split(/\.\./);
       var N = [];
       if (n[0] === void 0 || n[1] === void 0) {
@@ -569469,8 +569588,13 @@ var require_brace_expansion = __commonJS({
         test = gte;
       }
       var pad = n.some(isPadded);
+      var cost = pad ? width : 1;
       var length = 0;
       for (var i = x; test(i, y) && N.length < max; i += incr) {
+        budget.remaining -= cost;
+        if (budget.remaining < 0) {
+          return void 0;
+        }
         var c;
         if (isAlphaSequence) {
           c = String.fromCharCode(i);
@@ -569497,7 +569621,8 @@ var require_brace_expansion = __commonJS({
       }
       return N;
     }
-    function expand2(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
+    function expand2(str, max, maxLength, maxDepth, depth, maxRewrites, budget, isTop) {
+      budget.remaining -= CALL_STEPS;
       if (depth > maxDepth) {
         return [str];
       }
@@ -569505,12 +569630,27 @@ var require_brace_expansion = __commonJS({
       var rewrites = 0;
       var dropEmpties = false;
       var firstGroup = true;
+      var masked = str;
       for (; ; ) {
-        const m = balanced("{", "}", str);
+        const m = balancedWithBudget(str, masked, budget);
         if (!m) {
-          return combine(acc, str, [""], max, maxLength, dropEmpties);
+          return combine(acc, str, [""], max, maxLength, dropEmpties, budget);
+        }
+        if (m.unmatched) {
+          masked = maskUnmatchedOpens(masked, budget);
         }
         const pre = m.pre;
+        var literal3 = function() {
+          return combine(
+            acc,
+            pre + "{" + m.body + "}" + m.post,
+            [""],
+            max,
+            maxLength,
+            dropEmpties,
+            budget
+          );
+        };
         if (/\$$/.test(pre)) {
           acc = combine(
             acc,
@@ -569518,32 +569658,30 @@ var require_brace_expansion = __commonJS({
             [""],
             max,
             maxLength,
-            dropEmpties && !m.post.length
+            dropEmpties && !m.post.length,
+            budget
           );
           firstGroup = false;
           if (!m.post.length) break;
           str = m.post;
+          masked = masked.slice(m.end + 1);
           continue;
         }
         var isNumericSequence = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(m.body);
-        var isAlphaSequence = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(m.body);
+        var isAlphaSequence = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(
+          m.body
+        );
         var isSequence = isNumericSequence || isAlphaSequence;
         var isOptions = m.body.indexOf(",") >= 0;
         if (!isSequence && !isOptions) {
-          if (rewrites < maxRewrites && m.post.match(/,(?!,).*\}/)) {
+          if (rewrites < maxRewrites && commaSetFollows(m.post, budget)) {
             rewrites++;
             str = m.pre + "{" + m.body + escClose + m.post;
+            masked = masked.slice(0, m.end) + escClose + masked.slice(m.end + 1);
             isTop = true;
             continue;
           }
-          return combine(
-            acc,
-            pre + "{" + m.body + "}" + m.post,
-            [""],
-            max,
-            maxLength,
-            dropEmpties
-          );
+          return literal3();
         }
         if (firstGroup) {
           dropEmpties = isTop && !isSequence;
@@ -569551,22 +569689,52 @@ var require_brace_expansion = __commonJS({
         }
         var values2;
         if (isSequence) {
-          values2 = expandSequence(m.body, isAlphaSequence, max, maxLength);
+          values2 = expandSequence(
+            m.body,
+            isAlphaSequence,
+            max,
+            maxLength,
+            budget
+          );
+          if (!values2) {
+            return literal3();
+          }
         } else {
-          var n = parseCommaParts(m.body);
+          var n = parseCommaParts(m.body, budget);
+          if (!n) {
+            return literal3();
+          }
           if (n.length === 1 && n[0] !== void 0) {
-            n = expand2(n[0], max, maxLength, maxDepth, depth + 1, maxRewrites, false).map(embrace);
+            n = expand2(
+              n[0],
+              max,
+              maxLength,
+              maxDepth,
+              depth + 1,
+              maxRewrites,
+              budget,
+              false
+            ).map(embrace);
+            if (budget.remaining < 0) {
+              return literal3();
+            }
             if (n.length === 1) {
-              acc = combine(
+              var single = combine(
                 acc,
                 pre + n[0],
                 [""],
                 max,
                 maxLength,
-                dropEmpties && !m.post.length
+                dropEmpties && !m.post.length,
+                budget
               );
+              if (budget.remaining < 0) {
+                return literal3();
+              }
+              acc = single;
               if (!m.post.length) break;
               str = m.post;
+              masked = masked.slice(m.end + 1);
               continue;
             }
           }
@@ -569579,7 +569747,19 @@ var require_brace_expansion = __commonJS({
           values2 = [];
           var valuesLength = 0;
           outer: for (var j = 0; j < n.length; j++) {
-            var expanded = expand2(n[j], max, maxLength, maxDepth, depth + 1, maxRewrites, false);
+            var expanded = expand2(
+              n[j],
+              max,
+              maxLength,
+              maxDepth,
+              depth + 1,
+              maxRewrites,
+              budget,
+              false
+            );
+            if (budget.remaining < 0) {
+              return literal3();
+            }
             for (var k = 0; k < expanded.length; k++) {
               var v = expanded[k];
               if (dropsEmpties && !v) continue;
@@ -569591,9 +569771,22 @@ var require_brace_expansion = __commonJS({
             }
           }
         }
-        acc = combine(acc, pre, values2, max, maxLength, dropEmpties && !m.post.length);
+        var next = combine(
+          acc,
+          pre,
+          values2,
+          max,
+          maxLength,
+          dropEmpties && !m.post.length,
+          budget
+        );
+        if (budget.remaining < 0) {
+          return literal3();
+        }
+        acc = next;
         if (!m.post.length) break;
         str = m.post;
+        masked = masked.slice(m.end + 1);
       }
       return acc;
     }
@@ -577844,6 +578037,42 @@ var init_processSupervisor = __esm({
 });
 
 // src/agent/bashExecutor.js
+function getStableBashEnv() {
+  if (!_stableBashEnv) {
+    _stableBashEnv = {};
+    try {
+      const raw = (0, import_fs7.readFileSync)("/proc/self/environ", "utf8");
+      for (const entry of raw.split("\0")) {
+        const eq2 = entry.indexOf("=");
+        if (eq2 > 0) {
+          _stableBashEnv[entry.substring(0, eq2)] = entry.substring(eq2 + 1);
+        }
+      }
+    } catch {
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v !== void 0) _stableBashEnv[k] = v;
+      }
+    }
+  }
+  const result = { ..._stableBashEnv };
+  for (const key of [
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GIT_CONFIG_COUNT",
+    "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY"
+  ]) {
+    const v = process.env[key];
+    if (v !== void 0) result[key] = v;
+  }
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith("GIT_CONFIG_") && v !== void 0) {
+      result[k] = v;
+    }
+  }
+  return result;
+}
 function splitCommandComponents(command) {
   const parts = [];
   let current2 = "";
@@ -578014,7 +578243,7 @@ async function executeBashCommand(command, options = {}) {
   }
   return new Promise((resolve9) => {
     const processEnv = {
-      ...process.env,
+      ...getStableBashEnv(),
       ...env
     };
     if (!processEnv.GIT_EDITOR) processEnv.GIT_EDITOR = "true";
@@ -578192,7 +578421,7 @@ function validateExecutionOptions(options = {}) {
     warnings
   };
 }
-var import_path7, import_fs7;
+var import_path7, import_fs7, _stableBashEnv;
 var init_bashExecutor = __esm({
   "src/agent/bashExecutor.js"() {
     "use strict";
@@ -578200,6 +578429,7 @@ var init_bashExecutor = __esm({
     import_fs7 = __nccwpck_require__(79896);
     init_bashCommandUtils();
     init_processSupervisor();
+    _stableBashEnv = null;
   }
 });
 
@@ -621322,6 +621552,42 @@ var init_config2 = __esm({
 });
 
 // src/agent/mcp/client.js
+function getStableProcessEnv() {
+  if (!_stableEnv) {
+    _stableEnv = {};
+    try {
+      const raw = (0, import_fs14.readFileSync)("/proc/self/environ", "utf8");
+      for (const entry of raw.split("\0")) {
+        const eq2 = entry.indexOf("=");
+        if (eq2 > 0) {
+          _stableEnv[entry.substring(0, eq2)] = entry.substring(eq2 + 1);
+        }
+      }
+    } catch {
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v !== void 0) _stableEnv[k] = v;
+      }
+    }
+  }
+  const result = { ..._stableEnv };
+  for (const key of [
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GIT_CONFIG_COUNT",
+    "GOOGLE_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY"
+  ]) {
+    const v = process.env[key];
+    if (v !== void 0) result[key] = v;
+  }
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith("GIT_CONFIG_") && v !== void 0) {
+      result[k] = v;
+    }
+  }
+  return result;
+}
 function sanitizeSchemaForProvider(schema) {
   if (!schema || typeof schema !== "object") return schema;
   try {
@@ -621357,12 +621623,18 @@ function createTransport(serverConfig) {
     return serverConfig.transportInstance;
   }
   switch (transport) {
-    case "stdio":
+    case "stdio": {
+      let mergedEnv = void 0;
+      if (env) {
+        const baseEnv = getStableProcessEnv();
+        mergedEnv = { ...baseEnv, ...env };
+      }
       return new import_stdio.StdioClientTransport({
         command,
         args: args || [],
-        env: env ? { ...process.env, ...env } : void 0
+        env: mergedEnv
       });
+    }
     case "sse":
       if (!url2) {
         throw new Error("SSE transport requires a URL");
@@ -621395,7 +621667,7 @@ function createTransport(serverConfig) {
       throw new Error(`Unknown transport type: ${transport}`);
   }
 }
-var import_client, import_stdio, import_sse, import_websocket, import_streamableHttp, MCPClientManager;
+var import_client, import_stdio, import_sse, import_websocket, import_streamableHttp, import_fs14, _stableEnv, MCPClientManager;
 var init_client = __esm({
   "src/agent/mcp/client.js"() {
     "use strict";
@@ -621405,6 +621677,8 @@ var init_client = __esm({
     import_websocket = __nccwpck_require__(36615);
     import_streamableHttp = __nccwpck_require__(47894);
     init_config2();
+    import_fs14 = __nccwpck_require__(79896);
+    _stableEnv = null;
     MCPClientManager = class {
       constructor(options = {}) {
         this.clients = /* @__PURE__ */ new Map();
@@ -630295,11 +630569,11 @@ function isSafeEntryName(name15) {
   if (name15.includes("\0")) return false;
   return !name15.includes("/") && !name15.includes("\\");
 }
-var import_fs14, import_promises4, import_path15, DEFAULT_SKILL_DIRS, SKILL_FILE_NAME, SkillRegistry;
+var import_fs15, import_promises4, import_path15, DEFAULT_SKILL_DIRS, SKILL_FILE_NAME, SkillRegistry;
 var init_registry = __esm({
   "src/agent/skills/registry.js"() {
     "use strict";
-    import_fs14 = __nccwpck_require__(79896);
+    import_fs15 = __nccwpck_require__(79896);
     import_promises4 = __nccwpck_require__(91943);
     import_path15 = __nccwpck_require__(16928);
     init_parser7();
@@ -630374,7 +630648,7 @@ var init_registry = __esm({
         return resolvedReal;
       }
       async _scanSkillDir(dirPath) {
-        if (!(0, import_fs14.existsSync)(dirPath)) return [];
+        if (!(0, import_fs15.existsSync)(dirPath)) return [];
         let entries;
         try {
           entries = await (0, import_promises4.readdir)(dirPath, { withFileTypes: true });
@@ -630414,7 +630688,7 @@ var init_registry = __esm({
             }
             continue;
           }
-          if (!(0, import_fs14.existsSync)(skillFilePath)) continue;
+          if (!(0, import_fs15.existsSync)(skillFilePath)) continue;
           const { skill, error: error40 } = await parseSkillFile(skillFilePath, entry.name);
           if (!skill) {
             if (error40) {
@@ -634734,8 +635008,8 @@ function buildClaudeArgs({ systemPrompt, systemPromptFile, mcpConfigPath, sessio
 function resolveClaudeLaunch({
   platform = process.platform,
   env = process.env,
-  fileExists = import_fs15.existsSync,
-  readFile: readFile5 = (file2) => (0, import_fs15.readFileSync)(file2, "utf8"),
+  fileExists = import_fs16.existsSync,
+  readFile: readFile5 = (file2) => (0, import_fs16.readFileSync)(file2, "utf8"),
   execPath = process.execPath
 } = {}) {
   if (platform !== "win32") {
@@ -634869,14 +635143,14 @@ function combinePrompts2(systemPrompt, customPrompt, agent) {
   }
   return systemPrompt || "";
 }
-var import_child_process11, import_crypto8, import_promises6, import_fs15, import_path17, import_os5, import_events3, CLAUDE_MAX_STDIN_CHARS, SYSTEM_PROMPT_FILE_THRESHOLD_BYTES, STDERR_TAIL_CHARS, CLAUDE_NOT_FOUND_MESSAGE, CMD_META_CHARS;
+var import_child_process11, import_crypto8, import_promises6, import_fs16, import_path17, import_os5, import_events3, CLAUDE_MAX_STDIN_CHARS, SYSTEM_PROMPT_FILE_THRESHOLD_BYTES, STDERR_TAIL_CHARS, CLAUDE_NOT_FOUND_MESSAGE, CMD_META_CHARS;
 var init_enhanced_claude_code = __esm({
   "src/agent/engines/enhanced-claude-code.js"() {
     "use strict";
     import_child_process11 = __nccwpck_require__(35317);
     import_crypto8 = __nccwpck_require__(76982);
     import_promises6 = __toESM(__nccwpck_require__(91943), 1);
-    import_fs15 = __nccwpck_require__(79896);
+    import_fs16 = __nccwpck_require__(79896);
     import_path17 = __toESM(__nccwpck_require__(16928), 1);
     import_os5 = __toESM(__nccwpck_require__(70857), 1);
     import_events3 = __nccwpck_require__(24434);
@@ -635113,7 +635387,7 @@ function sanitizeToolInputSchema(schema) {
     return schema;
   }
 }
-var import_ai7, import_crypto9, import_events4, import_fs16, import_promises7, import_path18, ENGINE_ACTIVITY_TIMEOUT_DEFAULT, ENGINE_ACTIVITY_TIMEOUT_MIN, ENGINE_ACTIVITY_TIMEOUT_MAX, REQUEST_TIMEOUT_DEFAULT, REQUEST_TIMEOUT_MIN, REQUEST_TIMEOUT_MAX, GOVERNED_RESULT_IDENTITY, GOVERNED_RESULT_DOMAIN, GOVERNED_CODEX_EXEC_TRANSPORT2, GOVERNED_CANDIDATE_ORIGINS, GOVERNED_CANDIDATE_BOUNDARY_FIELDS, GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS2, MAX_TOOL_ITERATIONS, MAX_HISTORY_MESSAGES, MAX_IMAGE_FILE_SIZE, MAX_DOCUMENT_FILE_SIZE, ProbeAgent;
+var import_ai7, import_crypto9, import_events4, import_fs17, import_promises7, import_path18, ENGINE_ACTIVITY_TIMEOUT_DEFAULT, ENGINE_ACTIVITY_TIMEOUT_MIN, ENGINE_ACTIVITY_TIMEOUT_MAX, REQUEST_TIMEOUT_DEFAULT, REQUEST_TIMEOUT_MIN, REQUEST_TIMEOUT_MAX, GOVERNED_RESULT_IDENTITY, GOVERNED_RESULT_DOMAIN, GOVERNED_CODEX_EXEC_TRANSPORT2, GOVERNED_CANDIDATE_ORIGINS, GOVERNED_CANDIDATE_BOUNDARY_FIELDS, GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS2, MAX_TOOL_ITERATIONS, MAX_HISTORY_MESSAGES, MAX_IMAGE_FILE_SIZE, MAX_DOCUMENT_FILE_SIZE, ProbeAgent;
 var init_ProbeAgent = __esm({
   "src/agent/ProbeAgent.js"() {
     "use strict";
@@ -635121,7 +635395,7 @@ var init_ProbeAgent = __esm({
     import_ai7 = __nccwpck_require__(43409);
     import_crypto9 = __nccwpck_require__(76982);
     import_events4 = __nccwpck_require__(24434);
-    import_fs16 = __nccwpck_require__(79896);
+    import_fs17 = __nccwpck_require__(79896);
     import_promises7 = __nccwpck_require__(91943);
     import_path18 = __nccwpck_require__(16928);
     init_tokenCounter();
@@ -637404,7 +637678,7 @@ var init_ProbeAgent = __esm({
         } else {
           guidanceCandidates = ["agents.md", "claude.md"];
         }
-        if (!(0, import_fs16.existsSync)(rootDirectory)) {
+        if (!(0, import_fs17.existsSync)(rootDirectory)) {
           this._architectureContextLoaded = true;
           return null;
         }
@@ -738833,7 +739107,7 @@ module.exports = /*#__PURE__*/JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45
 /***/ ((module) => {
 
 "use strict";
-module.exports = /*#__PURE__*/JSON.parse('{"name":"@probelabs/visor","version":"0.1.42","main":"dist/index.js","bin":{"visor":"./dist/index.js"},"exports":{".":{"require":"./dist/index.js","import":"./dist/index.js"},"./sdk":{"types":"./dist/sdk/sdk.d.ts","import":"./dist/sdk/sdk.mjs","require":"./dist/sdk/sdk.js"},"./cli":{"require":"./dist/index.js"}},"files":["dist/","defaults/","action.yml","README.md","LICENSE"],"publishConfig":{"access":"public","registry":"https://registry.npmjs.org/"},"scripts":{"build:cli":"ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r docs dist/ && cp -r examples dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo \'#!/usr/bin/env node\' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js","build:sdk":"tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk","build":"npm run build:oss","build:oss":"./scripts/build-oss.sh","build:ee":"npm run build:cli && npm run build:sdk","test":"jest && npm run test:yaml","test:unit":"jest","prepublishOnly":"npm run build","test:watch":"jest --watch","test:coverage":"jest --coverage","test:ee":"jest --testPathPatterns=\'tests/ee\' --testPathIgnorePatterns=\'/node_modules/\' --no-coverage","test:manual:bash":"RUN_MANUAL_TESTS=true jest tests/manual/bash-config-manual.test.ts","lint":"eslint src tests --ext .ts","lint:fix":"eslint src tests --ext .ts --fix","format":"prettier --write src tests","format:check":"prettier --check src tests","clean":"","clean:traces":"node scripts/clean-traces.js","prebuild":"npm run clean && node scripts/generate-config-schema.js","pretest":"npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli","pretest:unit":"npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli","test:with-build":"npm run build:cli && jest","test:yaml":"node dist/index.js test --progress compact","test:yaml:parallel":"node dist/index.js test --progress compact --max-parallel 4","prepare":"husky","pre-commit":"lint-staged","deploy:site":"cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true","deploy:worker":"npx wrangler deploy","deploy":"npm run deploy:site && npm run deploy:worker","publish:ee":"./scripts/publish-ee.sh","release":"./scripts/release.sh","release:patch":"./scripts/release.sh patch","release:minor":"./scripts/release.sh minor","release:major":"./scripts/release.sh major","release:prerelease":"./scripts/release.sh prerelease","docs:validate":"node scripts/validate-readme-links.js","workshop:setup":"npm install -D reveal-md@6.1.2","workshop:serve":"cd workshop && reveal-md slides.md -w","workshop:export":"reveal-md workshop/slides.md --static workshop/build","workshop:pdf":"reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter","workshop:pdf:ci":"reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter --puppeteer-launch-args=\\"--no-sandbox --disable-dev-shm-usage\\"","workshop:pdf:a4":"reveal-md workshop/slides.md --print workshop/Visor-Workshop-A4.pdf --print-size A4","workshop:build":"npm run workshop:export && npm run workshop:pdf","simulate:issue":"TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issues --action opened --debug","simulate:comment":"TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issue_comment --action created --debug"},"keywords":["code-review","ai","github-action","cli","pr-review","visor"],"author":"Probe Labs","license":"MIT","description":"AI workflow engine for code review, assistants, and automation — orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines","repository":{"type":"git","url":"git+https://github.com/probelabs/visor.git"},"bugs":{"url":"https://github.com/probelabs/visor/issues"},"homepage":"https://github.com/probelabs/visor#readme","dependencies":{"@actions/core":"^1.11.1","@apidevtools/swagger-parser":"^12.1.0","@grammyjs/runner":"^2.0.3","@modelcontextprotocol/sdk":"^1.25.3","@nyariv/sandboxjs":"github:probelabs/SandboxJS#d0d8c8ab3113d3b73e08b79b88a4b834ba3fae11","@octokit/action":"^8.0.2","@octokit/auth-app":"^8.1.0","@octokit/core":"^7.0.3","@octokit/rest":"^22.0.0","@opentelemetry/api":"^1.9.0","@opentelemetry/api-logs":"^0.203.0","@opentelemetry/core":"^1.30.1","@opentelemetry/exporter-logs-otlp-http":"^0.203.0","@opentelemetry/exporter-metrics-otlp-http":"^0.203.0","@opentelemetry/exporter-trace-otlp-grpc":"^0.203.0","@opentelemetry/exporter-trace-otlp-http":"^0.203.0","@opentelemetry/instrumentation":"^0.203.0","@opentelemetry/resources":"^1.30.1","@opentelemetry/sdk-logs":"^0.203.0","@opentelemetry/sdk-metrics":"^1.30.1","@opentelemetry/sdk-node":"^0.203.0","@opentelemetry/sdk-trace-base":"^1.30.1","@opentelemetry/semantic-conventions":"^1.30.1","@probelabs/probe":"^0.6.0-rc345","@types/commander":"^2.12.0","@types/uuid":"^10.0.0","@utcp/file":"^1.1.0","@utcp/http":"^1.1.0","@utcp/sdk":"^1.1.0","@utcp/text":"^1.1.0","acorn":"^8.16.0","acorn-walk":"^8.3.5","ajv":"^8.17.1","ajv-formats":"^3.0.1","better-sqlite3":"^12.10.0","blessed":"^0.1.81","botbuilder":"^4.23.3","botframework-connector":"^4.23.3","cli-table3":"^0.6.5","commander":"^14.0.0","deepmerge":"^4.3.1","dotenv":"^17.2.3","grammy":"^1.41.1","ignore":"^7.0.5","imapflow":"^1.2.12","js-yaml":"^4.1.0","jsonpath-plus":"^10.4.0","liquidjs":"^10.21.1","mailparser":"^3.9.3","minimatch":"^10.2.2","node-cron":"^3.0.3","nodemailer":"^8.0.1","open":"^9.1.0","resend":"^6.9.3","simple-git":"^3.28.0","svix":"^1.84.1","uuid":"^11.1.0","ws":"^8.18.3"},"optionalDependencies":{"@anthropic/claude-code-sdk":"npm:null@*","@open-policy-agent/opa-wasm":"^1.10.0","knex":"^3.1.0","mysql2":"^3.11.0","pg":"^8.13.0","tedious":"^19.0.0"},"devDependencies":{"@eslint/js":"^9.34.0","@kie/act-js":"^2.6.2","@kie/mock-github":"^2.0.1","@swc/core":"^1.13.2","@swc/jest":"^0.2.37","@types/better-sqlite3":"^7.6.0","@types/blessed":"^0.1.27","@types/jest":"^30.0.0","@types/js-yaml":"^4.0.9","@types/mailparser":"^3.4.6","@types/node":"^24.3.0","@types/node-cron":"^3.0.11","@types/nodemailer":"^7.0.11","@types/ws":"^8.18.1","@typescript-eslint/eslint-plugin":"^8.42.0","@typescript-eslint/parser":"^8.42.0","@vercel/ncc":"^0.38.4","eslint":"^9.34.0","eslint-config-prettier":"^10.1.8","eslint-plugin-prettier":"^5.5.4","husky":"^9.1.7","jest":"^30.1.3","lint-staged":"^16.1.6","prettier":"^3.6.2","reveal-md":"^6.1.2","ts-json-schema-generator":"^1.5.1","ts-node":"^10.9.2","tsup":"^8.5.0","typescript":"^5.9.2","wrangler":"^3.0.0"},"peerDependenciesMeta":{"@anthropic/claude-code-sdk":{"optional":true}},"directories":{"test":"tests"},"lint-staged":{"src/**/*.{ts,js}":["eslint --fix","prettier --write"],"tests/**/*.{ts,js}":["eslint --fix","prettier --write"],"*.{json,md,yml,yaml}":["prettier --write"]}}');
+module.exports = /*#__PURE__*/JSON.parse('{"name":"@probelabs/visor","version":"0.1.42","main":"dist/index.js","bin":{"visor":"./dist/index.js"},"exports":{".":{"require":"./dist/index.js","import":"./dist/index.js"},"./sdk":{"types":"./dist/sdk/sdk.d.ts","import":"./dist/sdk/sdk.mjs","require":"./dist/sdk/sdk.js"},"./cli":{"require":"./dist/index.js"}},"files":["dist/","defaults/","action.yml","README.md","LICENSE"],"publishConfig":{"access":"public","registry":"https://registry.npmjs.org/"},"scripts":{"build:cli":"ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r docs dist/ && cp -r examples dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo \'#!/usr/bin/env node\' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js","build:sdk":"tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk","build":"npm run build:oss","build:oss":"./scripts/build-oss.sh","build:ee":"npm run build:cli && npm run build:sdk","test":"jest && npm run test:yaml","test:unit":"jest","prepublishOnly":"npm run build","test:watch":"jest --watch","test:coverage":"jest --coverage","test:ee":"jest --testPathPatterns=\'tests/ee\' --testPathIgnorePatterns=\'/node_modules/\' --no-coverage","test:manual:bash":"RUN_MANUAL_TESTS=true jest tests/manual/bash-config-manual.test.ts","lint":"eslint src tests --ext .ts","lint:fix":"eslint src tests --ext .ts --fix","format":"prettier --write src tests","format:check":"prettier --check src tests","clean":"","clean:traces":"node scripts/clean-traces.js","prebuild":"npm run clean && node scripts/generate-config-schema.js","pretest":"npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli","pretest:unit":"npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli","test:with-build":"npm run build:cli && jest","test:yaml":"node dist/index.js test --progress compact","test:yaml:parallel":"node dist/index.js test --progress compact --max-parallel 4","prepare":"husky","pre-commit":"lint-staged","deploy:site":"cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true","deploy:worker":"npx wrangler deploy","deploy":"npm run deploy:site && npm run deploy:worker","publish:ee":"./scripts/publish-ee.sh","release":"./scripts/release.sh","release:patch":"./scripts/release.sh patch","release:minor":"./scripts/release.sh minor","release:major":"./scripts/release.sh major","release:prerelease":"./scripts/release.sh prerelease","docs:validate":"node scripts/validate-readme-links.js","workshop:setup":"npm install -D reveal-md@6.1.2","workshop:serve":"cd workshop && reveal-md slides.md -w","workshop:export":"reveal-md workshop/slides.md --static workshop/build","workshop:pdf":"reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter","workshop:pdf:ci":"reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter --puppeteer-launch-args=\\"--no-sandbox --disable-dev-shm-usage\\"","workshop:pdf:a4":"reveal-md workshop/slides.md --print workshop/Visor-Workshop-A4.pdf --print-size A4","workshop:build":"npm run workshop:export && npm run workshop:pdf","simulate:issue":"TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issues --action opened --debug","simulate:comment":"TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issue_comment --action created --debug"},"keywords":["code-review","ai","github-action","cli","pr-review","visor"],"author":"Probe Labs","license":"MIT","description":"AI workflow engine for code review, assistants, and automation — orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines","repository":{"type":"git","url":"git+https://github.com/probelabs/visor.git"},"bugs":{"url":"https://github.com/probelabs/visor/issues"},"homepage":"https://github.com/probelabs/visor#readme","dependencies":{"@actions/core":"^1.11.1","@apidevtools/swagger-parser":"^12.1.0","@grammyjs/runner":"^2.0.3","@modelcontextprotocol/sdk":"^1.25.3","@nyariv/sandboxjs":"github:probelabs/SandboxJS#d0d8c8ab3113d3b73e08b79b88a4b834ba3fae11","@octokit/action":"^8.0.2","@octokit/auth-app":"^8.1.0","@octokit/core":"^7.0.3","@octokit/rest":"^22.0.0","@opentelemetry/api":"^1.9.0","@opentelemetry/api-logs":"^0.203.0","@opentelemetry/core":"^1.30.1","@opentelemetry/exporter-logs-otlp-http":"^0.203.0","@opentelemetry/exporter-metrics-otlp-http":"^0.203.0","@opentelemetry/exporter-trace-otlp-grpc":"^0.203.0","@opentelemetry/exporter-trace-otlp-http":"^0.203.0","@opentelemetry/instrumentation":"^0.203.0","@opentelemetry/resources":"^1.30.1","@opentelemetry/sdk-logs":"^0.203.0","@opentelemetry/sdk-metrics":"^1.30.1","@opentelemetry/sdk-node":"^0.203.0","@opentelemetry/sdk-trace-base":"^1.30.1","@opentelemetry/semantic-conventions":"^1.30.1","@probelabs/probe":"^0.6.0-rc346","@types/commander":"^2.12.0","@types/uuid":"^10.0.0","@utcp/file":"^1.1.0","@utcp/http":"^1.1.0","@utcp/sdk":"^1.1.0","@utcp/text":"^1.1.0","acorn":"^8.16.0","acorn-walk":"^8.3.5","ajv":"^8.17.1","ajv-formats":"^3.0.1","better-sqlite3":"^12.10.0","blessed":"^0.1.81","botbuilder":"^4.23.3","botframework-connector":"^4.23.3","cli-table3":"^0.6.5","commander":"^14.0.0","deepmerge":"^4.3.1","dotenv":"^17.2.3","grammy":"^1.41.1","ignore":"^7.0.5","imapflow":"^1.2.12","js-yaml":"^4.1.0","jsonpath-plus":"^10.4.0","liquidjs":"^10.21.1","mailparser":"^3.9.3","minimatch":"^10.2.2","node-cron":"^3.0.3","nodemailer":"^8.0.1","open":"^9.1.0","resend":"^6.9.3","simple-git":"^3.28.0","svix":"^1.84.1","uuid":"^11.1.0","ws":"^8.18.3"},"optionalDependencies":{"@anthropic/claude-code-sdk":"npm:null@*","@open-policy-agent/opa-wasm":"^1.10.0","knex":"^3.1.0","mysql2":"^3.11.0","pg":"^8.13.0","tedious":"^19.0.0"},"devDependencies":{"@eslint/js":"^9.34.0","@kie/act-js":"^2.6.2","@kie/mock-github":"^2.0.1","@swc/core":"^1.13.2","@swc/jest":"^0.2.37","@types/better-sqlite3":"^7.6.0","@types/blessed":"^0.1.27","@types/jest":"^30.0.0","@types/js-yaml":"^4.0.9","@types/mailparser":"^3.4.6","@types/node":"^24.3.0","@types/node-cron":"^3.0.11","@types/nodemailer":"^7.0.11","@types/ws":"^8.18.1","@typescript-eslint/eslint-plugin":"^8.42.0","@typescript-eslint/parser":"^8.42.0","@vercel/ncc":"^0.38.4","eslint":"^9.34.0","eslint-config-prettier":"^10.1.8","eslint-plugin-prettier":"^5.5.4","husky":"^9.1.7","jest":"^30.1.3","lint-staged":"^16.1.6","prettier":"^3.6.2","reveal-md":"^6.1.2","ts-json-schema-generator":"^1.5.1","ts-node":"^10.9.2","tsup":"^8.5.0","typescript":"^5.9.2","wrangler":"^3.0.0"},"peerDependenciesMeta":{"@anthropic/claude-code-sdk":{"optional":true}},"directories":{"test":"tests"},"lint-staged":{"src/**/*.{ts,js}":["eslint --fix","prettier --write"],"tests/**/*.{ts,js}":["eslint --fix","prettier --write"],"*.{json,md,yml,yaml}":["prettier --write"]}}');
 
 /***/ })
 
