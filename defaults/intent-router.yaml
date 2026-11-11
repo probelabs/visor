@@ -193,7 +193,7 @@ steps:
             "type": "string"
           }
         },
-        "required": ["intent", "topic"]
+        "required": ["intent", "topic"{% if inputs.skills and inputs.skills.size > 0 %}, "skills"{% elsif inputs.tags and inputs.tags.size > 0 %}, "tags"{% endif %}]
       }
     prompt: |
       <role>
