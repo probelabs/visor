@@ -276,8 +276,20 @@ steps:
     depends_on: [merge-projects]
     sandbox: "{{ inputs.sandbox }}"
     guarantee: "(output?.pr_urls?.length > 0) || (output?.error != null && output?.error != '')"
-    timeout: 3000000
+    # ── Timeout Configuration ──────────────────────────────────────────
+    # Visor hard kill: 2 hours (safety net)
+    timeout: 7200000
     ai:
+      # Probe soft timeout: 30 minutes — observer fires here
+      ai_timeout: 1800000
+      # Negotiated: independent observer LLM decides extensions
+      timeout_behavior: negotiated
+      # Budget: 60 min total (3 × 20 min extensions → up to 1.5h total)
+      negotiated_timeout_budget: 3600000
+      negotiated_timeout_max_requests: 3
+      negotiated_timeout_max_per_request: 1200000
+      graceful_stop_deadline: 30000
+      # ──────────────────────────────────────────────────────────────────
       skip_code_context: true
       prompt_type: engineer
       allowBash: true
