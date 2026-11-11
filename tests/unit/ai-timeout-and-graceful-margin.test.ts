@@ -214,6 +214,38 @@ describe('ai_timeout and graceful margin', () => {
       });
     });
   });
+
+  describe('engineer.yaml negotiated timeout config', () => {
+    it('should have negotiated timeout settings in engineer modify step', () => {
+      const fs = require('fs');
+      const path = require('path');
+      const yaml = require('js-yaml');
+
+      const engineerPath = path.join(__dirname, '../../defaults/engineer.yaml');
+      const content = fs.readFileSync(engineerPath, 'utf8');
+      const config = yaml.load(content) as any;
+
+      // Find the 'engineer-task' step which is the main AI engineering step
+      const modifyStep = config.steps?.['engineer-task'];
+      expect(modifyStep).toBeDefined();
+
+      const ai = modifyStep.ai;
+      expect(ai).toBeDefined();
+
+      // Verify negotiated timeout is configured
+      expect(ai.timeout_behavior).toBe('negotiated');
+      expect(ai.ai_timeout).toBe(1800000); // 30 min soft timeout
+      expect(ai.negotiated_timeout_budget).toBe(3600000); // 60 min extension budget
+      expect(ai.negotiated_timeout_max_requests).toBe(3); // 3 extensions
+      expect(ai.negotiated_timeout_max_per_request).toBe(1200000); // 20 min each
+      expect(ai.graceful_stop_deadline).toBe(30000); // 30s wind-down
+
+      // Verify the hard timeout is high enough to cover base + budget
+      expect(modifyStep.timeout).toBeGreaterThanOrEqual(
+        ai.ai_timeout + ai.negotiated_timeout_budget
+      );
+    });
+  });
 });
 
 describe('safe Probe request timeout events', () => {
