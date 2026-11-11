@@ -1,0 +1,18 @@
+version: "2.0"
+
+# Simplest sandbox: run a command check inside a Docker container
+sandboxes:
+  node-env:
+    image: "node:20-alpine"
+
+sandbox: node-env
+
+checks:
+  node-version:
+    type: command
+    exec: "node --version"
+
+  lint-check:
+    type: command
+    depends_on: [node-version]
+    exec: "echo 'All files pass lint'"

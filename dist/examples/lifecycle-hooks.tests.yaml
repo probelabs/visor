@@ -1,0 +1,62 @@
+# Example: Test lifecycle hooks for setup/teardown
+#
+# Hooks let you run shell commands at key points in the test lifecycle:
+#
+# Suite-level (tests.hooks):
+#   before_all  - runs once before any test case
+#   after_all   - runs once after all test cases (always, even on failure)
+#   before_each - runs before every test case
+#   after_each  - runs after every test case (always, even on failure)
+#
+# Case-level (case.hooks):
+#   before - runs before this specific case
+#   after  - runs after this specific case (always, even on failure)
+#
+# Hooks inherit all environment variables, so seed scripts can use
+# the same DB_PATH, API keys, etc. that your checks use.
+#
+# If a before_all or before hook fails (non-zero exit), tests are skipped.
+# After hooks always run, like a `finally` block.
+
+version: "1.0"
+
+checks:
+  greet:
+    type: command
+    exec: echo "hello from visor"
+
+tests:
+  hooks:
+    before_all:
+      exec: echo "suite setup complete"
+    after_all:
+      exec: echo "suite teardown complete"
+    before_each:
+      exec: echo "resetting state for next case"
+    after_each:
+      exec: echo "cleaning up after case"
+
+  cases:
+    - name: basic-greeting
+      event: manual
+      mocks:
+        greet: "hello from visor"
+      expect:
+        calls:
+          - step: greet
+            exactly: 1
+
+    - name: case-with-own-hooks
+      event: manual
+      hooks:
+        before:
+          exec: echo "seeding data for this specific case"
+        after:
+          exec: echo "removing test data"
+          timeout: 5000    # optional timeout in ms (default: 30s)
+      mocks:
+        greet: "hello from visor"
+      expect:
+        calls:
+          - step: greet
+            exactly: 1

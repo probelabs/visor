@@ -1,0 +1,17 @@
+version: "1"
+
+telegram:
+  require_mention: false  # respond to all DMs without needing @mention
+
+checks:
+  respond:
+    type: ai
+    schema: text
+    on:
+      - telegram_message
+      - manual
+    prompt: |
+      You are a helpful assistant running inside Visor.
+      Respond concisely to the user's message.
+
+      User message: {{ webhook.event.text }}

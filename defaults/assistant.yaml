@@ -424,6 +424,7 @@ steps:
 
       // Get activated skill IDs from router and expand dependencies
       const rawSelectedSkills = outputs['route-intent']?.skills ?? [];
+      log('[build-config] Route-intent raw output:', JSON.stringify({ intent, skills: rawSelectedSkills, tags, topic: outputs['route-intent']?.topic ?? '' }));
       const skillConfigs = Array.isArray(inputs.skills) ? inputs.skills : [];
 
       // Build requires map for dependency expansion
@@ -817,6 +818,14 @@ steps:
         3. If a tool returned an error or empty result, acknowledge it honestly
         4. Never claim success if you only PLANNED but didn't execute
 
+        Tool availability rule:
+        - If tools were CALLED and received ANY response (even empty results or errors
+          from missing arguments), that PROVES the tools are connected and available.
+        - Do NOT claim tools are "not available" or "not working" when they actually
+          responded to calls. An empty search result means no matches — not broken tools.
+        - Trust tool call evidence over thread history: if earlier messages said tools
+          were unavailable but this response successfully called them, they ARE available now.
+
         Step 3 — Act ONLY on genuine gaps:
         - If everything checks out: respond with your previous answer exactly as-is
         - If your text has inaccuracies but work was done: fix ONLY the text wording
@@ -883,6 +892,13 @@ steps:
       {% endif %}
       {% if outputs['route-intent'].tags and outputs['route-intent'].tags.size > 0 %}
       Tags: {{ outputs['route-intent'].tags | join: ', ' }}
+      {% endif %}
+
+      {% if outputs['build-config'].activated_skills and outputs['build-config'].activated_skills.size > 0 %}
+      ## Active Tools for This Request
+      The following skills and their tools are loaded and available RIGHT NOW for this specific request.
+      This may differ from what was available in earlier thread messages — always trust THIS list over thread history.
+      Active skills: {{ outputs['build-config'].activated_skills | join: ', ' }}
       {% endif %}
 
       {% if outputs['build-config'].knowledge_content and outputs['build-config'].knowledge_content != '' %}

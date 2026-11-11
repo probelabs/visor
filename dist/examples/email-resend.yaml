@@ -1,0 +1,30 @@
+version: "1"
+
+# Resend-powered bidirectional email assistant
+# Configure via environment variables:
+#   RESEND_API_KEY, RESEND_WEBHOOK_SECRET
+#
+email:
+  receive:
+    type: resend
+    api_key: ${RESEND_API_KEY}
+    webhook_secret: ${RESEND_WEBHOOK_SECRET}
+  send:
+    type: resend
+    api_key: ${RESEND_API_KEY}
+    from: "Visor Bot <bot@yourdomain.com>"
+
+checks:
+  respond:
+    type: ai
+    schema: text
+    on:
+      - email_message
+      - manual
+    prompt: |
+      You are a helpful email assistant running inside Visor.
+      Reply to the email thread concisely.
+
+      From: {{ webhook.event.from }}
+      Subject: {{ webhook.event.subject }}
+      Message: {{ webhook.event.text }}
