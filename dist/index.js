@@ -3238,7 +3238,7 @@ var import_provider4 = __nccwpck_require__(48468);
 var import_provider_utils28 = __nccwpck_require__(67216);
 
 // src/version.ts
-var VERSION =  true ? "3.0.138" : 0;
+var VERSION =  true ? "3.0.142" : 0;
 
 // src/anthropic-messages-language-model.ts
 var import_provider3 = __nccwpck_require__(48468);
@@ -4131,16 +4131,43 @@ var anthropicSystemMessageProviderOptions = (0, import_provider_utils3.lazySchem
        * initial system prompt). A system message carrying tool changes must come
        * right before an assistant message or at the end of the messages.
        *
-       * Tools referenced by a `tool_addition` must be declared in the `tools`
-       * option (typically with `deferLoading: true` so they are not loaded until
-       * the addition surfaces them). The required
-       * `mid-conversation-tool-changes-2026-07-01` beta is added automatically.
+       * A `tool_addition` either references a tool by `toolName` or defines it
+       * by value with `tool`:
+       * - By reference: the tool must be declared in the `tools` option
+       *   (typically with `deferLoading: true` so it is not loaded until the
+       *   addition surfaces it). The required
+       *   `mid-conversation-tool-changes-2026-07-01` beta is added
+       *   automatically.
+       * - By value: `tool` is a function or provider tool, in the same shape as
+       *   an entry of the `tools` option. The tool does not need to be declared
+       *   in `tools`, and defining a tool under an existing name replaces it
+       *   from that point on. The required `inline-tools-2026-09-15` beta is
+       *   added automatically. Requires the request-level
+       *   `allowInlineToolDefinitions` option to be true.
+       *
+       * A `tool_removal` always references the tool by `toolName`.
        */
       toolChanges: import_v43.z.array(
-        import_v43.z.discriminatedUnion("type", [
+        import_v43.z.union([
           import_v43.z.object({
             type: import_v43.z.literal("tool_addition"),
             toolName: import_v43.z.string()
+          }),
+          import_v43.z.object({
+            type: import_v43.z.literal("tool_addition"),
+            tool: import_v43.z.union([
+              import_v43.z.looseObject({
+                type: import_v43.z.literal("function"),
+                name: import_v43.z.string(),
+                inputSchema: import_v43.z.record(import_v43.z.string(), import_v43.z.unknown())
+              }),
+              import_v43.z.looseObject({
+                type: import_v43.z.literal("provider"),
+                id: import_v43.z.string(),
+                name: import_v43.z.string(),
+                args: import_v43.z.record(import_v43.z.string(), import_v43.z.unknown())
+              })
+            ])
           }),
           import_v43.z.object({
             type: import_v43.z.literal("tool_removal"),
@@ -4164,6 +4191,13 @@ var anthropicLanguageModelOptions = (0, import_provider_utils3.lazySchema)(() =>
        */
       sendReasoning: import_v43.z.boolean().optional(),
       /**
+       * Allow tool definitions supplied by value in system-message tool changes.
+       * Defaults to false. Enable only for server-controlled messages: inline
+       * definitions can add tools or replace their configured restrictions.
+       * This request-level option cannot be enabled through message metadata.
+       */
+      allowInlineToolDefinitions: import_v43.z.boolean().optional(),
+      /**
        * Determines how structured outputs are generated.
        *
        * - `outputFormat`: Use the `output_config.format` parameter to specify the structured output format.
@@ -4178,7 +4212,7 @@ var anthropicLanguageModelOptions = (0, import_provider_utils3.lazySchema)(() =>
        * Requires a minimum budget of 1,024 tokens and counts towards the `max_tokens` limit.
        *
        * Models that always use adaptive thinking (e.g. `claude-opus-5-5`,
-       * `claude-fable-5-1`) reject `enabled` and `disabled`. For those models the
+       * `claude-fable-5-1`, `claude-fable-5-2`) reject `enabled` and `disabled`. For those models the
        * provider drops the unsupported setting, emits a warning, and sends an
        * adaptive thinking request. Use `effort` to control how much they think.
        *
@@ -4552,10 +4586,17 @@ var computerToolset_20260801Members = [
   "hold_key",
   "wait"
 ];
-var computerToolset_20260801InputSchema = (0, import_provider_utils5.lazySchema)(
+var computerToolset_20260801InputSchema = (configs) => (0, import_provider_utils5.lazySchema)(
   () => (0, import_provider_utils5.zodSchema)(
     import_v45.z.object({
-      action: import_v45.z.enum(computerToolset_20260801Members),
+      action: import_v45.z.enum(
+        computerToolset_20260801Members.filter(
+          (member) => {
+            var _a;
+            return ((_a = configs == null ? void 0 : configs[member]) == null ? void 0 : _a.enabled) !== false;
+          }
+        )
+      ),
       coordinate: import_v45.z.tuple([import_v45.z.number().int(), import_v45.z.number().int()]).optional(),
       duration: import_v45.z.number().optional(),
       region: import_v45.z.tuple([
@@ -4585,9 +4626,13 @@ var computerToolset_20260801ArgsSchema = (0, import_provider_utils5.lazySchema)(
     })
   )
 );
-var computerToolset_20260801 = (0, import_provider_utils5.createProviderToolFactory)({
+var factory2 = (0, import_provider_utils5.createProviderToolFactory)({
   id: "anthropic.computer_toolset_20260801",
-  inputSchema: computerToolset_20260801InputSchema
+  inputSchema: computerToolset_20260801InputSchema()
+});
+var computerToolset_20260801 = (args) => ({
+  ...factory2(args),
+  inputSchema: computerToolset_20260801InputSchema(args.configs)
 });
 
 // src/tool/text-editor_20250728.ts
@@ -4614,12 +4659,12 @@ var textEditor_20250728InputSchema = (0, import_provider_utils6.lazySchema)(
     })
   )
 );
-var factory2 = (0, import_provider_utils6.createProviderToolFactory)({
+var factory3 = (0, import_provider_utils6.createProviderToolFactory)({
   id: "anthropic.text_editor_20250728",
   inputSchema: textEditor_20250728InputSchema
 });
 var textEditor_20250728 = (args = {}) => {
-  return factory2(args);
+  return factory3(args);
 };
 
 // src/tool/web-search_20260209.ts
@@ -4661,14 +4706,14 @@ var webSearch_20260209InputSchema = (0, import_provider_utils7.lazySchema)(
     })
   )
 );
-var factory3 = (0, import_provider_utils7.createProviderToolFactoryWithOutputSchema)({
+var factory4 = (0, import_provider_utils7.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_search_20260209",
   inputSchema: webSearch_20260209InputSchema,
   outputSchema: webSearch_20260209OutputSchema,
   supportsDeferredResults: true
 });
 var webSearch_20260209 = (args = {}) => {
-  return factory3(args);
+  return factory4(args);
 };
 
 // src/tool/web-search_20250305.ts
@@ -4710,14 +4755,14 @@ var webSearch_20250305InputSchema = (0, import_provider_utils8.lazySchema)(
     })
   )
 );
-var factory4 = (0, import_provider_utils8.createProviderToolFactoryWithOutputSchema)({
+var factory5 = (0, import_provider_utils8.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_search_20250305",
   inputSchema: webSearch_20250305InputSchema,
   outputSchema: webSearch_20250305OutputSchema,
   supportsDeferredResults: true
 });
 var webSearch_20250305 = (args = {}) => {
-  return factory4(args);
+  return factory5(args);
 };
 
 // src/tool/web-fetch-20260209.ts
@@ -4767,14 +4812,14 @@ var webFetch_20260209InputSchema = (0, import_provider_utils9.lazySchema)(
     })
   )
 );
-var factory5 = (0, import_provider_utils9.createProviderToolFactoryWithOutputSchema)({
+var factory6 = (0, import_provider_utils9.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_fetch_20260209",
   inputSchema: webFetch_20260209InputSchema,
   outputSchema: webFetch_20260209OutputSchema,
   supportsDeferredResults: true
 });
 var webFetch_20260209 = (args = {}) => {
-  return factory5(args);
+  return factory6(args);
 };
 
 // src/tool/web-fetch-20250910.ts
@@ -4824,14 +4869,14 @@ var webFetch_20250910InputSchema = (0, import_provider_utils10.lazySchema)(
     })
   )
 );
-var factory6 = (0, import_provider_utils10.createProviderToolFactoryWithOutputSchema)({
+var factory7 = (0, import_provider_utils10.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_fetch_20250910",
   inputSchema: webFetch_20250910InputSchema,
   outputSchema: webFetch_20250910OutputSchema,
   supportsDeferredResults: true
 });
 var webFetch_20250910 = (args = {}) => {
-  return factory6(args);
+  return factory7(args);
 };
 
 // src/anthropic-prepare-tools.ts
@@ -4839,6 +4884,7 @@ var import_provider_utils11 = __nccwpck_require__(67216);
 async function prepareTools({
   tools,
   toolChoice,
+  hasInlineTools = false,
   disableParallelToolUse,
   cacheControlValidator,
   supportsStructuredOutput,
@@ -4851,11 +4897,11 @@ async function prepareTools({
   const toolWarnings = [];
   const betas = /* @__PURE__ */ new Set();
   const validator = cacheControlValidator || new CacheControlValidator();
-  if (tools == null) {
+  if (tools == null && !hasInlineTools) {
     return { tools: void 0, toolChoice: void 0, toolWarnings, betas };
   }
   const anthropicTools2 = [];
-  for (const tool of tools) {
+  for (const tool of tools != null ? tools : []) {
     switch (tool.type) {
       case "function": {
         const cacheControl = validator.getCacheControl(tool.providerOptions, {
@@ -5167,9 +5213,10 @@ async function prepareTools({
       }
     }
   }
+  const declaredTools = tools == null ? void 0 : anthropicTools2;
   if (toolChoice == null) {
     return {
-      tools: anthropicTools2,
+      tools: declaredTools,
       toolChoice: disableParallelToolUse ? { type: "auto", disable_parallel_tool_use: disableParallelToolUse } : void 0,
       toolWarnings,
       betas
@@ -5179,7 +5226,7 @@ async function prepareTools({
   switch (type) {
     case "auto":
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: {
           type: "auto",
           disable_parallel_tool_use: disableParallelToolUse
@@ -5195,7 +5242,7 @@ async function prepareTools({
           details: `toolChoice 'required' is not supported with this model or thinking configuration. Using 'auto' instead. Instruct the model to use a tool in the prompt and verify that a tool call was made.`
         });
         return {
-          tools: anthropicTools2,
+          tools: declaredTools,
           toolChoice: {
             type: "auto",
             disable_parallel_tool_use: disableParallelToolUse
@@ -5205,7 +5252,7 @@ async function prepareTools({
         };
       }
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: {
           type: "any",
           disable_parallel_tool_use: disableParallelToolUse
@@ -5215,7 +5262,7 @@ async function prepareTools({
       };
     case "none":
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: { type: "none" },
         toolWarnings,
         betas
@@ -5228,7 +5275,7 @@ async function prepareTools({
           details: `toolChoice 'tool' is not supported with this model or thinking configuration. Only the '${toolChoice.toolName}' tool is sent with 'auto' tool choice. Instruct the model to use the tool in the prompt and verify that a tool call was made.`
         });
         return {
-          tools: anthropicTools2.filter(
+          tools: declaredTools == null ? void 0 : declaredTools.filter(
             (tool) => "name" in tool && tool.name === toolChoice.toolName
           ),
           toolChoice: {
@@ -5240,7 +5287,7 @@ async function prepareTools({
         };
       }
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: {
           type: "tool",
           name: toolChoice.toolName,
@@ -5340,13 +5387,13 @@ var codeExecution_20250522InputSchema = (0, import_provider_utils12.lazySchema)(
     })
   )
 );
-var factory7 = (0, import_provider_utils12.createProviderToolFactoryWithOutputSchema)({
+var factory8 = (0, import_provider_utils12.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.code_execution_20250522",
   inputSchema: codeExecution_20250522InputSchema,
   outputSchema: codeExecution_20250522OutputSchema
 });
 var codeExecution_20250522 = (args = {}) => {
-  return factory7(args);
+  return factory8(args);
 };
 
 // src/tool/code-execution_20250825.ts
@@ -5445,7 +5492,7 @@ var codeExecution_20250825InputSchema = (0, import_provider_utils13.lazySchema)(
     ])
   )
 );
-var factory8 = (0, import_provider_utils13.createProviderToolFactoryWithOutputSchema)({
+var factory9 = (0, import_provider_utils13.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.code_execution_20250825",
   inputSchema: codeExecution_20250825InputSchema,
   outputSchema: codeExecution_20250825OutputSchema,
@@ -5455,7 +5502,7 @@ var factory8 = (0, import_provider_utils13.createProviderToolFactoryWithOutputSc
   supportsDeferredResults: true
 });
 var codeExecution_20250825 = (args = {}) => {
-  return factory8(args);
+  return factory9(args);
 };
 
 // src/tool/code-execution_20260120.ts
@@ -5565,14 +5612,14 @@ var codeExecution_20260120InputSchema = (0, import_provider_utils14.lazySchema)(
     ])
   )
 );
-var factory9 = (0, import_provider_utils14.createProviderToolFactoryWithOutputSchema)({
+var factory10 = (0, import_provider_utils14.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.code_execution_20260120",
   inputSchema: codeExecution_20260120InputSchema,
   outputSchema: codeExecution_20260120OutputSchema,
   supportsDeferredResults: true
 });
 var codeExecution_20260120 = (args = {}) => {
-  return factory9(args);
+  return factory10(args);
 };
 
 // src/tool/tool-search-regex_20251119.ts
@@ -5609,14 +5656,14 @@ var toolSearchRegex_20251119InputSchema = (0, import_provider_utils15.lazySchema
     })
   )
 );
-var factory10 = (0, import_provider_utils15.createProviderToolFactoryWithOutputSchema)({
+var factory11 = (0, import_provider_utils15.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.tool_search_regex_20251119",
   inputSchema: toolSearchRegex_20251119InputSchema,
   outputSchema: toolSearchRegex_20251119OutputSchema,
   supportsDeferredResults: true
 });
 var toolSearchRegex_20251119 = (args = {}) => {
-  return factory10(args);
+  return factory11(args);
 };
 
 // src/convert-to-anthropic-messages-prompt.ts
@@ -5660,6 +5707,32 @@ async function extractErrorValue(value) {
   }
   return {};
 }
+function isComputerTool(tool) {
+  return tool.type === "provider" && tool.id.startsWith("anthropic.computer_");
+}
+async function getInlineToolsFromPrompt(prompt) {
+  var _a;
+  const inlineTools = [];
+  for (const message of prompt) {
+    if (message.role !== "system" || message.providerOptions == null) {
+      continue;
+    }
+    const options = await (0, import_provider_utils16.parseProviderOptions)({
+      provider: "anthropic",
+      providerOptions: message.providerOptions,
+      schema: anthropicSystemMessageProviderOptions
+    });
+    for (const toolChange of (_a = options == null ? void 0 : options.toolChanges) != null ? _a : []) {
+      if ("tool" in toolChange) {
+        const tool = toolChange.tool;
+        if (!isComputerTool(tool)) {
+          inlineTools.push(tool);
+        }
+      }
+    }
+  }
+  return inlineTools;
+}
 async function convertToAnthropicMessagesPrompt({
   prompt,
   sendReasoning,
@@ -5667,7 +5740,8 @@ async function convertToAnthropicMessagesPrompt({
   cacheControlValidator,
   toolNameMapping,
   toolsetNames = {},
-  convertMediaPart
+  convertMediaPart,
+  convertInlineTool
 }) {
   var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
   const betas = /* @__PURE__ */ new Set();
@@ -5704,6 +5778,7 @@ async function convertToAnthropicMessagesPrompt({
       case "system": {
         const systemMessages = [];
         let toolChangeCount = 0;
+        let hasInlineToolDefinition = false;
         let hasMidConversationOptions = false;
         for (const { content: text, providerOptions } of block.messages) {
           const systemMessageOptions = await (0, import_provider_utils16.parseProviderOptions)({
@@ -5726,6 +5801,40 @@ async function convertToAnthropicMessagesPrompt({
             });
           }
           for (const toolChange of toolChanges) {
+            if ("tool" in toolChange) {
+              if (convertInlineTool == null) {
+                throw new import_provider2.UnsupportedFunctionalityError({
+                  functionality: "tool additions by value in mid-conversation tool changes"
+                });
+              }
+              const tool = toolChange.tool;
+              if (isComputerTool(tool)) {
+                warnings.push({
+                  type: "other",
+                  message: `The tool '${tool.name}' cannot be added by value in a tool change. Declare it in the tools option and add it by reference with toolName. The tool change has been ignored.`
+                });
+                continue;
+              }
+              const {
+                definition,
+                warnings: toolWarnings,
+                betas: toolBetas
+              } = await convertInlineTool(tool);
+              warnings.push(...toolWarnings);
+              for (const beta of toolBetas) {
+                betas.add(beta);
+              }
+              if (definition == null) {
+                continue;
+              }
+              content.push({
+                type: "tool_addition",
+                tool: { type: "tool_definition", definition }
+              });
+              toolChangeCount++;
+              hasInlineToolDefinition = true;
+              continue;
+            }
             toolChangeCount++;
             content.push({
               type: toolChange.type,
@@ -5734,6 +5843,9 @@ async function convertToAnthropicMessagesPrompt({
                 name: toolNameMapping.toProviderToolName(toolChange.toolName)
               }
             });
+          }
+          if (content.length === 0 && clearAt == null && effort == null) {
+            continue;
           }
           hasMidConversationOptions || (hasMidConversationOptions = clearAt != null || effort != null);
           systemMessages.push({
@@ -5769,7 +5881,9 @@ async function convertToAnthropicMessagesPrompt({
         } else {
           messages.push(...systemMessages);
           betas.add("mid-conversation-system-2026-04-07");
-          if (toolChangeCount > 0) {
+          if (hasInlineToolDefinition) {
+            betas.add("inline-tools-2026-09-15");
+          } else if (toolChangeCount > 0) {
             betas.add("mid-conversation-tool-changes-2026-07-01");
           }
           if (systemMessages.some((message) => message.clear_at != null)) {
@@ -7089,6 +7203,22 @@ function isOpenObject(node) {
 }
 
 // src/anthropic-messages-language-model.ts
+function validateToolsetMember({
+  toolsetName,
+  memberName,
+  tools
+}) {
+  var _a, _b;
+  const toolset = tools == null ? void 0 : tools.find(
+    (tool) => "type" in tool && tool.type === "computer_toolset_20260801"
+  );
+  if (toolsetName !== "computer" || toolset == null || !computerToolset_20260801Members.some((member) => member === memberName) || ((_b = (_a = toolset.configs) == null ? void 0 : _a[memberName]) == null ? void 0 : _b.enabled) === false) {
+    throw new import_provider3.InvalidResponseDataError({
+      data: { toolsetName, memberName },
+      message: `Received an unavailable toolset member: ${toolsetName}.${memberName}.`
+    });
+  }
+}
 function createCitationSource(citation, citationDocuments, generateId3) {
   var _a;
   if (citation.type === "web_search_result_location") {
@@ -7156,9 +7286,15 @@ function toToolsetMemberInput({
   memberName,
   input
 }) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new import_provider3.InvalidResponseDataError({
+      data: input,
+      message: "Invalid toolset member input: expected an object."
+    });
+  }
   return {
-    action: memberName,
-    ...typeof input === "object" && input !== null && !Array.isArray(input) ? input : {}
+    ...input,
+    action: memberName
   };
 }
 var TEXT_OR_THINKING_BLOCK_TYPES = /* @__PURE__ */ new Set([
@@ -7230,7 +7366,7 @@ var AnthropicMessagesLanguageModel = class {
     providerOptions,
     stream
   }) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const warnings = [];
     if (frequencyPenalty != null) {
       warnings.push({ type: "unsupported", feature: "frequencyPenalty" });
@@ -7359,8 +7495,22 @@ var AnthropicMessagesLanguageModel = class {
     const cacheControlValidator = new CacheControlValidator(
       this.config.cacheControlProviderOptionsName
     );
+    const defaultEagerInputStreaming = stream && ((_e = anthropicOptions == null ? void 0 : anthropicOptions.toolStreaming) != null ? _e : true);
+    const inlineTools = await getInlineToolsFromPrompt(prompt);
+    const declaredFunctionToolNames = new Set(
+      (tools != null ? tools : []).flatMap(
+        (tool) => tool.type === "function" ? [tool.name] : []
+      )
+    );
     const toolNameMapping = (0, import_provider_utils17.createToolNameMapping)({
-      tools,
+      // later entries win when provider tool names collide, so the declared
+      // tools go last and an inline tool cannot take over their mapping:
+      tools: [
+        ...inlineTools.filter(
+          (tool) => !(tool.type === "provider" && declaredFunctionToolNames.has(tool.name))
+        ),
+        ...tools != null ? tools : []
+      ],
       providerToolNames: {
         "anthropic.code_execution_20250522": "code_execution",
         "anthropic.code_execution_20250825": "code_execution",
@@ -7386,15 +7536,57 @@ var AnthropicMessagesLanguageModel = class {
       }
     });
     const toolsetNames = getAnthropicToolsetNames(tools);
+    const inlineToolDefinitions = [];
     const { prompt: messagesPrompt, betas } = await convertToAnthropicMessagesPrompt({
       prompt,
-      sendReasoning: (_e = anthropicOptions == null ? void 0 : anthropicOptions.sendReasoning) != null ? _e : true,
+      sendReasoning: (_f = anthropicOptions == null ? void 0 : anthropicOptions.sendReasoning) != null ? _f : true,
       warnings,
       cacheControlValidator,
       toolNameMapping,
       toolsetNames,
-      convertMediaPart: this.config.convertMediaPart
+      convertMediaPart: this.config.convertMediaPart,
+      convertInlineTool: async (tool) => {
+        const {
+          tools: definitions,
+          toolWarnings: toolWarnings2,
+          betas: betas2
+        } = await prepareTools({
+          tools: [tool],
+          toolChoice: void 0,
+          cacheControlValidator,
+          supportsStructuredOutput,
+          supportsStrictTools
+          // no stream-dependent defaults (eager input streaming): the
+          // definition is replayed on every request and has to stay
+          // identical between streaming and non-streaming calls to keep
+          // the cache.
+        });
+        if ((definitions == null ? void 0 : definitions[0]) != null) {
+          inlineToolDefinitions.push({
+            sdkName: tool.name,
+            definition: definitions[0]
+          });
+        }
+        return {
+          definition: definitions == null ? void 0 : definitions[0],
+          warnings: toolWarnings2,
+          betas: betas2
+        };
+      }
     });
+    const emittedInlineDefinitions = new Set(
+      messagesPrompt.messages.flatMap(
+        (message) => message.role === "system" ? message.content.flatMap(
+          (part) => part.type === "tool_addition" && part.tool.type === "tool_definition" ? [part.tool.definition] : []
+        ) : []
+      )
+    );
+    if (emittedInlineDefinitions.size > 0 && (anthropicOptions == null ? void 0 : anthropicOptions.allowInlineToolDefinitions) !== true) {
+      throw new import_provider3.InvalidArgumentError({
+        argument: "providerOptions.anthropic.allowInlineToolDefinitions",
+        message: "Inline tool definitions require providerOptions.anthropic.allowInlineToolDefinitions to be true. Enable this option only for server-controlled messages, or declare tools in the tools option and add them by reference with toolName."
+      });
+    }
     if (rejectsThinkingDisabled && (anthropicOptions == null ? void 0 : anthropicOptions.thinking) != null) {
       const requestedThinking = anthropicOptions.thinking;
       const requestedType = "type" in requestedThinking ? requestedThinking.type : void 0;
@@ -7503,7 +7695,7 @@ var AnthropicMessagesLanguageModel = class {
       ...(anthropicOptions == null ? void 0 : anthropicOptions.cacheControl) && {
         cache_control: anthropicOptions.cacheControl
       },
-      ...((_f = anthropicOptions == null ? void 0 : anthropicOptions.metadata) == null ? void 0 : _f.userId) != null && {
+      ...((_g = anthropicOptions == null ? void 0 : anthropicOptions.metadata) == null ? void 0 : _g.userId) != null && {
         metadata: { user_id: anthropicOptions.metadata.userId }
       },
       // mcp servers:
@@ -7698,7 +7890,6 @@ var AnthropicMessagesLanguageModel = class {
     } else if ((anthropicOptions == null ? void 0 : anthropicOptions.fallbacks) && anthropicOptions.fallbacks.length > 0) {
       betas.add("server-side-fallback-2026-06-01");
     }
-    const defaultEagerInputStreaming = stream && ((_g = anthropicOptions == null ? void 0 : anthropicOptions.toolStreaming) != null ? _g : true);
     const {
       tools: anthropicTools2,
       toolChoice: anthropicToolChoice,
@@ -7722,6 +7913,9 @@ var AnthropicMessagesLanguageModel = class {
       } : {
         tools: tools != null ? tools : [],
         toolChoice,
+        // tool changes can add tools when `tools` is empty, so the tool
+        // choice and parallel tool use settings still apply:
+        hasInlineTools: inlineTools.length > 0,
         disableParallelToolUse: anthropicOptions == null ? void 0 : anthropicOptions.disableParallelToolUse,
         cacheControlValidator,
         supportsStructuredOutput,
@@ -7730,6 +7924,30 @@ var AnthropicMessagesLanguageModel = class {
         rejectsForcedToolUse: rejectsForcedToolUse || thinkingType === "enabled"
       }
     );
+    if ((toolChoice == null ? void 0 : toolChoice.type) === "tool" && ((anthropicToolChoice == null ? void 0 : anthropicToolChoice.type) === "auto" || jsonResponseTool != null) || (toolChoice == null ? void 0 : toolChoice.type) === "none" && jsonResponseTool != null) {
+      for (const server of (_h = baseArgs.mcp_servers) != null ? _h : []) {
+        server.tool_configuration = {
+          allowed_tools: (_i = server.tool_configuration) == null ? void 0 : _i.allowed_tools,
+          enabled: false
+        };
+      }
+      const selectedSdkName = toolChoice.type === "tool" ? toolChoice.toolName : void 0;
+      const selectedTool = tools == null ? void 0 : tools.find((tool) => tool.name === selectedSdkName);
+      const selectedProviderName = jsonResponseTool != null && selectedSdkName != null && (selectedTool == null ? void 0 : selectedTool.type) !== "function" ? toolNameMapping.toProviderToolName(selectedSdkName) : selectedSdkName;
+      const conflictingTool = inlineToolDefinitions.find(
+        ({ sdkName, definition }) => emittedInlineDefinitions.has(definition) && (toolChoice.type === "none" || // The JSON-tool path filters application tools by SDK name before
+        // conversion; the forced-choice fallback filters by provider name.
+        jsonResponseTool != null && sdkName !== selectedSdkName || !("name" in definition) || definition.name !== selectedProviderName)
+      );
+      if (conflictingTool != null) {
+        const toolName = "name" in conflictingTool.definition ? conflictingTool.definition.name : conflictingTool.definition.type;
+        const choice = toolChoice.type === "tool" ? `named tool choice '${toolChoice.toolName}'` : `tool choice 'none'`;
+        throw new import_provider3.InvalidArgumentError({
+          argument: "toolChoice",
+          message: `Inline tool '${toolName}' conflicts with ${choice}. Inline definitions must respect the tool choice when forced tool use falls back or the JSON response tool is used.`
+        });
+      }
+    }
     const cacheWarnings = cacheControlValidator.getWarnings();
     return {
       args: {
@@ -7744,7 +7962,7 @@ var AnthropicMessagesLanguageModel = class {
         ...betas,
         ...toolsBetas,
         ...userSuppliedBetas,
-        ...(_h = anthropicOptions == null ? void 0 : anthropicOptions.anthropicBeta) != null ? _h : []
+        ...(_j = anthropicOptions == null ? void 0 : anthropicOptions.anthropicBeta) != null ? _j : []
       ]),
       usesJsonResponseTool: jsonResponseTool != null,
       toolNameMapping,
@@ -7924,6 +8142,11 @@ var AnthropicMessagesLanguageModel = class {
               text: JSON.stringify(part.input)
             });
           } else if (part.toolset_name != null) {
+            validateToolsetMember({
+              toolsetName: part.toolset_name,
+              memberName: part.name,
+              tools: args.tools
+            });
             content.push({
               type: "tool-call",
               toolCallId: part.id,
@@ -8503,6 +8726,11 @@ var AnthropicMessagesLanguageModel = class {
                       id: String(value.index)
                     });
                   } else if (part.toolset_name != null) {
+                    validateToolsetMember({
+                      toolsetName: part.toolset_name,
+                      memberName: part.name,
+                      tools: body.tools
+                    });
                     const callerInfo = getAnthropicCallerInfo(part.caller);
                     const customToolName = toolNameMapping.toCustomToolName(
                       part.toolset_name
@@ -8918,9 +9146,12 @@ var AnthropicMessagesLanguageModel = class {
                         try {
                           memberInput = contentBlock.input === "" ? {} : (0, import_provider_utils17.secureJsonParse)(contentBlock.input);
                         } catch (e) {
-                          memberInput = void 0;
+                          throw new import_provider3.InvalidResponseDataError({
+                            data: contentBlock.input,
+                            message: "Invalid toolset member input JSON."
+                          });
                         }
-                        contentBlock.input = memberInput === void 0 ? contentBlock.input : JSON.stringify(
+                        contentBlock.input = JSON.stringify(
                           toToolsetMemberInput({
                             memberName: contentBlock.toolset.memberName,
                             input: memberInput
@@ -9378,7 +9609,7 @@ function getModelCapabilities(modelId) {
       supportsBetweenToolsThinking: false,
       isKnownModel: true
     };
-  } else if (modelId.includes("claude-fable-5-1")) {
+  } else if (modelId.includes("claude-fable-5-2") || modelId.includes("claude-fable-5-1")) {
     return {
       maxOutputTokens: 128e3,
       supportsStructuredOutput: true,
@@ -9861,14 +10092,14 @@ var toolSearchBm25_20251119InputSchema = (0, import_provider_utils27.lazySchema)
     })
   )
 );
-var factory11 = (0, import_provider_utils27.createProviderToolFactoryWithOutputSchema)({
+var factory12 = (0, import_provider_utils27.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.tool_search_bm25_20251119",
   inputSchema: toolSearchBm25_20251119InputSchema,
   outputSchema: toolSearchBm25_20251119OutputSchema,
   supportsDeferredResults: true
 });
 var toolSearchBm25_20251119 = (args = {}) => {
-  return factory11(args);
+  return factory12(args);
 };
 
 // src/anthropic-tools.ts
@@ -11153,16 +11384,43 @@ var anthropicSystemMessageProviderOptions = (0, import_provider_utils3.lazySchem
        * initial system prompt). A system message carrying tool changes must come
        * right before an assistant message or at the end of the messages.
        *
-       * Tools referenced by a `tool_addition` must be declared in the `tools`
-       * option (typically with `deferLoading: true` so they are not loaded until
-       * the addition surfaces them). The required
-       * `mid-conversation-tool-changes-2026-07-01` beta is added automatically.
+       * A `tool_addition` either references a tool by `toolName` or defines it
+       * by value with `tool`:
+       * - By reference: the tool must be declared in the `tools` option
+       *   (typically with `deferLoading: true` so it is not loaded until the
+       *   addition surfaces it). The required
+       *   `mid-conversation-tool-changes-2026-07-01` beta is added
+       *   automatically.
+       * - By value: `tool` is a function or provider tool, in the same shape as
+       *   an entry of the `tools` option. The tool does not need to be declared
+       *   in `tools`, and defining a tool under an existing name replaces it
+       *   from that point on. The required `inline-tools-2026-09-15` beta is
+       *   added automatically. Requires the request-level
+       *   `allowInlineToolDefinitions` option to be true.
+       *
+       * A `tool_removal` always references the tool by `toolName`.
        */
       toolChanges: import_v43.z.array(
-        import_v43.z.discriminatedUnion("type", [
+        import_v43.z.union([
           import_v43.z.object({
             type: import_v43.z.literal("tool_addition"),
             toolName: import_v43.z.string()
+          }),
+          import_v43.z.object({
+            type: import_v43.z.literal("tool_addition"),
+            tool: import_v43.z.union([
+              import_v43.z.looseObject({
+                type: import_v43.z.literal("function"),
+                name: import_v43.z.string(),
+                inputSchema: import_v43.z.record(import_v43.z.string(), import_v43.z.unknown())
+              }),
+              import_v43.z.looseObject({
+                type: import_v43.z.literal("provider"),
+                id: import_v43.z.string(),
+                name: import_v43.z.string(),
+                args: import_v43.z.record(import_v43.z.string(), import_v43.z.unknown())
+              })
+            ])
           }),
           import_v43.z.object({
             type: import_v43.z.literal("tool_removal"),
@@ -11186,6 +11444,13 @@ var anthropicLanguageModelOptions = (0, import_provider_utils3.lazySchema)(() =>
        */
       sendReasoning: import_v43.z.boolean().optional(),
       /**
+       * Allow tool definitions supplied by value in system-message tool changes.
+       * Defaults to false. Enable only for server-controlled messages: inline
+       * definitions can add tools or replace their configured restrictions.
+       * This request-level option cannot be enabled through message metadata.
+       */
+      allowInlineToolDefinitions: import_v43.z.boolean().optional(),
+      /**
        * Determines how structured outputs are generated.
        *
        * - `outputFormat`: Use the `output_config.format` parameter to specify the structured output format.
@@ -11200,7 +11465,7 @@ var anthropicLanguageModelOptions = (0, import_provider_utils3.lazySchema)(() =>
        * Requires a minimum budget of 1,024 tokens and counts towards the `max_tokens` limit.
        *
        * Models that always use adaptive thinking (e.g. `claude-opus-5-5`,
-       * `claude-fable-5-1`) reject `enabled` and `disabled`. For those models the
+       * `claude-fable-5-1`, `claude-fable-5-2`) reject `enabled` and `disabled`. For those models the
        * provider drops the unsupported setting, emits a warning, and sends an
        * adaptive thinking request. Use `effort` to control how much they think.
        *
@@ -11574,10 +11839,17 @@ var computerToolset_20260801Members = [
   "hold_key",
   "wait"
 ];
-var computerToolset_20260801InputSchema = (0, import_provider_utils5.lazySchema)(
+var computerToolset_20260801InputSchema = (configs) => (0, import_provider_utils5.lazySchema)(
   () => (0, import_provider_utils5.zodSchema)(
     import_v45.z.object({
-      action: import_v45.z.enum(computerToolset_20260801Members),
+      action: import_v45.z.enum(
+        computerToolset_20260801Members.filter(
+          (member) => {
+            var _a;
+            return ((_a = configs == null ? void 0 : configs[member]) == null ? void 0 : _a.enabled) !== false;
+          }
+        )
+      ),
       coordinate: import_v45.z.tuple([import_v45.z.number().int(), import_v45.z.number().int()]).optional(),
       duration: import_v45.z.number().optional(),
       region: import_v45.z.tuple([
@@ -11607,9 +11879,13 @@ var computerToolset_20260801ArgsSchema = (0, import_provider_utils5.lazySchema)(
     })
   )
 );
-var computerToolset_20260801 = (0, import_provider_utils5.createProviderToolFactory)({
+var factory2 = (0, import_provider_utils5.createProviderToolFactory)({
   id: "anthropic.computer_toolset_20260801",
-  inputSchema: computerToolset_20260801InputSchema
+  inputSchema: computerToolset_20260801InputSchema()
+});
+var computerToolset_20260801 = (args) => ({
+  ...factory2(args),
+  inputSchema: computerToolset_20260801InputSchema(args.configs)
 });
 
 // src/tool/text-editor_20250728.ts
@@ -11636,12 +11912,12 @@ var textEditor_20250728InputSchema = (0, import_provider_utils6.lazySchema)(
     })
   )
 );
-var factory2 = (0, import_provider_utils6.createProviderToolFactory)({
+var factory3 = (0, import_provider_utils6.createProviderToolFactory)({
   id: "anthropic.text_editor_20250728",
   inputSchema: textEditor_20250728InputSchema
 });
 var textEditor_20250728 = (args = {}) => {
-  return factory2(args);
+  return factory3(args);
 };
 
 // src/tool/web-search_20260209.ts
@@ -11683,14 +11959,14 @@ var webSearch_20260209InputSchema = (0, import_provider_utils7.lazySchema)(
     })
   )
 );
-var factory3 = (0, import_provider_utils7.createProviderToolFactoryWithOutputSchema)({
+var factory4 = (0, import_provider_utils7.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_search_20260209",
   inputSchema: webSearch_20260209InputSchema,
   outputSchema: webSearch_20260209OutputSchema,
   supportsDeferredResults: true
 });
 var webSearch_20260209 = (args = {}) => {
-  return factory3(args);
+  return factory4(args);
 };
 
 // src/tool/web-search_20250305.ts
@@ -11732,14 +12008,14 @@ var webSearch_20250305InputSchema = (0, import_provider_utils8.lazySchema)(
     })
   )
 );
-var factory4 = (0, import_provider_utils8.createProviderToolFactoryWithOutputSchema)({
+var factory5 = (0, import_provider_utils8.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_search_20250305",
   inputSchema: webSearch_20250305InputSchema,
   outputSchema: webSearch_20250305OutputSchema,
   supportsDeferredResults: true
 });
 var webSearch_20250305 = (args = {}) => {
-  return factory4(args);
+  return factory5(args);
 };
 
 // src/tool/web-fetch-20260209.ts
@@ -11789,14 +12065,14 @@ var webFetch_20260209InputSchema = (0, import_provider_utils9.lazySchema)(
     })
   )
 );
-var factory5 = (0, import_provider_utils9.createProviderToolFactoryWithOutputSchema)({
+var factory6 = (0, import_provider_utils9.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_fetch_20260209",
   inputSchema: webFetch_20260209InputSchema,
   outputSchema: webFetch_20260209OutputSchema,
   supportsDeferredResults: true
 });
 var webFetch_20260209 = (args = {}) => {
-  return factory5(args);
+  return factory6(args);
 };
 
 // src/tool/web-fetch-20250910.ts
@@ -11846,14 +12122,14 @@ var webFetch_20250910InputSchema = (0, import_provider_utils10.lazySchema)(
     })
   )
 );
-var factory6 = (0, import_provider_utils10.createProviderToolFactoryWithOutputSchema)({
+var factory7 = (0, import_provider_utils10.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.web_fetch_20250910",
   inputSchema: webFetch_20250910InputSchema,
   outputSchema: webFetch_20250910OutputSchema,
   supportsDeferredResults: true
 });
 var webFetch_20250910 = (args = {}) => {
-  return factory6(args);
+  return factory7(args);
 };
 
 // src/anthropic-prepare-tools.ts
@@ -11861,6 +12137,7 @@ var import_provider_utils11 = __nccwpck_require__(67216);
 async function prepareTools({
   tools,
   toolChoice,
+  hasInlineTools = false,
   disableParallelToolUse,
   cacheControlValidator,
   supportsStructuredOutput,
@@ -11873,11 +12150,11 @@ async function prepareTools({
   const toolWarnings = [];
   const betas = /* @__PURE__ */ new Set();
   const validator = cacheControlValidator || new CacheControlValidator();
-  if (tools == null) {
+  if (tools == null && !hasInlineTools) {
     return { tools: void 0, toolChoice: void 0, toolWarnings, betas };
   }
   const anthropicTools2 = [];
-  for (const tool of tools) {
+  for (const tool of tools != null ? tools : []) {
     switch (tool.type) {
       case "function": {
         const cacheControl = validator.getCacheControl(tool.providerOptions, {
@@ -12189,9 +12466,10 @@ async function prepareTools({
       }
     }
   }
+  const declaredTools = tools == null ? void 0 : anthropicTools2;
   if (toolChoice == null) {
     return {
-      tools: anthropicTools2,
+      tools: declaredTools,
       toolChoice: disableParallelToolUse ? { type: "auto", disable_parallel_tool_use: disableParallelToolUse } : void 0,
       toolWarnings,
       betas
@@ -12201,7 +12479,7 @@ async function prepareTools({
   switch (type) {
     case "auto":
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: {
           type: "auto",
           disable_parallel_tool_use: disableParallelToolUse
@@ -12217,7 +12495,7 @@ async function prepareTools({
           details: `toolChoice 'required' is not supported with this model or thinking configuration. Using 'auto' instead. Instruct the model to use a tool in the prompt and verify that a tool call was made.`
         });
         return {
-          tools: anthropicTools2,
+          tools: declaredTools,
           toolChoice: {
             type: "auto",
             disable_parallel_tool_use: disableParallelToolUse
@@ -12227,7 +12505,7 @@ async function prepareTools({
         };
       }
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: {
           type: "any",
           disable_parallel_tool_use: disableParallelToolUse
@@ -12237,7 +12515,7 @@ async function prepareTools({
       };
     case "none":
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: { type: "none" },
         toolWarnings,
         betas
@@ -12250,7 +12528,7 @@ async function prepareTools({
           details: `toolChoice 'tool' is not supported with this model or thinking configuration. Only the '${toolChoice.toolName}' tool is sent with 'auto' tool choice. Instruct the model to use the tool in the prompt and verify that a tool call was made.`
         });
         return {
-          tools: anthropicTools2.filter(
+          tools: declaredTools == null ? void 0 : declaredTools.filter(
             (tool) => "name" in tool && tool.name === toolChoice.toolName
           ),
           toolChoice: {
@@ -12262,7 +12540,7 @@ async function prepareTools({
         };
       }
       return {
-        tools: anthropicTools2,
+        tools: declaredTools,
         toolChoice: {
           type: "tool",
           name: toolChoice.toolName,
@@ -12362,13 +12640,13 @@ var codeExecution_20250522InputSchema = (0, import_provider_utils12.lazySchema)(
     })
   )
 );
-var factory7 = (0, import_provider_utils12.createProviderToolFactoryWithOutputSchema)({
+var factory8 = (0, import_provider_utils12.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.code_execution_20250522",
   inputSchema: codeExecution_20250522InputSchema,
   outputSchema: codeExecution_20250522OutputSchema
 });
 var codeExecution_20250522 = (args = {}) => {
-  return factory7(args);
+  return factory8(args);
 };
 
 // src/tool/code-execution_20250825.ts
@@ -12467,7 +12745,7 @@ var codeExecution_20250825InputSchema = (0, import_provider_utils13.lazySchema)(
     ])
   )
 );
-var factory8 = (0, import_provider_utils13.createProviderToolFactoryWithOutputSchema)({
+var factory9 = (0, import_provider_utils13.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.code_execution_20250825",
   inputSchema: codeExecution_20250825InputSchema,
   outputSchema: codeExecution_20250825OutputSchema,
@@ -12477,7 +12755,7 @@ var factory8 = (0, import_provider_utils13.createProviderToolFactoryWithOutputSc
   supportsDeferredResults: true
 });
 var codeExecution_20250825 = (args = {}) => {
-  return factory8(args);
+  return factory9(args);
 };
 
 // src/tool/code-execution_20260120.ts
@@ -12587,14 +12865,14 @@ var codeExecution_20260120InputSchema = (0, import_provider_utils14.lazySchema)(
     ])
   )
 );
-var factory9 = (0, import_provider_utils14.createProviderToolFactoryWithOutputSchema)({
+var factory10 = (0, import_provider_utils14.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.code_execution_20260120",
   inputSchema: codeExecution_20260120InputSchema,
   outputSchema: codeExecution_20260120OutputSchema,
   supportsDeferredResults: true
 });
 var codeExecution_20260120 = (args = {}) => {
-  return factory9(args);
+  return factory10(args);
 };
 
 // src/tool/tool-search-regex_20251119.ts
@@ -12631,14 +12909,14 @@ var toolSearchRegex_20251119InputSchema = (0, import_provider_utils15.lazySchema
     })
   )
 );
-var factory10 = (0, import_provider_utils15.createProviderToolFactoryWithOutputSchema)({
+var factory11 = (0, import_provider_utils15.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.tool_search_regex_20251119",
   inputSchema: toolSearchRegex_20251119InputSchema,
   outputSchema: toolSearchRegex_20251119OutputSchema,
   supportsDeferredResults: true
 });
 var toolSearchRegex_20251119 = (args = {}) => {
-  return factory10(args);
+  return factory11(args);
 };
 
 // src/convert-to-anthropic-messages-prompt.ts
@@ -12682,6 +12960,32 @@ async function extractErrorValue(value) {
   }
   return {};
 }
+function isComputerTool(tool) {
+  return tool.type === "provider" && tool.id.startsWith("anthropic.computer_");
+}
+async function getInlineToolsFromPrompt(prompt) {
+  var _a;
+  const inlineTools = [];
+  for (const message of prompt) {
+    if (message.role !== "system" || message.providerOptions == null) {
+      continue;
+    }
+    const options = await (0, import_provider_utils16.parseProviderOptions)({
+      provider: "anthropic",
+      providerOptions: message.providerOptions,
+      schema: anthropicSystemMessageProviderOptions
+    });
+    for (const toolChange of (_a = options == null ? void 0 : options.toolChanges) != null ? _a : []) {
+      if ("tool" in toolChange) {
+        const tool = toolChange.tool;
+        if (!isComputerTool(tool)) {
+          inlineTools.push(tool);
+        }
+      }
+    }
+  }
+  return inlineTools;
+}
 async function convertToAnthropicMessagesPrompt({
   prompt,
   sendReasoning,
@@ -12689,7 +12993,8 @@ async function convertToAnthropicMessagesPrompt({
   cacheControlValidator,
   toolNameMapping,
   toolsetNames = {},
-  convertMediaPart
+  convertMediaPart,
+  convertInlineTool
 }) {
   var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
   const betas = /* @__PURE__ */ new Set();
@@ -12726,6 +13031,7 @@ async function convertToAnthropicMessagesPrompt({
       case "system": {
         const systemMessages = [];
         let toolChangeCount = 0;
+        let hasInlineToolDefinition = false;
         let hasMidConversationOptions = false;
         for (const { content: text, providerOptions } of block.messages) {
           const systemMessageOptions = await (0, import_provider_utils16.parseProviderOptions)({
@@ -12748,6 +13054,40 @@ async function convertToAnthropicMessagesPrompt({
             });
           }
           for (const toolChange of toolChanges) {
+            if ("tool" in toolChange) {
+              if (convertInlineTool == null) {
+                throw new import_provider2.UnsupportedFunctionalityError({
+                  functionality: "tool additions by value in mid-conversation tool changes"
+                });
+              }
+              const tool = toolChange.tool;
+              if (isComputerTool(tool)) {
+                warnings.push({
+                  type: "other",
+                  message: `The tool '${tool.name}' cannot be added by value in a tool change. Declare it in the tools option and add it by reference with toolName. The tool change has been ignored.`
+                });
+                continue;
+              }
+              const {
+                definition,
+                warnings: toolWarnings,
+                betas: toolBetas
+              } = await convertInlineTool(tool);
+              warnings.push(...toolWarnings);
+              for (const beta of toolBetas) {
+                betas.add(beta);
+              }
+              if (definition == null) {
+                continue;
+              }
+              content.push({
+                type: "tool_addition",
+                tool: { type: "tool_definition", definition }
+              });
+              toolChangeCount++;
+              hasInlineToolDefinition = true;
+              continue;
+            }
             toolChangeCount++;
             content.push({
               type: toolChange.type,
@@ -12756,6 +13096,9 @@ async function convertToAnthropicMessagesPrompt({
                 name: toolNameMapping.toProviderToolName(toolChange.toolName)
               }
             });
+          }
+          if (content.length === 0 && clearAt == null && effort == null) {
+            continue;
           }
           hasMidConversationOptions || (hasMidConversationOptions = clearAt != null || effort != null);
           systemMessages.push({
@@ -12791,7 +13134,9 @@ async function convertToAnthropicMessagesPrompt({
         } else {
           messages.push(...systemMessages);
           betas.add("mid-conversation-system-2026-04-07");
-          if (toolChangeCount > 0) {
+          if (hasInlineToolDefinition) {
+            betas.add("inline-tools-2026-09-15");
+          } else if (toolChangeCount > 0) {
             betas.add("mid-conversation-tool-changes-2026-07-01");
           }
           if (systemMessages.some((message) => message.clear_at != null)) {
@@ -14111,6 +14456,22 @@ function isOpenObject(node) {
 }
 
 // src/anthropic-messages-language-model.ts
+function validateToolsetMember({
+  toolsetName,
+  memberName,
+  tools
+}) {
+  var _a, _b;
+  const toolset = tools == null ? void 0 : tools.find(
+    (tool) => "type" in tool && tool.type === "computer_toolset_20260801"
+  );
+  if (toolsetName !== "computer" || toolset == null || !computerToolset_20260801Members.some((member) => member === memberName) || ((_b = (_a = toolset.configs) == null ? void 0 : _a[memberName]) == null ? void 0 : _b.enabled) === false) {
+    throw new import_provider3.InvalidResponseDataError({
+      data: { toolsetName, memberName },
+      message: `Received an unavailable toolset member: ${toolsetName}.${memberName}.`
+    });
+  }
+}
 function createCitationSource(citation, citationDocuments, generateId2) {
   var _a;
   if (citation.type === "web_search_result_location") {
@@ -14178,9 +14539,15 @@ function toToolsetMemberInput({
   memberName,
   input
 }) {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new import_provider3.InvalidResponseDataError({
+      data: input,
+      message: "Invalid toolset member input: expected an object."
+    });
+  }
   return {
-    action: memberName,
-    ...typeof input === "object" && input !== null && !Array.isArray(input) ? input : {}
+    ...input,
+    action: memberName
   };
 }
 var TEXT_OR_THINKING_BLOCK_TYPES = /* @__PURE__ */ new Set([
@@ -14252,7 +14619,7 @@ var AnthropicMessagesLanguageModel = class {
     providerOptions,
     stream
   }) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const warnings = [];
     if (frequencyPenalty != null) {
       warnings.push({ type: "unsupported", feature: "frequencyPenalty" });
@@ -14381,8 +14748,22 @@ var AnthropicMessagesLanguageModel = class {
     const cacheControlValidator = new CacheControlValidator(
       this.config.cacheControlProviderOptionsName
     );
+    const defaultEagerInputStreaming = stream && ((_e = anthropicOptions == null ? void 0 : anthropicOptions.toolStreaming) != null ? _e : true);
+    const inlineTools = await getInlineToolsFromPrompt(prompt);
+    const declaredFunctionToolNames = new Set(
+      (tools != null ? tools : []).flatMap(
+        (tool) => tool.type === "function" ? [tool.name] : []
+      )
+    );
     const toolNameMapping = (0, import_provider_utils17.createToolNameMapping)({
-      tools,
+      // later entries win when provider tool names collide, so the declared
+      // tools go last and an inline tool cannot take over their mapping:
+      tools: [
+        ...inlineTools.filter(
+          (tool) => !(tool.type === "provider" && declaredFunctionToolNames.has(tool.name))
+        ),
+        ...tools != null ? tools : []
+      ],
       providerToolNames: {
         "anthropic.code_execution_20250522": "code_execution",
         "anthropic.code_execution_20250825": "code_execution",
@@ -14408,15 +14789,57 @@ var AnthropicMessagesLanguageModel = class {
       }
     });
     const toolsetNames = getAnthropicToolsetNames(tools);
+    const inlineToolDefinitions = [];
     const { prompt: messagesPrompt, betas } = await convertToAnthropicMessagesPrompt({
       prompt,
-      sendReasoning: (_e = anthropicOptions == null ? void 0 : anthropicOptions.sendReasoning) != null ? _e : true,
+      sendReasoning: (_f = anthropicOptions == null ? void 0 : anthropicOptions.sendReasoning) != null ? _f : true,
       warnings,
       cacheControlValidator,
       toolNameMapping,
       toolsetNames,
-      convertMediaPart: this.config.convertMediaPart
+      convertMediaPart: this.config.convertMediaPart,
+      convertInlineTool: async (tool) => {
+        const {
+          tools: definitions,
+          toolWarnings: toolWarnings2,
+          betas: betas2
+        } = await prepareTools({
+          tools: [tool],
+          toolChoice: void 0,
+          cacheControlValidator,
+          supportsStructuredOutput,
+          supportsStrictTools
+          // no stream-dependent defaults (eager input streaming): the
+          // definition is replayed on every request and has to stay
+          // identical between streaming and non-streaming calls to keep
+          // the cache.
+        });
+        if ((definitions == null ? void 0 : definitions[0]) != null) {
+          inlineToolDefinitions.push({
+            sdkName: tool.name,
+            definition: definitions[0]
+          });
+        }
+        return {
+          definition: definitions == null ? void 0 : definitions[0],
+          warnings: toolWarnings2,
+          betas: betas2
+        };
+      }
     });
+    const emittedInlineDefinitions = new Set(
+      messagesPrompt.messages.flatMap(
+        (message) => message.role === "system" ? message.content.flatMap(
+          (part) => part.type === "tool_addition" && part.tool.type === "tool_definition" ? [part.tool.definition] : []
+        ) : []
+      )
+    );
+    if (emittedInlineDefinitions.size > 0 && (anthropicOptions == null ? void 0 : anthropicOptions.allowInlineToolDefinitions) !== true) {
+      throw new import_provider3.InvalidArgumentError({
+        argument: "providerOptions.anthropic.allowInlineToolDefinitions",
+        message: "Inline tool definitions require providerOptions.anthropic.allowInlineToolDefinitions to be true. Enable this option only for server-controlled messages, or declare tools in the tools option and add them by reference with toolName."
+      });
+    }
     if (rejectsThinkingDisabled && (anthropicOptions == null ? void 0 : anthropicOptions.thinking) != null) {
       const requestedThinking = anthropicOptions.thinking;
       const requestedType = "type" in requestedThinking ? requestedThinking.type : void 0;
@@ -14525,7 +14948,7 @@ var AnthropicMessagesLanguageModel = class {
       ...(anthropicOptions == null ? void 0 : anthropicOptions.cacheControl) && {
         cache_control: anthropicOptions.cacheControl
       },
-      ...((_f = anthropicOptions == null ? void 0 : anthropicOptions.metadata) == null ? void 0 : _f.userId) != null && {
+      ...((_g = anthropicOptions == null ? void 0 : anthropicOptions.metadata) == null ? void 0 : _g.userId) != null && {
         metadata: { user_id: anthropicOptions.metadata.userId }
       },
       // mcp servers:
@@ -14720,7 +15143,6 @@ var AnthropicMessagesLanguageModel = class {
     } else if ((anthropicOptions == null ? void 0 : anthropicOptions.fallbacks) && anthropicOptions.fallbacks.length > 0) {
       betas.add("server-side-fallback-2026-06-01");
     }
-    const defaultEagerInputStreaming = stream && ((_g = anthropicOptions == null ? void 0 : anthropicOptions.toolStreaming) != null ? _g : true);
     const {
       tools: anthropicTools2,
       toolChoice: anthropicToolChoice,
@@ -14744,6 +15166,9 @@ var AnthropicMessagesLanguageModel = class {
       } : {
         tools: tools != null ? tools : [],
         toolChoice,
+        // tool changes can add tools when `tools` is empty, so the tool
+        // choice and parallel tool use settings still apply:
+        hasInlineTools: inlineTools.length > 0,
         disableParallelToolUse: anthropicOptions == null ? void 0 : anthropicOptions.disableParallelToolUse,
         cacheControlValidator,
         supportsStructuredOutput,
@@ -14752,6 +15177,30 @@ var AnthropicMessagesLanguageModel = class {
         rejectsForcedToolUse: rejectsForcedToolUse || thinkingType === "enabled"
       }
     );
+    if ((toolChoice == null ? void 0 : toolChoice.type) === "tool" && ((anthropicToolChoice == null ? void 0 : anthropicToolChoice.type) === "auto" || jsonResponseTool != null) || (toolChoice == null ? void 0 : toolChoice.type) === "none" && jsonResponseTool != null) {
+      for (const server of (_h = baseArgs.mcp_servers) != null ? _h : []) {
+        server.tool_configuration = {
+          allowed_tools: (_i = server.tool_configuration) == null ? void 0 : _i.allowed_tools,
+          enabled: false
+        };
+      }
+      const selectedSdkName = toolChoice.type === "tool" ? toolChoice.toolName : void 0;
+      const selectedTool = tools == null ? void 0 : tools.find((tool) => tool.name === selectedSdkName);
+      const selectedProviderName = jsonResponseTool != null && selectedSdkName != null && (selectedTool == null ? void 0 : selectedTool.type) !== "function" ? toolNameMapping.toProviderToolName(selectedSdkName) : selectedSdkName;
+      const conflictingTool = inlineToolDefinitions.find(
+        ({ sdkName, definition }) => emittedInlineDefinitions.has(definition) && (toolChoice.type === "none" || // The JSON-tool path filters application tools by SDK name before
+        // conversion; the forced-choice fallback filters by provider name.
+        jsonResponseTool != null && sdkName !== selectedSdkName || !("name" in definition) || definition.name !== selectedProviderName)
+      );
+      if (conflictingTool != null) {
+        const toolName = "name" in conflictingTool.definition ? conflictingTool.definition.name : conflictingTool.definition.type;
+        const choice = toolChoice.type === "tool" ? `named tool choice '${toolChoice.toolName}'` : `tool choice 'none'`;
+        throw new import_provider3.InvalidArgumentError({
+          argument: "toolChoice",
+          message: `Inline tool '${toolName}' conflicts with ${choice}. Inline definitions must respect the tool choice when forced tool use falls back or the JSON response tool is used.`
+        });
+      }
+    }
     const cacheWarnings = cacheControlValidator.getWarnings();
     return {
       args: {
@@ -14766,7 +15215,7 @@ var AnthropicMessagesLanguageModel = class {
         ...betas,
         ...toolsBetas,
         ...userSuppliedBetas,
-        ...(_h = anthropicOptions == null ? void 0 : anthropicOptions.anthropicBeta) != null ? _h : []
+        ...(_j = anthropicOptions == null ? void 0 : anthropicOptions.anthropicBeta) != null ? _j : []
       ]),
       usesJsonResponseTool: jsonResponseTool != null,
       toolNameMapping,
@@ -14946,6 +15395,11 @@ var AnthropicMessagesLanguageModel = class {
               text: JSON.stringify(part.input)
             });
           } else if (part.toolset_name != null) {
+            validateToolsetMember({
+              toolsetName: part.toolset_name,
+              memberName: part.name,
+              tools: args.tools
+            });
             content.push({
               type: "tool-call",
               toolCallId: part.id,
@@ -15525,6 +15979,11 @@ var AnthropicMessagesLanguageModel = class {
                       id: String(value.index)
                     });
                   } else if (part.toolset_name != null) {
+                    validateToolsetMember({
+                      toolsetName: part.toolset_name,
+                      memberName: part.name,
+                      tools: body.tools
+                    });
                     const callerInfo = getAnthropicCallerInfo(part.caller);
                     const customToolName = toolNameMapping.toCustomToolName(
                       part.toolset_name
@@ -15940,9 +16399,12 @@ var AnthropicMessagesLanguageModel = class {
                         try {
                           memberInput = contentBlock.input === "" ? {} : (0, import_provider_utils17.secureJsonParse)(contentBlock.input);
                         } catch (e) {
-                          memberInput = void 0;
+                          throw new import_provider3.InvalidResponseDataError({
+                            data: contentBlock.input,
+                            message: "Invalid toolset member input JSON."
+                          });
                         }
-                        contentBlock.input = memberInput === void 0 ? contentBlock.input : JSON.stringify(
+                        contentBlock.input = JSON.stringify(
                           toToolsetMemberInput({
                             memberName: contentBlock.toolset.memberName,
                             input: memberInput
@@ -16400,7 +16862,7 @@ function getModelCapabilities(modelId) {
       supportsBetweenToolsThinking: false,
       isKnownModel: true
     };
-  } else if (modelId.includes("claude-fable-5-1")) {
+  } else if (modelId.includes("claude-fable-5-2") || modelId.includes("claude-fable-5-1")) {
     return {
       maxOutputTokens: 128e3,
       supportsStructuredOutput: true,
@@ -16883,14 +17345,14 @@ var toolSearchBm25_20251119InputSchema = (0, import_provider_utils27.lazySchema)
     })
   )
 );
-var factory11 = (0, import_provider_utils27.createProviderToolFactoryWithOutputSchema)({
+var factory12 = (0, import_provider_utils27.createProviderToolFactoryWithOutputSchema)({
   id: "anthropic.tool_search_bm25_20251119",
   inputSchema: toolSearchBm25_20251119InputSchema,
   outputSchema: toolSearchBm25_20251119OutputSchema,
   supportsDeferredResults: true
 });
 var toolSearchBm25_20251119 = (args = {}) => {
-  return factory11(args);
+  return factory12(args);
 };
 
 // src/anthropic-tools.ts
@@ -19659,12 +20121,17 @@ var takoResultContentSchema = () => import_zod9.z.object({
   expires_at: import_zod9.z.string().nullish(),
   total_rows: import_zod9.z.number().nullish(),
   truncated: import_zod9.z.boolean().optional(),
+  premium_rows: import_zod9.z.record(import_zod9.z.string(), import_zod9.z.number()).nullish(),
+  redacted_cells: import_zod9.z.record(import_zod9.z.string(), import_zod9.z.array(import_zod9.z.number())).nullish(),
+  total_matching: import_zod9.z.number().nullish(),
   export_pricing: import_zod9.z.object({
     baseline_usd: import_zod9.z.number(),
-    free_rows: import_zod9.z.number(),
+    free_rows: import_zod9.z.number().optional(),
     max_rows_ceiling: import_zod9.z.number(),
-    row_cpm_usd: import_zod9.z.number()
-  }).nullish(),
+    row_cpm_usd: import_zod9.z.number(),
+    premium_row_cpm_usd: import_zod9.z.record(import_zod9.z.string(), import_zod9.z.number()).nullish(),
+    variable_cost_max_usd: import_zod9.z.number().nullish()
+  }).passthrough().nullish(),
   manifest: import_zod9.z.array(
     import_zod9.z.object({
       dtype: import_zod9.z.enum(["boolean", "date", "datetime", "number", "string"]).nullish(),
@@ -19701,6 +20168,7 @@ var takoCardSchema = () => import_zod9.z.object({
   source_indexes: import_zod9.z.array(import_zod9.z.enum(["data", "web"])).nullish(),
   card_type: import_zod9.z.string().nullish(),
   relevance: import_zod9.z.enum(["High", "Low", "Medium"]).nullish(),
+  relevance_score: import_zod9.z.number().nullish(),
   content: takoResultContentSchema().nullish(),
   exportable: import_zod9.z.boolean().optional(),
   nodes: import_zod9.z.array(
@@ -19716,7 +20184,11 @@ var takoCardSchema = () => import_zod9.z.object({
     coverage_end: import_zod9.z.string().nullish(),
     data_as_of: import_zod9.z.string().nullish(),
     last_updated: import_zod9.z.string().nullish()
-  }).nullish()
+  }).nullish(),
+  placeholder: import_zod9.z.object({
+    withheld_source: import_zod9.z.string(),
+    reason: import_zod9.z.enum(["not_served", "over_cap"]).nullish()
+  }).passthrough().nullish()
 }).passthrough();
 var takoWebResultSchema = () => import_zod9.z.object({
   title: import_zod9.z.string(),
@@ -19735,9 +20207,14 @@ var takoSearchOutputSchema = (0, import_provider_utils23.lazySchema)(
         web_results: import_zod9.z.array(takoWebResultSchema()).optional(),
         usage: import_zod9.z.object({
           total_cost_usd: import_zod9.z.number(),
-          compute: import_zod9.z.object({ cost_usd: import_zod9.z.number() }).nullish(),
-          data: import_zod9.z.object({ cost_usd: import_zod9.z.number(), datasets: import_zod9.z.number() }).nullish()
-        }).nullish(),
+          compute: import_zod9.z.object({ cost_usd: import_zod9.z.number() }).passthrough().nullish(),
+          data: import_zod9.z.object({
+            cost_usd: import_zod9.z.number(),
+            datasets: import_zod9.z.number(),
+            data_points: import_zod9.z.number().nullish()
+          }).passthrough().nullish(),
+          variable_cost: import_zod9.z.object({ cost_usd: import_zod9.z.number() }).passthrough().nullish()
+        }).passthrough().nullish(),
         related: import_zod9.z.array(import_zod9.z.object({}).passthrough()).nullish()
       }).passthrough(),
       gatewayToolErrorSchema()
@@ -19822,7 +20299,7 @@ async function getVercelRequestId() {
 }
 
 // src/version.ts
-var VERSION =  true ? "3.0.229" : 0;
+var VERSION =  true ? "3.0.235" : 0;
 
 // src/gateway-provider.ts
 var AI_GATEWAY_PROTOCOL_VERSION = "0.0.1";
@@ -20339,7 +20816,7 @@ var googleInteractionsTranscriptionResponseSchema = (0, import_provider_utils3.l
 var import_provider_utils26 = __nccwpck_require__(67216);
 
 // src/version.ts
-var VERSION =  true ? "3.0.141" : 0;
+var VERSION =  true ? "3.0.145" : 0;
 
 // src/google-generative-ai-embedding-model.ts
 var import_provider2 = __nccwpck_require__(48468);
@@ -20710,25 +21187,54 @@ function addTokenDetails(a, b) {
 
 // src/convert-json-schema-to-openapi-schema.ts
 var import_provider3 = __nccwpck_require__(48468);
+var maxSchemaDepth = 100;
+var maxSchemaNodes = 1e4;
+var maxSchemaSize = 1e6;
 var recursiveReferenceFunctionalityPrefix = "recursive JSON Schema reference:";
 function isRecursiveJSONSchemaReferenceError(error) {
   return import_provider3.UnsupportedFunctionalityError.isInstance(error) && error.functionality.startsWith(recursiveReferenceFunctionalityPrefix);
 }
 function convertJSONSchemaToOpenAPISchema(jsonSchema, isRoot = true) {
+  consumeSchemaBudget(jsonSchema, {
+    nodes: maxSchemaNodes,
+    size: maxSchemaSize
+  });
   const rootSchema = typeof jsonSchema === "object" ? jsonSchema : void 0;
   return convertJSONSchemaDefinition(jsonSchema, isRoot, {
     definitions: rootSchema == null ? void 0 : rootSchema.definitions,
     dollarDefinitions: rootSchema == null ? void 0 : rootSchema.$defs,
-    resolvingReferences: /* @__PURE__ */ new Set()
+    resolvingReferences: /* @__PURE__ */ new Set(),
+    budget: { nodes: maxSchemaNodes, size: maxSchemaSize },
+    depth: 0
   });
 }
 function convertJSONSchemaDefinition(jsonSchema, isRoot, referenceContext) {
   if (jsonSchema == null) {
     return void 0;
   }
+  referenceContext.budget.nodes--;
+  referenceContext.budget.size -= 128;
+  checkSchemaBudget(referenceContext.budget, referenceContext.depth);
+  referenceContext = {
+    ...referenceContext,
+    depth: referenceContext.depth + 1
+  };
   if (typeof jsonSchema === "boolean") {
     return { type: "boolean", properties: {} };
   }
+  consumeSchemaBudget(
+    [
+      jsonSchema.$ref,
+      jsonSchema.type,
+      jsonSchema.description,
+      jsonSchema.required,
+      jsonSchema.format,
+      jsonSchema.const,
+      jsonSchema.enum,
+      jsonSchema.minLength
+    ],
+    referenceContext.budget
+  );
   if (jsonSchema.$ref != null) {
     return convertJSONSchemaReference({
       jsonSchema,
@@ -20792,6 +21298,7 @@ function convertJSONSchemaDefinition(jsonSchema, isRoot, referenceContext) {
   if (properties != null) {
     result.properties = Object.entries(properties).reduce(
       (acc, [key, value]) => {
+        consumeSchemaBudget(key, referenceContext.budget);
         acc[key] = convertJSONSchemaDefinition(value, false, referenceContext);
         return acc;
       },
@@ -20846,6 +21353,38 @@ function convertJSONSchemaDefinition(jsonSchema, isRoot, referenceContext) {
     result.minLength = minLength;
   }
   return result;
+}
+function checkSchemaBudget(budget, depth) {
+  if (budget.nodes < 0 || budget.size < 0 || depth > maxSchemaDepth) {
+    throw new import_provider3.UnsupportedFunctionalityError({
+      functionality: "JSON Schema conversion exceeding resource limits",
+      message: "Google schema conversion exceeded its node, size, or depth limit."
+    });
+  }
+}
+function consumeSchemaBudget(value, budget, depth = 0) {
+  if (value === void 0) {
+    return;
+  }
+  budget.nodes--;
+  budget.size -= typeof value === "string" ? value.length * 6 + 2 : 32;
+  checkSchemaBudget(budget, depth);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      consumeSchemaBudget(item, budget, depth + 1);
+    }
+  } else if (value !== null && typeof value === "object") {
+    for (const key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        consumeSchemaBudget(key, budget, depth + 1);
+        consumeSchemaBudget(
+          value[key],
+          budget,
+          depth + 1
+        );
+      }
+    }
+  }
 }
 function addEnumToSchema({
   values,
@@ -21719,6 +22258,9 @@ function prepareTools({
   modelId,
   isVertexProvider = false
 }) {
+  if ((toolChoice == null ? void 0 : toolChoice.type) === "none") {
+    tools = tools == null ? void 0 : tools.filter((tool) => tool.type === "function");
+  }
   tools = (tools == null ? void 0 : tools.length) ? tools : void 0;
   const toolWarnings = [];
   const { supportsGemini2Tools, supportsFileSearch, usesGemini3Features } = getGoogleModelCapabilities(modelId);
@@ -21997,6 +22539,7 @@ var GoogleJSONAccumulator = class {
       const rawPath = jsonPath.replace(/^\$\./, "");
       if (!rawPath || rawPath === "$") continue;
       const segments = parsePath(rawPath);
+      if (!normalizeAndCheckIndexes(this.accumulatedArgs, segments)) continue;
       const existingValue = getNestedValue(this.accumulatedArgs, segments);
       const isStringContinuation = arg.stringValue != null && existingValue !== void 0;
       if (isStringContinuation) {
@@ -22216,6 +22759,25 @@ function getNestedValue(obj, segments) {
     current = currentRecord[seg];
   }
   return current;
+}
+function normalizeAndCheckIndexes(obj, segments) {
+  let current = obj;
+  for (let i = 0; i < segments.length; i++) {
+    let pathSegment = segments[i];
+    if (Array.isArray(current) && typeof pathSegment === "string") {
+      const index = Number(pathSegment);
+      if (Number.isInteger(index) && index >= 0 && index < 2 ** 32 - 1 && String(index) === pathSegment) {
+        pathSegment = index;
+        segments[i] = index;
+      }
+    }
+    if (typeof pathSegment === "number") {
+      const length = Array.isArray(current) ? current.length : current == null ? 0 : void 0;
+      if (length !== void 0 && pathSegment > length) return false;
+    }
+    current = current != null && typeof current === "object" && hasOwnProperty(current, pathSegment) ? current[pathSegment] : void 0;
+  }
+  return true;
 }
 function setNestedValue(obj, segments, value) {
   let current = obj;
@@ -22491,7 +23053,7 @@ var GoogleGenerativeAILanguageModel = class {
     };
   }
   async doGenerate(options) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
     const { args, warnings, providerOptionsName, extraHeaders } = await this.getArgs(options);
     const mergedHeaders = (0, import_provider_utils9.combineHeaders)(
       await (0, import_provider_utils9.resolve)(this.config.headers),
@@ -22693,7 +23255,7 @@ var GoogleGenerativeAILanguageModel = class {
           safetyRatings: (_y = candidate == null ? void 0 : candidate.safetyRatings) != null ? _y : null,
           usageMetadata: usageMetadata != null ? usageMetadata : null,
           finishMessage: (_z = candidate == null ? void 0 : candidate.finishMessage) != null ? _z : null,
-          serviceTier: (_A = usageMetadata == null ? void 0 : usageMetadata.serviceTier) != null ? _A : null,
+          serviceTier: (_B = (_A = usageMetadata == null ? void 0 : usageMetadata.serviceTier) != null ? _A : responseHeaders == null ? void 0 : responseHeaders["x-gemini-service-tier"]) != null ? _B : null,
           ...(candidate == null ? void 0 : candidate.continuationToken) != null && rawFinishReason === "MAX_TOKENS" ? { continuationToken: candidate.continuationToken } : {},
           ...continuedUsageMetadata != null && firstPromptTokenCount != null ? { initialPromptTokenCount: firstPromptTokenCount } : {}
         }
@@ -22701,7 +23263,7 @@ var GoogleGenerativeAILanguageModel = class {
       request: { body: args },
       response: {
         // TODO timestamp, model id
-        id: (_B = response.responseId) != null ? _B : void 0,
+        id: (_C = response.responseId) != null ? _C : void 0,
         headers: responseHeaders,
         body: rawResponse
       }
@@ -23177,7 +23739,7 @@ var GoogleGenerativeAILanguageModel = class {
             }
           },
           flush(controller) {
-            var _a2;
+            var _a2, _b;
             usage = addGoogleGenerativeAIUsageMetadata(continuedUsage, usage);
             if (currentTextBlockId !== null) {
               controller.enqueue({
@@ -23209,7 +23771,7 @@ var GoogleGenerativeAILanguageModel = class {
                   safetyRatings: lastSafetyRatings,
                   usageMetadata: usage != null ? usage : null,
                   finishMessage: lastFinishMessage,
-                  serviceTier: (_a2 = usage == null ? void 0 : usage.serviceTier) != null ? _a2 : null,
+                  serviceTier: (_b = (_a2 = usage == null ? void 0 : usage.serviceTier) != null ? _a2 : responseHeaders == null ? void 0 : responseHeaders["x-gemini-service-tier"]) != null ? _b : null,
                   // Only surface the token when the response stopped early
                   // (budget used up, or continuing failed), not for the
                   // checkpoint tokens of a stream that finished normally.
@@ -25789,6 +26351,8 @@ var import_v419 = __nccwpck_require__(36360);
 var googleInteractionsLanguageModelOptions = (0, import_provider_utils21.lazySchema)(
   () => (0, import_provider_utils21.zodSchema)(
     import_v419.z.object({
+      /** User-defined request metadata, including `safety_identifier`. */
+      labels: import_v419.z.record(import_v419.z.string(), import_v419.z.string()).nullish(),
       previousInteractionId: import_v419.z.string().nullish(),
       store: import_v419.z.boolean().nullish(),
       agent: import_v419.z.string().nullish(),
@@ -26739,7 +27303,7 @@ var GoogleInteractionsLanguageModel = class {
     };
   }
   async getArgs(options) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G;
     const warnings = [];
     const opts = await (0, import_provider_utils25.parseProviderOptions)({
       provider: "google",
@@ -26974,24 +27538,25 @@ var GoogleInteractionsLanguageModel = class {
     const args = pruneUndefined({
       ...isAgent ? { agent: this.agent } : { model: this.modelId },
       input,
+      labels: (_B = opts == null ? void 0 : opts.labels) != null ? _B : void 0,
       system_instruction: systemInstruction,
       tools: toolsForBody,
       response_format: responseFormatEntries.length > 0 ? responseFormatEntries : void 0,
       response_modalities: (opts == null ? void 0 : opts.responseModalities) != null ? opts.responseModalities : void 0,
-      previous_interaction_id: (_B = opts == null ? void 0 : opts.previousInteractionId) != null ? _B : void 0,
-      service_tier: (_C = opts == null ? void 0 : opts.serviceTier) != null ? _C : void 0,
-      store: (_D = opts == null ? void 0 : opts.store) != null ? _D : void 0,
+      previous_interaction_id: (_C = opts == null ? void 0 : opts.previousInteractionId) != null ? _C : void 0,
+      service_tier: (_D = opts == null ? void 0 : opts.serviceTier) != null ? _D : void 0,
+      store: (_E = opts == null ? void 0 : opts.store) != null ? _E : void 0,
       generation_config: generationConfig != null && Object.keys(generationConfig).length > 0 ? generationConfig : void 0,
       agent_config: agentConfig,
       environment,
-      background: (_E = opts == null ? void 0 : opts.background) != null ? _E : void 0
+      background: (_F = opts == null ? void 0 : opts.background) != null ? _F : void 0
     });
     return {
       args,
       warnings,
       isAgent,
       isBackground: (opts == null ? void 0 : opts.background) === true,
-      pollingTimeoutMs: (_F = opts == null ? void 0 : opts.pollingTimeoutMs) != null ? _F : void 0
+      pollingTimeoutMs: (_G = opts == null ? void 0 : opts.pollingTimeoutMs) != null ? _G : void 0
     };
   }
   async doGenerate(options) {
@@ -28026,10 +28591,13 @@ function getResponseMetadata({
 }
 
 // src/chat/map-openai-finish-reason.ts
-function mapOpenAIFinishReason(finishReason) {
+function mapOpenAIFinishReason({
+  finishReason,
+  hasRefusal = false
+}) {
   switch (finishReason) {
     case "stop":
-      return "stop";
+      return hasRefusal ? "content-filter" : "stop";
     case "length":
       return "length";
     case "content_filter":
@@ -28056,6 +28624,8 @@ var openaiChatResponseSchema = (0, import_provider_utils3.lazySchema)(
           message: import_v42.z.object({
             role: import_v42.z.literal("assistant").nullish(),
             content: import_v42.z.string().nullish(),
+            // set instead of `content` when the model refuses to answer:
+            refusal: import_v42.z.string().nullish(),
             audio: import_v42.z.object({
               transcript: import_v42.z.string().nullish()
             }).nullish(),
@@ -28084,6 +28654,20 @@ var openaiChatResponseSchema = (0, import_provider_utils3.lazySchema)(
           index: import_v42.z.number(),
           logprobs: import_v42.z.object({
             content: import_v42.z.array(
+              import_v42.z.object({
+                token: import_v42.z.string(),
+                logprob: import_v42.z.number(),
+                top_logprobs: import_v42.z.array(
+                  import_v42.z.object({
+                    token: import_v42.z.string(),
+                    logprob: import_v42.z.number()
+                  })
+                )
+              })
+            ).nullish(),
+            // logprobs of the refusal tokens (set instead of `content` when
+            // the model refuses to answer):
+            refusal: import_v42.z.array(
               import_v42.z.object({
                 token: import_v42.z.string(),
                 logprob: import_v42.z.number(),
@@ -28128,6 +28712,8 @@ var openaiChatChunkSchema = (0, import_provider_utils3.lazySchema)(
             delta: import_v42.z.object({
               role: import_v42.z.enum(["assistant"]).nullish(),
               content: import_v42.z.string().nullish(),
+              // set instead of `content` when the model refuses to answer:
+              refusal: import_v42.z.string().nullish(),
               tool_calls: import_v42.z.array(
                 import_v42.z.object({
                   index: import_v42.z.number(),
@@ -28153,6 +28739,20 @@ var openaiChatChunkSchema = (0, import_provider_utils3.lazySchema)(
             }).nullish(),
             logprobs: import_v42.z.object({
               content: import_v42.z.array(
+                import_v42.z.object({
+                  token: import_v42.z.string(),
+                  logprob: import_v42.z.number(),
+                  top_logprobs: import_v42.z.array(
+                    import_v42.z.object({
+                      token: import_v42.z.string(),
+                      logprob: import_v42.z.number()
+                    })
+                  )
+                })
+              ).nullish(),
+              // logprobs of the refusal tokens (set instead of `content` when
+              // the model refuses to answer):
+              refusal: import_v42.z.array(
                 import_v42.z.object({
                   token: import_v42.z.string(),
                   logprob: import_v42.z.number(),
@@ -28599,7 +29199,7 @@ var OpenAIChatLanguageModel = class {
     };
   }
   async doGenerate(options) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
     const { args: body, warnings } = await this.getArgs(options);
     const {
       responseHeaders,
@@ -28631,6 +29231,11 @@ var OpenAIChatLanguageModel = class {
     if (text != null && text.length > 0) {
       content.push({ type: "text", text });
     }
+    const refusal = choice.message.refusal;
+    const hasRefusal = refusal != null && refusal.length > 0;
+    if (hasRefusal) {
+      content.push({ type: "text", text: refusal });
+    }
     for (const toolCall of (_b = choice.message.tool_calls) != null ? _b : []) {
       content.push({
         type: "tool-call",
@@ -28657,14 +29262,22 @@ var OpenAIChatLanguageModel = class {
     if ((completionTokenDetails == null ? void 0 : completionTokenDetails.rejected_prediction_tokens) != null) {
       providerMetadata.openai.rejectedPredictionTokens = completionTokenDetails == null ? void 0 : completionTokenDetails.rejected_prediction_tokens;
     }
-    if (((_g = choice.logprobs) == null ? void 0 : _g.content) != null) {
-      providerMetadata.openai.logprobs = choice.logprobs.content;
+    const contentLogprobs = (_g = choice.logprobs) == null ? void 0 : _g.content;
+    const refusalLogprobs = (_h = choice.logprobs) == null ? void 0 : _h.refusal;
+    if (contentLogprobs != null || refusalLogprobs != null) {
+      providerMetadata.openai.logprobs = [
+        ...contentLogprobs != null ? contentLogprobs : [],
+        ...refusalLogprobs != null ? refusalLogprobs : []
+      ];
     }
     return {
       content,
       finishReason: {
-        unified: mapOpenAIFinishReason(choice.finish_reason),
-        raw: (_h = choice.finish_reason) != null ? _h : void 0
+        unified: mapOpenAIFinishReason({
+          finishReason: choice.finish_reason,
+          hasRefusal
+        }),
+        raw: (_i = choice.finish_reason) != null ? _i : void 0
       },
       usage: convertOpenAIChatUsage(response.usage),
       request: { body },
@@ -28717,6 +29330,10 @@ var OpenAIChatLanguageModel = class {
     let usage = void 0;
     let metadataExtracted = false;
     let isActiveText = false;
+    let hasRefusal = false;
+    let rawFinishReason = void 0;
+    let hasLogprobs = false;
+    const streamedLogprobs = [];
     const providerMetadata = { openai: {} };
     const result = {
       stream: checkedResponse.pipeThrough(
@@ -28729,18 +29346,20 @@ var OpenAIChatLanguageModel = class {
             controller.enqueue({ type: "stream-start", warnings });
           },
           transform(chunk, controller) {
-            var _a2, _b, _c, _d, _e;
+            var _a2, _b, _c, _d;
             if (options.includeRawChunks) {
               controller.enqueue({ type: "raw", rawValue: chunk.rawValue });
             }
             if (!chunk.success) {
               finishReason = { unified: "error", raw: void 0 };
+              rawFinishReason = void 0;
               controller.enqueue({ type: "error", error: chunk.error });
               return;
             }
             const value = chunk.value;
             if ("error" in value) {
               finishReason = { unified: "error", raw: void 0 };
+              rawFinishReason = void 0;
               controller.enqueue({ type: "error", error: value.error });
               return;
             }
@@ -28765,19 +29384,35 @@ var OpenAIChatLanguageModel = class {
             }
             const choice = value.choices[0];
             if ((choice == null ? void 0 : choice.finish_reason) != null) {
-              finishReason = {
-                unified: mapOpenAIFinishReason(choice.finish_reason),
-                raw: choice.finish_reason
-              };
+              rawFinishReason = choice.finish_reason;
             }
-            if (((_e = choice == null ? void 0 : choice.logprobs) == null ? void 0 : _e.content) != null) {
-              providerMetadata.openai.logprobs = choice.logprobs.content;
+            if ((choice == null ? void 0 : choice.logprobs) != null) {
+              const contentLogprobs = choice.logprobs.content;
+              const refusalLogprobs = choice.logprobs.refusal;
+              if (contentLogprobs != null || refusalLogprobs != null) {
+                hasLogprobs = true;
+                streamedLogprobs.push(
+                  ...contentLogprobs != null ? contentLogprobs : [],
+                  ...refusalLogprobs != null ? refusalLogprobs : []
+                );
+              }
             }
             if ((choice == null ? void 0 : choice.delta) == null) {
               return;
             }
             const delta = choice.delta;
-            if (delta.content != null) {
+            const textDeltas = [];
+            if (delta.content != null && delta.content.length > 0) {
+              textDeltas.push(delta.content);
+            }
+            if (delta.refusal != null && delta.refusal.length > 0) {
+              hasRefusal = true;
+              textDeltas.push(delta.refusal);
+            }
+            if (textDeltas.length === 0 && delta.content === "") {
+              textDeltas.push(delta.content);
+            }
+            for (const textDelta of textDeltas) {
               if (!isActiveText) {
                 controller.enqueue({ type: "text-start", id: "0" });
                 isActiveText = true;
@@ -28785,7 +29420,7 @@ var OpenAIChatLanguageModel = class {
               controller.enqueue({
                 type: "text-delta",
                 id: "0",
-                delta: delta.content
+                delta: textDelta
               });
             }
             if (delta.tool_calls != null) {
@@ -28810,6 +29445,18 @@ var OpenAIChatLanguageModel = class {
               controller.enqueue({ type: "text-end", id: "0" });
             }
             toolCallTracker.flush();
+            if (rawFinishReason != null) {
+              finishReason = {
+                unified: mapOpenAIFinishReason({
+                  finishReason: rawFinishReason,
+                  hasRefusal
+                }),
+                raw: rawFinishReason
+              };
+            }
+            if (hasLogprobs) {
+              providerMetadata.openai.logprobs = streamedLogprobs;
+            }
             controller.enqueue({
               type: "finish",
               finishReason,
@@ -28831,7 +29478,7 @@ function isOpenAIChatOutputChunk(chunk) {
   }
   return chunk.choices.some((choice) => {
     const delta = choice.delta;
-    return (delta == null ? void 0 : delta.content) != null && delta.content.length > 0 || (delta == null ? void 0 : delta.tool_calls) != null && delta.tool_calls.length > 0 || (delta == null ? void 0 : delta.annotations) != null && delta.annotations.length > 0;
+    return (delta == null ? void 0 : delta.content) != null && delta.content.length > 0 || (delta == null ? void 0 : delta.refusal) != null && delta.refusal.length > 0 || (delta == null ? void 0 : delta.tool_calls) != null && delta.tool_calls.length > 0 || (delta == null ? void 0 : delta.annotations) != null && delta.annotations.length > 0;
   });
 }
 
@@ -30475,6 +31122,29 @@ var openaiTools = {
   toolSearch
 };
 
+// src/responses/openai-responses-text-format.ts
+var import_v421 = __nccwpck_require__(36360);
+var openaiResponsesTextFormatSchema = () => import_v421.z.discriminatedUnion("type", [
+  import_v421.z.object({ type: import_v421.z.literal("text") }),
+  import_v421.z.object({
+    type: import_v421.z.literal("json_schema"),
+    name: import_v421.z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/),
+    schema: import_v421.z.record(import_v421.z.string(), import_v421.z.json()),
+    description: import_v421.z.string().optional(),
+    strict: import_v421.z.boolean().optional()
+  })
+]);
+function normalizeOpenAIResponsesTextFormat(format) {
+  if (format.type === "text") {
+    return format;
+  }
+  const normalized = normalizeOpenAIJsonSchema(format.schema);
+  return {
+    ...format,
+    schema: normalized
+  };
+}
+
 // src/responses/openai-responses-language-model.ts
 var import_provider11 = __nccwpck_require__(48468);
 var import_provider_utils31 = __nccwpck_require__(67216);
@@ -30522,11 +31192,11 @@ function convertOpenAIResponsesUsage(usage) {
 // src/responses/convert-to-openai-responses-input.ts
 var import_provider9 = __nccwpck_require__(48468);
 var import_provider_utils28 = __nccwpck_require__(67216);
-var import_v422 = __nccwpck_require__(36360);
+var import_v423 = __nccwpck_require__(36360);
 
 // src/responses/openai-responses-options.ts
 var import_provider_utils26 = __nccwpck_require__(67216);
-var import_v421 = __nccwpck_require__(36360);
+var import_v422 = __nccwpck_require__(36360);
 var TOP_LOGPROBS_MAX = 20;
 var openaiResponsesReasoningModelIds = [
   "o1",
@@ -30604,7 +31274,7 @@ var openaiResponsesModelIds = [
 ];
 var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazySchema)(
   () => (0, import_provider_utils26.zodSchema)(
-    import_v421.z.object({
+    import_v422.z.object({
       /**
        * The ID of the OpenAI Conversation to continue.
        * You must create a conversation first via the OpenAI API.
@@ -30612,13 +31282,13 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * Defaults to `undefined`.
        * @see https://platform.openai.com/docs/api-reference/conversations/create
        */
-      conversation: import_v421.z.string().nullish(),
+      conversation: import_v422.z.string().nullish(),
       /**
        * The set of extra fields to include in the response (advanced, usually not needed).
        * Example values: 'reasoning.encrypted_content', 'file_search_call.results', 'web_search_call.results', 'message.output_text.logprobs'.
        */
-      include: import_v421.z.array(
-        import_v421.z.enum([
+      include: import_v422.z.array(
+        import_v422.z.enum([
           "reasoning.encrypted_content",
           // handled internally by default, only needed for unknown reasoning models
           "file_search_call.results",
@@ -30631,7 +31301,7 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * They can be used to change the system or developer message when continuing a conversation using the `previousResponseId` option.
        * Defaults to `undefined`.
        */
-      instructions: import_v421.z.string().nullish(),
+      instructions: import_v422.z.string().nullish(),
       /**
        * Return the log probabilities of the tokens. Including logprobs will increase
        * the response size and can slow down response times. However, it can
@@ -30646,40 +31316,41 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * @see https://platform.openai.com/docs/api-reference/responses/create
        * @see https://cookbook.openai.com/examples/using_logprobs
        */
-      logprobs: import_v421.z.union([import_v421.z.boolean(), import_v421.z.number().min(1).max(TOP_LOGPROBS_MAX)]).optional(),
+      logprobs: import_v422.z.union([import_v422.z.boolean(), import_v422.z.number().min(1).max(TOP_LOGPROBS_MAX)]).optional(),
       /**
        * The maximum number of total calls to built-in tools that can be processed in a response.
        * This maximum number applies across all built-in tool calls, not per individual tool.
        * Any further attempts to call a tool by the model will be ignored.
        */
-      maxToolCalls: import_v421.z.number().nullish(),
+      maxToolCalls: import_v422.z.number().nullish(),
       /**
        * Additional metadata to store with the generation.
        */
-      metadata: import_v421.z.any().nullish(),
+      metadata: import_v422.z.any().nullish(),
       /**
        * Whether to use parallel tool calls. Defaults to `true`.
        */
-      parallelToolCalls: import_v421.z.boolean().nullish(),
+      parallelToolCalls: import_v422.z.boolean().nullish(),
       /**
        * The ID of the previous response. You can use it to continue a conversation.
        * Defaults to `undefined`.
        */
-      previousResponseId: import_v421.z.string().nullish(),
+      previousResponseId: import_v422.z.string().nullish(),
       /**
        * Sets a cache key to tie this prompt to cached prefixes for better caching performance.
        */
-      promptCacheKey: import_v421.z.string().nullish(),
+      promptCacheKey: import_v422.z.string().nullish(),
       /**
        * Prompt cache behavior for GPT-5.6 and later models.
        * `mode` controls whether OpenAI also places an implicit breakpoint.
        * `ttl` sets the minimum cache lifetime: `'30m'` (default) or `'12h'`.
        * `prewarm` writes the prompt to the cache without generating output.
        */
-      promptCacheOptions: import_v421.z.object({
-        mode: import_v421.z.enum(["implicit", "explicit"]).optional(),
-        ttl: import_v421.z.enum(["30m", "12h"]).optional(),
-        prewarm: import_v421.z.boolean().optional()
+      promptCacheOptions: import_v422.z.object({
+        comparisonResponseId: import_v422.z.string().optional(),
+        mode: import_v422.z.enum(["implicit", "explicit"]).optional(),
+        ttl: import_v422.z.enum(["30m", "12h"]).optional(),
+        prewarm: import_v422.z.boolean().optional()
       }).optional(),
       /**
        * The retention policy for the prompt cache.
@@ -30691,7 +31362,7 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        *
        * @default 'in_memory'
        */
-      promptCacheRetention: import_v421.z.enum(["in_memory", "24h"]).nullish(),
+      promptCacheRetention: import_v422.z.enum(["in_memory", "24h"]).nullish(),
       /**
        * Reasoning effort for reasoning models. Defaults to `medium`. If you use
        * `providerOptions` to set the `reasoningEffort` option, this model setting will be ignored.
@@ -30699,7 +31370,7 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * GPT-6 and later models support 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
        * Supported values vary by model.
        */
-      reasoningEffort: import_v421.z.string().nullish(),
+      reasoningEffort: import_v422.z.string().nullish(),
       /**
        * Updates the reasoning effort for GPT-6 and later models starting with this response
        * without changing the request-level reasoning effort. This preserves the
@@ -30708,28 +31379,28 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * Only supported by GPT-6 and later models in standard, single-agent mode. Cannot be
        * combined with automatic truncation.
        */
-      reasoningEffortUpdate: import_v421.z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+      reasoningEffortUpdate: import_v422.z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
       /**
        * Controls how much model work GPT-5.6 performs before returning a final answer.
        * `standard` is the default. `pro` increases quality, latency, and token usage.
        */
-      reasoningMode: import_v421.z.enum(["standard", "pro"]).optional(),
+      reasoningMode: import_v422.z.enum(["standard", "pro"]).optional(),
       /**
        * Controls which available reasoning items GPT-5.6 can use.
        * `auto` uses the model default, `current_turn` excludes reasoning from earlier
        * turns, and `all_turns` makes compatible earlier reasoning available.
        */
-      reasoningContext: import_v421.z.enum(["auto", "current_turn", "all_turns"]).optional(),
+      reasoningContext: import_v422.z.enum(["auto", "current_turn", "all_turns"]).optional(),
       /**
        * Controls reasoning summary output from the model.
        * Set to "auto" to automatically receive the richest level available,
        * or "detailed" for comprehensive summaries.
        */
-      reasoningSummary: import_v421.z.string().nullish(),
+      reasoningSummary: import_v422.z.string().nullish(),
       /**
        * The identifier for safety monitoring and tracking.
        */
-      safetyIdentifier: import_v421.z.string().nullish(),
+      safetyIdentifier: import_v422.z.string().nullish(),
       /**
        * Service tier for the request.
        * Set to 'flex' for 50% cheaper processing at the cost of increased latency (available for o3, o4-mini, and gpt-5 models).
@@ -30739,11 +31410,11 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        *
        * Defaults to 'auto'.
        */
-      serviceTier: import_v421.z.enum(["auto", "flex", "priority", "fast", "ultrafast", "default"]).nullish(),
+      serviceTier: import_v422.z.enum(["auto", "flex", "priority", "fast", "ultrafast", "default"]).nullish(),
       /**
        * Whether to store the generation. Defaults to `true`.
        */
-      store: import_v421.z.boolean().nullish(),
+      store: import_v422.z.boolean().nullish(),
       /**
        * Whether to pass through non-image file types as generic input files.
        *
@@ -30751,30 +31422,32 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * Enable this when the target OpenAI Responses model supports additional
        * file media types, such as text/csv.
        */
-      passThroughUnsupportedFiles: import_v421.z.boolean().optional(),
+      passThroughUnsupportedFiles: import_v422.z.boolean().optional(),
       /**
        * Whether to use strict JSON schema validation.
        * Defaults to `true`.
        */
-      strictJsonSchema: import_v421.z.boolean().nullish(),
+      strictJsonSchema: import_v422.z.boolean().nullish(),
       /**
        * Controls the verbosity of the model's responses. Lower values ('low') will result
        * in more concise responses, while higher values ('high') will result in more verbose responses.
        * Valid values: 'low', 'medium', 'high'.
        */
-      textVerbosity: import_v421.z.enum(["low", "medium", "high"]).nullish(),
+      textVerbosity: import_v422.z.enum(["low", "medium", "high"]).nullish(),
+      /** Keep the initial wire format stable while Output validates the current schema. */
+      textFormat: openaiResponsesTextFormatSchema().optional(),
       /**
        * Controls output truncation. 'auto' (default) performs truncation automatically;
        * 'disabled' turns truncation off.
        */
-      truncation: import_v421.z.enum(["auto", "disabled"]).nullish(),
+      truncation: import_v422.z.enum(["auto", "disabled"]).nullish(),
       /**
        * A unique identifier representing your end-user, which can help OpenAI to
        * monitor and detect abuse.
        * Defaults to `undefined`.
        * @see https://platform.openai.com/docs/guides/safety-best-practices/end-user-ids
        */
-      user: import_v421.z.string().nullish(),
+      user: import_v422.z.string().nullish(),
       /**
        * Override the system message mode for this model.
        * - 'system': Use the 'system' role for system messages (default for most models)
@@ -30783,7 +31456,7 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        *
        * If not specified, the mode is automatically determined based on the model.
        */
-      systemMessageMode: import_v421.z.enum(["system", "developer", "remove"]).optional(),
+      systemMessageMode: import_v422.z.enum(["system", "developer", "remove"]).optional(),
       /**
        * Force treating this model as a reasoning model.
        *
@@ -30793,7 +31466,7 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        * When enabled, the SDK applies reasoning-model parameter compatibility rules
        * and defaults `systemMessageMode` to `developer` unless overridden.
        */
-      forceReasoning: import_v421.z.boolean().optional(),
+      forceReasoning: import_v422.z.boolean().optional(),
       /**
        * Restrict the callable tools to a subset while keeping the full tools
        * list intact, so prompt caching is preserved across requests with
@@ -30804,16 +31477,18 @@ var openaiLanguageModelResponsesOptionsSchema = (0, import_provider_utils26.lazy
        *
        * @see https://developers.openai.com/api/reference/resources/responses/methods/create#(resource)%20responses%20%3E%20(model)%20tool_choice_allowed%20%3E%20(schema)
        */
-      allowedTools: import_v421.z.object({
-        toolNames: import_v421.z.array(import_v421.z.string()).min(1),
-        mode: import_v421.z.enum(["auto", "required"]).optional()
+      allowedTools: import_v422.z.object({
+        toolNames: import_v422.z.array(import_v422.z.string()).min(1),
+        mode: import_v422.z.enum(["auto", "required"]).optional()
       }).optional()
     })
   )
 );
 var openaiResponsesSystemMessageOptionsSchema = (0, import_provider_utils26.lazySchema)(
   () => (0, import_provider_utils26.zodSchema)(
-    import_v421.z.object({
+    import_v422.z.object({
+      /** Replace the format at this position; requires empty system content. */
+      textFormatUpdate: openaiResponsesTextFormatSchema().optional(),
       /**
        * Emit a configuration update at this position in Responses history.
        * Requires empty system message content and the same supported
@@ -30822,7 +31497,7 @@ var openaiResponsesSystemMessageOptionsSchema = (0, import_provider_utils26.lazy
        *
        * @see https://developers.openai.com/api/docs/guides/reasoning#change-reasoning-mid-conversation
        */
-      reasoningEffortUpdate: import_v421.z.enum(["low", "medium", "high", "xhigh", "max"]).optional()
+      reasoningEffortUpdate: import_v422.z.enum(["low", "medium", "high", "xhigh", "max"]).optional()
     })
   )
 );
@@ -30838,7 +31513,7 @@ function getParallelToolCallMetadata({
 }) {
   var _a2;
   const metadata = (_a2 = providerOptions == null ? void 0 : providerOptions[providerOptionsName]) == null ? void 0 : _a2.parallelToolCall;
-  if (!(0, import_provider8.isJSONObject)(metadata) || typeof metadata.itemId !== "string" || typeof metadata.toolCallId !== "string" || typeof metadata.toolName !== "string" || typeof metadata.input !== "string" || typeof metadata.index !== "number" || !Number.isInteger(metadata.index) || typeof metadata.count !== "number" || !Number.isInteger(metadata.count) || metadata.index < 0 || metadata.count <= metadata.index) {
+  if (!(0, import_provider8.isJSONObject)(metadata) || typeof metadata.itemId !== "string" || typeof metadata.toolCallId !== "string" || typeof metadata.toolName !== "string" || metadata.input !== void 0 && typeof metadata.input !== "string" || typeof metadata.index !== "number" || !Number.isInteger(metadata.index) || typeof metadata.count !== "number" || !Number.isInteger(metadata.count) || metadata.index < 0 || metadata.count <= metadata.index) {
     return void 0;
   }
   return metadata;
@@ -30892,7 +31567,7 @@ async function expandParallelToolCall({
             itemId,
             toolCallId: toolCall.toolCallId,
             toolName: toolCall.toolName,
-            input: toolCall.input,
+            ...index === 0 && { input: toolCall.input },
             index,
             count: toolUses.length
           }
@@ -31079,7 +31754,7 @@ async function convertFunctionToolResultOutput({
   }
 }
 function hasSameParallelToolCall(first, second) {
-  return first.itemId === second.itemId && first.toolCallId === second.toolCallId && first.toolName === second.toolName && first.input === second.input && first.count === second.count;
+  return first.itemId === second.itemId && first.toolCallId === second.toolCallId && first.toolName === second.toolName && (first.input === void 0 || second.input === void 0 || first.input === second.input) && first.count === second.count;
 }
 function collectCompleteParallelToolResultGroups({
   prompt,
@@ -31114,12 +31789,15 @@ function collectCompleteParallelToolResultGroups({
         existing.invalid = true;
         continue;
       }
+      if (existing.metadata.input === void 0 && metadata.input !== void 0) {
+        existing.metadata = metadata;
+      }
       existing.results.set(metadata.index, part);
     }
   }
   const completeGroups = /* @__PURE__ */ new Map();
   for (const [toolCallId, group] of pendingGroups) {
-    if (group.invalid || group.results.size !== group.metadata.count) {
+    if (group.invalid || group.results.size !== group.metadata.count || group.metadata.input === void 0) {
       continue;
     }
     const results = Array.from(
@@ -31128,7 +31806,7 @@ function collectCompleteParallelToolResultGroups({
     );
     if (results.every(import_provider_utils28.isNonNullable)) {
       completeGroups.set(toolCallId, {
-        metadata: group.metadata,
+        metadata: { ...group.metadata, input: group.metadata.input },
         results
       });
     }
@@ -31199,17 +31877,24 @@ async function convertToOpenAIResponsesInput({
           });
         }
         const effort = options == null ? void 0 : options.reasoningEffortUpdate;
-        if (effort != null) {
-          const unsupportedReason = content !== "" ? "Message-level reasoningEffortUpdate requires empty system message content." : configurationUpdateUnsupportedReason;
+        const textFormat = options == null ? void 0 : options.textFormatUpdate;
+        if (effort != null || textFormat != null) {
+          const feature = effort != null ? "reasoningEffortUpdate" : "textFormatUpdate";
+          const unsupportedReason = content !== "" ? `Message-level ${feature} requires empty system message content.` : configurationUpdateUnsupportedReason;
           if (unsupportedReason != null) {
             throw new import_provider9.UnsupportedFunctionalityError({
-              functionality: "Message-level reasoningEffortUpdate",
+              functionality: `Message-level ${feature}`,
               message: unsupportedReason
             });
           }
           input.push({
             type: "configuration_update",
-            reasoning: { effort }
+            ...effort != null && { reasoning: { effort } },
+            ...textFormat != null && {
+              text: {
+                format: normalizeOpenAIResponsesTextFormat(textFormat)
+              }
+            }
           });
           break;
         }
@@ -31951,9 +32636,9 @@ ${text}`,
 }
 var openaiResponsesReasoningProviderOptionsSchema = (0, import_provider_utils28.lazySchema)(
   () => (0, import_provider_utils28.zodSchema)(
-    import_v422.z.object({
-      itemId: import_v422.z.string().nullish(),
-      reasoningEncryptedContent: import_v422.z.string().nullish()
+    import_v423.z.object({
+      itemId: import_v423.z.string().nullish(),
+      reasoningEncryptedContent: import_v423.z.string().nullish()
     })
   )
 );
@@ -31961,12 +32646,14 @@ var openaiResponsesReasoningProviderOptionsSchema = (0, import_provider_utils28.
 // src/responses/map-openai-responses-finish-reason.ts
 function mapOpenAIResponseFinishReason({
   finishReason,
-  hasFunctionCall
+  hasFunctionCall,
+  hasRefusal = false
 }) {
   switch (finishReason) {
     case void 0:
     case null:
-      return hasFunctionCall ? "tool-calls" : "stop";
+      if (hasFunctionCall) return "tool-calls";
+      return hasRefusal ? "content-filter" : "stop";
     case "max_output_tokens":
       return "length";
     case "content_filter":
@@ -31978,82 +32665,88 @@ function mapOpenAIResponseFinishReason({
 
 // src/responses/openai-responses-api.ts
 var import_provider_utils29 = __nccwpck_require__(67216);
-var import_v423 = __nccwpck_require__(36360);
+var import_v424 = __nccwpck_require__(36360);
+var openaiResponsesPromptCacheDiagnosticsSchema = () => import_v424.z.object({
+  type: import_v424.z.string(),
+  reason: import_v424.z.string().nullish(),
+  cache_missed_tokens: import_v424.z.number().nullish(),
+  comparison_reusable_tokens: import_v424.z.number().nullish()
+});
 var cachedJsonValueSchema2;
-var jsonValueSchema2 = () => cachedJsonValueSchema2 != null ? cachedJsonValueSchema2 : cachedJsonValueSchema2 = import_v423.z.lazy(
-  () => import_v423.z.union([
-    import_v423.z.string(),
-    import_v423.z.number(),
-    import_v423.z.boolean(),
-    import_v423.z.null(),
-    import_v423.z.array(jsonValueSchema2()),
-    import_v423.z.record(import_v423.z.string(), jsonValueSchema2().optional())
+var jsonValueSchema2 = () => cachedJsonValueSchema2 != null ? cachedJsonValueSchema2 : cachedJsonValueSchema2 = import_v424.z.lazy(
+  () => import_v424.z.union([
+    import_v424.z.string(),
+    import_v424.z.number(),
+    import_v424.z.boolean(),
+    import_v424.z.null(),
+    import_v424.z.array(jsonValueSchema2()),
+    import_v424.z.record(import_v424.z.string(), jsonValueSchema2().optional())
   ])
 );
-var jsonObjectSchema = () => import_v423.z.record(import_v423.z.string(), jsonValueSchema2().optional());
-var openaiResponsesUsageSchema = () => import_v423.z.intersection(
+var jsonObjectSchema = () => import_v424.z.record(import_v424.z.string(), jsonValueSchema2().optional());
+var openaiResponsesUsageSchema = () => import_v424.z.intersection(
   jsonObjectSchema(),
-  import_v423.z.object({
-    input_tokens: import_v423.z.number(),
-    input_tokens_details: import_v423.z.intersection(
+  import_v424.z.object({
+    input_tokens: import_v424.z.number(),
+    input_tokens_details: import_v424.z.intersection(
       jsonObjectSchema(),
-      import_v423.z.object({
-        cached_tokens: import_v423.z.number().nullish(),
-        cache_write_tokens: import_v423.z.number().nullish(),
-        cache_write_tokens_details: import_v423.z.intersection(
+      import_v424.z.object({
+        cached_tokens: import_v424.z.number().nullish(),
+        cache_write_tokens: import_v424.z.number().nullish(),
+        cache_write_tokens_details: import_v424.z.intersection(
           jsonObjectSchema(),
-          import_v423.z.object({
-            ttl_30m_tokens: import_v423.z.number().nullish(),
-            ttl_12h_tokens: import_v423.z.number().nullish()
+          import_v424.z.object({
+            ttl_30m_tokens: import_v424.z.number().nullish(),
+            ttl_12h_tokens: import_v424.z.number().nullish()
           })
         ).nullish(),
-        orchestration_input_tokens: import_v423.z.number().nullish(),
-        orchestration_input_cached_tokens: import_v423.z.number().nullish()
+        orchestration_input_tokens: import_v424.z.number().nullish(),
+        orchestration_input_cached_tokens: import_v424.z.number().nullish()
       })
     ).nullish(),
-    output_tokens: import_v423.z.number(),
-    output_tokens_details: import_v423.z.intersection(
+    output_tokens: import_v424.z.number(),
+    output_tokens_details: import_v424.z.intersection(
       jsonObjectSchema(),
-      import_v423.z.object({
-        reasoning_tokens: import_v423.z.number().nullish(),
-        orchestration_output_tokens: import_v423.z.number().nullish()
+      import_v424.z.object({
+        reasoning_tokens: import_v424.z.number().nullish(),
+        orchestration_output_tokens: import_v424.z.number().nullish()
       })
     ).nullish(),
-    total_tokens: import_v423.z.number().optional()
+    total_tokens: import_v424.z.number().optional()
   })
 );
 function isRecord(value) {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
-var openaiResponsesLocalShellCallSchema = () => import_v423.z.object({
-  type: import_v423.z.literal("local_shell_call"),
-  id: import_v423.z.string(),
-  call_id: import_v423.z.string(),
-  action: import_v423.z.object({
-    type: import_v423.z.literal("exec"),
-    command: import_v423.z.array(import_v423.z.string()),
-    timeout_ms: import_v423.z.number().optional(),
-    user: import_v423.z.string().optional(),
-    working_directory: import_v423.z.string().optional(),
-    env: import_v423.z.record(import_v423.z.string(), import_v423.z.string()).optional()
+var openaiResponsesLocalShellCallSchema = () => import_v424.z.object({
+  type: import_v424.z.literal("local_shell_call"),
+  id: import_v424.z.string(),
+  call_id: import_v424.z.string(),
+  action: import_v424.z.object({
+    type: import_v424.z.literal("exec"),
+    command: import_v424.z.array(import_v424.z.string()),
+    timeout_ms: import_v424.z.number().optional(),
+    user: import_v424.z.string().optional(),
+    working_directory: import_v424.z.string().optional(),
+    env: import_v424.z.record(import_v424.z.string(), import_v424.z.string()).optional()
   })
 });
-var openaiResponsesNestedErrorChunkSchema = () => import_v423.z.object({
-  type: import_v423.z.literal("error"),
-  sequence_number: import_v423.z.number(),
-  error: import_v423.z.object({
-    type: import_v423.z.string(),
-    code: import_v423.z.string().nullish(),
-    message: import_v423.z.string(),
-    param: import_v423.z.string().nullish()
+var openaiResponsesNestedErrorChunkSchema = () => import_v424.z.object({
+  type: import_v424.z.literal("error"),
+  sequence_number: import_v424.z.number(),
+  error: import_v424.z.object({
+    type: import_v424.z.string(),
+    code: import_v424.z.string().nullish(),
+    message: import_v424.z.string(),
+    param: import_v424.z.string().nullish()
   })
 });
-var openaiResponsesErrorChunkSchema = () => import_v423.z.object({
-  type: import_v423.z.literal("error"),
-  sequence_number: import_v423.z.number(),
-  code: import_v423.z.string().nullish(),
-  message: import_v423.z.string(),
-  param: import_v423.z.string().nullish()
+var openaiResponsesErrorChunkSchema = () => import_v424.z.object({
+  type: import_v424.z.literal("error"),
+  sequence_number: import_v424.z.number(),
+  code: import_v424.z.string().nullish(),
+  message: import_v424.z.string(),
+  param: import_v424.z.string().nullish()
 });
 var openaiResponsesModeledChunkTypes = /* @__PURE__ */ new Set([
   "error",
@@ -32073,6 +32766,8 @@ var openaiResponsesModeledChunkTypes = /* @__PURE__ */ new Set([
   "response.output_item.done",
   "response.output_text.annotation.added",
   "response.output_text.delta",
+  "response.refusal.delta",
+  "response.refusal.done",
   "response.reasoning_summary_part.added",
   "response.reasoning_summary_part.done",
   "response.reasoning_summary_text.delta"
@@ -32111,521 +32806,537 @@ function isModeledOpenAIResponsesChunk(value) {
 }
 var openaiResponsesChunkSchema = (0, import_provider_utils29.lazySchema)(
   () => (0, import_provider_utils29.zodSchema)(
-    import_v423.z.union([
-      import_v423.z.object({
-        type: import_v423.z.literal("response.output_text.delta"),
-        item_id: import_v423.z.string(),
-        delta: import_v423.z.string(),
-        logprobs: import_v423.z.array(
-          import_v423.z.object({
-            token: import_v423.z.string(),
-            logprob: import_v423.z.number(),
-            top_logprobs: import_v423.z.array(
-              import_v423.z.object({
-                token: import_v423.z.string(),
-                logprob: import_v423.z.number()
+    import_v424.z.union([
+      import_v424.z.object({
+        type: import_v424.z.literal("response.output_text.delta"),
+        item_id: import_v424.z.string(),
+        delta: import_v424.z.string(),
+        logprobs: import_v424.z.array(
+          import_v424.z.object({
+            token: import_v424.z.string(),
+            logprob: import_v424.z.number(),
+            top_logprobs: import_v424.z.array(
+              import_v424.z.object({
+                token: import_v424.z.string(),
+                logprob: import_v424.z.number()
               })
             )
           })
         ).nullish()
       }),
-      import_v423.z.object({
-        type: import_v423.z.enum(["response.completed", "response.incomplete"]),
-        response: import_v423.z.object({
-          incomplete_details: import_v423.z.object({ reason: import_v423.z.string() }).nullish(),
+      import_v424.z.object({
+        type: import_v424.z.literal("response.refusal.delta"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number().nullish(),
+        content_index: import_v424.z.number().nullish(),
+        delta: import_v424.z.string()
+      }),
+      import_v424.z.object({
+        type: import_v424.z.literal("response.refusal.done"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number().nullish(),
+        content_index: import_v424.z.number().nullish(),
+        refusal: import_v424.z.string()
+      }),
+      import_v424.z.object({
+        type: import_v424.z.enum(["response.completed", "response.incomplete"]),
+        response: import_v424.z.object({
+          prompt_cache_diagnostics: openaiResponsesPromptCacheDiagnosticsSchema().nullish(),
+          incomplete_details: import_v424.z.object({ reason: import_v424.z.string() }).nullish(),
           usage: openaiResponsesUsageSchema().nullish(),
-          reasoning: import_v423.z.object({
-            context: import_v423.z.string().nullish()
+          reasoning: import_v424.z.object({
+            context: import_v424.z.string().nullish()
           }).nullish(),
-          service_tier: import_v423.z.string().nullish()
+          service_tier: import_v424.z.string().nullish()
         })
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.failed"),
-        sequence_number: import_v423.z.number(),
-        response: import_v423.z.object({
-          error: import_v423.z.object({
-            code: import_v423.z.string().nullish(),
-            message: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.failed"),
+        sequence_number: import_v424.z.number(),
+        response: import_v424.z.object({
+          prompt_cache_diagnostics: openaiResponsesPromptCacheDiagnosticsSchema().nullish(),
+          error: import_v424.z.object({
+            code: import_v424.z.string().nullish(),
+            message: import_v424.z.string()
           }).nullish(),
-          incomplete_details: import_v423.z.object({ reason: import_v423.z.string() }).nullish(),
+          incomplete_details: import_v424.z.object({ reason: import_v424.z.string() }).nullish(),
           usage: openaiResponsesUsageSchema().nullish(),
-          reasoning: import_v423.z.object({
-            context: import_v423.z.string().nullish()
+          reasoning: import_v424.z.object({
+            context: import_v424.z.string().nullish()
           }).nullish(),
-          service_tier: import_v423.z.string().nullish()
+          service_tier: import_v424.z.string().nullish()
         })
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.created"),
-        response: import_v423.z.object({
-          id: import_v423.z.string(),
-          created_at: import_v423.z.number(),
-          model: import_v423.z.string(),
-          service_tier: import_v423.z.string().nullish()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.created"),
+        response: import_v424.z.object({
+          id: import_v424.z.string(),
+          created_at: import_v424.z.number(),
+          model: import_v424.z.string(),
+          service_tier: import_v424.z.string().nullish()
         })
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.output_item.added"),
-        output_index: import_v423.z.number(),
-        item: import_v423.z.discriminatedUnion("type", [
-          import_v423.z.object({
-            type: import_v423.z.literal("message"),
-            id: import_v423.z.string(),
-            phase: import_v423.z.enum(["commentary", "final_answer"]).nullish()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.output_item.added"),
+        output_index: import_v424.z.number(),
+        item: import_v424.z.discriminatedUnion("type", [
+          import_v424.z.object({
+            type: import_v424.z.literal("message"),
+            id: import_v424.z.string(),
+            phase: import_v424.z.enum(["commentary", "final_answer"]).nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("reasoning"),
-            id: import_v423.z.string(),
-            encrypted_content: import_v423.z.string().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("reasoning"),
+            id: import_v424.z.string(),
+            encrypted_content: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("function_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            name: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            async: import_v423.z.boolean().nullish(),
-            namespace: import_v423.z.string().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("function_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            name: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            async: import_v424.z.boolean().nullish(),
+            namespace: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("web_search_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("web_search_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("computer_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("computer_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("file_search_call"),
-            id: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("file_search_call"),
+            id: import_v424.z.string()
           }),
           openaiResponsesLocalShellCallSchema(),
-          import_v423.z.object({
-            type: import_v423.z.literal("image_generation_call"),
-            id: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("image_generation_call"),
+            id: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("code_interpreter_call"),
-            id: import_v423.z.string(),
-            container_id: import_v423.z.string(),
-            code: import_v423.z.string().nullable(),
-            outputs: import_v423.z.array(
-              import_v423.z.discriminatedUnion("type", [
-                import_v423.z.object({ type: import_v423.z.literal("logs"), logs: import_v423.z.string() }),
-                import_v423.z.object({ type: import_v423.z.literal("image"), url: import_v423.z.string() })
+          import_v424.z.object({
+            type: import_v424.z.literal("code_interpreter_call"),
+            id: import_v424.z.string(),
+            container_id: import_v424.z.string(),
+            code: import_v424.z.string().nullable(),
+            outputs: import_v424.z.array(
+              import_v424.z.discriminatedUnion("type", [
+                import_v424.z.object({ type: import_v424.z.literal("logs"), logs: import_v424.z.string() }),
+                import_v424.z.object({ type: import_v424.z.literal("image"), url: import_v424.z.string() })
               ])
             ).nullable(),
-            status: import_v423.z.string()
+            status: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string(),
-            approval_request_id: import_v423.z.string().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string(),
+            approval_request_id: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_list_tools"),
-            id: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_list_tools"),
+            id: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_approval_request"),
-            id: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_approval_request"),
+            id: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("apply_patch_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed"]),
-            operation: import_v423.z.discriminatedUnion("type", [
-              import_v423.z.object({
-                type: import_v423.z.literal("create_file"),
-                path: import_v423.z.string(),
-                diff: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("apply_patch_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed"]),
+            operation: import_v424.z.discriminatedUnion("type", [
+              import_v424.z.object({
+                type: import_v424.z.literal("create_file"),
+                path: import_v424.z.string(),
+                diff: import_v424.z.string()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("delete_file"),
-                path: import_v423.z.string()
+              import_v424.z.object({
+                type: import_v424.z.literal("delete_file"),
+                path: import_v424.z.string()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("update_file"),
-                path: import_v423.z.string(),
-                diff: import_v423.z.string()
+              import_v424.z.object({
+                type: import_v424.z.literal("update_file"),
+                path: import_v424.z.string(),
+                diff: import_v424.z.string()
               })
             ])
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("custom_tool_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            name: import_v423.z.string(),
-            input: import_v423.z.string(),
-            async: import_v423.z.boolean().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("custom_tool_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            name: import_v424.z.string(),
+            input: import_v424.z.string(),
+            async: import_v424.z.boolean().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("shell_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            action: import_v423.z.object({
-              commands: import_v423.z.array(import_v423.z.string())
+          import_v424.z.object({
+            type: import_v424.z.literal("shell_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            action: import_v424.z.object({
+              commands: import_v424.z.array(import_v424.z.string())
             })
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("shell_call_output"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            output: import_v423.z.array(
-              import_v423.z.object({
-                stdout: import_v423.z.string(),
-                stderr: import_v423.z.string(),
-                outcome: import_v423.z.discriminatedUnion("type", [
-                  import_v423.z.object({ type: import_v423.z.literal("timeout") }),
-                  import_v423.z.object({
-                    type: import_v423.z.literal("exit"),
-                    exit_code: import_v423.z.number()
+          import_v424.z.object({
+            type: import_v424.z.literal("shell_call_output"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            output: import_v424.z.array(
+              import_v424.z.object({
+                stdout: import_v424.z.string(),
+                stderr: import_v424.z.string(),
+                outcome: import_v424.z.discriminatedUnion("type", [
+                  import_v424.z.object({ type: import_v424.z.literal("timeout") }),
+                  import_v424.z.object({
+                    type: import_v424.z.literal("exit"),
+                    exit_code: import_v424.z.number()
                   })
                 ])
               })
             )
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("tool_search_call"),
-            id: import_v423.z.string(),
-            execution: import_v423.z.enum(["server", "client"]),
-            call_id: import_v423.z.string().nullable(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            arguments: import_v423.z.unknown()
+          import_v424.z.object({
+            type: import_v424.z.literal("tool_search_call"),
+            id: import_v424.z.string(),
+            execution: import_v424.z.enum(["server", "client"]),
+            call_id: import_v424.z.string().nullable(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            arguments: import_v424.z.unknown()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("tool_search_output"),
-            id: import_v423.z.string(),
-            execution: import_v423.z.enum(["server", "client"]),
-            call_id: import_v423.z.string().nullable(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            tools: import_v423.z.array(import_v423.z.record(import_v423.z.string(), jsonValueSchema2().optional()))
+          import_v424.z.object({
+            type: import_v424.z.literal("tool_search_output"),
+            id: import_v424.z.string(),
+            execution: import_v424.z.enum(["server", "client"]),
+            call_id: import_v424.z.string().nullable(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            tools: import_v424.z.array(import_v424.z.record(import_v424.z.string(), jsonValueSchema2().optional()))
           })
         ])
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.output_item.done"),
-        output_index: import_v423.z.number(),
-        item: import_v423.z.discriminatedUnion("type", [
-          import_v423.z.object({
-            type: import_v423.z.literal("message"),
-            id: import_v423.z.string(),
-            phase: import_v423.z.enum(["commentary", "final_answer"]).nullish()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.output_item.done"),
+        output_index: import_v424.z.number(),
+        item: import_v424.z.discriminatedUnion("type", [
+          import_v424.z.object({
+            type: import_v424.z.literal("message"),
+            id: import_v424.z.string(),
+            phase: import_v424.z.enum(["commentary", "final_answer"]).nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("reasoning"),
-            id: import_v423.z.string(),
-            encrypted_content: import_v423.z.string().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("reasoning"),
+            id: import_v424.z.string(),
+            encrypted_content: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("function_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            name: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            async: import_v423.z.boolean().nullish(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            namespace: import_v423.z.string().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("function_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            name: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            async: import_v424.z.boolean().nullish(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            namespace: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("custom_tool_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            name: import_v423.z.string(),
-            input: import_v423.z.string(),
-            async: import_v423.z.boolean().nullish(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"])
+          import_v424.z.object({
+            type: import_v424.z.literal("custom_tool_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            name: import_v424.z.string(),
+            input: import_v424.z.string(),
+            async: import_v424.z.boolean().nullish(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"])
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("code_interpreter_call"),
-            id: import_v423.z.string(),
-            code: import_v423.z.string().nullable(),
-            container_id: import_v423.z.string(),
-            outputs: import_v423.z.array(
-              import_v423.z.discriminatedUnion("type", [
-                import_v423.z.object({ type: import_v423.z.literal("logs"), logs: import_v423.z.string() }),
-                import_v423.z.object({ type: import_v423.z.literal("image"), url: import_v423.z.string() })
+          import_v424.z.object({
+            type: import_v424.z.literal("code_interpreter_call"),
+            id: import_v424.z.string(),
+            code: import_v424.z.string().nullable(),
+            container_id: import_v424.z.string(),
+            outputs: import_v424.z.array(
+              import_v424.z.discriminatedUnion("type", [
+                import_v424.z.object({ type: import_v424.z.literal("logs"), logs: import_v424.z.string() }),
+                import_v424.z.object({ type: import_v424.z.literal("image"), url: import_v424.z.string() })
               ])
             ).nullable()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("image_generation_call"),
-            id: import_v423.z.string(),
-            result: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("image_generation_call"),
+            id: import_v424.z.string(),
+            result: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("web_search_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string(),
-            action: import_v423.z.discriminatedUnion("type", [
-              import_v423.z.object({
-                type: import_v423.z.literal("search"),
-                query: import_v423.z.string().nullish(),
-                queries: import_v423.z.array(import_v423.z.string()).nullish(),
-                sources: import_v423.z.array(
-                  import_v423.z.discriminatedUnion("type", [
-                    import_v423.z.object({ type: import_v423.z.literal("url"), url: import_v423.z.string() }),
-                    import_v423.z.object({ type: import_v423.z.literal("api"), name: import_v423.z.string() })
+          import_v424.z.object({
+            type: import_v424.z.literal("web_search_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string(),
+            action: import_v424.z.discriminatedUnion("type", [
+              import_v424.z.object({
+                type: import_v424.z.literal("search"),
+                query: import_v424.z.string().nullish(),
+                queries: import_v424.z.array(import_v424.z.string()).nullish(),
+                sources: import_v424.z.array(
+                  import_v424.z.discriminatedUnion("type", [
+                    import_v424.z.object({ type: import_v424.z.literal("url"), url: import_v424.z.string() }),
+                    import_v424.z.object({ type: import_v424.z.literal("api"), name: import_v424.z.string() })
                   ])
                 ).nullish()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("open_page"),
-                url: import_v423.z.string().nullish()
+              import_v424.z.object({
+                type: import_v424.z.literal("open_page"),
+                url: import_v424.z.string().nullish()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("find_in_page"),
-                url: import_v423.z.string().nullish(),
-                pattern: import_v423.z.string().nullish()
+              import_v424.z.object({
+                type: import_v424.z.literal("find_in_page"),
+                url: import_v424.z.string().nullish(),
+                pattern: import_v424.z.string().nullish()
               })
             ]).nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("file_search_call"),
-            id: import_v423.z.string(),
-            queries: import_v423.z.array(import_v423.z.string()),
-            results: import_v423.z.array(
-              import_v423.z.object({
-                attributes: import_v423.z.record(
-                  import_v423.z.string(),
-                  import_v423.z.union([import_v423.z.string(), import_v423.z.number(), import_v423.z.boolean()])
+          import_v424.z.object({
+            type: import_v424.z.literal("file_search_call"),
+            id: import_v424.z.string(),
+            queries: import_v424.z.array(import_v424.z.string()),
+            results: import_v424.z.array(
+              import_v424.z.object({
+                attributes: import_v424.z.record(
+                  import_v424.z.string(),
+                  import_v424.z.union([import_v424.z.string(), import_v424.z.number(), import_v424.z.boolean()])
                 ),
-                file_id: import_v423.z.string(),
-                filename: import_v423.z.string(),
-                score: import_v423.z.number(),
-                text: import_v423.z.string()
+                file_id: import_v424.z.string(),
+                filename: import_v424.z.string(),
+                score: import_v424.z.number(),
+                text: import_v424.z.string()
               })
             ).nullish()
           }),
           openaiResponsesLocalShellCallSchema(),
-          import_v423.z.object({
-            type: import_v423.z.literal("computer_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.literal("completed")
+          import_v424.z.object({
+            type: import_v424.z.literal("computer_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.literal("completed")
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            name: import_v423.z.string(),
-            server_label: import_v423.z.string(),
-            output: import_v423.z.string().nullish(),
-            error: import_v423.z.union([
-              import_v423.z.string(),
-              import_v423.z.object({
-                type: import_v423.z.string().optional(),
-                code: import_v423.z.union([import_v423.z.number(), import_v423.z.string()]).optional(),
-                message: import_v423.z.string().optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            name: import_v424.z.string(),
+            server_label: import_v424.z.string(),
+            output: import_v424.z.string().nullish(),
+            error: import_v424.z.union([
+              import_v424.z.string(),
+              import_v424.z.object({
+                type: import_v424.z.string().optional(),
+                code: import_v424.z.union([import_v424.z.number(), import_v424.z.string()]).optional(),
+                message: import_v424.z.string().optional()
               }).loose()
             ]).nullish(),
-            approval_request_id: import_v423.z.string().nullish()
+            approval_request_id: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_list_tools"),
-            id: import_v423.z.string(),
-            server_label: import_v423.z.string(),
-            tools: import_v423.z.array(
-              import_v423.z.object({
-                name: import_v423.z.string(),
-                description: import_v423.z.string().optional(),
-                input_schema: import_v423.z.any(),
-                annotations: import_v423.z.record(import_v423.z.string(), import_v423.z.unknown()).optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_list_tools"),
+            id: import_v424.z.string(),
+            server_label: import_v424.z.string(),
+            tools: import_v424.z.array(
+              import_v424.z.object({
+                name: import_v424.z.string(),
+                description: import_v424.z.string().optional(),
+                input_schema: import_v424.z.any(),
+                annotations: import_v424.z.record(import_v424.z.string(), import_v424.z.unknown()).optional()
               })
             ),
-            error: import_v423.z.union([
-              import_v423.z.string(),
-              import_v423.z.object({
-                type: import_v423.z.string().optional(),
-                code: import_v423.z.union([import_v423.z.number(), import_v423.z.string()]).optional(),
-                message: import_v423.z.string().optional()
+            error: import_v424.z.union([
+              import_v424.z.string(),
+              import_v424.z.object({
+                type: import_v424.z.string().optional(),
+                code: import_v424.z.union([import_v424.z.number(), import_v424.z.string()]).optional(),
+                message: import_v424.z.string().optional()
               }).loose()
             ]).optional()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_approval_request"),
-            id: import_v423.z.string(),
-            server_label: import_v423.z.string(),
-            name: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            approval_request_id: import_v423.z.string().optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_approval_request"),
+            id: import_v424.z.string(),
+            server_label: import_v424.z.string(),
+            name: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            approval_request_id: import_v424.z.string().optional()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("apply_patch_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed"]),
-            operation: import_v423.z.discriminatedUnion("type", [
-              import_v423.z.object({
-                type: import_v423.z.literal("create_file"),
-                path: import_v423.z.string(),
-                diff: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("apply_patch_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed"]),
+            operation: import_v424.z.discriminatedUnion("type", [
+              import_v424.z.object({
+                type: import_v424.z.literal("create_file"),
+                path: import_v424.z.string(),
+                diff: import_v424.z.string()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("delete_file"),
-                path: import_v423.z.string()
+              import_v424.z.object({
+                type: import_v424.z.literal("delete_file"),
+                path: import_v424.z.string()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("update_file"),
-                path: import_v423.z.string(),
-                diff: import_v423.z.string()
+              import_v424.z.object({
+                type: import_v424.z.literal("update_file"),
+                path: import_v424.z.string(),
+                diff: import_v424.z.string()
               })
             ])
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("shell_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            action: import_v423.z.object({
-              commands: import_v423.z.array(import_v423.z.string())
+          import_v424.z.object({
+            type: import_v424.z.literal("shell_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            action: import_v424.z.object({
+              commands: import_v424.z.array(import_v424.z.string())
             })
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("shell_call_output"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            output: import_v423.z.array(
-              import_v423.z.object({
-                stdout: import_v423.z.string(),
-                stderr: import_v423.z.string(),
-                outcome: import_v423.z.discriminatedUnion("type", [
-                  import_v423.z.object({ type: import_v423.z.literal("timeout") }),
-                  import_v423.z.object({
-                    type: import_v423.z.literal("exit"),
-                    exit_code: import_v423.z.number()
+          import_v424.z.object({
+            type: import_v424.z.literal("shell_call_output"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            output: import_v424.z.array(
+              import_v424.z.object({
+                stdout: import_v424.z.string(),
+                stderr: import_v424.z.string(),
+                outcome: import_v424.z.discriminatedUnion("type", [
+                  import_v424.z.object({ type: import_v424.z.literal("timeout") }),
+                  import_v424.z.object({
+                    type: import_v424.z.literal("exit"),
+                    exit_code: import_v424.z.number()
                   })
                 ])
               })
             )
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("tool_search_call"),
-            id: import_v423.z.string(),
-            execution: import_v423.z.enum(["server", "client"]),
-            call_id: import_v423.z.string().nullable(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            arguments: import_v423.z.unknown()
+          import_v424.z.object({
+            type: import_v424.z.literal("tool_search_call"),
+            id: import_v424.z.string(),
+            execution: import_v424.z.enum(["server", "client"]),
+            call_id: import_v424.z.string().nullable(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            arguments: import_v424.z.unknown()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("tool_search_output"),
-            id: import_v423.z.string(),
-            execution: import_v423.z.enum(["server", "client"]),
-            call_id: import_v423.z.string().nullable(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            tools: import_v423.z.array(import_v423.z.record(import_v423.z.string(), jsonValueSchema2().optional()))
+          import_v424.z.object({
+            type: import_v424.z.literal("tool_search_output"),
+            id: import_v424.z.string(),
+            execution: import_v424.z.enum(["server", "client"]),
+            call_id: import_v424.z.string().nullable(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            tools: import_v424.z.array(import_v424.z.record(import_v424.z.string(), jsonValueSchema2().optional()))
           })
         ])
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.function_call_arguments.delta"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        delta: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.function_call_arguments.delta"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        delta: import_v424.z.string()
       }),
-      import_v423.z.object({
+      import_v424.z.object({
         // `name` is documented as required but omitted from live API events:
         // https://github.com/openai/openai-openapi/issues/545
-        type: import_v423.z.literal("response.function_call_arguments.done"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        arguments: import_v423.z.string()
+        type: import_v424.z.literal("response.function_call_arguments.done"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        arguments: import_v424.z.string()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.custom_tool_call_input.delta"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        delta: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.custom_tool_call_input.delta"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        delta: import_v424.z.string()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.image_generation_call.partial_image"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        partial_image_b64: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.image_generation_call.partial_image"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        partial_image_b64: import_v424.z.string()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.code_interpreter_call_code.delta"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        delta: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.code_interpreter_call_code.delta"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        delta: import_v424.z.string()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.code_interpreter_call_code.done"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        code: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.code_interpreter_call_code.done"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        code: import_v424.z.string()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.output_text.annotation.added"),
-        annotation: import_v423.z.discriminatedUnion("type", [
-          import_v423.z.object({
-            type: import_v423.z.literal("url_citation"),
-            start_index: import_v423.z.number(),
-            end_index: import_v423.z.number(),
-            url: import_v423.z.string(),
-            title: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.output_text.annotation.added"),
+        annotation: import_v424.z.discriminatedUnion("type", [
+          import_v424.z.object({
+            type: import_v424.z.literal("url_citation"),
+            start_index: import_v424.z.number(),
+            end_index: import_v424.z.number(),
+            url: import_v424.z.string(),
+            title: import_v424.z.string()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("file_citation"),
-            file_id: import_v423.z.string(),
-            filename: import_v423.z.string(),
-            index: import_v423.z.number()
+          import_v424.z.object({
+            type: import_v424.z.literal("file_citation"),
+            file_id: import_v424.z.string(),
+            filename: import_v424.z.string(),
+            index: import_v424.z.number()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("container_file_citation"),
-            container_id: import_v423.z.string(),
-            file_id: import_v423.z.string(),
-            filename: import_v423.z.string(),
-            start_index: import_v423.z.number(),
-            end_index: import_v423.z.number()
+          import_v424.z.object({
+            type: import_v424.z.literal("container_file_citation"),
+            container_id: import_v424.z.string(),
+            file_id: import_v424.z.string(),
+            filename: import_v424.z.string(),
+            start_index: import_v424.z.number(),
+            end_index: import_v424.z.number()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("file_path"),
-            file_id: import_v423.z.string(),
-            index: import_v423.z.number()
+          import_v424.z.object({
+            type: import_v424.z.literal("file_path"),
+            file_id: import_v424.z.string(),
+            index: import_v424.z.number()
           })
         ])
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.reasoning_summary_part.added"),
-        item_id: import_v423.z.string(),
-        summary_index: import_v423.z.number()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.reasoning_summary_part.added"),
+        item_id: import_v424.z.string(),
+        summary_index: import_v424.z.number()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.reasoning_summary_text.delta"),
-        item_id: import_v423.z.string(),
-        summary_index: import_v423.z.number(),
-        delta: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.reasoning_summary_text.delta"),
+        item_id: import_v424.z.string(),
+        summary_index: import_v424.z.number(),
+        delta: import_v424.z.string()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.reasoning_summary_part.done"),
-        item_id: import_v423.z.string(),
-        summary_index: import_v423.z.number()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.reasoning_summary_part.done"),
+        item_id: import_v424.z.string(),
+        summary_index: import_v424.z.number()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.apply_patch_call_operation_diff.delta"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        delta: import_v423.z.string(),
-        obfuscation: import_v423.z.string().nullish()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.apply_patch_call_operation_diff.delta"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        delta: import_v424.z.string(),
+        obfuscation: import_v424.z.string().nullish()
       }),
-      import_v423.z.object({
-        type: import_v423.z.literal("response.apply_patch_call_operation_diff.done"),
-        item_id: import_v423.z.string(),
-        output_index: import_v423.z.number(),
-        diff: import_v423.z.string()
+      import_v424.z.object({
+        type: import_v424.z.literal("response.apply_patch_call_operation_diff.done"),
+        item_id: import_v424.z.string(),
+        output_index: import_v424.z.number(),
+        diff: import_v424.z.string()
       }),
       openaiResponsesNestedErrorChunkSchema(),
       openaiResponsesErrorChunkSchema(),
-      import_v423.z.object({ type: import_v423.z.string() }).loose().refine((value) => !isModeledOpenAIResponsesChunk(value), {
+      import_v424.z.object({ type: import_v424.z.string() }).loose().refine((value) => !isModeledOpenAIResponsesChunk(value), {
         message: "Known response chunk failed schema validation"
       }).transform((value) => ({
         type: "unknown_chunk",
@@ -32637,292 +33348,300 @@ var openaiResponsesChunkSchema = (0, import_provider_utils29.lazySchema)(
 );
 var openaiResponsesResponseSchema = (0, import_provider_utils29.lazySchema)(
   () => (0, import_provider_utils29.zodSchema)(
-    import_v423.z.object({
-      id: import_v423.z.string().optional(),
-      created_at: import_v423.z.number().optional(),
-      error: import_v423.z.object({
-        message: import_v423.z.string(),
-        type: import_v423.z.string(),
-        param: import_v423.z.string().nullish(),
-        code: import_v423.z.string()
+    import_v424.z.object({
+      id: import_v424.z.string().optional(),
+      created_at: import_v424.z.number().optional(),
+      error: import_v424.z.object({
+        message: import_v424.z.string(),
+        type: import_v424.z.string(),
+        param: import_v424.z.string().nullish(),
+        code: import_v424.z.string()
       }).nullish(),
-      model: import_v423.z.string().optional(),
-      output: import_v423.z.array(
-        import_v423.z.discriminatedUnion("type", [
-          import_v423.z.object({
-            type: import_v423.z.literal("message"),
-            role: import_v423.z.literal("assistant"),
-            id: import_v423.z.string(),
-            phase: import_v423.z.enum(["commentary", "final_answer"]).nullish(),
-            content: import_v423.z.array(
-              import_v423.z.object({
-                type: import_v423.z.literal("output_text"),
-                text: import_v423.z.string(),
-                logprobs: import_v423.z.array(
-                  import_v423.z.object({
-                    token: import_v423.z.string(),
-                    logprob: import_v423.z.number(),
-                    top_logprobs: import_v423.z.array(
-                      import_v423.z.object({
-                        token: import_v423.z.string(),
-                        logprob: import_v423.z.number()
-                      })
-                    )
-                  })
-                ).nullish(),
-                annotations: import_v423.z.array(
-                  import_v423.z.discriminatedUnion("type", [
-                    import_v423.z.object({
-                      type: import_v423.z.literal("url_citation"),
-                      start_index: import_v423.z.number(),
-                      end_index: import_v423.z.number(),
-                      url: import_v423.z.string(),
-                      title: import_v423.z.string()
-                    }),
-                    import_v423.z.object({
-                      type: import_v423.z.literal("file_citation"),
-                      file_id: import_v423.z.string(),
-                      filename: import_v423.z.string(),
-                      index: import_v423.z.number()
-                    }),
-                    import_v423.z.object({
-                      type: import_v423.z.literal("container_file_citation"),
-                      container_id: import_v423.z.string(),
-                      file_id: import_v423.z.string(),
-                      filename: import_v423.z.string(),
-                      start_index: import_v423.z.number(),
-                      end_index: import_v423.z.number()
-                    }),
-                    import_v423.z.object({
-                      type: import_v423.z.literal("file_path"),
-                      file_id: import_v423.z.string(),
-                      index: import_v423.z.number()
+      model: import_v424.z.string().optional(),
+      output: import_v424.z.array(
+        import_v424.z.discriminatedUnion("type", [
+          import_v424.z.object({
+            type: import_v424.z.literal("message"),
+            role: import_v424.z.literal("assistant"),
+            id: import_v424.z.string(),
+            phase: import_v424.z.enum(["commentary", "final_answer"]).nullish(),
+            // the API returns either text or a refusal as content parts:
+            content: import_v424.z.array(
+              import_v424.z.discriminatedUnion("type", [
+                import_v424.z.object({
+                  type: import_v424.z.literal("output_text"),
+                  text: import_v424.z.string(),
+                  logprobs: import_v424.z.array(
+                    import_v424.z.object({
+                      token: import_v424.z.string(),
+                      logprob: import_v424.z.number(),
+                      top_logprobs: import_v424.z.array(
+                        import_v424.z.object({
+                          token: import_v424.z.string(),
+                          logprob: import_v424.z.number()
+                        })
+                      )
                     })
-                  ])
-                )
-              })
+                  ).nullish(),
+                  annotations: import_v424.z.array(
+                    import_v424.z.discriminatedUnion("type", [
+                      import_v424.z.object({
+                        type: import_v424.z.literal("url_citation"),
+                        start_index: import_v424.z.number(),
+                        end_index: import_v424.z.number(),
+                        url: import_v424.z.string(),
+                        title: import_v424.z.string()
+                      }),
+                      import_v424.z.object({
+                        type: import_v424.z.literal("file_citation"),
+                        file_id: import_v424.z.string(),
+                        filename: import_v424.z.string(),
+                        index: import_v424.z.number()
+                      }),
+                      import_v424.z.object({
+                        type: import_v424.z.literal("container_file_citation"),
+                        container_id: import_v424.z.string(),
+                        file_id: import_v424.z.string(),
+                        filename: import_v424.z.string(),
+                        start_index: import_v424.z.number(),
+                        end_index: import_v424.z.number()
+                      }),
+                      import_v424.z.object({
+                        type: import_v424.z.literal("file_path"),
+                        file_id: import_v424.z.string(),
+                        index: import_v424.z.number()
+                      })
+                    ])
+                  )
+                }),
+                import_v424.z.object({
+                  type: import_v424.z.literal("refusal"),
+                  refusal: import_v424.z.string()
+                })
+              ])
             )
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("web_search_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string(),
-            action: import_v423.z.discriminatedUnion("type", [
-              import_v423.z.object({
-                type: import_v423.z.literal("search"),
-                query: import_v423.z.string().nullish(),
-                queries: import_v423.z.array(import_v423.z.string()).nullish(),
-                sources: import_v423.z.array(
-                  import_v423.z.discriminatedUnion("type", [
-                    import_v423.z.object({ type: import_v423.z.literal("url"), url: import_v423.z.string() }),
-                    import_v423.z.object({
-                      type: import_v423.z.literal("api"),
-                      name: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("web_search_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string(),
+            action: import_v424.z.discriminatedUnion("type", [
+              import_v424.z.object({
+                type: import_v424.z.literal("search"),
+                query: import_v424.z.string().nullish(),
+                queries: import_v424.z.array(import_v424.z.string()).nullish(),
+                sources: import_v424.z.array(
+                  import_v424.z.discriminatedUnion("type", [
+                    import_v424.z.object({ type: import_v424.z.literal("url"), url: import_v424.z.string() }),
+                    import_v424.z.object({
+                      type: import_v424.z.literal("api"),
+                      name: import_v424.z.string()
                     })
                   ])
                 ).nullish()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("open_page"),
-                url: import_v423.z.string().nullish()
+              import_v424.z.object({
+                type: import_v424.z.literal("open_page"),
+                url: import_v424.z.string().nullish()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("find_in_page"),
-                url: import_v423.z.string().nullish(),
-                pattern: import_v423.z.string().nullish()
+              import_v424.z.object({
+                type: import_v424.z.literal("find_in_page"),
+                url: import_v424.z.string().nullish(),
+                pattern: import_v424.z.string().nullish()
               })
             ]).nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("file_search_call"),
-            id: import_v423.z.string(),
-            queries: import_v423.z.array(import_v423.z.string()),
-            results: import_v423.z.array(
-              import_v423.z.object({
-                attributes: import_v423.z.record(
-                  import_v423.z.string(),
-                  import_v423.z.union([import_v423.z.string(), import_v423.z.number(), import_v423.z.boolean()])
+          import_v424.z.object({
+            type: import_v424.z.literal("file_search_call"),
+            id: import_v424.z.string(),
+            queries: import_v424.z.array(import_v424.z.string()),
+            results: import_v424.z.array(
+              import_v424.z.object({
+                attributes: import_v424.z.record(
+                  import_v424.z.string(),
+                  import_v424.z.union([import_v424.z.string(), import_v424.z.number(), import_v424.z.boolean()])
                 ),
-                file_id: import_v423.z.string(),
-                filename: import_v423.z.string(),
-                score: import_v423.z.number(),
-                text: import_v423.z.string()
+                file_id: import_v424.z.string(),
+                filename: import_v424.z.string(),
+                score: import_v424.z.number(),
+                text: import_v424.z.string()
               })
             ).nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("code_interpreter_call"),
-            id: import_v423.z.string(),
-            code: import_v423.z.string().nullable(),
-            container_id: import_v423.z.string(),
-            outputs: import_v423.z.array(
-              import_v423.z.discriminatedUnion("type", [
-                import_v423.z.object({ type: import_v423.z.literal("logs"), logs: import_v423.z.string() }),
-                import_v423.z.object({ type: import_v423.z.literal("image"), url: import_v423.z.string() })
+          import_v424.z.object({
+            type: import_v424.z.literal("code_interpreter_call"),
+            id: import_v424.z.string(),
+            code: import_v424.z.string().nullable(),
+            container_id: import_v424.z.string(),
+            outputs: import_v424.z.array(
+              import_v424.z.discriminatedUnion("type", [
+                import_v424.z.object({ type: import_v424.z.literal("logs"), logs: import_v424.z.string() }),
+                import_v424.z.object({ type: import_v424.z.literal("image"), url: import_v424.z.string() })
               ])
             ).nullable()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("image_generation_call"),
-            id: import_v423.z.string(),
-            result: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("image_generation_call"),
+            id: import_v424.z.string(),
+            result: import_v424.z.string()
           }),
           openaiResponsesLocalShellCallSchema(),
-          import_v423.z.object({
-            type: import_v423.z.literal("function_call"),
-            call_id: import_v423.z.string(),
-            name: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            id: import_v423.z.string(),
-            async: import_v423.z.boolean().nullish(),
-            namespace: import_v423.z.string().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("function_call"),
+            call_id: import_v424.z.string(),
+            name: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            id: import_v424.z.string(),
+            async: import_v424.z.boolean().nullish(),
+            namespace: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("custom_tool_call"),
-            call_id: import_v423.z.string(),
-            name: import_v423.z.string(),
-            input: import_v423.z.string(),
-            id: import_v423.z.string(),
-            async: import_v423.z.boolean().nullish()
+          import_v424.z.object({
+            type: import_v424.z.literal("custom_tool_call"),
+            call_id: import_v424.z.string(),
+            name: import_v424.z.string(),
+            input: import_v424.z.string(),
+            id: import_v424.z.string(),
+            async: import_v424.z.boolean().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("computer_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string().optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("computer_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string().optional()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("reasoning"),
-            id: import_v423.z.string(),
-            encrypted_content: import_v423.z.string().nullish(),
-            summary: import_v423.z.array(
-              import_v423.z.object({
-                type: import_v423.z.literal("summary_text"),
-                text: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("reasoning"),
+            id: import_v424.z.string(),
+            encrypted_content: import_v424.z.string().nullish(),
+            summary: import_v424.z.array(
+              import_v424.z.object({
+                type: import_v424.z.literal("summary_text"),
+                text: import_v424.z.string()
               })
             )
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_call"),
-            id: import_v423.z.string(),
-            status: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            name: import_v423.z.string(),
-            server_label: import_v423.z.string(),
-            output: import_v423.z.string().nullish(),
-            error: import_v423.z.union([
-              import_v423.z.string(),
-              import_v423.z.object({
-                type: import_v423.z.string().optional(),
-                code: import_v423.z.union([import_v423.z.number(), import_v423.z.string()]).optional(),
-                message: import_v423.z.string().optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_call"),
+            id: import_v424.z.string(),
+            status: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            name: import_v424.z.string(),
+            server_label: import_v424.z.string(),
+            output: import_v424.z.string().nullish(),
+            error: import_v424.z.union([
+              import_v424.z.string(),
+              import_v424.z.object({
+                type: import_v424.z.string().optional(),
+                code: import_v424.z.union([import_v424.z.number(), import_v424.z.string()]).optional(),
+                message: import_v424.z.string().optional()
               }).loose()
             ]).nullish(),
-            approval_request_id: import_v423.z.string().nullish()
+            approval_request_id: import_v424.z.string().nullish()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_list_tools"),
-            id: import_v423.z.string(),
-            server_label: import_v423.z.string(),
-            tools: import_v423.z.array(
-              import_v423.z.object({
-                name: import_v423.z.string(),
-                description: import_v423.z.string().optional(),
-                input_schema: import_v423.z.any(),
-                annotations: import_v423.z.record(import_v423.z.string(), import_v423.z.unknown()).optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_list_tools"),
+            id: import_v424.z.string(),
+            server_label: import_v424.z.string(),
+            tools: import_v424.z.array(
+              import_v424.z.object({
+                name: import_v424.z.string(),
+                description: import_v424.z.string().optional(),
+                input_schema: import_v424.z.any(),
+                annotations: import_v424.z.record(import_v424.z.string(), import_v424.z.unknown()).optional()
               })
             ),
-            error: import_v423.z.union([
-              import_v423.z.string(),
-              import_v423.z.object({
-                type: import_v423.z.string().optional(),
-                code: import_v423.z.union([import_v423.z.number(), import_v423.z.string()]).optional(),
-                message: import_v423.z.string().optional()
+            error: import_v424.z.union([
+              import_v424.z.string(),
+              import_v424.z.object({
+                type: import_v424.z.string().optional(),
+                code: import_v424.z.union([import_v424.z.number(), import_v424.z.string()]).optional(),
+                message: import_v424.z.string().optional()
               }).loose()
             ]).optional()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("mcp_approval_request"),
-            id: import_v423.z.string(),
-            server_label: import_v423.z.string(),
-            name: import_v423.z.string(),
-            arguments: import_v423.z.string(),
-            approval_request_id: import_v423.z.string().optional()
+          import_v424.z.object({
+            type: import_v424.z.literal("mcp_approval_request"),
+            id: import_v424.z.string(),
+            server_label: import_v424.z.string(),
+            name: import_v424.z.string(),
+            arguments: import_v424.z.string(),
+            approval_request_id: import_v424.z.string().optional()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("apply_patch_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed"]),
-            operation: import_v423.z.discriminatedUnion("type", [
-              import_v423.z.object({
-                type: import_v423.z.literal("create_file"),
-                path: import_v423.z.string(),
-                diff: import_v423.z.string()
+          import_v424.z.object({
+            type: import_v424.z.literal("apply_patch_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed"]),
+            operation: import_v424.z.discriminatedUnion("type", [
+              import_v424.z.object({
+                type: import_v424.z.literal("create_file"),
+                path: import_v424.z.string(),
+                diff: import_v424.z.string()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("delete_file"),
-                path: import_v423.z.string()
+              import_v424.z.object({
+                type: import_v424.z.literal("delete_file"),
+                path: import_v424.z.string()
               }),
-              import_v423.z.object({
-                type: import_v423.z.literal("update_file"),
-                path: import_v423.z.string(),
-                diff: import_v423.z.string()
+              import_v424.z.object({
+                type: import_v424.z.literal("update_file"),
+                path: import_v424.z.string(),
+                diff: import_v424.z.string()
               })
             ])
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("shell_call"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            action: import_v423.z.object({
-              commands: import_v423.z.array(import_v423.z.string())
+          import_v424.z.object({
+            type: import_v424.z.literal("shell_call"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            action: import_v424.z.object({
+              commands: import_v424.z.array(import_v424.z.string())
             })
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("shell_call_output"),
-            id: import_v423.z.string(),
-            call_id: import_v423.z.string(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            output: import_v423.z.array(
-              import_v423.z.object({
-                stdout: import_v423.z.string(),
-                stderr: import_v423.z.string(),
-                outcome: import_v423.z.discriminatedUnion("type", [
-                  import_v423.z.object({ type: import_v423.z.literal("timeout") }),
-                  import_v423.z.object({
-                    type: import_v423.z.literal("exit"),
-                    exit_code: import_v423.z.number()
+          import_v424.z.object({
+            type: import_v424.z.literal("shell_call_output"),
+            id: import_v424.z.string(),
+            call_id: import_v424.z.string(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            output: import_v424.z.array(
+              import_v424.z.object({
+                stdout: import_v424.z.string(),
+                stderr: import_v424.z.string(),
+                outcome: import_v424.z.discriminatedUnion("type", [
+                  import_v424.z.object({ type: import_v424.z.literal("timeout") }),
+                  import_v424.z.object({
+                    type: import_v424.z.literal("exit"),
+                    exit_code: import_v424.z.number()
                   })
                 ])
               })
             )
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("tool_search_call"),
-            id: import_v423.z.string(),
-            execution: import_v423.z.enum(["server", "client"]),
-            call_id: import_v423.z.string().nullable(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            arguments: import_v423.z.unknown()
+          import_v424.z.object({
+            type: import_v424.z.literal("tool_search_call"),
+            id: import_v424.z.string(),
+            execution: import_v424.z.enum(["server", "client"]),
+            call_id: import_v424.z.string().nullable(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            arguments: import_v424.z.unknown()
           }),
-          import_v423.z.object({
-            type: import_v423.z.literal("tool_search_output"),
-            id: import_v423.z.string(),
-            execution: import_v423.z.enum(["server", "client"]),
-            call_id: import_v423.z.string().nullable(),
-            status: import_v423.z.enum(["in_progress", "completed", "incomplete"]),
-            tools: import_v423.z.array(
-              import_v423.z.record(import_v423.z.string(), jsonValueSchema2().optional())
+          import_v424.z.object({
+            type: import_v424.z.literal("tool_search_output"),
+            id: import_v424.z.string(),
+            execution: import_v424.z.enum(["server", "client"]),
+            call_id: import_v424.z.string().nullable(),
+            status: import_v424.z.enum(["in_progress", "completed", "incomplete"]),
+            tools: import_v424.z.array(
+              import_v424.z.record(import_v424.z.string(), jsonValueSchema2().optional())
             )
           })
         ])
       ).optional(),
-      service_tier: import_v423.z.string().nullish(),
-      reasoning: import_v423.z.object({
-        context: import_v423.z.string().nullish()
+      service_tier: import_v424.z.string().nullish(),
+      prompt_cache_diagnostics: openaiResponsesPromptCacheDiagnosticsSchema().nullish(),
+      reasoning: import_v424.z.object({
+        context: import_v424.z.string().nullish()
       }).nullish(),
-      incomplete_details: import_v423.z.object({ reason: import_v423.z.string() }).nullish(),
+      incomplete_details: import_v424.z.object({ reason: import_v424.z.string() }).nullish(),
       usage: openaiResponsesUsageSchema().nullish()
     })
   )
@@ -33432,10 +34151,10 @@ function getConfigurationUpdateUnsupportedReason({
   options
 }) {
   if (!modelCapabilities.supportsConfigurationUpdate) {
-    return "reasoningEffortUpdate is only supported by GPT-6 and later models";
+    return "Configuration updates are only supported by GPT-6 and later models";
   }
   if ((options == null ? void 0 : options.reasoningMode) === "pro" || (options == null ? void 0 : options.truncation) === "auto") {
-    return "reasoningEffortUpdate requires standard reasoning mode without automatic truncation";
+    return "Configuration updates require standard reasoning mode without automatic truncation";
   }
   return void 0;
 }
@@ -33467,7 +34186,7 @@ var OpenAIResponsesLanguageModel = class {
     toolChoice,
     responseFormat
   }) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const warnings = [];
     const modelCapabilities = getOpenAILanguageModelCapabilities(this.modelId);
     if (topK != null) {
@@ -33580,7 +34299,7 @@ var OpenAIResponsesLanguageModel = class {
       });
     } else if (reasoningEffortUpdate != null) {
       const firstItem = input[0];
-      if ((firstItem == null ? void 0 : firstItem.type) !== "configuration_update" || firstItem.reasoning.effort !== reasoningEffortUpdate) {
+      if ((firstItem == null ? void 0 : firstItem.type) !== "configuration_update" || ((_f = firstItem.reasoning) == null ? void 0 : _f.effort) !== reasoningEffortUpdate) {
         input.unshift({
           type: "configuration_update",
           reasoning: { effort: reasoningEffortUpdate }
@@ -33590,11 +34309,13 @@ var OpenAIResponsesLanguageModel = class {
     for (let i = 1; i < input.length; i++) {
       if (input[i - 1].type === "configuration_update" && input[i].type === "configuration_update") {
         throw new import_provider11.UnsupportedFunctionalityError({
-          functionality: "Adjacent reasoning effort configuration updates"
+          functionality: "Adjacent configuration updates",
+          message: "Configuration updates cannot be consecutive. Set reasoningEffortUpdate and textFormatUpdate in the same empty system message, and omit request-level reasoningEffortUpdate when using message-level updates."
         });
       }
     }
-    const strictJsonSchema = (_f = openaiOptions == null ? void 0 : openaiOptions.strictJsonSchema) != null ? _f : true;
+    const strictJsonSchema = (_g = openaiOptions == null ? void 0 : openaiOptions.strictJsonSchema) != null ? _g : true;
+    const requestTextFormat = (openaiOptions == null ? void 0 : openaiOptions.textFormat) != null ? normalizeOpenAIResponsesTextFormat(openaiOptions.textFormat) : void 0;
     let include = openaiOptions == null ? void 0 : openaiOptions.include;
     function addInclude(key) {
       if (include == null) {
@@ -33614,9 +34335,9 @@ var OpenAIResponsesLanguageModel = class {
     if (topLogprobs) {
       addInclude("message.output_text.logprobs");
     }
-    const webSearchToolName = (_g = tools == null ? void 0 : tools.find(
+    const webSearchToolName = (_h = tools == null ? void 0 : tools.find(
       (tool) => tool.type === "provider" && (tool.id === "openai.web_search" || tool.id === "openai.web_search_preview")
-    )) == null ? void 0 : _g.name;
+    )) == null ? void 0 : _h.name;
     if (webSearchToolName) {
       addInclude("web_search_call.action.sources");
     }
@@ -33633,15 +34354,17 @@ var OpenAIResponsesLanguageModel = class {
       temperature,
       top_p: topP,
       max_output_tokens: maxOutputTokens,
-      ...((responseFormat == null ? void 0 : responseFormat.type) === "json" || (openaiOptions == null ? void 0 : openaiOptions.textVerbosity)) && {
+      ...((responseFormat == null ? void 0 : responseFormat.type) === "json" || requestTextFormat != null || (openaiOptions == null ? void 0 : openaiOptions.textVerbosity)) && {
         text: {
-          ...(responseFormat == null ? void 0 : responseFormat.type) === "json" && {
+          ...requestTextFormat != null ? { format: requestTextFormat } : (responseFormat == null ? void 0 : responseFormat.type) === "json" && {
             format: responseFormat.schema != null ? {
               type: "json_schema",
               strict: strictJsonSchema,
-              name: (_h = responseFormat.name) != null ? _h : "response",
+              name: (_i = responseFormat.name) != null ? _i : "response",
               description: responseFormat.description,
-              schema: normalizeOpenAIJsonSchema(responseFormat.schema)
+              schema: normalizeOpenAIJsonSchema(
+                responseFormat.schema
+              )
             } : { type: "json_object" }
           },
           ...(openaiOptions == null ? void 0 : openaiOptions.textVerbosity) && {
@@ -33661,7 +34384,12 @@ var OpenAIResponsesLanguageModel = class {
       service_tier: openaiOptions == null ? void 0 : openaiOptions.serviceTier,
       include,
       prompt_cache_key: openaiOptions == null ? void 0 : openaiOptions.promptCacheKey,
-      prompt_cache_options: openaiOptions == null ? void 0 : openaiOptions.promptCacheOptions,
+      prompt_cache_options: (openaiOptions == null ? void 0 : openaiOptions.promptCacheOptions) && {
+        mode: openaiOptions.promptCacheOptions.mode,
+        ttl: openaiOptions.promptCacheOptions.ttl,
+        prewarm: openaiOptions.promptCacheOptions.prewarm,
+        comparison_response_id: openaiOptions.promptCacheOptions.comparisonResponseId
+      },
       prompt_cache_retention: openaiOptions == null ? void 0 : openaiOptions.promptCacheRetention,
       safety_identifier: openaiOptions == null ? void 0 : openaiOptions.safetyIdentifier,
       top_logprobs: topLogprobs,
@@ -33711,9 +34439,9 @@ var OpenAIResponsesLanguageModel = class {
           });
         }
       }
-      if (modelCapabilities.supportedReasoningEfforts != null && (baseArgs.top_logprobs != null || ((_i = baseArgs.include) == null ? void 0 : _i.includes("message.output_text.logprobs")))) {
+      if (modelCapabilities.supportedReasoningEfforts != null && (baseArgs.top_logprobs != null || ((_j = baseArgs.include) == null ? void 0 : _j.includes("message.output_text.logprobs")))) {
         baseArgs.top_logprobs = void 0;
-        const filteredInclude = (_j = baseArgs.include) == null ? void 0 : _j.filter(
+        const filteredInclude = (_k = baseArgs.include) == null ? void 0 : _k.filter(
           (value) => value !== "message.output_text.logprobs"
         );
         baseArgs.include = filteredInclude != null && filteredInclude.length > 0 ? filteredInclude : void 0;
@@ -33769,9 +34497,9 @@ var OpenAIResponsesLanguageModel = class {
       });
       delete baseArgs.service_tier;
     }
-    const shellToolEnvType = (_m = (_l = (_k = tools == null ? void 0 : tools.find(
+    const shellToolEnvType = (_n = (_m = (_l = tools == null ? void 0 : tools.find(
       (tool) => tool.type === "provider" && tool.id === "openai.shell"
-    )) == null ? void 0 : _k.args) == null ? void 0 : _l.environment) == null ? void 0 : _m.type;
+    )) == null ? void 0 : _l.args) == null ? void 0 : _m.environment) == null ? void 0 : _n.type;
     const isShellProviderExecuted = shellToolEnvType === "containerAuto" || shellToolEnvType === "containerReference";
     return {
       webSearchToolName,
@@ -33835,6 +34563,7 @@ var OpenAIResponsesLanguageModel = class {
     )) != null ? _b : [];
     let hasFunctionCall = false;
     const hostedToolSearchCallIds = [];
+    let hasRefusal = false;
     for (const part of response.output) {
       switch (part.type) {
         case "reasoning": {
@@ -33968,6 +34697,20 @@ var OpenAIResponsesLanguageModel = class {
         }
         case "message": {
           for (const contentPart of part.content) {
+            if (contentPart.type === "refusal") {
+              hasRefusal = true;
+              content.push({
+                type: "text",
+                text: contentPart.refusal,
+                providerMetadata: {
+                  [providerOptionsName]: {
+                    itemId: part.id,
+                    ...part.phase != null && { phase: part.phase }
+                  }
+                }
+              });
+              continue;
+            }
             if (((_h = (_g = options.providerOptions) == null ? void 0 : _g[providerOptionsName]) == null ? void 0 : _h.logprobs) && contentPart.logprobs) {
               logprobs.push(contentPart.logprobs);
             }
@@ -34258,6 +35001,7 @@ var OpenAIResponsesLanguageModel = class {
         responseId: response.id,
         ...logprobs.length > 0 ? { logprobs } : {},
         ...typeof response.service_tier === "string" ? { serviceTier: response.service_tier } : {},
+        ...response.prompt_cache_diagnostics != null ? { promptCacheDiagnostics: response.prompt_cache_diagnostics } : {},
         ...((_B = response.reasoning) == null ? void 0 : _B.context) != null ? { reasoningContext: response.reasoning.context } : {}
       }
     };
@@ -34267,7 +35011,8 @@ var OpenAIResponsesLanguageModel = class {
       finishReason: {
         unified: mapOpenAIResponseFinishReason({
           finishReason: (_C = response.incomplete_details) == null ? void 0 : _C.reason,
-          hasFunctionCall
+          hasFunctionCall,
+          hasRefusal
         }),
         raw: (_E = (_D = response.incomplete_details) == null ? void 0 : _D.reason) != null ? _E : void 0
       },
@@ -34338,9 +35083,11 @@ var OpenAIResponsesLanguageModel = class {
     const ongoingAnnotations = [];
     let activeMessagePhase;
     let hasFunctionCall = false;
+    let hasRefusal = false;
     const activeReasoning = {};
     let serviceTier;
     let reasoningContext;
+    let promptCacheDiagnostics;
     const hostedToolSearchCallIds = [];
     let encounteredStreamError = false;
     const result = {
@@ -34350,7 +35097,7 @@ var OpenAIResponsesLanguageModel = class {
             controller.enqueue({ type: "stream-start", warnings });
           },
           transform(chunk, controller) {
-            var _a3, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S;
+            var _a3, _b2, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C, _D, _E, _F, _G, _H, _I, _J, _K, _L, _M, _N, _O, _P, _Q, _R, _S, _T, _U;
             if (options.includeRawChunks) {
               controller.enqueue({ type: "raw", rawValue: chunk.rawValue });
             }
@@ -35111,6 +35858,15 @@ var OpenAIResponsesLanguageModel = class {
               if (((_u = (_t = options.providerOptions) == null ? void 0 : _t[providerOptionsName]) == null ? void 0 : _u.logprobs) && value.logprobs) {
                 logprobs.push(value.logprobs);
               }
+            } else if (isRefusalDeltaChunk(value)) {
+              hasRefusal = true;
+              controller.enqueue({
+                type: "text-delta",
+                id: value.item_id,
+                delta: value.delta
+              });
+            } else if (isRefusalDoneChunk(value)) {
+              hasRefusal = true;
             } else if (value.type === "response.reasoning_summary_part.added") {
               if (value.summary_index > 0) {
                 const activeReasoningPart = activeReasoning[value.item_id];
@@ -35169,24 +35925,27 @@ var OpenAIResponsesLanguageModel = class {
                 activeReasoning[value.item_id].summaryParts[value.summary_index] = "can-conclude";
               }
             } else if (isResponseFinishedChunk(value)) {
+              promptCacheDiagnostics = (_x = value.response.prompt_cache_diagnostics) != null ? _x : void 0;
               if (!encounteredStreamError) {
                 finishReason = {
                   unified: mapOpenAIResponseFinishReason({
-                    finishReason: (_x = value.response.incomplete_details) == null ? void 0 : _x.reason,
-                    hasFunctionCall
+                    finishReason: (_y = value.response.incomplete_details) == null ? void 0 : _y.reason,
+                    hasFunctionCall,
+                    hasRefusal
                   }),
-                  raw: (_z = (_y = value.response.incomplete_details) == null ? void 0 : _y.reason) != null ? _z : void 0
+                  raw: (_A = (_z = value.response.incomplete_details) == null ? void 0 : _z.reason) != null ? _A : void 0
                 };
               }
-              usage = (_A = value.response.usage) != null ? _A : void 0;
+              usage = (_B = value.response.usage) != null ? _B : void 0;
               if (typeof value.response.service_tier === "string") {
                 serviceTier = value.response.service_tier;
               }
-              if (((_B = value.response.reasoning) == null ? void 0 : _B.context) != null) {
+              if (((_C = value.response.reasoning) == null ? void 0 : _C.context) != null) {
                 reasoningContext = value.response.reasoning.context;
               }
             } else if (isResponseFailedChunk(value)) {
-              const incompleteReason = (_C = value.response.incomplete_details) == null ? void 0 : _C.reason;
+              promptCacheDiagnostics = (_D = value.response.prompt_cache_diagnostics) != null ? _D : void 0;
+              const incompleteReason = (_E = value.response.incomplete_details) == null ? void 0 : _E.reason;
               finishReason = {
                 unified: incompleteReason ? mapOpenAIResponseFinishReason({
                   finishReason: incompleteReason,
@@ -35194,8 +35953,8 @@ var OpenAIResponsesLanguageModel = class {
                 }) : "error",
                 raw: incompleteReason != null ? incompleteReason : "error"
               };
-              usage = (_D = value.response.usage) != null ? _D : void 0;
-              if (((_E = value.response.reasoning) == null ? void 0 : _E.context) != null) {
+              usage = (_F = value.response.usage) != null ? _F : void 0;
+              if (((_G = value.response.reasoning) == null ? void 0 : _G.context) != null) {
                 reasoningContext = value.response.reasoning.context;
               }
               if (!encounteredStreamError && value.response.error != null) {
@@ -35211,7 +35970,7 @@ var OpenAIResponsesLanguageModel = class {
                 };
                 controller.enqueue({
                   type: "error",
-                  error: (_F = createOpenAIProviderStreamError(error)) != null ? _F : error
+                  error: (_H = createOpenAIProviderStreamError(error)) != null ? _H : error
                 });
               }
             } else if (isResponseAnnotationAddedChunk(value)) {
@@ -35220,7 +35979,7 @@ var OpenAIResponsesLanguageModel = class {
                 controller.enqueue({
                   type: "source",
                   sourceType: "url",
-                  id: (_I = (_H = (_G = self.config).generateId) == null ? void 0 : _H.call(_G)) != null ? _I : (0, import_provider_utils31.generateId)(),
+                  id: (_K = (_J = (_I = self.config).generateId) == null ? void 0 : _J.call(_I)) != null ? _K : (0, import_provider_utils31.generateId)(),
                   url: value.annotation.url,
                   title: value.annotation.title
                 });
@@ -35228,7 +35987,7 @@ var OpenAIResponsesLanguageModel = class {
                 controller.enqueue({
                   type: "source",
                   sourceType: "document",
-                  id: (_L = (_K = (_J = self.config).generateId) == null ? void 0 : _K.call(_J)) != null ? _L : (0, import_provider_utils31.generateId)(),
+                  id: (_N = (_M = (_L = self.config).generateId) == null ? void 0 : _M.call(_L)) != null ? _N : (0, import_provider_utils31.generateId)(),
                   mediaType: "text/plain",
                   title: value.annotation.filename,
                   filename: value.annotation.filename,
@@ -35244,7 +36003,7 @@ var OpenAIResponsesLanguageModel = class {
                 controller.enqueue({
                   type: "source",
                   sourceType: "document",
-                  id: (_O = (_N = (_M = self.config).generateId) == null ? void 0 : _N.call(_M)) != null ? _O : (0, import_provider_utils31.generateId)(),
+                  id: (_Q = (_P = (_O = self.config).generateId) == null ? void 0 : _P.call(_O)) != null ? _Q : (0, import_provider_utils31.generateId)(),
                   mediaType: "text/plain",
                   title: value.annotation.filename,
                   filename: value.annotation.filename,
@@ -35260,7 +36019,7 @@ var OpenAIResponsesLanguageModel = class {
                 controller.enqueue({
                   type: "source",
                   sourceType: "document",
-                  id: (_R = (_Q = (_P = self.config).generateId) == null ? void 0 : _Q.call(_P)) != null ? _R : (0, import_provider_utils31.generateId)(),
+                  id: (_T = (_S = (_R = self.config).generateId) == null ? void 0 : _S.call(_R)) != null ? _T : (0, import_provider_utils31.generateId)(),
                   mediaType: "application/octet-stream",
                   title: value.annotation.file_id,
                   filename: value.annotation.file_id,
@@ -35278,7 +36037,7 @@ var OpenAIResponsesLanguageModel = class {
               finishReason = { unified: "error", raw: "error" };
               controller.enqueue({
                 type: "error",
-                error: (_S = createOpenAIProviderStreamError(value)) != null ? _S : value
+                error: (_U = createOpenAIProviderStreamError(value)) != null ? _U : value
               });
             }
           },
@@ -35306,7 +36065,8 @@ var OpenAIResponsesLanguageModel = class {
                 responseId,
                 ...logprobs.length > 0 ? { logprobs } : {},
                 ...serviceTier !== void 0 ? { serviceTier } : {},
-                ...reasoningContext !== void 0 ? { reasoningContext } : {}
+                ...reasoningContext !== void 0 ? { reasoningContext } : {},
+                ...promptCacheDiagnostics !== void 0 ? { promptCacheDiagnostics } : {}
               }
             };
             controller.enqueue({
@@ -35326,6 +36086,12 @@ var OpenAIResponsesLanguageModel = class {
 };
 function isTextDeltaChunk(chunk) {
   return chunk.type === "response.output_text.delta";
+}
+function isRefusalDeltaChunk(chunk) {
+  return chunk.type === "response.refusal.delta";
+}
+function isRefusalDoneChunk(chunk) {
+  return chunk.type === "response.refusal.done";
 }
 function isOpenAIChatCompletionChunk(value) {
   const chunk = asRecord2(value);
@@ -35440,12 +36206,12 @@ var import_provider_utils33 = __nccwpck_require__(67216);
 
 // src/speech/openai-speech-options.ts
 var import_provider_utils32 = __nccwpck_require__(67216);
-var import_v424 = __nccwpck_require__(36360);
+var import_v425 = __nccwpck_require__(36360);
 var openaiSpeechModelOptionsSchema = (0, import_provider_utils32.lazySchema)(
   () => (0, import_provider_utils32.zodSchema)(
-    import_v424.z.object({
-      instructions: import_v424.z.string().nullish(),
-      speed: import_v424.z.number().min(0.25).max(4).default(1).nullish()
+    import_v425.z.object({
+      instructions: import_v425.z.string().nullish(),
+      speed: import_v425.z.number().min(0.25).max(4).default(1).nullish()
     })
   )
 );
@@ -35556,38 +36322,38 @@ var import_provider_utils36 = __nccwpck_require__(67216);
 
 // src/transcription/openai-transcription-api.ts
 var import_provider_utils34 = __nccwpck_require__(67216);
-var import_v425 = __nccwpck_require__(36360);
+var import_v426 = __nccwpck_require__(36360);
 var openaiTranscriptionResponseSchema = (0, import_provider_utils34.lazySchema)(
   () => (0, import_provider_utils34.zodSchema)(
-    import_v425.z.object({
-      text: import_v425.z.string(),
-      language: import_v425.z.string().nullish(),
-      duration: import_v425.z.number().nullish(),
-      words: import_v425.z.array(
-        import_v425.z.object({
-          word: import_v425.z.string(),
-          start: import_v425.z.number(),
-          end: import_v425.z.number()
+    import_v426.z.object({
+      text: import_v426.z.string(),
+      language: import_v426.z.string().nullish(),
+      duration: import_v426.z.number().nullish(),
+      words: import_v426.z.array(
+        import_v426.z.object({
+          word: import_v426.z.string(),
+          start: import_v426.z.number(),
+          end: import_v426.z.number()
         })
       ).nullish(),
-      segments: import_v425.z.array(
-        import_v425.z.object({
-          id: import_v425.z.number(),
-          seek: import_v425.z.number(),
-          start: import_v425.z.number(),
-          end: import_v425.z.number(),
-          text: import_v425.z.string(),
-          tokens: import_v425.z.array(import_v425.z.number()),
-          temperature: import_v425.z.number(),
-          avg_logprob: import_v425.z.number(),
-          compression_ratio: import_v425.z.number(),
-          no_speech_prob: import_v425.z.number()
+      segments: import_v426.z.array(
+        import_v426.z.object({
+          id: import_v426.z.number(),
+          seek: import_v426.z.number(),
+          start: import_v426.z.number(),
+          end: import_v426.z.number(),
+          text: import_v426.z.string(),
+          tokens: import_v426.z.array(import_v426.z.number()),
+          temperature: import_v426.z.number(),
+          avg_logprob: import_v426.z.number(),
+          compression_ratio: import_v426.z.number(),
+          no_speech_prob: import_v426.z.number()
         })
       ).nullish(),
       // Lenient: an unexpected usage shape must not fail the transcription.
-      usage: import_v425.z.object({
-        type: import_v425.z.string().nullish(),
-        seconds: import_v425.z.number().nullish()
+      usage: import_v426.z.object({
+        type: import_v426.z.string().nullish(),
+        seconds: import_v426.z.number().nullish()
       }).nullish().catch(void 0)
     })
   )
@@ -35595,42 +36361,42 @@ var openaiTranscriptionResponseSchema = (0, import_provider_utils34.lazySchema)(
 
 // src/transcription/openai-transcription-options.ts
 var import_provider_utils35 = __nccwpck_require__(67216);
-var import_v426 = __nccwpck_require__(36360);
+var import_v427 = __nccwpck_require__(36360);
 var openAITranscriptionModelOptions = (0, import_provider_utils35.lazySchema)(
   () => (0, import_provider_utils35.zodSchema)(
-    import_v426.z.object({
+    import_v427.z.object({
       /**
        * Additional information to include in the transcription response.
        */
-      include: import_v426.z.array(import_v426.z.string()).optional(),
+      include: import_v427.z.array(import_v427.z.string()).optional(),
       /**
        * The language of the input audio in ISO-639-1 format.
        */
-      language: import_v426.z.string().optional(),
+      language: import_v427.z.string().optional(),
       /**
        * Expected languages for REST transcription, e.g. with gpt-transcribe.
        * Use this instead of language. The API validates model support.
        */
-      languages: import_v426.z.array(import_v426.z.string()).optional(),
+      languages: import_v427.z.array(import_v427.z.string()).optional(),
       /**
        * Vocabulary hints for REST transcription, e.g. names or technical terms.
        * The API validates model support.
        */
-      keywords: import_v426.z.array(import_v426.z.string()).optional(),
+      keywords: import_v427.z.array(import_v427.z.string()).optional(),
       /**
        * An optional text to guide the model's style or continue a previous audio segment.
        */
-      prompt: import_v426.z.string().optional(),
+      prompt: import_v427.z.string().optional(),
       /**
        * The sampling temperature, between 0 and 1.
        * @default 0
        */
-      temperature: import_v426.z.number().min(0).max(1).default(0).optional(),
+      temperature: import_v427.z.number().min(0).max(1).default(0).optional(),
       /**
        * The timestamp granularities to populate for this transcription.
        * @default ['segment']
        */
-      timestampGranularities: import_v426.z.array(import_v426.z.enum(["word", "segment"])).default(["segment"]).optional()
+      timestampGranularities: import_v427.z.array(import_v427.z.enum(["word", "segment"])).default(["segment"]).optional()
     })
   )
 );
@@ -35806,7 +36572,7 @@ var OpenAITranscriptionModel = class {
 };
 
 // src/version.ts
-var VERSION =  true ? "3.0.137" : 0;
+var VERSION =  true ? "3.0.141" : 0;
 
 // src/openai-provider.ts
 function createOpenAI(options = {}) {
@@ -36608,12 +37374,20 @@ async function fetchWithValidatedEndpoint({
   init,
   fetch: customFetch,
   trustedOrigin,
-  redirect = "error"
+  redirect = "error",
+  requireDnsValidation = false
 }) {
   const urlText = url.toString();
   const isTrusted = trustedOrigin !== void 0 && isSameOrigin(urlText, trustedOrigin);
   if (!isTrusted) {
     validateDownloadUrl(urlText);
+    if (requireDnsValidation && (customFetch == null || customFetch === globalThis.fetch) && !isNodeRuntime() && // A window alias alone does not distinguish older Deno from a browser.
+    !(isBrowserRuntime() && typeof document !== "undefined")) {
+      throw new DownloadError({
+        url: urlText,
+        message: "This server runtime requires a custom fetch with connect-time DNS validation for untrusted URLs"
+      });
+    }
   }
   const fetch = isTrusted && customFetch != null ? customFetch : isTrusted ? globalThis.fetch : await getValidatedFetch(customFetch);
   return await fetch(url, {
@@ -36659,6 +37433,12 @@ async function fetchWithValidatedRedirects({
     if (REDIRECT_STATUS_CODES.has(response.status) && location) {
       void cancelResponseBody(response);
       const nextUrl = new URL(location, currentUrl).toString();
+      if (new URL(currentUrl).protocol === "https:" && new URL(nextUrl).protocol === "http:") {
+        throw new DownloadError({
+          url,
+          message: "Redirect from HTTPS to HTTP was blocked"
+        });
+      }
       if (currentHeaders !== void 0 && !isSameOrigin(nextUrl, currentUrl)) {
         const userAgent = currentHeaders.get("user-agent");
         currentHeaders = new Headers(
@@ -36961,7 +37741,7 @@ function withUserAgentSuffix(headers, ...userAgentSuffixParts) {
 }
 
 // src/version.ts
-var VERSION =  true ? "4.0.64" : 0;
+var VERSION =  true ? "4.0.66" : 0;
 
 // src/get-from-api.ts
 var getOriginalFetch = () => globalThis.fetch;
@@ -64923,7 +65703,7 @@ __export(src_exports, {
   UnsupportedFunctionalityError: () => import_provider23.UnsupportedFunctionalityError,
   UnsupportedModelVersionError: () => UnsupportedModelVersionError,
   addToolInputExamplesMiddleware: () => addToolInputExamplesMiddleware,
-  asSchema: () => import_provider_utils44.asSchema,
+  asSchema: () => import_provider_utils45.asSchema,
   assistantModelMessageSchema: () => assistantModelMessageSchema,
   bindTelemetryIntegration: () => bindTelemetryIntegration,
   callCompletionApi: () => callCompletionApi,
@@ -64935,7 +65715,7 @@ __export(src_exports, {
   createAgentUIStreamResponse: () => createAgentUIStreamResponse,
   createDownload: () => createDownload,
   createGateway: () => import_gateway4.createGateway,
-  createIdGenerator: () => import_provider_utils44.createIdGenerator,
+  createIdGenerator: () => import_provider_utils45.createIdGenerator,
   createProviderRegistry: () => createProviderRegistry,
   createTextStreamResponse: () => createTextStreamResponse,
   createUIMessageStream: () => createUIMessageStream,
@@ -64943,7 +65723,7 @@ __export(src_exports, {
   customProvider: () => customProvider,
   defaultEmbeddingSettingsMiddleware: () => defaultEmbeddingSettingsMiddleware,
   defaultSettingsMiddleware: () => defaultSettingsMiddleware,
-  dynamicTool: () => import_provider_utils44.dynamicTool,
+  dynamicTool: () => import_provider_utils45.dynamicTool,
   embed: () => embed,
   embedMany: () => embedMany,
   experimental_createProviderRegistry: () => experimental_createProviderRegistry,
@@ -64955,7 +65735,7 @@ __export(src_exports, {
   extractJsonMiddleware: () => extractJsonMiddleware,
   extractReasoningMiddleware: () => extractReasoningMiddleware,
   gateway: () => import_gateway4.gateway,
-  generateId: () => import_provider_utils44.generateId,
+  generateId: () => import_provider_utils45.generateId,
   generateImage: () => generateImage,
   generateObject: () => generateObject,
   generateText: () => generateText,
@@ -64974,11 +65754,11 @@ __export(src_exports, {
   isTextUIPart: () => isTextUIPart,
   isToolOrDynamicToolUIPart: () => isToolOrDynamicToolUIPart,
   isToolUIPart: () => isToolUIPart,
-  jsonSchema: () => import_provider_utils44.jsonSchema,
+  jsonSchema: () => import_provider_utils45.jsonSchema,
   lastAssistantMessageIsCompleteWithApprovalResponses: () => lastAssistantMessageIsCompleteWithApprovalResponses,
   lastAssistantMessageIsCompleteWithToolCalls: () => lastAssistantMessageIsCompleteWithToolCalls,
   modelMessageSchema: () => modelMessageSchema,
-  parseJsonEventStream: () => import_provider_utils44.parseJsonEventStream,
+  parseJsonEventStream: () => import_provider_utils45.parseJsonEventStream,
   parsePartialJson: () => parsePartialJson,
   pipeAgentUIStreamToResponse: () => pipeAgentUIStreamToResponse,
   pipeTextStreamToResponse: () => pipeTextStreamToResponse,
@@ -64995,7 +65775,7 @@ __export(src_exports, {
   streamObject: () => streamObject,
   streamText: () => streamText,
   systemModelMessageSchema: () => systemModelMessageSchema,
-  tool: () => import_provider_utils44.tool,
+  tool: () => import_provider_utils45.tool,
   toolModelMessageSchema: () => toolModelMessageSchema,
   uiMessageChunkSchema: () => uiMessageChunkSchema,
   userModelMessageSchema: () => userModelMessageSchema,
@@ -65004,17 +65784,17 @@ __export(src_exports, {
   wrapImageModel: () => wrapImageModel,
   wrapLanguageModel: () => wrapLanguageModel,
   wrapProvider: () => wrapProvider,
-  zodSchema: () => import_provider_utils44.zodSchema
+  zodSchema: () => import_provider_utils45.zodSchema
 });
 module.exports = __toCommonJS(src_exports);
 var import_gateway4 = __nccwpck_require__(6345);
-var import_provider_utils44 = __nccwpck_require__(67216);
+var import_provider_utils45 = __nccwpck_require__(67216);
 
 // src/agent/tool-loop-agent.ts
-var import_provider_utils21 = __nccwpck_require__(67216);
+var import_provider_utils22 = __nccwpck_require__(67216);
 
 // src/generate-text/generate-text.ts
-var import_provider_utils16 = __nccwpck_require__(67216);
+var import_provider_utils17 = __nccwpck_require__(67216);
 
 // src/error/index.ts
 var import_provider23 = __nccwpck_require__(48468);
@@ -66188,7 +66968,7 @@ function detectMediaType({
 var import_provider_utils3 = __nccwpck_require__(67216);
 
 // src/version.ts
-var VERSION =  true ? "6.0.323" : 0;
+var VERSION =  true ? "6.0.330" : 0;
 
 // src/util/download/download.ts
 var download = async ({
@@ -66912,7 +67692,8 @@ async function prepareToolsAndToolChoice({
   if (!isNonEmptyObject(tools)) {
     return {
       tools: void 0,
-      toolChoice: void 0
+      // Providers can configure native tools without SDK tools.
+      toolChoice: toolChoice === "none" ? { type: "none" } : void 0
     };
   }
   const filteredTools = activeTools != null ? Object.entries(tools).filter(
@@ -67529,6 +68310,58 @@ function stringifyForTelemetry(prompt) {
       )
     }))
   );
+}
+
+// src/telemetry/redact-tool-definition.ts
+function redactToolDefinition(tool2) {
+  if (tool2.type !== "provider") {
+    return tool2;
+  }
+  const args = tool2.args;
+  if (!isRecord(args))
+    return tool2;
+  if (tool2.id === "openai.mcp") {
+    return {
+      ...tool2,
+      args: {
+        ...args,
+        ...args.authorization != null ? { authorization: "[redacted]" } : {},
+        ...isRecord(args.headers) ? {
+          headers: Object.fromEntries(
+            Object.keys(args.headers).map((name23) => [name23, "[redacted]"])
+          )
+        } : {}
+      }
+    };
+  }
+  const containerKey = tool2.id === "openai.code_interpreter" ? "container" : tool2.id === "openai.shell" ? "environment" : void 0;
+  if (containerKey == null)
+    return tool2;
+  const container = args[containerKey];
+  if (!isRecord(container))
+    return tool2;
+  const networkPolicy = container.networkPolicy;
+  if (!isRecord(networkPolicy) || !Array.isArray(networkPolicy.domainSecrets)) {
+    return tool2;
+  }
+  return {
+    ...tool2,
+    args: {
+      ...args,
+      [containerKey]: {
+        ...container,
+        networkPolicy: {
+          ...networkPolicy,
+          domainSecrets: networkPolicy.domainSecrets.map(
+            (secret) => isRecord(secret) && "value" in secret ? { ...secret, value: "[redacted]" } : secret
+          )
+        }
+      }
+    }
+  };
+}
+function isRecord(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 // src/telemetry/telemetry-integration-registry.ts
@@ -68346,10 +69179,119 @@ __export(output_exports, {
   text: () => text
 });
 var import_provider29 = __nccwpck_require__(48468);
-var import_provider_utils14 = __nccwpck_require__(67216);
+var import_provider_utils15 = __nccwpck_require__(67216);
+
+// src/util/array-output-stream.ts
+var import_provider_utils13 = __nccwpck_require__(67216);
+var arrayStreamParserFactories = /* @__PURE__ */ new WeakMap();
+function createArrayStreamParser(output) {
+  var _a23;
+  return (_a23 = arrayStreamParserFactories.get(output)) == null ? void 0 : _a23();
+}
+function createArrayOutputStreamParser(schema, skipInvalidElements) {
+  let phase = 0 /* Prefix */;
+  let prefix = "";
+  let elementText = "";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let afterComma = false;
+  let pending = [];
+  const elements = [];
+  let publishedCount;
+  async function finishElement() {
+    const parsed = await (0, import_provider_utils13.safeParseJSON)({ text: elementText });
+    if (!parsed.success) {
+      return false;
+    }
+    const validated = await (0, import_provider_utils13.safeValidateTypes)({ value: parsed.value, schema });
+    if (validated.success) {
+      pending = [validated.value];
+    } else if (!skipInvalidElements) {
+      return false;
+    }
+    elementText = "";
+    return true;
+  }
+  function publishPending() {
+    elements.push(...pending);
+    pending = [];
+  }
+  return async (textDelta) => {
+    for (const char of textDelta) {
+      if (phase === 0 /* Prefix */) {
+        prefix += char;
+        if (char === "[") {
+          if (!/^\s*\{\s*"elements"\s*:\s*\[$/.test(prefix)) {
+            return "fallback";
+          }
+          phase = 1 /* Elements */;
+        } else if (prefix.length > 256) {
+          return "fallback";
+        }
+        continue;
+      }
+      if (phase === 2 /* Suffix */ || phase === 3 /* Done */) {
+        if (/\s/.test(char)) {
+          continue;
+        }
+        if (phase === 2 /* Suffix */ && char === "}") {
+          publishPending();
+          phase = 3 /* Done */;
+          continue;
+        }
+        return "fallback";
+      }
+      if (!inString && depth === 0 && (char === "," || char === "]")) {
+        if (elementText.length > 0) {
+          if (!await finishElement()) {
+            return "fallback";
+          }
+        } else if (char === "," || afterComma) {
+          return "fallback";
+        }
+        afterComma = char === ",";
+        if (char === "]") {
+          phase = 2 /* Suffix */;
+        }
+        continue;
+      }
+      if (elementText.length === 0) {
+        if (/\s/.test(char)) {
+          continue;
+        }
+        publishPending();
+        afterComma = false;
+      }
+      elementText += char;
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+      } else if (char === '"') {
+        inString = true;
+      } else if (char === "{" || char === "[") {
+        depth++;
+      } else if (char === "}" || char === "]") {
+        depth--;
+      }
+    }
+    if (phase === 0 /* Prefix */ || publishedCount === elements.length) {
+      return void 0;
+    }
+    const previousCount = publishedCount != null ? publishedCount : 0;
+    const delta = (publishedCount == null ? "[" : "") + (previousCount > 0 && elements.length > previousCount ? "," : "") + elements.slice(previousCount).map((value) => JSON.stringify(value)).join(",") + (phase === 3 /* Done */ ? "]" : "");
+    publishedCount = elements.length;
+    return { partial: elements.slice(), textDelta: delta };
+  };
+}
 
 // src/util/parse-partial-json.ts
-var import_provider_utils13 = __nccwpck_require__(67216);
+var import_provider_utils14 = __nccwpck_require__(67216);
 
 // src/util/fix-json.ts
 function fixJson(input) {
@@ -68693,11 +69635,11 @@ async function parsePartialJson(jsonText) {
   if (jsonText === void 0) {
     return { value: void 0, state: "undefined-input" };
   }
-  let result = await (0, import_provider_utils13.safeParseJSON)({ text: jsonText });
+  let result = await (0, import_provider_utils14.safeParseJSON)({ text: jsonText });
   if (result.success) {
     return { value: result.value, state: "successful-parse" };
   }
-  result = await (0, import_provider_utils13.safeParseJSON)({ text: fixJson(jsonText) });
+  result = await (0, import_provider_utils14.safeParseJSON)({ text: fixJson(jsonText) });
   if (result.success) {
     return { value: result.value, state: "repaired-parse" };
   }
@@ -68723,39 +69665,35 @@ var object = ({
   name: name23,
   description
 }) => {
-  const schema = (0, import_provider_utils14.asSchema)(inputSchema);
+  const schema = (0, import_provider_utils15.asSchema)(inputSchema);
   return {
     name: "object",
-    responseFormat: (0, import_provider_utils14.resolve)(schema.jsonSchema).then((jsonSchema2) => ({
+    responseFormat: (0, import_provider_utils15.resolve)(schema.jsonSchema).then((jsonSchema2) => ({
       type: "json",
       schema: jsonSchema2,
       ...name23 != null && { name: name23 },
       ...description != null && { description }
     })),
     async parseCompleteOutput({ text: text2 }, context2) {
-      const parseResult = await (0, import_provider_utils14.safeParseJSON)({ text: text2 });
+      const parseResult = await (0, import_provider_utils15.safeParseJSON)({ text: text2 });
       if (!parseResult.success) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: could not parse the response.",
           cause: parseResult.error,
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
-      const validationResult = await (0, import_provider_utils14.safeValidateTypes)({
+      const validationResult = await (0, import_provider_utils15.safeValidateTypes)({
         value: parseResult.value,
         schema
       });
       if (!validationResult.success) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: response did not match schema.",
           cause: validationResult.error,
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
       return validationResult.value;
@@ -68786,11 +69724,11 @@ var array = ({
   name: name23,
   description
 }) => {
-  const elementSchema = (0, import_provider_utils14.asSchema)(inputElementSchema);
-  return {
+  const elementSchema = (0, import_provider_utils15.asSchema)(inputElementSchema);
+  const output = {
     name: "array",
     // JSON schema that describes an array of elements:
-    responseFormat: (0, import_provider_utils14.resolve)(elementSchema.jsonSchema).then((jsonSchema2) => {
+    responseFormat: (0, import_provider_utils15.resolve)(elementSchema.jsonSchema).then((jsonSchema2) => {
       const { $schema, ...itemSchema } = jsonSchema2;
       return {
         type: "json",
@@ -68808,45 +69746,39 @@ var array = ({
       };
     }),
     async parseCompleteOutput({ text: text2 }, context2) {
-      const parseResult = await (0, import_provider_utils14.safeParseJSON)({ text: text2 });
+      const parseResult = await (0, import_provider_utils15.safeParseJSON)({ text: text2 });
       if (!parseResult.success) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: could not parse the response.",
           cause: parseResult.error,
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
       const outerValue = parseResult.value;
       if (outerValue == null || typeof outerValue !== "object" || !("elements" in outerValue) || !Array.isArray(outerValue.elements)) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: response did not match schema.",
           cause: new import_provider29.TypeValidationError({
             value: outerValue,
             cause: "response must be an object with an elements array"
           }),
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
       const validatedElements = [];
       for (const element of outerValue.elements) {
-        const validationResult = await (0, import_provider_utils14.safeValidateTypes)({
+        const validationResult = await (0, import_provider_utils15.safeValidateTypes)({
           value: element,
           schema: elementSchema
         });
         if (!validationResult.success) {
           throw new NoObjectGeneratedError({
+            ...context2,
             message: "No object generated: response did not match schema.",
             cause: validationResult.error,
-            text: text2,
-            response: context2.response,
-            usage: context2.usage,
-            finishReason: context2.finishReason
+            text: text2
           });
         }
         validatedElements.push(validationResult.value);
@@ -68869,7 +69801,7 @@ var array = ({
           const rawElements = result.state === "repaired-parse" && outerValue.elements.length > 0 ? outerValue.elements.slice(0, -1) : outerValue.elements;
           const parsedElements = [];
           for (const rawElement of rawElements) {
-            const validationResult = await (0, import_provider_utils14.safeValidateTypes)({
+            const validationResult = await (0, import_provider_utils15.safeValidateTypes)({
               value: rawElement,
               schema: elementSchema
             });
@@ -68894,6 +69826,12 @@ var array = ({
       });
     }
   };
+  const parsePartialOutput = output.parsePartialOutput;
+  arrayStreamParserFactories.set(
+    output,
+    () => output.parsePartialOutput === parsePartialOutput ? createArrayOutputStreamParser(elementSchema, true) : void 0
+  );
+  return output;
 };
 var choice = ({
   options: choiceOptions,
@@ -68918,29 +69856,25 @@ var choice = ({
       ...description != null && { description }
     }),
     async parseCompleteOutput({ text: text2 }, context2) {
-      const parseResult = await (0, import_provider_utils14.safeParseJSON)({ text: text2 });
+      const parseResult = await (0, import_provider_utils15.safeParseJSON)({ text: text2 });
       if (!parseResult.success) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: could not parse the response.",
           cause: parseResult.error,
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
       const outerValue = parseResult.value;
       if (outerValue == null || typeof outerValue !== "object" || !("result" in outerValue) || typeof outerValue.result !== "string" || !choiceOptions.includes(outerValue.result)) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: response did not match schema.",
           cause: new import_provider29.TypeValidationError({
             value: outerValue,
             cause: "response must be an object that contains a choice value."
           }),
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
       return outerValue.result;
@@ -68986,15 +69920,13 @@ var json = ({
       ...description != null && { description }
     }),
     async parseCompleteOutput({ text: text2 }, context2) {
-      const parseResult = await (0, import_provider_utils14.safeParseJSON)({ text: text2 });
+      const parseResult = await (0, import_provider_utils15.safeParseJSON)({ text: text2 });
       if (!parseResult.success) {
         throw new NoObjectGeneratedError({
+          ...context2,
           message: "No object generated: could not parse the response.",
           cause: parseResult.error,
-          text: text2,
-          response: context2.response,
-          usage: context2.usage,
-          finishReason: context2.finishReason
+          text: text2
         });
       }
       return parseResult.value;
@@ -69019,7 +69951,7 @@ var json = ({
 };
 
 // src/generate-text/parse-tool-call.ts
-var import_provider_utils15 = __nccwpck_require__(67216);
+var import_provider_utils16 = __nccwpck_require__(67216);
 
 // src/generate-text/tool-call.ts
 var inputSchemaInputSymbol = Symbol("ai-sdk-tool-call-input-schema-input");
@@ -69063,7 +69995,7 @@ async function parseToolCall({
           tools,
           inputSchema: async ({ toolName }) => {
             const { inputSchema } = tools[toolName];
-            return await (0, import_provider_utils15.asSchema)(inputSchema).jsonSchema;
+            return await (0, import_provider_utils16.asSchema)(inputSchema).jsonSchema;
           },
           system,
           messages,
@@ -69081,7 +70013,7 @@ async function parseToolCall({
       return await doParseToolCall({ toolCall: repairedToolCall, tools });
     }
   } catch (error) {
-    const parsedInput = await (0, import_provider_utils15.safeParseJSON)({ text: toolCall.input });
+    const parsedInput = await (0, import_provider_utils16.safeParseJSON)({ text: toolCall.input });
     const input = parsedInput.success ? parsedInput.value : toolCall.input;
     const tool2 = tools == null ? void 0 : tools[toolCall.toolName];
     return {
@@ -69100,7 +70032,7 @@ async function parseToolCall({
   }
 }
 async function parseProviderExecutedDynamicToolCall(toolCall) {
-  const parseResult = toolCall.input.trim() === "" ? { success: true, value: {} } : await (0, import_provider_utils15.safeParseJSON)({ text: toolCall.input });
+  const parseResult = toolCall.input.trim() === "" ? { success: true, value: {} } : await (0, import_provider_utils16.safeParseJSON)({ text: toolCall.input });
   if (parseResult.success === false) {
     throw new InvalidToolInputError({
       toolName: toolCall.toolName,
@@ -69133,8 +70065,8 @@ async function doParseToolCall({
       availableTools: Object.keys(tools)
     });
   }
-  const schema = (0, import_provider_utils15.asSchema)(tool2.inputSchema);
-  const parseResult = toolCall.input.trim() === "" ? await (0, import_provider_utils15.safeValidateTypes)({ value: {}, schema }) : await (0, import_provider_utils15.safeParseJSON)({ text: toolCall.input, schema });
+  const schema = (0, import_provider_utils16.asSchema)(tool2.inputSchema);
+  const parseResult = toolCall.input.trim() === "" ? await (0, import_provider_utils16.safeValidateTypes)({ value: {}, schema }) : await (0, import_provider_utils16.safeParseJSON)({ text: toolCall.input, schema });
   if (parseResult.success === false) {
     throw new InvalidToolInputError({
       toolName,
@@ -69471,7 +70403,7 @@ function mergeAbortSignals(...signals) {
 }
 
 // src/generate-text/generate-text.ts
-var originalGenerateId = (0, import_provider_utils16.createIdGenerator)({
+var originalGenerateId = (0, import_provider_utils17.createIdGenerator)({
   prefix: "aitxt",
   size: 24
 });
@@ -69526,7 +70458,7 @@ async function generateText({
     abortSignal: mergedAbortSignal
   });
   const callSettings = prepareCallSettings(settings);
-  const headersWithUserAgent = (0, import_provider_utils16.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils17.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -69808,7 +70740,9 @@ async function generateText({
                     },
                     "ai.prompt.tools": {
                       // convert the language model level tools:
-                      input: () => stepTools == null ? void 0 : stepTools.map((tool2) => JSON.stringify(tool2))
+                      input: () => stepTools == null ? void 0 : stepTools.map(
+                        (tool2) => JSON.stringify(redactToolDefinition(tool2))
+                      )
                     },
                     "ai.prompt.toolChoice": {
                       input: () => stepToolChoice != null ? JSON.stringify(stepToolChoice) : void 0
@@ -69866,9 +70800,9 @@ async function generateText({
                         "ai.response.id": responseData.id,
                         "ai.response.model": responseData.modelId,
                         "ai.response.timestamp": responseData.timestamp.toISOString(),
-                        "ai.response.providerMetadata": JSON.stringify(
-                          result.providerMetadata
-                        ),
+                        "ai.response.providerMetadata": {
+                          output: () => JSON.stringify(result.providerMetadata)
+                        },
                         "ai.usage.inputTokens": result.usage.inputTokens.total,
                         "ai.usage.inputTokenDetails.noCacheTokens": result.usage.inputTokens.noCache,
                         "ai.usage.inputTokenDetails.cacheReadTokens": result.usage.inputTokens.cacheRead,
@@ -69979,7 +70913,7 @@ async function generateText({
                 toolCallId: toolCall.toolCallId,
                 toolName: toolCall.toolName,
                 input: toolCall.input,
-                error: (0, import_provider_utils16.getErrorMessage)(toolCall.error),
+                error: (0, import_provider_utils17.getErrorMessage)(toolCall.error),
                 dynamic: true
               });
             }
@@ -70109,9 +71043,9 @@ async function generateText({
                   return toolCalls == null ? void 0 : JSON.stringify(toolCalls);
                 }
               },
-              "ai.response.providerMetadata": JSON.stringify(
-                currentModelResponse.providerMetadata
-              )
+              "ai.response.providerMetadata": {
+                output: () => JSON.stringify(currentModelResponse.providerMetadata)
+              }
             }
           })
         );
@@ -70442,7 +71376,7 @@ function asContent({
 
 // src/generate-text/stream-text.ts
 var import_provider30 = __nccwpck_require__(48468);
-var import_provider_utils20 = __nccwpck_require__(67216);
+var import_provider_utils21 = __nccwpck_require__(67216);
 
 // src/util/prepare-headers.ts
 function prepareHeaders(headers, defaultHeaders) {
@@ -70683,17 +71617,17 @@ function getResponseUIMessageId({
 }
 
 // src/ui/process-ui-message-stream.ts
-var import_provider_utils18 = __nccwpck_require__(67216);
+var import_provider_utils19 = __nccwpck_require__(67216);
 
 // src/ui-message-stream/ui-message-chunks.ts
 var import_v47 = __nccwpck_require__(36360);
-var import_provider_utils17 = __nccwpck_require__(67216);
+var import_provider_utils18 = __nccwpck_require__(67216);
 var toolMetadataSchema = import_v47.z.record(
   import_v47.z.string(),
   jsonValueSchema.optional()
 );
-var uiMessageChunkSchema = (0, import_provider_utils17.lazySchema)(
-  () => (0, import_provider_utils17.zodSchema)(
+var uiMessageChunkSchema = (0, import_provider_utils18.lazySchema)(
+  () => (0, import_provider_utils18.zodSchema)(
     import_v47.z.union([
       import_v47.z.looseObject({
         type: import_v47.z.literal("text-start"),
@@ -71116,7 +72050,7 @@ function processUIMessageStream({
             if (metadata != null) {
               const mergedMetadata = state.message.metadata != null ? mergeObjects(state.message.metadata, metadata) : metadata;
               if (messageMetadataSchema != null) {
-                await (0, import_provider_utils18.validateTypes)({
+                await (0, import_provider_utils19.validateTypes)({
                   value: mergedMetadata,
                   schema: messageMetadataSchema,
                   context: {
@@ -71538,7 +72472,7 @@ function processUIMessageStream({
                     (p) => "id" in p && "data" in p && p.id === chunk.id && p.type === chunk.type
                   );
                   const actualPartIdx = partIdx >= 0 ? partIdx : state.message.parts.length;
-                  await (0, import_provider_utils18.validateTypes)({
+                  await (0, import_provider_utils19.validateTypes)({
                     value: chunk.data,
                     schema: dataPartSchemas[chunk.type],
                     context: {
@@ -71961,7 +72895,7 @@ function createStitchableStream() {
 }
 
 // src/generate-text/run-tools-transformation.ts
-var import_provider_utils19 = __nccwpck_require__(67216);
+var import_provider_utils20 = __nccwpck_require__(67216);
 function runToolsTransformation({
   tools,
   toolChoice,
@@ -72190,7 +73124,7 @@ function runToolsTransformation({
                   toolCallId: toolCall.toolCallId,
                   toolName: toolCall.toolName,
                   input: toolCall.input,
-                  error: (0, import_provider_utils19.getErrorMessage)(toolCall.error),
+                  error: (0, import_provider_utils20.getErrorMessage)(toolCall.error),
                   dynamic: true,
                   title: toolCall.title,
                   ...toolCall.toolMetadata != null ? { toolMetadata: toolCall.toolMetadata } : {}
@@ -72310,7 +73244,7 @@ function runToolsTransformation({
 }
 
 // src/generate-text/stream-text.ts
-var originalGenerateId2 = (0, import_provider_utils20.createIdGenerator)({
+var originalGenerateId2 = (0, import_provider_utils21.createIdGenerator)({
   prefix: "aitxt",
   size: 24
 });
@@ -72437,9 +73371,13 @@ function createOutputTransformStream(output) {
   let text2 = "";
   let textChunk = "";
   let textProviderMetadata = void 0;
+  let arrayStreamParser = createArrayStreamParser(output);
+  let lastArrayPartial;
   let lastPublishedValue = void 0;
   let hasPublishedValue = false;
   function resetOutputState() {
+    arrayStreamParser = createArrayStreamParser(output);
+    lastArrayPartial = void 0;
     firstTextChunkId = void 0;
     text2 = "";
     textChunk = "";
@@ -72498,6 +73436,21 @@ function createOutputTransformStream(output) {
         controller.enqueue({ part: chunk, partialOutput: void 0 });
         return;
       }
+      if (arrayStreamParser != null) {
+        const result2 = await arrayStreamParser(chunk.text);
+        if (result2 !== "fallback") {
+          if (result2 != null) {
+            lastArrayPartial = result2.partial;
+            publishTextChunk({ controller, partialOutput: lastArrayPartial });
+          }
+          return;
+        }
+        arrayStreamParser = void 0;
+        if (lastArrayPartial != null) {
+          lastPublishedValue = JSON.stringify(lastArrayPartial);
+          hasPublishedValue = true;
+        }
+      }
       const result = await output.parsePartialOutput({ text: text2 });
       if (result !== void 0) {
         const currentValue = typeof result.partial === "string" ? result.partial : JSON.stringify(result.partial);
@@ -72555,10 +73508,10 @@ var DefaultStreamTextResult = class {
     download: download2,
     include
   }) {
-    this._totalUsage = new import_provider_utils20.DelayedPromise();
-    this._finishReason = new import_provider_utils20.DelayedPromise();
-    this._rawFinishReason = new import_provider_utils20.DelayedPromise();
-    this._steps = new import_provider_utils20.DelayedPromise();
+    this._totalUsage = new import_provider_utils21.DelayedPromise();
+    this._finishReason = new import_provider_utils21.DelayedPromise();
+    this._rawFinishReason = new import_provider_utils21.DelayedPromise();
+    this._steps = new import_provider_utils21.DelayedPromise();
     this.outputSpecification = output;
     this.includeRawChunks = includeRawChunks;
     this.tools = tools;
@@ -72849,9 +73802,9 @@ var DefaultStreamTextResult = class {
                     return ((_a24 = finalStep.toolCalls) == null ? void 0 : _a24.length) ? JSON.stringify(finalStep.toolCalls) : void 0;
                   }
                 },
-                "ai.response.providerMetadata": JSON.stringify(
-                  finalStep.providerMetadata
-                ),
+                "ai.response.providerMetadata": {
+                  output: () => JSON.stringify(finalStep.providerMetadata)
+                },
                 "ai.usage.inputTokens": totalUsage.inputTokens,
                 "ai.usage.inputTokenDetails.noCacheTokens": (_a23 = totalUsage.inputTokenDetails) == null ? void 0 : _a23.noCacheTokens,
                 "ai.usage.inputTokenDetails.cacheReadTokens": (_b = totalUsage.inputTokenDetails) == null ? void 0 : _b.cacheReadTokens,
@@ -72904,7 +73857,7 @@ var DefaultStreamTextResult = class {
           }
           controller.enqueue(value);
         } catch (error) {
-          if ((0, import_provider_utils20.isAbortError)(error) && (abortSignal == null ? void 0 : abortSignal.aborted)) {
+          if ((0, import_provider_utils21.isAbortError)(error) && (abortSignal == null ? void 0 : abortSignal.aborted)) {
             abort();
           } else {
             controller.error(error);
@@ -73195,7 +74148,7 @@ var DefaultStreamTextResult = class {
             once: true
           });
           try {
-            stepFinish = new import_provider_utils20.DelayedPromise();
+            stepFinish = new import_provider_utils21.DelayedPromise();
             const stepInputMessages = [...initialMessages, ...responseMessages];
             const prepareStepResult = await (prepareStep == null ? void 0 : prepareStep({
               model,
@@ -73292,7 +74245,9 @@ var DefaultStreamTextResult = class {
                     },
                     "ai.prompt.tools": {
                       // convert the language model level tools:
-                      input: () => stepTools == null ? void 0 : stepTools.map((tool2) => JSON.stringify(tool2))
+                      input: () => stepTools == null ? void 0 : stepTools.map(
+                        (tool2) => JSON.stringify(redactToolDefinition(tool2))
+                      )
                     },
                     "ai.prompt.toolChoice": {
                       input: () => stepToolChoice != null ? JSON.stringify(stepToolChoice) : void 0
@@ -73619,9 +74574,9 @@ var DefaultStreamTextResult = class {
                             "ai.response.reasoning": {
                               output: () => processedStep.reasoningText
                             },
-                            "ai.response.providerMetadata": JSON.stringify(
-                              processedStep.providerMetadata
-                            )
+                            "ai.response.providerMetadata": {
+                              output: () => JSON.stringify(processedStep.providerMetadata)
+                            }
                           }
                         })
                       );
@@ -74341,7 +75296,7 @@ var ToolLoopAgent = class {
   async prepareCall(options) {
     var _a23, _b, _c, _d;
     if (this.settings.callOptionsSchema != null && options.options !== void 0) {
-      const validatedOptions = await (0, import_provider_utils21.validateTypes)({
+      const validatedOptions = await (0, import_provider_utils22.validateTypes)({
         value: options.options,
         schema: this.settings.callOptionsSchema,
         context: { field: "options" }
@@ -74425,7 +75380,7 @@ var ToolLoopAgent = class {
 };
 
 // src/ui-message-stream/create-ui-message-stream.ts
-var import_provider_utils22 = __nccwpck_require__(67216);
+var import_provider_utils23 = __nccwpck_require__(67216);
 function createUIMessageStream({
   execute,
   onError = () => "An error occurred.",
@@ -74433,7 +75388,7 @@ function createUIMessageStream({
   originalMessages,
   onStepFinish,
   onFinish,
-  generateId: generateId2 = import_provider_utils22.generateId
+  generateId: generateId2 = import_provider_utils23.generateId
 }) {
   let controller;
   const ongoingStreamPromises = [];
@@ -74615,7 +75570,7 @@ function readUIMessageStream({
 }
 
 // src/ui/convert-to-model-messages.ts
-var import_provider_utils23 = __nccwpck_require__(67216);
+var import_provider_utils24 = __nccwpck_require__(67216);
 
 // src/util/get-own.ts
 function getOwn(obj, key) {
@@ -74709,7 +75664,7 @@ async function convertToModelMessages(messages, options) {
                 part
               );
             }
-          }).filter(import_provider_utils23.isNonNullable)
+          }).filter(import_provider_utils24.isNonNullable)
         });
         break;
       }
@@ -74895,7 +75850,7 @@ async function convertToModelMessages(messages, options) {
 
 // src/ui/validate-ui-messages.ts
 var import_provider31 = __nccwpck_require__(48468);
-var import_provider_utils24 = __nccwpck_require__(67216);
+var import_provider_utils25 = __nccwpck_require__(67216);
 var import_v48 = __nccwpck_require__(36360);
 var toolMetadataSchema2 = import_v48.z.record(
   import_v48.z.string(),
@@ -74915,7 +75870,7 @@ function asDynamicToolPart(toolPart) {
 function getToolPartInputSchemaInput(toolPart) {
   return toolPart.approval != null && Object.prototype.hasOwnProperty.call(toolPart.approval, "inputSchemaInput") ? { value: toolPart.approval.inputSchemaInput } : void 0;
 }
-var uiMessagesSchema = (0, import_provider_utils24.lazySchema)(() => {
+var uiMessagesSchema = (0, import_provider_utils25.lazySchema)(() => {
   const approvalRequestedSchema = import_v48.z.object({
     id: import_v48.z.string(),
     approved: import_v48.z.never().optional(),
@@ -74934,7 +75889,7 @@ var uiMessagesSchema = (0, import_provider_utils24.lazySchema)(() => {
   const approvalDeniedSchema = approvalRespondedSchema.extend({
     approved: import_v48.z.literal(false)
   });
-  return (0, import_provider_utils24.zodSchema)(
+  return (0, import_provider_utils25.zodSchema)(
     import_v48.z.array(
       import_v48.z.object({
         id: import_v48.z.string(),
@@ -75216,13 +76171,13 @@ async function safeValidateUIMessagesInternal({
         })
       };
     }
-    const validatedMessages = await (0, import_provider_utils24.validateTypes)({
+    const validatedMessages = await (0, import_provider_utils25.validateTypes)({
       value: messages,
       schema: uiMessagesSchema
     });
     if (metadataSchema) {
       for (const [msgIdx, message] of validatedMessages.entries()) {
-        message.metadata = await (0, import_provider_utils24.validateTypes)({
+        message.metadata = await (0, import_provider_utils25.validateTypes)({
           value: message.metadata,
           schema: metadataSchema,
           context: {
@@ -75254,7 +76209,7 @@ async function safeValidateUIMessagesInternal({
                 })
               };
             }
-            dataPart.data = await (0, import_provider_utils24.validateTypes)({
+            dataPart.data = await (0, import_provider_utils25.validateTypes)({
               value: dataPart.data,
               schema: dataSchema,
               context: {
@@ -75300,7 +76255,7 @@ async function safeValidateUIMessagesInternal({
             const inputToValidate = inputSchemaInput == null ? toolPart.input : inputSchemaInput.value;
             let convertToDynamic = false;
             if (toolPart.state !== "input-streaming" && (toolPart.state !== "output-error" || inputSchemaInput != null || toolPart.input !== void 0)) {
-              const result = await (0, import_provider_utils24.safeValidateTypes)({
+              const result = await (0, import_provider_utils25.safeValidateTypes)({
                 value: inputToValidate,
                 schema: tool2.inputSchema,
                 context: inputValidationContext
@@ -75326,7 +76281,7 @@ async function safeValidateUIMessagesInternal({
               }
             }
             if (toolPart.state === "output-available" && tool2.outputSchema) {
-              await (0, import_provider_utils24.validateTypes)({
+              await (0, import_provider_utils25.validateTypes)({
                 value: toolPart.output,
                 schema: tool2.outputSchema,
                 context: {
@@ -75456,7 +76411,7 @@ async function pipeAgentUIStreamToResponse({
 }
 
 // src/embed/embed.ts
-var import_provider_utils25 = __nccwpck_require__(67216);
+var import_provider_utils26 = __nccwpck_require__(67216);
 async function embed({
   model: modelArg,
   value,
@@ -75471,7 +76426,7 @@ async function embed({
     maxRetries: maxRetriesArg,
     abortSignal
   });
-  const headersWithUserAgent = (0, import_provider_utils25.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils26.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -75595,18 +76550,18 @@ function setOwn(object2, key, value) {
 }
 
 // src/embed/embed-many.ts
-var import_provider_utils28 = __nccwpck_require__(67216);
+var import_provider_utils29 = __nccwpck_require__(67216);
 
 // src/model/get-embedding-model-max-input-bytes-per-call.ts
-var import_provider_utils26 = __nccwpck_require__(67216);
+var import_provider_utils27 = __nccwpck_require__(67216);
 function getEmbeddingModelMaxInputBytesPerCall(model) {
-  return model[import_provider_utils26.EXPERIMENTAL_EMBEDDING_MODEL_MAX_INPUT_BYTES_PER_CALL];
+  return model[import_provider_utils27.EXPERIMENTAL_EMBEDDING_MODEL_MAX_INPUT_BYTES_PER_CALL];
 }
 
 // src/model/get-embedding-model-provider-options-transformer.ts
-var import_provider_utils27 = __nccwpck_require__(67216);
+var import_provider_utils28 = __nccwpck_require__(67216);
 function getEmbeddingModelProviderOptionsTransformer(model) {
-  return model[import_provider_utils27.EXPERIMENTAL_EMBEDDING_MODEL_PROVIDER_OPTIONS_TRANSFORMER];
+  return model[import_provider_utils28.EXPERIMENTAL_EMBEDDING_MODEL_PROVIDER_OPTIONS_TRANSFORMER];
 }
 
 // src/util/split-array.ts
@@ -75637,7 +76592,7 @@ async function embedMany({
     maxRetries: maxRetriesArg,
     abortSignal
   });
-  const headersWithUserAgent = (0, import_provider_utils28.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils29.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -75922,7 +76877,7 @@ var DefaultEmbedManyResult = class {
 };
 
 // src/generate-image/generate-image.ts
-var import_provider_utils29 = __nccwpck_require__(67216);
+var import_provider_utils30 = __nccwpck_require__(67216);
 var RetryableNoImageResultError = class extends Error {
   constructor() {
     super("No image generated.");
@@ -75944,7 +76899,7 @@ async function generateImage({
 }) {
   var _a23, _b;
   const model = resolveImageModel(modelArg);
-  const headersWithUserAgent = (0, import_provider_utils29.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils30.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -76107,7 +77062,7 @@ function toImageModelV3File(dataContent) {
   if (typeof dataContent === "string" && dataContent.startsWith("data:")) {
     const { mediaType: dataUrlMediaType, base64Content } = splitDataUrl(dataContent);
     if (base64Content != null) {
-      const uint8Data2 = (0, import_provider_utils29.convertBase64ToUint8Array)(base64Content);
+      const uint8Data2 = (0, import_provider_utils30.convertBase64ToUint8Array)(base64Content);
       return {
         type: "file",
         data: uint8Data2,
@@ -76133,11 +77088,11 @@ function toImageModelV3File(dataContent) {
 var experimental_generateImage = generateImage;
 
 // src/generate-object/generate-object.ts
-var import_provider_utils32 = __nccwpck_require__(67216);
+var import_provider_utils33 = __nccwpck_require__(67216);
 
 // src/generate-object/output-strategy.ts
 var import_provider32 = __nccwpck_require__(48468);
-var import_provider_utils30 = __nccwpck_require__(67216);
+var import_provider_utils31 = __nccwpck_require__(67216);
 var noSchemaOutputStrategy = {
   type: "no-schema",
   jsonSchema: async () => void 0,
@@ -76176,7 +77131,7 @@ var objectOutputStrategy = (schema) => ({
     };
   },
   async validateFinalResult(value) {
-    return (0, import_provider_utils30.safeValidateTypes)({ value, schema });
+    return (0, import_provider_utils31.safeValidateTypes)({ value, schema });
   },
   createElementStream() {
     throw new import_provider32.UnsupportedFunctionalityError({
@@ -76187,6 +77142,7 @@ var objectOutputStrategy = (schema) => ({
 var arrayOutputStrategy = (schema) => {
   return {
     type: "array",
+    createArrayStreamParser: () => createArrayOutputStreamParser(schema, false),
     // wrap in object that contains array of elements, since most LLMs will not
     // be able to generate an array directly:
     // possible future optimization: use arrays directly when model supports grammar-guided generation
@@ -76222,7 +77178,7 @@ var arrayOutputStrategy = (schema) => {
       const resultArray = [];
       for (let i = 0; i < inputArray.length; i++) {
         const element = inputArray[i];
-        const result = await (0, import_provider_utils30.safeValidateTypes)({ value: element, schema });
+        const result = await (0, import_provider_utils31.safeValidateTypes)({ value: element, schema });
         if (i === inputArray.length - 1 && !isFinalDelta) {
           continue;
         }
@@ -76264,7 +77220,7 @@ var arrayOutputStrategy = (schema) => {
       const inputArray = value.elements;
       const resultArray = [];
       for (const element of inputArray) {
-        const result = await (0, import_provider_utils30.safeValidateTypes)({ value: element, schema });
+        const result = await (0, import_provider_utils31.safeValidateTypes)({ value: element, schema });
         if (!result.success) {
           return result;
         }
@@ -76383,9 +77339,9 @@ function getOutputStrategy({
 }) {
   switch (output) {
     case "object":
-      return objectOutputStrategy((0, import_provider_utils30.asSchema)(schema));
+      return objectOutputStrategy((0, import_provider_utils31.asSchema)(schema));
     case "array":
-      return arrayOutputStrategy((0, import_provider_utils30.asSchema)(schema));
+      return arrayOutputStrategy((0, import_provider_utils31.asSchema)(schema));
     case "enum":
       return enumOutputStrategy(enumValues);
     case "no-schema":
@@ -76399,9 +77355,9 @@ function getOutputStrategy({
 
 // src/generate-object/parse-and-validate-object-result.ts
 var import_provider33 = __nccwpck_require__(48468);
-var import_provider_utils31 = __nccwpck_require__(67216);
+var import_provider_utils32 = __nccwpck_require__(67216);
 async function parseAndValidateObjectResult(result, outputStrategy, context2) {
-  const parseResult = await (0, import_provider_utils31.safeParseJSON)({ text: result });
+  const parseResult = await (0, import_provider_utils32.safeParseJSON)({ text: result });
   if (!parseResult.success) {
     throw new NoObjectGeneratedError({
       message: "No object generated: could not parse the response.",
@@ -76573,7 +77529,7 @@ function validateObjectGenerationInput({
 }
 
 // src/generate-object/generate-object.ts
-var originalGenerateId3 = (0, import_provider_utils32.createIdGenerator)({ prefix: "aiobj", size: 24 });
+var originalGenerateId3 = (0, import_provider_utils33.createIdGenerator)({ prefix: "aiobj", size: 24 });
 async function generateObject(options) {
   const {
     model: modelArg,
@@ -76619,7 +77575,7 @@ async function generateObject(options) {
     enumValues
   });
   const callSettings = prepareCallSettings(settings);
-  const headersWithUserAgent = (0, import_provider_utils32.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils33.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -76742,9 +77698,9 @@ async function generateObject(options) {
                     "ai.response.id": responseData.id,
                     "ai.response.model": responseData.modelId,
                     "ai.response.timestamp": responseData.timestamp.toISOString(),
-                    "ai.response.providerMetadata": JSON.stringify(
-                      result2.providerMetadata
-                    ),
+                    "ai.response.providerMetadata": {
+                      output: () => JSON.stringify(result2.providerMetadata)
+                    },
                     // TODO rename telemetry attributes to inputTokens and outputTokens
                     "ai.usage.promptTokens": result2.usage.inputTokens.total,
                     "ai.usage.completionTokens": result2.usage.outputTokens.total,
@@ -76799,9 +77755,9 @@ async function generateObject(options) {
               "ai.response.object": {
                 output: () => JSON.stringify(object2)
               },
-              "ai.response.providerMetadata": JSON.stringify(
-                resultProviderMetadata
-              ),
+              "ai.response.providerMetadata": {
+                output: () => JSON.stringify(resultProviderMetadata)
+              },
               // TODO rename telemetry attributes to inputTokens and outputTokens
               "ai.usage.promptTokens": usage.inputTokens,
               "ai.usage.completionTokens": usage.outputTokens
@@ -76847,7 +77803,7 @@ var DefaultGenerateObjectResult = class {
 };
 
 // src/generate-object/stream-object.ts
-var import_provider_utils34 = __nccwpck_require__(67216);
+var import_provider_utils35 = __nccwpck_require__(67216);
 
 // src/util/cosine-similarity.ts
 function cosineSimilarity(vector1, vector2) {
@@ -76943,7 +77899,7 @@ var SerialJobExecutor = class {
 };
 
 // src/util/simulate-readable-stream.ts
-var import_provider_utils33 = __nccwpck_require__(67216);
+var import_provider_utils34 = __nccwpck_require__(67216);
 function simulateReadableStream({
   chunks,
   initialDelayInMs = 0,
@@ -76951,7 +77907,7 @@ function simulateReadableStream({
   _internal
 }) {
   var _a23;
-  const delay = (_a23 = _internal == null ? void 0 : _internal.delay) != null ? _a23 : import_provider_utils33.delay;
+  const delay = (_a23 = _internal == null ? void 0 : _internal.delay) != null ? _a23 : import_provider_utils34.delay;
   let index = 0;
   return new ReadableStream({
     async pull(controller) {
@@ -76966,7 +77922,7 @@ function simulateReadableStream({
 }
 
 // src/generate-object/stream-object.ts
-var originalGenerateId4 = (0, import_provider_utils34.createIdGenerator)({ prefix: "aiobj", size: 24 });
+var originalGenerateId4 = (0, import_provider_utils35.createIdGenerator)({ prefix: "aiobj", size: 24 });
 async function markPromiseAsHandled(promise) {
   try {
     await promise;
@@ -77065,13 +78021,13 @@ var DefaultStreamObjectResult = class {
     currentDate,
     now: now2
   }) {
-    this._object = new import_provider_utils34.DelayedPromise();
-    this._usage = new import_provider_utils34.DelayedPromise();
-    this._providerMetadata = new import_provider_utils34.DelayedPromise();
-    this._warnings = new import_provider_utils34.DelayedPromise();
-    this._request = new import_provider_utils34.DelayedPromise();
-    this._response = new import_provider_utils34.DelayedPromise();
-    this._finishReason = new import_provider_utils34.DelayedPromise();
+    this._object = new import_provider_utils35.DelayedPromise();
+    this._usage = new import_provider_utils35.DelayedPromise();
+    this._providerMetadata = new import_provider_utils35.DelayedPromise();
+    this._warnings = new import_provider_utils35.DelayedPromise();
+    this._request = new import_provider_utils35.DelayedPromise();
+    this._response = new import_provider_utils35.DelayedPromise();
+    this._finishReason = new import_provider_utils35.DelayedPromise();
     const model = resolveLanguageModel(modelArg);
     const { maxRetries, retry } = prepareRetries({
       maxRetries: maxRetriesArg,
@@ -77125,6 +78081,7 @@ var DefaultStreamObjectResult = class {
       endWhenDone: false,
       endOnError: true,
       fn: async (rootSpan) => {
+        var _a23;
         const standardizedPrompt = await standardizePrompt({
           system,
           prompt,
@@ -77212,6 +78169,7 @@ var DefaultStreamObjectResult = class {
         let object2;
         let error;
         let terminalError;
+        let arrayStreamParser = (_a23 = outputStrategy.createArrayStreamParser) == null ? void 0 : _a23.call(outputStrategy);
         let accumulatedText = "";
         let textDelta = "";
         let fullResponse = {
@@ -77226,7 +78184,7 @@ var DefaultStreamObjectResult = class {
         const transformedStream = stream.pipeThrough(new TransformStream(transformer)).pipeThrough(
           new TransformStream({
             async transform(chunk, controller) {
-              var _a23, _b, _c;
+              var _a24, _b, _c;
               if (typeof chunk === "object" && chunk.type === "stream-start") {
                 warnings = chunk.warnings;
                 return;
@@ -77244,6 +78202,26 @@ var DefaultStreamObjectResult = class {
               if (typeof chunk === "string") {
                 accumulatedText += chunk;
                 textDelta += chunk;
+                if (arrayStreamParser != null) {
+                  const result = await arrayStreamParser(chunk);
+                  if (result !== "fallback") {
+                    if (result != null) {
+                      latestObject = result.partial;
+                      controller.enqueue({
+                        type: "object",
+                        object: latestObject
+                      });
+                      controller.enqueue({
+                        type: "text-delta",
+                        textDelta: result.textDelta
+                      });
+                      textDelta = "";
+                      isFirstDelta = false;
+                    }
+                    return;
+                  }
+                  arrayStreamParser = void 0;
+                }
                 const { value: currentObjectJson, state: parseState } = await parsePartialJson(accumulatedText);
                 if (currentObjectJson !== void 0 && !isDeepEqualData(latestObjectJson, currentObjectJson)) {
                   const validationResult = await outputStrategy.validatePartialResult({
@@ -77276,7 +78254,7 @@ var DefaultStreamObjectResult = class {
               switch (chunk.type) {
                 case "response-metadata": {
                   fullResponse = {
-                    id: (_a23 = chunk.id) != null ? _a23 : fullResponse.id,
+                    id: (_a24 = chunk.id) != null ? _a24 : fullResponse.id,
                     timestamp: (_b = chunk.timestamp) != null ? _b : fullResponse.timestamp,
                     modelId: (_c = chunk.modelId) != null ? _c : fullResponse.modelId
                   };
@@ -77365,7 +78343,9 @@ var DefaultStreamObjectResult = class {
                       "ai.response.id": fullResponse.id,
                       "ai.response.model": fullResponse.modelId,
                       "ai.response.timestamp": fullResponse.timestamp.toISOString(),
-                      "ai.response.providerMetadata": JSON.stringify(providerMetadata),
+                      "ai.response.providerMetadata": {
+                        output: () => JSON.stringify(providerMetadata)
+                      },
                       "ai.usage.inputTokens": finalUsage.inputTokens,
                       "ai.usage.outputTokens": finalUsage.outputTokens,
                       "ai.usage.totalTokens": finalUsage.totalTokens,
@@ -77393,7 +78373,9 @@ var DefaultStreamObjectResult = class {
                       "ai.response.object": {
                         output: () => JSON.stringify(object2)
                       },
-                      "ai.response.providerMetadata": JSON.stringify(providerMetadata)
+                      "ai.response.providerMetadata": {
+                        output: () => JSON.stringify(providerMetadata)
+                      }
                     }
                   })
                 );
@@ -77549,7 +78531,7 @@ var DefaultStreamObjectResult = class {
 };
 
 // src/generate-speech/generate-speech.ts
-var import_provider_utils35 = __nccwpck_require__(67216);
+var import_provider_utils36 = __nccwpck_require__(67216);
 
 // src/generate-speech/generated-audio-file.ts
 var DefaultGeneratedAudioFile = class extends DefaultGeneratedFile {
@@ -77595,7 +78577,7 @@ async function generateSpeech({
   if (!resolvedModel) {
     throw new Error("Model could not be resolved");
   }
-  const headersWithUserAgent = (0, import_provider_utils35.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils36.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -77785,7 +78767,7 @@ function pruneMessages({
 }
 
 // src/generate-text/smooth-stream.ts
-var import_provider_utils36 = __nccwpck_require__(67216);
+var import_provider_utils37 = __nccwpck_require__(67216);
 var import_provider34 = __nccwpck_require__(48468);
 var CHUNKING_REGEXPS = {
   word: /\S+\s+/m,
@@ -77797,7 +78779,7 @@ function isDocumentHidden() {
 function smoothStream({
   delayInMs = 10,
   chunking = "word",
-  _internal: { delay = import_provider_utils36.delay } = {}
+  _internal: { delay = import_provider_utils37.delay } = {}
 } = {}) {
   let detectChunk;
   if (chunking != null && typeof chunking === "object" && "segment" in chunking && typeof chunking.segment === "function") {
@@ -77897,7 +78879,7 @@ function smoothStream({
 }
 
 // src/generate-video/generate-video.ts
-var import_provider_utils37 = __nccwpck_require__(67216);
+var import_provider_utils38 = __nccwpck_require__(67216);
 var defaultDownload = createDownload();
 async function experimental_generateVideo({
   model: modelArg,
@@ -77920,7 +78902,7 @@ async function experimental_generateVideo({
 }) {
   var _a23, _b;
   const model = resolveVideoModel(modelArg);
-  const headersWithUserAgent = (0, import_provider_utils37.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils38.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -78105,14 +79087,14 @@ function normalizeImageData(dataContent, { restrictToImages = true } = {}) {
     }
     if (dataContent.startsWith("data:")) {
       const { mediaType, base64Content } = splitDataUrl(dataContent);
-      const data = (0, import_provider_utils37.convertBase64ToUint8Array)(base64Content != null ? base64Content : "");
+      const data = (0, import_provider_utils38.convertBase64ToUint8Array)(base64Content != null ? base64Content : "");
       return {
         type: "file",
         mediaType: mediaType != null ? mediaType : detectFileMediaType(data, restrictToImages),
         data
       };
     }
-    const bytes = (0, import_provider_utils37.convertBase64ToUint8Array)(dataContent);
+    const bytes = (0, import_provider_utils38.convertBase64ToUint8Array)(dataContent);
     return {
       type: "file",
       mediaType: detectFileMediaType(bytes, restrictToImages),
@@ -78653,7 +79635,7 @@ var doWrap = ({
 };
 
 // src/middleware/wrap-embedding-model.ts
-var import_provider_utils38 = __nccwpck_require__(67216);
+var import_provider_utils39 = __nccwpck_require__(67216);
 var wrapEmbeddingModel = ({
   model,
   middleware: middlewareArg,
@@ -78688,8 +79670,8 @@ var doWrap2 = ({
     provider: (_a23 = providerId != null ? providerId : overrideProvider == null ? void 0 : overrideProvider({ model })) != null ? _a23 : model.provider,
     modelId: (_b = modelId != null ? modelId : overrideModelId == null ? void 0 : overrideModelId({ model })) != null ? _b : model.modelId,
     maxEmbeddingsPerCall: (_c = overrideMaxEmbeddingsPerCall == null ? void 0 : overrideMaxEmbeddingsPerCall({ model })) != null ? _c : model.maxEmbeddingsPerCall,
-    [import_provider_utils38.EXPERIMENTAL_EMBEDDING_MODEL_MAX_INPUT_BYTES_PER_CALL]: getEmbeddingModelMaxInputBytesPerCall(model),
-    [import_provider_utils38.EXPERIMENTAL_EMBEDDING_MODEL_PROVIDER_OPTIONS_TRANSFORMER]: getEmbeddingModelProviderOptionsTransformer(model),
+    [import_provider_utils39.EXPERIMENTAL_EMBEDDING_MODEL_MAX_INPUT_BYTES_PER_CALL]: getEmbeddingModelMaxInputBytesPerCall(model),
+    [import_provider_utils39.EXPERIMENTAL_EMBEDDING_MODEL_PROVIDER_OPTIONS_TRANSFORMER]: getEmbeddingModelProviderOptionsTransformer(model),
     supportsParallelCalls: (_d = overrideSupportsParallelCalls == null ? void 0 : overrideSupportsParallelCalls({ model })) != null ? _d : model.supportsParallelCalls,
     async doEmbed(params) {
       const transformedParams = await doTransform({ params });
@@ -79193,7 +80175,7 @@ var DefaultRerankResult = class {
 };
 
 // src/transcribe/transcribe.ts
-var import_provider_utils39 = __nccwpck_require__(67216);
+var import_provider_utils40 = __nccwpck_require__(67216);
 var defaultDownload2 = createDownload();
 async function transcribe({
   model,
@@ -79212,7 +80194,7 @@ async function transcribe({
     maxRetries: maxRetriesArg,
     abortSignal
   });
-  const headersWithUserAgent = (0, import_provider_utils39.withUserAgentSuffix)(
+  const headersWithUserAgent = (0, import_provider_utils40.withUserAgentSuffix)(
     headers != null ? headers : {},
     `ai/${VERSION}`
   );
@@ -79264,7 +80246,7 @@ var DefaultTranscriptionResult = class {
 };
 
 // src/ui/call-completion-api.ts
-var import_provider_utils40 = __nccwpck_require__(67216);
+var import_provider_utils41 = __nccwpck_require__(67216);
 
 // src/ui/process-text-stream.ts
 async function processTextStream({
@@ -79312,13 +80294,13 @@ async function callCompletionApi({
         ...body
       }),
       credentials,
-      headers: (0, import_provider_utils40.withUserAgentSuffix)(
+      headers: (0, import_provider_utils41.withUserAgentSuffix)(
         {
           "Content-Type": "application/json",
           ...headers
         },
         `ai-sdk/${VERSION}`,
-        (0, import_provider_utils40.getRuntimeEnvironmentUserAgent)()
+        (0, import_provider_utils41.getRuntimeEnvironmentUserAgent)()
       ),
       signal: abortController.signal
     }).catch((err) => {
@@ -79346,7 +80328,7 @@ async function callCompletionApi({
       }
       case "data": {
         await consumeStream({
-          stream: (0, import_provider_utils40.parseJsonEventStream)({
+          stream: (0, import_provider_utils41.parseJsonEventStream)({
             stream: response.body,
             schema: uiMessageChunkSchema
           }).pipeThrough(
@@ -79398,7 +80380,7 @@ async function callCompletionApi({
 }
 
 // src/ui/chat.ts
-var import_provider_utils43 = __nccwpck_require__(67216);
+var import_provider_utils44 = __nccwpck_require__(67216);
 
 // src/ui/convert-file-list-to-file-ui-parts.ts
 async function convertFileListToFileUIParts(files) {
@@ -79431,10 +80413,10 @@ async function convertFileListToFileUIParts(files) {
 }
 
 // src/ui/default-chat-transport.ts
-var import_provider_utils42 = __nccwpck_require__(67216);
+var import_provider_utils43 = __nccwpck_require__(67216);
 
 // src/ui/http-chat-transport.ts
-var import_provider_utils41 = __nccwpck_require__(67216);
+var import_provider_utils42 = __nccwpck_require__(67216);
 function appendPathToUrl(url, path) {
   const queryOrFragmentStart = url.search(/[?#]/);
   const urlPath = queryOrFragmentStart === -1 ? url : url.slice(0, queryOrFragmentStart);
@@ -79464,12 +80446,12 @@ var HttpChatTransport = class {
     ...options
   }) {
     var _a23, _b, _c, _d, _e;
-    const resolvedBody = await (0, import_provider_utils41.resolve)(this.body);
-    const resolvedHeaders = await (0, import_provider_utils41.resolve)(this.headers);
-    const resolvedCredentials = await (0, import_provider_utils41.resolve)(this.credentials);
+    const resolvedBody = await (0, import_provider_utils42.resolve)(this.body);
+    const resolvedHeaders = await (0, import_provider_utils42.resolve)(this.headers);
+    const resolvedCredentials = await (0, import_provider_utils42.resolve)(this.credentials);
     const baseHeaders = {
-      ...(0, import_provider_utils41.normalizeHeaders)(resolvedHeaders),
-      ...(0, import_provider_utils41.normalizeHeaders)(options.headers)
+      ...(0, import_provider_utils42.normalizeHeaders)(resolvedHeaders),
+      ...(0, import_provider_utils42.normalizeHeaders)(options.headers)
     };
     const preparedRequest = await ((_a23 = this.prepareSendMessagesRequest) == null ? void 0 : _a23.call(this, {
       api: this.api,
@@ -79483,7 +80465,7 @@ var HttpChatTransport = class {
       messageId: options.messageId
     }));
     const api = (_b = preparedRequest == null ? void 0 : preparedRequest.api) != null ? _b : this.api;
-    const headers = (preparedRequest == null ? void 0 : preparedRequest.headers) !== void 0 ? (0, import_provider_utils41.normalizeHeaders)(preparedRequest.headers) : baseHeaders;
+    const headers = (preparedRequest == null ? void 0 : preparedRequest.headers) !== void 0 ? (0, import_provider_utils42.normalizeHeaders)(preparedRequest.headers) : baseHeaders;
     const body = (preparedRequest == null ? void 0 : preparedRequest.body) !== void 0 ? preparedRequest.body : {
       ...resolvedBody,
       ...options.body,
@@ -79516,12 +80498,12 @@ var HttpChatTransport = class {
   }
   async reconnectToStream(options) {
     var _a23, _b, _c, _d;
-    const resolvedBody = await (0, import_provider_utils41.resolve)(this.body);
-    const resolvedHeaders = await (0, import_provider_utils41.resolve)(this.headers);
-    const resolvedCredentials = await (0, import_provider_utils41.resolve)(this.credentials);
+    const resolvedBody = await (0, import_provider_utils42.resolve)(this.body);
+    const resolvedHeaders = await (0, import_provider_utils42.resolve)(this.headers);
+    const resolvedCredentials = await (0, import_provider_utils42.resolve)(this.credentials);
     const baseHeaders = {
-      ...(0, import_provider_utils41.normalizeHeaders)(resolvedHeaders),
-      ...(0, import_provider_utils41.normalizeHeaders)(options.headers)
+      ...(0, import_provider_utils42.normalizeHeaders)(resolvedHeaders),
+      ...(0, import_provider_utils42.normalizeHeaders)(options.headers)
     };
     const preparedRequest = await ((_a23 = this.prepareReconnectToStreamRequest) == null ? void 0 : _a23.call(this, {
       api: this.api,
@@ -79545,7 +80527,7 @@ var HttpChatTransport = class {
         `/${encodeURIComponent(options.chatId)}/stream`
       );
     }
-    const headers = (preparedRequest == null ? void 0 : preparedRequest.headers) !== void 0 ? (0, import_provider_utils41.normalizeHeaders)(preparedRequest.headers) : baseHeaders;
+    const headers = (preparedRequest == null ? void 0 : preparedRequest.headers) !== void 0 ? (0, import_provider_utils42.normalizeHeaders)(preparedRequest.headers) : baseHeaders;
     const credentials = (_b = preparedRequest == null ? void 0 : preparedRequest.credentials) != null ? _b : resolvedCredentials;
     const fetch2 = (_c = this.fetch) != null ? _c : globalThis.fetch;
     const response = await fetch2(api, {
@@ -79579,7 +80561,7 @@ var DefaultChatTransport = class extends HttpChatTransport {
     this.resumeStreamIsReplay = resumeStreamIsReplay;
   }
   processResponseStream(stream) {
-    return (0, import_provider_utils42.parseJsonEventStream)({
+    return (0, import_provider_utils43.parseJsonEventStream)({
       stream,
       schema: uiMessageChunkSchema
     }).pipeThrough(
@@ -79598,7 +80580,7 @@ var DefaultChatTransport = class extends HttpChatTransport {
 // src/ui/chat.ts
 var AbstractChat = class {
   constructor({
-    generateId: generateId2 = import_provider_utils43.generateId,
+    generateId: generateId2 = import_provider_utils44.generateId,
     id = generateId2(),
     transport = new DefaultChatTransport(),
     messageMetadataSchema,
@@ -174972,7 +175954,8 @@ function isURL(value) {
 }
 
 function escapeRegex(regex) {
-  return regex.replace(/[[\]\\/()*+?.^$|]/g, "\\$&");
+  // As per https://tc39.es/proposal-regexp-modifiers/#prod-SyntaxCharacter
+  return regex.replace(/[\^$\\.*+?()[\]{}|]/g, "\\$&");
 }
 
 // Exports
@@ -314134,6 +315117,14 @@ class Receiver extends Writable {
       }
     }
 
+    //
+    // The mask is a view into the buffer the stream delivered, which is commonly
+    // 64 KiB, and it is not needed once the payload above has been unmasked.
+    // Leaving it set would pin that whole buffer until the next frame arrives,
+    // which on an idle connection can be indefinitely.
+    //
+    this._mask = undefined;
+
     if (this._opcode > 0x07) {
       this.controlMessage(data, cb);
       return;
@@ -315982,6 +316973,7 @@ const EventEmitter = __nccwpck_require__(24434);
 const https = __nccwpck_require__(65692);
 const http = __nccwpck_require__(58611);
 const net = __nccwpck_require__(69278);
+const querystring = __nccwpck_require__(83480);
 const tls = __nccwpck_require__(64756);
 const { randomBytes, createHash } = __nccwpck_require__(76982);
 const { Duplex, Readable } = __nccwpck_require__(2203);
@@ -316700,10 +317692,9 @@ function initAsClient(websocket, address, protocols, options) {
     }
   }
 
-  if (parsedUrl.protocol === 'http:') {
-    parsedUrl.protocol = 'ws:';
-  } else if (parsedUrl.protocol === 'https:') {
-    parsedUrl.protocol = 'wss:';
+  if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+    parsedUrl = new URL(parsedUrl);
+    parsedUrl.protocol = parsedUrl.protocol === 'http:' ? 'ws:' : 'wss:';
   }
 
   websocket._url = parsedUrl.href;
@@ -316791,7 +317782,10 @@ function initAsClient(websocket, address, protocols, options) {
     }
   }
   if (parsedUrl.username || parsedUrl.password) {
-    opts.auth = `${parsedUrl.username}:${parsedUrl.password}`;
+    const username = querystring.unescape(parsedUrl.username);
+    const password = querystring.unescape(parsedUrl.password);
+
+    opts.auth = `${username}:${password}`;
   }
 
   if (isIpcUrl) {
@@ -317164,8 +318158,19 @@ function receiverOnConclude(code, reason) {
   const websocket = this[kWebSocket];
 
   websocket._closeFrameReceived = true;
-  websocket._closeMessage = reason;
   websocket._closeCode = code;
+
+  //
+  // The reason is a view into the buffer the socket delivered. Copy it so that
+  // the `WebSocket` does not keep that buffer alive. The copy is not pooled
+  // because a pooled one would keep the pool alive in the same way.
+  //
+  if (reason.length === 0) {
+    websocket._closeMessage = EMPTY_BUFFER;
+  } else {
+    websocket._closeMessage = Buffer.allocUnsafeSlow(reason.length);
+    websocket._closeMessage.set(reason);
+  }
 
   if (websocket._socket[kWebSocket] === undefined) return;
 
@@ -357615,6 +358620,12 @@ class AICheckProvider extends check_provider_interface_1.CheckProvider {
      * Build a safe subset of environment variables for sandbox access.
      * Excludes sensitive keys like API keys, secrets, tokens.
      */
+    static _stableEnvForSafe = null;
+    /**
+     * Build a safe env for sandboxed expressions (no secrets).
+     * Uses /proc/self/environ as the base to avoid copying transient vars
+     * that concurrent withTemporaryEnv() calls may have injected.
+     */
     buildSafeEnv() {
         const sensitivePatterns = [
             /api.?key/i,
@@ -357625,10 +358636,28 @@ class AICheckProvider extends check_provider_interface_1.CheckProvider {
             /auth/i,
             /private/i,
         ];
+        // Read from /proc/self/environ (static initial env) to avoid copying
+        // transient env vars from concurrent tasks.
+        if (!AICheckProvider._stableEnvForSafe) {
+            AICheckProvider._stableEnvForSafe = {};
+            try {
+                const raw = (__nccwpck_require__(79896).readFileSync)('/proc/self/environ', 'utf8');
+                for (const entry of raw.split('\0')) {
+                    const eq = entry.indexOf('=');
+                    if (eq > 0) {
+                        AICheckProvider._stableEnvForSafe[entry.substring(0, eq)] = entry.substring(eq + 1);
+                    }
+                }
+            }
+            catch {
+                for (const [k, v] of Object.entries(process.env)) {
+                    if (v !== undefined)
+                        AICheckProvider._stableEnvForSafe[k] = v;
+                }
+            }
+        }
         const safeEnv = {};
-        for (const [key, value] of Object.entries(process.env)) {
-            if (value === undefined)
-                continue;
+        for (const [key, value] of Object.entries(AICheckProvider._stableEnvForSafe)) {
             const isSensitive = sensitivePatterns.some(pattern => pattern.test(key));
             if (!isSensitive) {
                 safeEnv[key] = value;
@@ -366469,15 +367498,31 @@ class McpCheckProvider extends check_provider_interface_1.CheckProvider {
      * Execute MCP method using stdio transport
      */
     async executeStdioMethod(config, methodArgs, timeout) {
-        // Build env: start with process.env as base (inherits .env-loaded vars),
-        // then overlay resolved config env on top. This fixes two issues:
-        // 1. MCP SDK's StdioClientTransport only passes a minimal safe set of vars
-        //    (HOME, PATH, etc.) when env is provided, stripping .env-loaded values.
-        // 2. Config env values like "${VAR_NAME}" need interpolation via EnvironmentResolver.
+        // Build env from the INITIAL process environ (read from /proc/self/environ)
+        // instead of the JS process.env object. The JS object can be inflated by
+        // concurrent tasks via withTemporaryEnv(), pushing combined argv+envp past
+        // ARG_MAX and causing E2BIG on spawn. The /proc environ is static (set at
+        // process start) and stays at its original size.
+        //
+        // When /proc is unavailable, fall back to process.env but warn if it's large.
         const env = {};
-        for (const [key, value] of Object.entries(process.env)) {
-            if (value !== undefined) {
-                env[key] = value;
+        let envSource = 'process.env';
+        try {
+            const { readFileSync } = __nccwpck_require__(79896);
+            const raw = readFileSync('/proc/self/environ', 'utf8');
+            for (const entry of raw.split('\0')) {
+                const eq = entry.indexOf('=');
+                if (eq > 0) {
+                    env[entry.substring(0, eq)] = entry.substring(eq + 1);
+                }
+            }
+            envSource = '/proc/self/environ';
+        }
+        catch {
+            for (const [key, value] of Object.entries(process.env)) {
+                if (value !== undefined) {
+                    env[key] = value;
+                }
             }
         }
         if (config.env) {
@@ -366485,6 +367530,33 @@ class McpCheckProvider extends check_provider_interface_1.CheckProvider {
                 if (value !== undefined && value !== null) {
                     env[key] = String(env_resolver_1.EnvironmentResolver.resolveValue(value));
                 }
+            }
+        }
+        // Also pick up vars that were set after startup (GitHub credentials, etc.)
+        for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_CONFIG_COUNT']) {
+            const v = process.env[key];
+            if (v !== undefined)
+                env[key] = v;
+        }
+        // Copy any GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* entries
+        for (const [k, v] of Object.entries(process.env)) {
+            if (k.startsWith('GIT_CONFIG_') && v !== undefined) {
+                env[k] = v;
+            }
+        }
+        // Log if env is unexpectedly large
+        {
+            let envSize = 0;
+            for (const [k, v] of Object.entries(env)) {
+                envSize += k.length + 1 + v.length + 1;
+            }
+            if (envSize > 100000) {
+                const top5 = Object.entries(env)
+                    .map(([k, v]) => [k, v.length])
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 5);
+                logger_1.logger.warn(`[MCP-StdioSpawn] Large env (${envSource}): ${Object.keys(env).length} vars, ${envSize} bytes. ` +
+                    `Top: ${top5.map(([k, l]) => `${k}=${l}b`).join(', ')}. Cmd: ${config.command}`);
             }
         }
         return this.executeWithTransport(() => new stdio_js_1.StdioClientTransport({
@@ -420209,6 +421281,27 @@ class CommandExecutor {
         }
         // For commands without stdin, use the simpler promisified version
         try {
+            // Log env size to diagnose E2BIG spawn failures
+            if (options.env) {
+                let envSize = 0;
+                let envCount = 0;
+                for (const [k, v] of Object.entries(options.env)) {
+                    if (v !== undefined) {
+                        envSize += k.length + 1 + String(v).length + 1;
+                        envCount++;
+                    }
+                }
+                if (envSize > 100000) {
+                    const top5 = Object.entries(options.env)
+                        .filter(([, v]) => v !== undefined)
+                        .map(([k, v]) => [k, String(v).length])
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 5);
+                    logger_1.logger.warn(`[CommandExecutor] Large env detected: ${envCount} vars, ${envSize} bytes. ` +
+                        `Top vars: ${top5.map(([k, l]) => `${k}=${l}b`).join(', ')}. ` +
+                        `Command: ${command.substring(0, 100)}`);
+                }
+            }
             const result = await execAsync(command, {
                 cwd: options.cwd,
                 env: options.env,
@@ -420230,6 +421323,7 @@ class CommandExecutor {
     /**
      * A too-large exec command fails before a shell is spawned, so replaying the
      * exact command from an owned script cannot duplicate command side effects.
+     * Also strips the env to essential vars to avoid a second E2BIG from a bloated env.
      */
     async executeE2BigFallback(command, options, timeout) {
         const tempDir = await (0, promises_1.mkdtemp)((0, path_1.join)((0, os_1.tmpdir)(), E2BIG_FALLBACK_TEMP_PREFIX));
@@ -420238,10 +421332,24 @@ class CommandExecutor {
             const scriptPath = (0, path_1.join)(tempDir, 'command.sh');
             await (0, promises_1.writeFile)(scriptPath, command, { encoding: 'utf8', mode: 0o600 });
             await (0, promises_1.chmod)(scriptPath, 0o600);
+            // If the original env was too large, strip it to essentials
+            let fallbackEnv = options.env;
+            if (fallbackEnv) {
+                let envSize = 0;
+                for (const [k, v] of Object.entries(fallbackEnv)) {
+                    if (v !== undefined)
+                        envSize += k.length + 1 + String(v).length + 1;
+                }
+                if (envSize > 1000000) {
+                    fallbackEnv = CommandExecutor.stripEnvToEssentials(fallbackEnv);
+                    const strippedSize = Object.entries(fallbackEnv).reduce((s, [k, v]) => s + k.length + 1 + (v ? String(v).length : 0) + 1, 0);
+                    logger_1.logger.warn(`[CommandExecutor] E2BIG fallback: stripped env from ${envSize} to ${strippedSize} bytes`);
+                }
+            }
             try {
                 const result = await execAsync(`/bin/sh ${shellQuote(scriptPath)}`, {
                     cwd: options.cwd,
-                    env: options.env,
+                    env: fallbackEnv,
                     timeout,
                 });
                 return {
@@ -420257,6 +421365,48 @@ class CommandExecutor {
         finally {
             await (0, promises_1.rm)(tempDir, { recursive: true, force: true });
         }
+    }
+    /**
+     * Strip env to essential variables needed for most child processes.
+     * Used when the full env exceeds safe spawn limits.
+     */
+    static stripEnvToEssentials(env) {
+        const essential = new Set([
+            'PATH',
+            'HOME',
+            'USER',
+            'SHELL',
+            'LANG',
+            'LC_ALL',
+            'TERM',
+            'TMPDIR',
+            'TMP',
+            'TEMP',
+            'NODE_OPTIONS',
+            'NODE_PATH',
+            'NODE_ENV',
+            'npm_config_cache',
+            'HOSTNAME',
+            'GIT_TERMINAL_PROMPT',
+            'GIT_SSH_COMMAND',
+            'GIT_CONFIG_COUNT',
+            'GITHUB_TOKEN',
+            'GH_TOKEN',
+            'GOOGLE_API_KEY',
+            'GOOGLE_API_URL',
+            'OPENAI_API_KEY',
+            'OPENAI_BASE_URL',
+            'ANTHROPIC_API_KEY',
+            'VISOR_TELEMETRY_ENABLED',
+        ]);
+        const result = {};
+        for (const [k, v] of Object.entries(env)) {
+            // Keep essential vars and all GIT_CONFIG_* vars
+            if (essential.has(k) || k.startsWith('GIT_CONFIG_')) {
+                result[k] = v;
+            }
+        }
+        return result;
     }
     isE2Big(error) {
         return Boolean(error && typeof error === 'object' && error.code === 'E2BIG');
@@ -427602,13 +428752,12 @@ class WorktreeManager {
      * Execute a git command
      */
     async executeGitCommand(command, options = {}) {
-        // Merge provided env with process.env and add git-specific settings
-        // These settings prevent git from hanging on interactive prompts while
-        // still allowing OS-level credential helpers to work:
-        // - GIT_TERMINAL_PROMPT=0: Prevents terminal credential prompts
-        // - GIT_SSH_COMMAND: Disables SSH password prompts (BatchMode)
+        // Build env from /proc/self/environ (the static initial env) instead of
+        // spreading the JS process.env object. Concurrent tasks can inflate
+        // process.env via withTemporaryEnv(), pushing argv+envp past ARG_MAX
+        // and causing E2BIG on spawn.
         const gitEnv = {
-            ...process.env,
+            ...WorktreeManager.getStableEnv(),
             ...options.env,
             GIT_TERMINAL_PROMPT: '0',
             GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no',
@@ -427622,6 +428771,44 @@ class WorktreeManager {
             stderr: result.stderr,
             exitCode: result.exitCode,
         };
+    }
+    static _stableEnv = null;
+    /**
+     * Return the process's initial environment from /proc/self/environ,
+     * plus dynamic vars set after startup (GitHub auth, GIT_CONFIG).
+     */
+    static getStableEnv() {
+        if (!WorktreeManager._stableEnv) {
+            WorktreeManager._stableEnv = {};
+            try {
+                const raw = (__nccwpck_require__(79896).readFileSync)('/proc/self/environ', 'utf8');
+                for (const entry of raw.split('\0')) {
+                    const eq = entry.indexOf('=');
+                    if (eq > 0) {
+                        WorktreeManager._stableEnv[entry.substring(0, eq)] = entry.substring(eq + 1);
+                    }
+                }
+            }
+            catch {
+                for (const [k, v] of Object.entries(process.env)) {
+                    if (v !== undefined)
+                        WorktreeManager._stableEnv[k] = v;
+                }
+            }
+        }
+        const result = { ...WorktreeManager._stableEnv };
+        // Merge in dynamic vars set after startup
+        for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_CONFIG_COUNT']) {
+            const v = process.env[key];
+            if (v !== undefined)
+                result[key] = v;
+        }
+        for (const [k, v] of Object.entries(process.env)) {
+            if (k.startsWith('GIT_CONFIG_') && v !== undefined) {
+                result[k] = v;
+            }
+        }
+        return result;
     }
     /**
      * Build authenticated URL with token
@@ -460600,14 +461787,14 @@ exports.range = range;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.EXPANSION_MAX_REWRITES = exports.EXPANSION_MAX_DEPTH = exports.EXPANSION_MAX_LENGTH = exports.EXPANSION_MAX = void 0;
+exports.EXPANSION_MAX_STEPS = exports.EXPANSION_MAX_REWRITES = exports.EXPANSION_MAX_DEPTH = exports.EXPANSION_MAX_LENGTH = exports.EXPANSION_MAX = void 0;
 exports.expand = expand;
 const balanced_match_1 = __nccwpck_require__(76075);
-const escSlash = '\0SLASH' + Math.random() + '\0';
-const escOpen = '\0OPEN' + Math.random() + '\0';
-const escClose = '\0CLOSE' + Math.random() + '\0';
-const escComma = '\0COMMA' + Math.random() + '\0';
-const escPeriod = '\0PERIOD' + Math.random() + '\0';
+const escSlash = '\0SLASH' + Math.random().toFixed(16) + '\0';
+const escOpen = '\0OPEN' + Math.random().toFixed(16) + '\0';
+const escClose = '\0CLOSE' + Math.random().toFixed(16) + '\0';
+const escComma = '\0COMMA' + Math.random().toFixed(16) + '\0';
+const escPeriod = '\0PERIOD' + Math.random().toFixed(16) + '\0';
 const escSlashPattern = new RegExp(escSlash, 'g');
 const escOpenPattern = new RegExp(escOpen, 'g');
 const escClosePattern = new RegExp(escClose, 'g');
@@ -460648,6 +461835,23 @@ exports.EXPANSION_MAX_DEPTH = 1_000;
 // seconds to produce two results. `EXPANSION_MAX_REWRITES` bounds how many
 // times the scan may restart. Real `{a},b}` input needs a handful.
 exports.EXPANSION_MAX_REWRITES = 1_000;
+// `EXPANSION_MAX_STEPS` bounds the work one `expand` call does, which `max`,
+// `maxLength` and `maxDepth` don't: nested sets are rescanned at every level
+// and chained groups each rebuild up to `max` results, so 2KB of input could
+// block the event loop for over 30 seconds. Each character scanned, result
+// built and sequence value generated is a step, and each `expand_` call costs
+// `CALL_STEPS` more. Past the budget, the set being expanded and everything
+// after it stay literal. A glob needs a few hundred steps, and nesting all the
+// way to `EXPANSION_MAX_DEPTH` about 4M.
+exports.EXPANSION_MAX_STEPS = 20_000_000;
+// What one `expand_` call costs on top of what it scans and builds. Setting
+// one up takes about as long as scanning 16 characters, and a set whose
+// results are wrapped to be expanded again makes one call per result, each
+// scanning and building next to nothing: 64KB of
+// `('{{' + ','.repeat(316) + '}{' + ','.repeat(316) + '}}').repeat(n)` made
+// 4M such calls, which spent the budget three times as slowly as anything
+// else.
+const CALL_STEPS = 16;
 function numeric(str) {
     return !isNaN(str) ? parseInt(str, 10) : str.charCodeAt(0);
 }
@@ -460673,12 +461877,96 @@ function pushAll(target, items) {
         target.push(items[i]);
     }
 }
+// `balanced`, run on `masked` (see `maskUnmatchedOpens`), sliced from `str`
+// and charged for the characters it walks: up to the group's `}`, or the
+// whole string when there is no match or unmatched `{` come first, which
+// `unmatched` then flags for masking. Once a call overdraws the budget, it
+// and every later one return undefined, so the rest stays literal.
+function balancedWithBudget(str, masked, budget) {
+    if (budget.remaining < 0) {
+        return undefined;
+    }
+    const r = (0, balanced_match_1.range)('{', '}', masked);
+    const unmatched = r !== undefined && masked.indexOf('{') < r[0];
+    budget.remaining -= r && !unmatched ? r[1] + 1 : str.length;
+    if (!r || budget.remaining < 0) {
+        return undefined;
+    }
+    return {
+        end: r[1],
+        pre: str.slice(0, r[0]),
+        body: str.slice(r[0] + 1, r[1]),
+        post: str.slice(r[1] + 1),
+        unmatched,
+    };
+}
+// `masked` with every `{` that has no matching `}` swapped for a `\0`, which
+// keeps the length, so a scan of it still lines up with the string it was
+// made from. Such a `{` is literal either way, but `balanced` only learns that
+// one is unmatched by reading to the end of the string, so with one at the
+// head of every group (`'{a,{b,c}'.repeat(n)`) each scan read the rest of the
+// input. That was quadratic, and once the step budget charged for it, it ran
+// out partway through and left the rest literal. A scan of the masked copy
+// stops at the group's `}`. It is one pass, charged as such.
+function maskUnmatchedOpens(masked, budget) {
+    budget.remaining -= masked.length;
+    const open = [];
+    for (let i = 0; i < masked.length; i++) {
+        const c = masked.charCodeAt(i);
+        if (c === 0x7b) {
+            open.push(i);
+        }
+        else if (c === 0x7d && open.length) {
+            open.pop();
+        }
+    }
+    let out = '';
+    let last = 0;
+    for (let i = 0; i < open.length; i++) {
+        const at = open[i];
+        out += masked.slice(last, at) + '\0';
+        last = at + 1;
+    }
+    return out + masked.slice(last);
+}
+// Whether `str` has a `,` not followed by another `,`, with a `}` after it on
+// the same line - what `/,(?!,).*\}/.test(str)` asks, answered in one pass from
+// the end. The regex tries every `,` and backtracks through the rest of its
+// line from each, which is quadratic, and the `{a},b}` rewrite asks again on
+// every pass. Like a scan, it is charged for the whole string and refused if
+// that overdraws the budget.
+function commaSetFollows(str, budget) {
+    budget.remaining -= str.length;
+    if (budget.remaining < 0) {
+        return false;
+    }
+    // Whether a `}` follows the current position before the line ends
+    let close = false;
+    for (let i = str.length - 1; i >= 0; i--) {
+        const c = str.charCodeAt(i);
+        if (c === 0x7d) {
+            close = true;
+        }
+        else if (c === 0x0a || c === 0x0d || c === 0x2028 || c === 0x2029) {
+            // A line terminator, which `.` does not match
+            close = false;
+        }
+        else if (c === 0x2c && close && str.charCodeAt(i + 1) !== 0x2c) {
+            return true;
+        }
+    }
+    return false;
+}
 /**
  * Basically just str.split(","), but handling cases
  * where we have nested braced sections, which should be
  * treated as individual members, like {a,{b,c},d}
+ *
+ * Returns `undefined` if the step budget runs out before the whole set is
+ * split, since splitting what is left on every comma would tear apart the
+ * nested sets it still holds.
  */
-function parseCommaParts(str) {
+function parseCommaParts(str, budget) {
     const parts = [];
     // Walk the brace groups iteratively. Recursing on `post` once per group let a
     // chain of them exhaust the stack - the parsing-side counterpart to
@@ -460688,7 +461976,11 @@ function parseCommaParts(str) {
     // The part the next chunk continues
     let carry = '';
     for (;;) {
-        const m = (0, balanced_match_1.balanced)('{', '}', str);
+        // A set's body holds no unmatched `{`, so there is nothing to mask.
+        const m = balancedWithBudget(str, str, budget);
+        if (budget.remaining < 0) {
+            return undefined;
+        }
         if (!m) {
             const tail = str.split(',');
             tail[0] = carry + tail[0];
@@ -460708,11 +462000,23 @@ function parseCommaParts(str) {
         str = post;
     }
 }
+// An option that is left out, or that is NaN, gets its default. Every
+// comparison against NaN is false, so a NaN bound would never be reached:
+// `{ maxSteps: NaN }` let 15KB of input block the event loop for 16 seconds,
+// and `{ maxDepth: NaN }` overflowed the stack again (CVE-2026-102278). Pass
+// `Infinity` to lift a bound.
+function bound(value, fallback) {
+    return value === undefined || isNaN(value) ? fallback : value;
+}
 function expand(str, options = {}) {
     if (!str) {
         return [];
     }
-    const { max = exports.EXPANSION_MAX, maxLength = exports.EXPANSION_MAX_LENGTH, maxDepth = exports.EXPANSION_MAX_DEPTH, maxRewrites = exports.EXPANSION_MAX_REWRITES, } = options;
+    const max = bound(options.max, exports.EXPANSION_MAX);
+    const maxLength = bound(options.maxLength, exports.EXPANSION_MAX_LENGTH);
+    const maxDepth = bound(options.maxDepth, exports.EXPANSION_MAX_DEPTH);
+    const maxRewrites = bound(options.maxRewrites, exports.EXPANSION_MAX_REWRITES);
+    const maxSteps = bound(options.maxSteps, exports.EXPANSION_MAX_STEPS);
     // I don't know why Bash 4.3 does this, but it does.
     // Anything starting with {} will have the first two bytes preserved
     // but *only* at the top level, so {},a}b will not expand to anything,
@@ -460722,7 +462026,7 @@ function expand(str, options = {}) {
     if (str.slice(0, 2) === '{}') {
         str = '\\{\\}' + str.slice(2);
     }
-    return expand_(escapeBraces(str), max, maxLength, maxDepth, 0, maxRewrites, true).map(unescapeBraces);
+    return expand_(escapeBraces(str), max, maxLength, maxDepth, 0, maxRewrites, { remaining: maxSteps }, true).map(unescapeBraces);
 }
 function embrace(str) {
     return '{' + str + '}';
@@ -460740,30 +462044,41 @@ function gte(i, y) {
 // number of results at `max` and the total number of characters at `maxLength`.
 // This is the one place output grows, so bounding it here keeps the single
 // accumulator - and therefore memory - flat regardless of how many brace groups
-// are combined (CVE-2026-14257).
-function combine(acc, pre, values, max, maxLength, dropEmpties) {
+// are combined (CVE-2026-14257). Each result built is a step, since `max` and
+// `maxLength` bound one combination, not how many brace groups are combined.
+function combine(acc, pre, values, max, maxLength, dropEmpties, budget) {
     const out = [];
     let length = 0;
-    for (let a = 0; a < acc.length; a++) {
-        for (let v = 0; v < values.length; v++) {
+    // Bash drops empty results at the top level, and they don't count against
+    // `max`, so `max` bounds the number of *kept* results. Only an empty
+    // `acc[a] + pre` can make one, so for those the empty values are skipped
+    // without being visited. Visiting them one at a time let a set of empties
+    // cost `acc.length * values.length` while keeping nothing.
+    let nonEmpty;
+    outer: for (let a = 0; a < acc.length; a++) {
+        const prefix = acc[a] + pre;
+        let vs = values;
+        if (dropEmpties && !prefix) {
+            if (!nonEmpty)
+                nonEmpty = values.filter(v => v);
+            vs = nonEmpty;
+        }
+        for (let v = 0; v < vs.length; v++) {
             if (out.length >= max)
-                return out;
-            const expansion = acc[a] + pre + values[v];
-            // Bash drops empty results at the top level. Skip them before they count
-            // against `max`, so `max` bounds the number of *kept* results.
-            if (dropEmpties && !expansion)
-                continue;
+                break outer;
+            const expansion = prefix + vs[v];
             if (length + expansion.length > maxLength)
-                return out;
+                break outer;
             out.push(expansion);
             length += expansion.length;
         }
     }
+    budget.remaining -= out.length;
     return out;
 }
 // The expansion values of a single numeric (`1..5`) or alphabetic (`a..e..2`)
-// sequence body.
-function expandSequence(body, isAlphaSequence, max, maxLength) {
+// sequence body, or `undefined` if the step budget runs out generating them.
+function expandSequence(body, isAlphaSequence, max, maxLength, budget) {
     const n = body.split(/\.\./);
     const N = [];
     // A sequence body always splits into two or three parts, but the compiler
@@ -460786,8 +462101,20 @@ function expandSequence(body, isAlphaSequence, max, maxLength) {
         test = gte;
     }
     const pad = n.some(isPadded);
+    // A padded value is built a character at a time to `width`, which the input
+    // sets, so it costs one step per character: 64KB of
+    // `('{' + '0'.repeat(100) + '..99999}').repeat(n)` took 7 seconds charged
+    // one step per value.
+    const cost = pad ? width : 1;
     let length = 0;
     for (let i = x; test(i, y) && N.length < max; i += incr) {
+        // Each value is a step. `max` and `maxLength` bound one sequence, but a
+        // chain of them still generated up to `max` values each, however few
+        // combining could keep.
+        budget.remaining -= cost;
+        if (budget.remaining < 0) {
+            return undefined;
+        }
         let c;
         if (isAlphaSequence) {
             c = String.fromCharCode(i);
@@ -460817,7 +462144,9 @@ function expandSequence(body, isAlphaSequence, max, maxLength) {
     }
     return N;
 }
-function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
+function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, budget, isTop) {
+    // An overdraft here makes the first scan refuse, so `str` stays literal.
+    budget.remaining -= CALL_STEPS;
     // Too deeply nested to keep following: treat the rest as literal, the same
     // way a group that cannot expand is already handled. Truncating rather than
     // throwing keeps `expand` total, matching `max` and `maxLength`.
@@ -460840,20 +462169,33 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
     let rewrites = 0;
     let dropEmpties = false;
     let firstGroup = true;
+    // `str` with its unmatched `{` masked, once a scan has run into them
+    let masked = str;
     for (;;) {
-        const m = (0, balanced_match_1.balanced)('{', '}', str);
-        // No brace set left: the rest of the string is literal.
+        const m = balancedWithBudget(str, masked, budget);
+        // No brace set left, or no step budget left to look for one: the rest of
+        // the string is literal.
         if (!m) {
-            return combine(acc, str, [''], max, maxLength, dropEmpties);
+            return combine(acc, str, [''], max, maxLength, dropEmpties, budget);
+        }
+        if (m.unmatched) {
+            masked = maskUnmatchedOpens(masked, budget);
         }
         // no need to expand pre, since it is guaranteed to be free of brace-sets
         const pre = m.pre;
+        // This set and the rest of the string, literal: for a set that cannot
+        // expand, and for one the step budget runs out on. Once it is overdrawn,
+        // every set still being expanded, at every level, stays literal like this -
+        // otherwise each level above would go on combining, and wrapping and
+        // expanding again, results the budget was too small for.
+        const literal = () => combine(acc, pre + '{' + m.body + '}' + m.post, [''], max, maxLength, dropEmpties, budget);
         if (/\$$/.test(pre)) {
-            acc = combine(acc, pre + '{' + m.body + '}', [''], max, maxLength, dropEmpties && !m.post.length);
+            acc = combine(acc, pre + '{' + m.body + '}', [''], max, maxLength, dropEmpties && !m.post.length, budget);
             firstGroup = false;
             if (!m.post.length)
                 break;
             str = m.post;
+            masked = masked.slice(m.end + 1);
             continue;
         }
         const isNumericSequence = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(m.body);
@@ -460862,14 +462204,19 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
         const isOptions = m.body.indexOf(',') >= 0;
         if (!isSequence && !isOptions) {
             // {a},b}
-            if (rewrites < maxRewrites && m.post.match(/,(?!,).*\}/)) {
+            if (rewrites < maxRewrites && commaSetFollows(m.post, budget)) {
                 rewrites++;
                 str = m.pre + '{' + m.body + escClose + m.post;
+                // Taking a `}` away never gives an unmatched `{` a partner, so what
+                // is masked stays unmatched. The `{` it closed can be left without
+                // one, and the next scan masks it.
+                masked =
+                    masked.slice(0, m.end) + escClose + masked.slice(m.end + 1);
                 isTop = true;
                 continue;
             }
             // Nothing here expands, so the whole remaining string is literal.
-            return combine(acc, pre + '{' + m.body + '}' + m.post, [''], max, maxLength, dropEmpties);
+            return literal();
         }
         if (firstGroup) {
             dropEmpties = isTop && !isSequence;
@@ -460877,20 +462224,36 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
         }
         let values;
         if (isSequence) {
-            values = expandSequence(m.body, isAlphaSequence, max, maxLength);
+            values = expandSequence(m.body, isAlphaSequence, max, maxLength, budget);
+            if (!values) {
+                return literal();
+            }
         }
         else {
-            let n = parseCommaParts(m.body);
+            let n = parseCommaParts(m.body, budget);
+            // The step budget ran out partway through the set.
+            if (!n) {
+                return literal();
+            }
             if (n.length === 1 && n[0] !== undefined) {
                 // x{{a,b}}y ==> x{a}y x{b}y
-                n = expand_(n[0], max, maxLength, maxDepth, depth + 1, maxRewrites, false).map(embrace);
+                n = expand_(n[0], max, maxLength, maxDepth, depth + 1, maxRewrites, budget, false).map(embrace);
+                // The step budget ran out expanding the set's only part.
+                if (budget.remaining < 0) {
+                    return literal();
+                }
                 //XXX is this necessary? Can't seem to hit it in tests.
                 /* c8 ignore start */
                 if (n.length === 1) {
-                    acc = combine(acc, pre + n[0], [''], max, maxLength, dropEmpties && !m.post.length);
+                    const next = combine(acc, pre + n[0], [''], max, maxLength, dropEmpties && !m.post.length, budget);
+                    if (budget.remaining < 0) {
+                        return literal();
+                    }
+                    acc = next;
                     if (!m.post.length)
                         break;
                     str = m.post;
+                    masked = masked.slice(m.end + 1);
                     continue;
                 }
                 /* c8 ignore stop */
@@ -460909,7 +462272,11 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
             values = [];
             let valuesLength = 0;
             outer: for (let j = 0; j < n.length; j++) {
-                const expanded = expand_(n[j], max, maxLength, maxDepth, depth + 1, maxRewrites, false);
+                const expanded = expand_(n[j], max, maxLength, maxDepth, depth + 1, maxRewrites, budget, false);
+                // The step budget ran out expanding a member.
+                if (budget.remaining < 0) {
+                    return literal();
+                }
                 for (let k = 0; k < expanded.length; k++) {
                     const v = expanded[k];
                     if (dropsEmpties && !v)
@@ -460923,10 +462290,16 @@ function expand_(str, max, maxLength, maxDepth, depth, maxRewrites, isTop) {
                 }
             }
         }
-        acc = combine(acc, pre, values, max, maxLength, dropEmpties && !m.post.length);
+        const next = combine(acc, pre, values, max, maxLength, dropEmpties && !m.post.length, budget);
+        // The step budget ran out combining the set's values in.
+        if (budget.remaining < 0) {
+            return literal();
+        }
+        acc = next;
         if (!m.post.length)
             break;
         str = m.post;
+        masked = masked.slice(m.end + 1);
     }
     return acc;
 }
@@ -475684,6 +477057,30 @@ class TokenList {
         return this.length++;
     }
     /**
+     * Offset of the first character of a token that is part of its value. A text run that is
+     * no plain slice of the field still spans the whitespace and control characters its value
+     * is trimmed of.
+     */
+    contentStart(index) {
+        let start = this.slots[index * 3 + 1];
+        const end = this.slots[index * 3 + 2];
+        while (start < end && _isDroppedCode(this.str.charCodeAt(start))) {
+            start++;
+        }
+        return start;
+    }
+    /**
+     * Offset just past the last character of a token that is part of its value
+     */
+    contentEnd(index) {
+        const start = this.slots[index * 3 + 1];
+        let end = this.slots[index * 3 + 2];
+        while (end > start && _isDroppedCode(this.str.charCodeAt(end - 1))) {
+            end--;
+        }
+        return end;
+    }
+    /**
      * The character of an operator token, an empty string for a text run
      */
     operatorAt(index) {
@@ -475819,6 +477216,44 @@ function _isSpaceCode(code) {
         code === 0xfeff);
 }
 /**
+ * Checks for the whitespace RFC 5322 folding whitespace is made of: SP and HTAB, plus the
+ * line break a fold carries. The other characters _isSpaceCode accepts are atext under
+ * RFC 6532, and parsers disagree on them: mailauth keeps U+00A0 in a domain, so joining a
+ * domain across one names a domain that reader never sees
+ *
+ * @param code Character code
+ * @return true if the character is folding whitespace
+ */
+function _isFoldingSpaceCode(code) {
+    return code === 0x20 || code === 0x09 || code === 0x0d || code === 0x0a;
+}
+/**
+ * Checks if every character in a stretch of the field is folding whitespace
+ *
+ * @param str The field
+ * @param from Offset of the first character
+ * @param to Offset just past the last one
+ * @return true if the stretch holds nothing but folding whitespace
+ */
+function _isFoldingGap(str, from, to) {
+    for (let i = from; i < to; i++) {
+        if (!_isFoldingSpaceCode(str.charCodeAt(i))) {
+            return false;
+        }
+    }
+    return true;
+}
+/**
+ * Checks for a character the value of a text run is trimmed of, or leaves out: whitespace,
+ * C0 controls and DEL
+ *
+ * @param code Character code
+ * @return true if the character is not part of the value at the edge of a run
+ */
+function _isDroppedCode(code) {
+    return code < 0x20 || code === 0x7f || _isSpaceCode(code);
+}
+/**
  * The characters JS `\w` matches without the unicode flag, the set the `\b` in
  * LOOSE_TEXT_ADDR is read against. charCodeAt off either end of the string gives NaN,
  * which compares false throughout, so out of range reads as the non-word the pattern
@@ -475868,6 +477303,9 @@ const LEADING_QUOTED_STRING = /^"(?:[^"\\]|\\[\s\S])*"/;
  * The scan is by index, a pattern such as /\s+@/ backtracks over a long whitespace run that
  * no '@' follows.
  *
+ * The whitespace around the dots of the domain that follows is dropped as well, see
+ * _joinDomainDotSpacing.
+ *
  * @param value Value holding the '@'
  * @param at Offset of the '@', or -1
  * @return The value with the whitespace beside that '@' removed
@@ -475884,7 +477322,86 @@ function _joinAtSpacing(value, at) {
     while (end < value.length && _isSpaceCode(value.charCodeAt(end))) {
         end++;
     }
-    return start === at && end === at + 1 ? value : value.slice(0, start) + '@' + value.slice(end);
+    const joined = start === at && end === at + 1 ? value : value.slice(0, start) + '@' + value.slice(end);
+    return _joinDomainDotSpacing(joined, start);
+}
+// The ASCII atext characters: printable, and none of the RFC 5322 specials
+const ASCII_ATEXT = new Uint8Array(0x80);
+for (let code = 0x21; code < 0x7f; code++) {
+    ASCII_ATEXT[code] = '()<>[]:;@\\,."'.indexOf(String.fromCharCode(code)) < 0 ? 1 : 0;
+}
+/**
+ * Checks if a character can be part of an atom: anything but the specials, whitespace and
+ * the control characters (RFC 5322 3.2.3, with non-ASCII allowed as RFC 6532 does)
+ *
+ * @param code Character code
+ * @return true if the character is atext
+ */
+function _isAtextCode(code) {
+    return code < 0x80 ? ASCII_ATEXT[code] === 1 : !_isSpaceCode(code);
+}
+/**
+ * Drops the whitespace around the dots of the domain behind the '@' at an offset.
+ *
+ * obs-domain is atoms with CFWS around the dots (RFC 5322 4.4), so 'user@victim.example
+ * .allowed.example' names user@victim.example.allowed.example. Read as two runs, the domain
+ * ended at the whitespace and the envelope went to victim.example, a different domain than
+ * the one an RFC 5322 parser, and an application validating the address with one, reads
+ * (GHSA-3q53-mvfw-q9v8). A comment around a dot reaches here as whitespace.
+ *
+ * Only SP, HTAB and a fold count as the whitespace, see _isFoldingSpaceCode.
+ *
+ * Only a dot with an atom on both sides joins, as for a conformant parser: whitespace that
+ * is not beside a dot ends the domain, and so does a dot that no atom follows, which keeps
+ * 'user@example.com .' from becoming a domain with a trailing dot. A domain literal is left
+ * alone. Everything from where the domain ends is kept as it is.
+ *
+ * @param value Value holding the '@'
+ * @param at Offset of the '@'
+ * @return The value with the whitespace around the dots of that domain removed
+ */
+function _joinDomainDotSpacing(value, at) {
+    const len = value.length;
+    // '[' is no atext, so a domain literal ends the walk before it starts
+    let pos = at + 1;
+    let spaced = false;
+    for (;;) {
+        const labelStart = pos;
+        while (pos < len && _isAtextCode(value.charCodeAt(pos))) {
+            pos++;
+        }
+        if (pos === labelStart) {
+            break;
+        }
+        // the dot, with the whitespace on either side of it, and the label behind it
+        let next = pos;
+        while (next < len && _isFoldingSpaceCode(value.charCodeAt(next))) {
+            next++;
+        }
+        if (value.charCodeAt(next) !== 0x2e) {
+            break;
+        }
+        next++;
+        while (next < len && _isFoldingSpaceCode(value.charCodeAt(next))) {
+            next++;
+        }
+        if (next >= len || !_isAtextCode(value.charCodeAt(next))) {
+            break;
+        }
+        spaced = spaced || next !== pos + 1;
+        pos = next;
+    }
+    if (!spaced) {
+        return value;
+    }
+    // every whitespace character the walk covered sits beside a dot
+    let domain = '';
+    for (let k = at + 1; k < pos; k++) {
+        if (!_isFoldingSpaceCode(value.charCodeAt(k))) {
+            domain += value.charAt(k);
+        }
+    }
+    return value.slice(0, at + 1) + domain + value.slice(pos);
 }
 /**
  * Drops the whitespace beside the '@' that splits the domain off a value. That is the '@'
@@ -476188,6 +477705,15 @@ function _collectAddressParts(tokens, from, to) {
     // whether the last text run holds nothing but quoted text so far, which is what a quoted
     // local part is until the '@' after it joins the run
     let lastTextPureQuoted = false;
+    // whether the last text run holds an unquoted '@', so that it runs on into a domain, and
+    // whether nothing but comments has come since it, see the join below
+    let lastTextHasAt = false;
+    let lastTextOpen = false;
+    // Where the last text run, or the last comment since it, ended in the field, and whether
+    // everything between it and the comments since was folding whitespace. The tokens are
+    // trimmed of any whitespace, so this is read off the field itself.
+    let gapFrom = 0;
+    let gapsFolding = true;
     // Last character of the run each state is currently accumulating. Reading it back off
     // the accumulator with slice(-1) makes the engine flatten the whole growing string on
     // every token, which is quadratic over an address built from many comment-joined atoms
@@ -476205,18 +477731,27 @@ function _collectAddressParts(tokens, from, to) {
                 case '<':
                     state = 'address';
                     insideQuotes = false;
+                    lastTextOpen = false;
                     break;
                 case '(':
                     state = 'comment';
                     insideQuotes = false;
+                    gapsFolding = gapsFolding && _isFoldingGap(tokens.str, gapFrom, tokens.contentStart(i));
                     break;
                 case '"':
                     insideQuotes = !insideQuotes;
                     state = 'text';
+                    lastTextOpen = false;
                     break;
                 default:
                     state = 'text';
                     insideQuotes = false;
+                    if (value !== ')') {
+                        lastTextOpen = false;
+                    }
+                    else {
+                        gapFrom = tokens.contentEnd(i);
+                    }
                     break;
             }
         }
@@ -476233,8 +477768,23 @@ function _collectAddressParts(tokens, from, to) {
             // of the '@', but it cannot join two atoms into one: gluing across it would read
             // 'user@example.com(x)evil.com' as the single domain 'example.comevil.com' and
             // deliver to a domain the sender never named.
+            // A comment beside a dot of a domain is CFWS inside obs-domain, with or without
+            // folding whitespace around it, so 'user@victim.example(x).allowed.example' names
+            // one domain (GHSA-3q53-mvfw-q9v8). Any other whitespace in between keeps them apart.
+            // A ')' always leaves the walk in unquoted text, so neither needs checking here.
+            // Neither join across a comment takes in a second '@' once the run holds one: the
+            // address would then split at the last '@', and 'user@company(x).com@attacker.net',
+            // which an RFC 5322 parser reads as user@company.com, would go to attacker.net.
             const parts = data[state];
-            const joins = prevNoBreak && parts.length && (prevOperator !== ')' || lastChars[state] === '@' || value.charAt(0) === '@');
+            const secondAt = lastTextHasAt && prevOperator === ')' && value.indexOf('@') >= 0;
+            const joinsDomain = !secondAt &&
+                lastTextOpen &&
+                lastTextHasAt &&
+                prevOperator === ')' &&
+                (lastChars.text === '.' || value.charAt(0) === '.') &&
+                gapsFolding &&
+                _isFoldingGap(tokens.str, gapFrom, tokens.contentStart(i));
+            const joins = joinsDomain || (!secondAt && prevNoBreak && parts.length > 0 && (prevOperator !== ')' || lastChars[state] === '@' || value.charAt(0) === '@'));
             if (joins) {
                 const last = data[state].length - 1;
                 if (state === 'text' && !insideQuotes) {
@@ -476258,6 +477808,12 @@ function _collectAddressParts(tokens, from, to) {
                     data.quotedLocalAt.push(opensAfterEmptyQuotedString && value.charAt(0) === '@' ? 0 : -1);
                     lastTextPureQuoted = insideQuotes;
                 }
+            }
+            if (state === 'text') {
+                lastTextHasAt = (joins && lastTextHasAt) || (!insideQuotes && value.indexOf('@') >= 0);
+                lastTextOpen = true;
+                gapFrom = tokens.contentEnd(i);
+                gapsFolding = true;
             }
         }
     }
@@ -656637,7 +658193,7 @@ exports.NEVER = parseUtil_js_1.INVALID;
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
-/*! Axios v1.21.0 Copyright (c) 2026 Matt Zabriskie and contributors */
+/*! Axios v1.21.1 Copyright (c) 2026 Matt Zabriskie and contributors */
 
 
 var FormData$1 = __nccwpck_require__(28260);
@@ -659520,7 +661076,7 @@ function getEnv(key) {
   return process.env[key.toLowerCase()] || process.env[key.toUpperCase()] || '';
 }
 
-const VERSION = "1.21.0";
+const VERSION = "1.21.1";
 
 function parseProtocol(url) {
   const match = /^([-+\w]{1,25}):(?:\/\/)?/.exec(url);
@@ -663409,18 +664965,32 @@ function throwIfCancellationRequested(config) {
 }
 
 /**
- * Milliseconds elapsed since `start`, floored at zero.
+ * Resolve the clock used to time adapter execution.
  *
- * Wall-clock, to match the rest of the codebase (speedometer, throttle,
- * AxiosTransformStream). A backwards clock adjustment mid-request would
- * otherwise produce a negative duration, so the result is clamped.
+ * Prefers the monotonic `performance.now()` so wall-clock adjustments do not
+ * skew the measurement, and so frameworks that forbid reading the current
+ * time during prerendering (e.g. Next.js Cache Components) accept it. Falls
+ * back to `Date.now()` in runtimes without the High Resolution Time API.
  *
- * @param {number} start Timestamp from `Date.now()`
+ * @returns {() => number} Millisecond clock
+ */
+function resolveClock() {
+  return typeof performance !== 'undefined' && utils$1.isFunction(performance.now) ? () => performance.now() : Date.now;
+}
+
+/**
+ * Whole milliseconds elapsed since `start`, floored at zero.
+ *
+ * Rounded so the value stays an integer as with `Date.now()`. The fallback
+ * wall clock can move backwards mid-request, so the result is clamped.
+ *
+ * @param {() => number} now Clock returned by `resolveClock()`
+ * @param {number} start Timestamp read from `now`
  *
  * @returns {number} Non-negative elapsed milliseconds
  */
-function elapsedSince(start) {
-  return Math.max(0, Date.now() - start);
+function elapsedSince(now, start) {
+  return Math.max(0, Math.round(now() - start));
 }
 
 /**
@@ -663444,10 +665014,11 @@ function dispatchRequest(_config) {
     config.headers.setContentType('application/x-www-form-urlencoded', false);
   }
   const adapter = adapters.getAdapter(config.adapter || defaults.adapter, config);
-  const start = Date.now();
+  const now = resolveClock();
+  const start = now();
   return adapter(config).then(function onAdapterResolution(response) {
     throwIfCancellationRequested(config);
-    response.duration = elapsedSince(start);
+    response.duration = elapsedSince(now, start);
 
     // Expose the current response on config so that transformResponse can
     // attach it to any AxiosError it throws (e.g. on JSON parse failure).
@@ -663466,7 +665037,7 @@ function dispatchRequest(_config) {
 
       // Transform response data
       if (reason && reason.response) {
-        reason.response.duration = elapsedSince(start);
+        reason.response.duration = elapsedSince(now, start);
         config.response = reason.response;
         try {
           reason.response.data = transformData.call(config, config.transformResponse, reason.response);
@@ -694257,7 +695828,7 @@ const MOVE_THREAD_FOLDERS = [
 ];
 //#endregion
 //#region package.json
-var version = "6.37.0";
+var version = "6.38.0";
 //#endregion
 //#region src/common/utils/build-pagination-query.ts
 function buildPaginationUrl(base, options) {
@@ -694319,12 +695890,37 @@ var AutomationRuns = class {
 };
 //#endregion
 //#region src/common/utils/parse-automation-to-api-options.ts
+const TRIGGER_FIELDS = { eventName: "event_name" };
+const SEND_EMAIL_FIELDS = {
+	template: "template",
+	subject: "subject",
+	from: "from",
+	replyTo: "reply_to",
+	topicId: "topic_id"
+};
+const WAIT_FOR_EVENT_FIELDS = {
+	eventName: "event_name",
+	timeout: "timeout",
+	filterRule: "filter_rule"
+};
+const CONTACT_UPDATE_FIELDS = {
+	firstName: "first_name",
+	lastName: "last_name",
+	unsubscribed: "unsubscribed",
+	properties: "properties"
+};
+const ADD_TO_SEGMENT_FIELDS = { segmentId: "segment_id" };
+function renameFields(config, fields) {
+	const result = {};
+	for (const sdkField of Object.keys(fields)) result[fields[sdkField]] = config[sdkField];
+	return result;
+}
 function parseStepConfig(step) {
 	switch (step.type) {
 		case "trigger": return {
 			key: step.key,
 			type: step.type,
-			config: { event_name: step.config.eventName }
+			config: renameFields(step.config, TRIGGER_FIELDS)
 		};
 		case "delay": return {
 			key: step.key,
@@ -694334,21 +695930,12 @@ function parseStepConfig(step) {
 		case "send_email": return {
 			key: step.key,
 			type: step.type,
-			config: {
-				template: step.config.template,
-				subject: step.config.subject,
-				from: step.config.from,
-				reply_to: step.config.replyTo
-			}
+			config: renameFields(step.config, SEND_EMAIL_FIELDS)
 		};
 		case "wait_for_event": return {
 			key: step.key,
 			type: step.type,
-			config: {
-				event_name: step.config.eventName,
-				timeout: step.config.timeout,
-				filter_rule: step.config.filterRule
-			}
+			config: renameFields(step.config, WAIT_FOR_EVENT_FIELDS)
 		};
 		case "condition": return {
 			key: step.key,
@@ -694358,12 +695945,7 @@ function parseStepConfig(step) {
 		case "contact_update": return {
 			key: step.key,
 			type: step.type,
-			config: {
-				first_name: step.config.firstName,
-				last_name: step.config.lastName,
-				unsubscribed: step.config.unsubscribed,
-				properties: step.config.properties
-			}
+			config: renameFields(step.config, CONTACT_UPDATE_FIELDS)
 		};
 		case "contact_delete": return {
 			key: step.key,
@@ -694373,7 +695955,7 @@ function parseStepConfig(step) {
 		case "add_to_segment": return {
 			key: step.key,
 			type: step.type,
-			config: { segment_id: step.config.segmentId }
+			config: renameFields(step.config, ADD_TO_SEGMENT_FIELDS)
 		};
 	}
 }

@@ -33,7 +33,7 @@ import {
 import {
   WorkspaceManager,
   init_workspace_manager
-} from "./chunk-4EA7TOUV.mjs";
+} from "./chunk-QFVC34KY.mjs";
 import {
   OAuth2TokenCache,
   init_oauth2_token_cache
@@ -65,7 +65,7 @@ import {
 import {
   commandExecutor,
   init_command_executor
-} from "./chunk-32S5FVFW.mjs";
+} from "./chunk-T6CSWCAM.mjs";
 import {
   DependencyResolver,
   WorkflowRegistry,
@@ -5257,7 +5257,7 @@ async function executeWorkflowAsTool(workflowId, args, context2, argsOverrides) 
     ...args,
     ...argsOverrides
   };
-  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-EAODOVUJ.mjs");
+  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-GD6VK5ZV.mjs");
   const provider = new WorkflowCheckProvider2();
   const checkConfig = {
     type: "workflow",
@@ -16851,7 +16851,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const map = options?.webhookContext?.webhookData;
             if (map) {
-              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-FBZJJ5EZ.mjs");
+              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-MSHEENQP.mjs");
               const reg = CheckProviderRegistry2.getInstance();
               const p = reg.getProvider("http_input");
               if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -17019,7 +17019,7 @@ var init_state_machine_execution_engine = __esm({
           if (onRetryCheckpoint) await onRetryCheckpoint(retryCheckpoint);
         }
         try {
-          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-FBZJJ5EZ.mjs");
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-MSHEENQP.mjs");
           const registry = CheckProviderRegistry2.getInstance();
           registry.setCustomTools(configWithTagFilter.tools || {});
         } catch (error) {
@@ -17077,7 +17077,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const webhookData = this.executionContext?.webhookContext?.webhookData;
             if (webhookData instanceof Map) {
-              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-JEFIOKFC.mjs");
+              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-H5MJAGHJ.mjs");
               const slackCtx = extractSlackContext2(webhookData);
               if (slackCtx) {
                 const payload = Array.from(webhookData.values())[0];
@@ -23597,6 +23597,12 @@ ${processedPrompt}` : processedPrompt;
        * Build a safe subset of environment variables for sandbox access.
        * Excludes sensitive keys like API keys, secrets, tokens.
        */
+      static _stableEnvForSafe = null;
+      /**
+       * Build a safe env for sandboxed expressions (no secrets).
+       * Uses /proc/self/environ as the base to avoid copying transient vars
+       * that concurrent withTemporaryEnv() calls may have injected.
+       */
       buildSafeEnv() {
         const sensitivePatterns = [
           /api.?key/i,
@@ -23607,9 +23613,24 @@ ${processedPrompt}` : processedPrompt;
           /auth/i,
           /private/i
         ];
+        if (!_AICheckProvider._stableEnvForSafe) {
+          _AICheckProvider._stableEnvForSafe = {};
+          try {
+            const raw = __require("fs").readFileSync("/proc/self/environ", "utf8");
+            for (const entry of raw.split("\0")) {
+              const eq = entry.indexOf("=");
+              if (eq > 0) {
+                _AICheckProvider._stableEnvForSafe[entry.substring(0, eq)] = entry.substring(eq + 1);
+              }
+            }
+          } catch {
+            for (const [k, v] of Object.entries(process.env)) {
+              if (v !== void 0) _AICheckProvider._stableEnvForSafe[k] = v;
+            }
+          }
+        }
         const safeEnv = {};
-        for (const [key, value] of Object.entries(process.env)) {
-          if (value === void 0) continue;
+        for (const [key, value] of Object.entries(_AICheckProvider._stableEnvForSafe)) {
           const isSensitive = sensitivePatterns.some((pattern) => pattern.test(key));
           if (!isSensitive) {
             safeEnv[key] = value;
@@ -44869,9 +44890,22 @@ var init_mcp_check_provider = __esm({
        */
       async executeStdioMethod(config, methodArgs, timeout) {
         const env = {};
-        for (const [key, value] of Object.entries(process.env)) {
-          if (value !== void 0) {
-            env[key] = value;
+        let envSource = "process.env";
+        try {
+          const { readFileSync: readFileSync5 } = __require("fs");
+          const raw = readFileSync5("/proc/self/environ", "utf8");
+          for (const entry of raw.split("\0")) {
+            const eq = entry.indexOf("=");
+            if (eq > 0) {
+              env[entry.substring(0, eq)] = entry.substring(eq + 1);
+            }
+          }
+          envSource = "/proc/self/environ";
+        } catch {
+          for (const [key, value] of Object.entries(process.env)) {
+            if (value !== void 0) {
+              env[key] = value;
+            }
           }
         }
         if (config.env) {
@@ -44879,6 +44913,27 @@ var init_mcp_check_provider = __esm({
             if (value !== void 0 && value !== null) {
               env[key] = String(EnvironmentResolver.resolveValue(value));
             }
+          }
+        }
+        for (const key of ["GITHUB_TOKEN", "GH_TOKEN", "GIT_CONFIG_COUNT"]) {
+          const v = process.env[key];
+          if (v !== void 0) env[key] = v;
+        }
+        for (const [k, v] of Object.entries(process.env)) {
+          if (k.startsWith("GIT_CONFIG_") && v !== void 0) {
+            env[k] = v;
+          }
+        }
+        {
+          let envSize = 0;
+          for (const [k, v] of Object.entries(env)) {
+            envSize += k.length + 1 + v.length + 1;
+          }
+          if (envSize > 1e5) {
+            const top5 = Object.entries(env).map(([k, v]) => [k, v.length]).sort((a, b) => b[1] - a[1]).slice(0, 5);
+            logger.warn(
+              `[MCP-StdioSpawn] Large env (${envSource}): ${Object.keys(env).length} vars, ${envSize} bytes. Top: ${top5.map(([k, l]) => `${k}=${l}b`).join(", ")}. Cmd: ${config.command}`
+            );
           }
         }
         return this.executeWithTransport(
@@ -46126,8 +46181,8 @@ function buildBuiltinGlobals(opts) {
   const asyncFunctionNames = /* @__PURE__ */ new Set();
   const scheduleFn = async (args = {}) => {
     try {
-      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-66QWZERV.mjs");
-      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-JEFIOKFC.mjs");
+      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-MQEGE6UP.mjs");
+      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-H5MJAGHJ.mjs");
       const parentCtx = opts.sessionInfo?._parentContext;
       const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
       const webhookEventType = parentCtx?.webhookContext?.eventType || parentCtx?.prInfo?.eventContext?.eventType;
@@ -46258,7 +46313,7 @@ function buildBuiltinGlobals(opts) {
   if (opts.config.enable_bash === true) {
     const bashFn = async (args = {}) => {
       try {
-        const { CommandExecutor } = await import("./command-executor-6XENSXBC.mjs");
+        const { CommandExecutor } = await import("./command-executor-UK32CJWC.mjs");
         const executor = CommandExecutor.getInstance();
         const command = String(args.command || "");
         if (!command) return "ERROR: command is required";
@@ -47764,7 +47819,7 @@ var init_worktree_manager = __esm({
        */
       async executeGitCommand(command, options = {}) {
         const gitEnv = {
-          ...process.env,
+          ..._WorktreeManager.getStableEnv(),
           ...options.env,
           GIT_TERMINAL_PROMPT: "0",
           GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
@@ -47778,6 +47833,40 @@ var init_worktree_manager = __esm({
           stderr: result.stderr,
           exitCode: result.exitCode
         };
+      }
+      static _stableEnv = null;
+      /**
+       * Return the process's initial environment from /proc/self/environ,
+       * plus dynamic vars set after startup (GitHub auth, GIT_CONFIG).
+       */
+      static getStableEnv() {
+        if (!_WorktreeManager._stableEnv) {
+          _WorktreeManager._stableEnv = {};
+          try {
+            const raw = __require("fs").readFileSync("/proc/self/environ", "utf8");
+            for (const entry of raw.split("\0")) {
+              const eq = entry.indexOf("=");
+              if (eq > 0) {
+                _WorktreeManager._stableEnv[entry.substring(0, eq)] = entry.substring(eq + 1);
+              }
+            }
+          } catch {
+            for (const [k, v] of Object.entries(process.env)) {
+              if (v !== void 0) _WorktreeManager._stableEnv[k] = v;
+            }
+          }
+        }
+        const result = { ..._WorktreeManager._stableEnv };
+        for (const key of ["GITHUB_TOKEN", "GH_TOKEN", "GIT_CONFIG_COUNT"]) {
+          const v = process.env[key];
+          if (v !== void 0) result[key] = v;
+        }
+        for (const [k, v] of Object.entries(process.env)) {
+          if (k.startsWith("GIT_CONFIG_") && v !== void 0) {
+            result[k] = v;
+          }
+        }
+        return result;
       }
       /**
        * Build authenticated URL with token
@@ -48137,7 +48226,7 @@ var init_git_checkout_provider = __esm({
       }
       async isAvailable() {
         try {
-          const { commandExecutor: commandExecutor2 } = await import("./command-executor-6XENSXBC.mjs");
+          const { commandExecutor: commandExecutor2 } = await import("./command-executor-UK32CJWC.mjs");
           const result = await commandExecutor2.execute("git --version", { timeout: 5e3 });
           return result.exitCode === 0;
         } catch (_error) {
@@ -50547,4 +50636,4 @@ undici/lib/fetch/body.js:
 undici/lib/websocket/frame.js:
   (*! ws. MIT License. Einar Otto Stangvik <einaros@gmail.com> *)
 */
-//# sourceMappingURL=chunk-YQCO6RG2.mjs.map
+//# sourceMappingURL=chunk-OHHOXPJW.mjs.map
