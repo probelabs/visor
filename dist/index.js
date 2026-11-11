@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 process.env.VISOR_VERSION = '0.1.42';
-process.env.PROBE_VERSION = '0.6.0-rc346';
+process.env.PROBE_VERSION = '0.6.0-rc347';
 process.env.VISOR_COMMIT_SHA = 'unknown';
 process.env.VISOR_COMMIT_SHORT = 'unknown';
 /******/ (() => { // webpackBootstrap
@@ -559205,6 +559205,9 @@ Do NOT search for analogies or loosely related concepts. If the feature does not
             timeoutBehavior,
             requestTimeout,
             gracefulTimeoutBonusSteps,
+            negotiatedTimeoutBudget,
+            negotiatedTimeoutMaxRequests,
+            negotiatedTimeoutMaxPerRequest,
             // Subagent lifecycle callbacks for graceful stop coordination
             onSubagentCreated,
             onSubagentCompleted
@@ -640341,6 +640344,9 @@ async function delegate({
   timeoutBehavior = void 0,
   requestTimeout = void 0,
   gracefulTimeoutBonusSteps = void 0,
+  negotiatedTimeoutBudget = void 0,
+  negotiatedTimeoutMaxRequests = void 0,
+  negotiatedTimeoutMaxPerRequest = void 0,
   // Subagent lifecycle callbacks for graceful stop coordination
   onSubagentCreated = null,
   onSubagentCompleted = null
@@ -640444,8 +640450,11 @@ async function delegate({
       // 15s before external kill
       timeoutBehavior: timeoutBehavior || "graceful",
       requestTimeout,
-      gracefulTimeoutBonusSteps: gracefulTimeoutBonusSteps ?? 2
+      gracefulTimeoutBonusSteps: gracefulTimeoutBonusSteps ?? 2,
       // fewer steps for subagents
+      ...negotiatedTimeoutBudget !== void 0 && { negotiatedTimeoutBudget },
+      ...negotiatedTimeoutMaxRequests !== void 0 && { negotiatedTimeoutMaxRequests },
+      ...negotiatedTimeoutMaxPerRequest !== void 0 && { negotiatedTimeoutMaxPerRequest }
     });
     if (onSubagentCreated) {
       onSubagentCreated(sessionId, subagent);
