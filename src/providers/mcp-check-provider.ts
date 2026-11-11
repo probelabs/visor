@@ -691,22 +691,68 @@ export class McpCheckProvider extends CheckProvider {
     methodArgs: Record<string, unknown>,
     timeout: number
   ): Promise<unknown> {
-    // Build env: start with process.env as base (inherits .env-loaded vars),
-    // then overlay resolved config env on top. This fixes two issues:
-    // 1. MCP SDK's StdioClientTransport only passes a minimal safe set of vars
-    //    (HOME, PATH, etc.) when env is provided, stripping .env-loaded values.
-    // 2. Config env values like "${VAR_NAME}" need interpolation via EnvironmentResolver.
+    // Build env from the INITIAL process environ (read from /proc/self/environ)
+    // instead of the JS process.env object. The JS object can be inflated by
+    // concurrent tasks via withTemporaryEnv(), pushing combined argv+envp past
+    // ARG_MAX and causing E2BIG on spawn. The /proc environ is static (set at
+    // process start) and stays at its original size.
+    //
+    // When /proc is unavailable, fall back to process.env but warn if it's large.
     const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined) {
-        env[key] = value;
+    let envSource = 'process.env';
+    try {
+      const { readFileSync } = require('fs');
+      const raw = readFileSync('/proc/self/environ', 'utf8');
+      for (const entry of raw.split('\0')) {
+        const eq = entry.indexOf('=');
+        if (eq > 0) {
+          env[entry.substring(0, eq)] = entry.substring(eq + 1);
+        }
+      }
+      envSource = '/proc/self/environ';
+    } catch {
+      for (const [key, value] of Object.entries(process.env)) {
+        if (value !== undefined) {
+          env[key] = value;
+        }
       }
     }
+
     if (config.env) {
       for (const [key, value] of Object.entries(config.env)) {
         if (value !== undefined && value !== null) {
           env[key] = String(EnvironmentResolver.resolveValue(value));
         }
+      }
+    }
+
+    // Also pick up vars that were set after startup (GitHub credentials, etc.)
+    for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_CONFIG_COUNT']) {
+      const v = process.env[key];
+      if (v !== undefined) env[key] = v;
+    }
+    // Copy any GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* entries
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k.startsWith('GIT_CONFIG_') && v !== undefined) {
+        env[k] = v;
+      }
+    }
+
+    // Log if env is unexpectedly large
+    {
+      let envSize = 0;
+      for (const [k, v] of Object.entries(env)) {
+        envSize += k.length + 1 + v.length + 1;
+      }
+      if (envSize > 100000) {
+        const top5 = Object.entries(env)
+          .map(([k, v]) => [k, v.length] as const)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5);
+        logger.warn(
+          `[MCP-StdioSpawn] Large env (${envSource}): ${Object.keys(env).length} vars, ${envSize} bytes. ` +
+            `Top: ${top5.map(([k, l]) => `${k}=${l}b`).join(', ')}. Cmd: ${config.command}`
+        );
       }
     }
 

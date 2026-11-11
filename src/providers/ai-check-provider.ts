@@ -3130,6 +3130,13 @@ export class AICheckProvider extends CheckProvider {
    * Build a safe subset of environment variables for sandbox access.
    * Excludes sensitive keys like API keys, secrets, tokens.
    */
+  private static _stableEnvForSafe: Record<string, string> | null = null;
+
+  /**
+   * Build a safe env for sandboxed expressions (no secrets).
+   * Uses /proc/self/environ as the base to avoid copying transient vars
+   * that concurrent withTemporaryEnv() calls may have injected.
+   */
   private buildSafeEnv(): Record<string, string> {
     const sensitivePatterns = [
       /api.?key/i,
@@ -3140,10 +3147,28 @@ export class AICheckProvider extends CheckProvider {
       /auth/i,
       /private/i,
     ];
-    const safeEnv: Record<string, string> = {};
 
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value === undefined) continue;
+    // Read from /proc/self/environ (static initial env) to avoid copying
+    // transient env vars from concurrent tasks.
+    if (!AICheckProvider._stableEnvForSafe) {
+      AICheckProvider._stableEnvForSafe = {};
+      try {
+        const raw = require('fs').readFileSync('/proc/self/environ', 'utf8');
+        for (const entry of raw.split('\0')) {
+          const eq = entry.indexOf('=');
+          if (eq > 0) {
+            AICheckProvider._stableEnvForSafe[entry.substring(0, eq)] = entry.substring(eq + 1);
+          }
+        }
+      } catch {
+        for (const [k, v] of Object.entries(process.env)) {
+          if (v !== undefined) AICheckProvider._stableEnvForSafe[k] = v;
+        }
+      }
+    }
+
+    const safeEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(AICheckProvider._stableEnvForSafe)) {
       const isSensitive = sensitivePatterns.some(pattern => pattern.test(key));
       if (!isSensitive) {
         safeEnv[key] = value;

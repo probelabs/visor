@@ -1383,13 +1383,12 @@ export class WorktreeManager {
     command: string,
     options: { timeout?: number; env?: Record<string, string> } = {}
   ): Promise<GitCommandResult> {
-    // Merge provided env with process.env and add git-specific settings
-    // These settings prevent git from hanging on interactive prompts while
-    // still allowing OS-level credential helpers to work:
-    // - GIT_TERMINAL_PROMPT=0: Prevents terminal credential prompts
-    // - GIT_SSH_COMMAND: Disables SSH password prompts (BatchMode)
+    // Build env from /proc/self/environ (the static initial env) instead of
+    // spreading the JS process.env object. Concurrent tasks can inflate
+    // process.env via withTemporaryEnv(), pushing argv+envp past ARG_MAX
+    // and causing E2BIG on spawn.
     const gitEnv = {
-      ...process.env,
+      ...WorktreeManager.getStableEnv(),
       ...options.env,
       GIT_TERMINAL_PROMPT: '0',
       GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no',
@@ -1405,6 +1404,43 @@ export class WorktreeManager {
       stderr: result.stderr,
       exitCode: result.exitCode,
     };
+  }
+
+  private static _stableEnv: Record<string, string> | null = null;
+
+  /**
+   * Return the process's initial environment from /proc/self/environ,
+   * plus dynamic vars set after startup (GitHub auth, GIT_CONFIG).
+   */
+  private static getStableEnv(): Record<string, string> {
+    if (!WorktreeManager._stableEnv) {
+      WorktreeManager._stableEnv = {};
+      try {
+        const raw = require('fs').readFileSync('/proc/self/environ', 'utf8');
+        for (const entry of raw.split('\0')) {
+          const eq = entry.indexOf('=');
+          if (eq > 0) {
+            WorktreeManager._stableEnv[entry.substring(0, eq)] = entry.substring(eq + 1);
+          }
+        }
+      } catch {
+        for (const [k, v] of Object.entries(process.env)) {
+          if (v !== undefined) WorktreeManager._stableEnv[k] = v;
+        }
+      }
+    }
+    const result = { ...WorktreeManager._stableEnv };
+    // Merge in dynamic vars set after startup
+    for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_CONFIG_COUNT']) {
+      const v = process.env[key];
+      if (v !== undefined) result[key] = v;
+    }
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k.startsWith('GIT_CONFIG_') && v !== undefined) {
+        result[k] = v;
+      }
+    }
+    return result;
   }
 
   /**
