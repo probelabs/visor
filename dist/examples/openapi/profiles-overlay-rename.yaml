@@ -1,0 +1,3 @@
+actions:
+  - target: "$.paths['/profiles/{id}'].get.operationId"
+    update: getProfileFromFileOverlay

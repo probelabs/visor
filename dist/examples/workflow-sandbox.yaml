@@ -1,0 +1,43 @@
+version: "2.0"
+
+# Workflow with sandbox isolation
+# Defines sandboxes at the top level and assigns them to steps
+
+sandboxes:
+  secure:
+    engine: bubblewrap
+    network: false
+    read_only: true
+
+  dev:
+    engine: bubblewrap
+    network: true
+    bind_paths:
+      - host: ~/.gitconfig
+      - host: ~/.ssh
+
+# Default sandbox for all steps
+sandbox: secure
+
+steps:
+  read-source:
+    type: command
+    exec: "cat package.json | head -10"
+
+  git-info:
+    type: command
+    # Override: use dev sandbox for git operations that need SSH and config
+    sandbox: dev
+    exec: "git log --oneline -5"
+
+  lint:
+    type: command
+    depends_on: [read-source]
+    exec: "echo 'Lint passed'"
+
+  summary:
+    type: logger
+    depends_on: [git-info, lint]
+    message: |
+      Source read: {{ outputs["read-source"] | json }}
+      Git info: {{ outputs["git-info"] | json }}

@@ -751,6 +751,40 @@ export class Scheduler {
   }
 
   /**
+   * Test-fire a schedule without modifying its state.
+   * Executes the workflow/reminder and sends output, but does NOT update
+   * runCount, lastRunAt, or mark one-time schedules as completed.
+   */
+  async testSchedule(scheduleId: string): Promise<ScheduleExecutionResult> {
+    const schedule = await this.store.getAsync(scheduleId);
+    if (!schedule) {
+      return { success: false, error: `Schedule ${scheduleId} not found`, executionTimeMs: 0 };
+    }
+
+    logger.info(`[Scheduler] Test-firing schedule ${schedule.id}`);
+    const startTime = Date.now();
+
+    try {
+      const output = await this.executeWorkflow(schedule);
+      const result: ScheduleExecutionResult = {
+        success: true,
+        output,
+        executionTimeMs: Date.now() - startTime,
+      };
+      await this.sendResult(schedule, result);
+      return result;
+    } catch (error) {
+      const result: ScheduleExecutionResult = {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        executionTimeMs: Date.now() - startTime,
+      };
+      await this.sendResult(schedule, result);
+      return result;
+    }
+  }
+
+  /**
    * Helper to prepare execution environment - reduces duplication between workflow and reminder execution
    */
   private prepareExecution(

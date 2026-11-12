@@ -142,6 +142,7 @@ export type ScheduleAction =
   | 'cancel'
   | 'pause'
   | 'resume'
+  | 'test'
   | 'create_trigger'
   | 'list_triggers'
   | 'delete_trigger'
@@ -386,6 +387,9 @@ export async function handleScheduleAction(
     case 'resume':
       return handlePauseResume(args, context, store, 'active');
 
+    case 'test':
+      return handleTest(args, context, store);
+
     case 'create_trigger':
       return handleCreateTrigger(args, context, store);
 
@@ -402,7 +406,7 @@ export async function handleScheduleAction(
       return {
         success: false,
         message: `Unknown action: ${args.action}`,
-        error: `Supported actions: create, list, cancel, pause, resume, create_trigger, list_triggers, delete_trigger, update_trigger`,
+        error: `Supported actions: create, list, cancel, pause, resume, test, create_trigger, list_triggers, delete_trigger, update_trigger`,
       };
   }
 }
@@ -759,6 +763,55 @@ async function handlePauseResume(
   };
 }
 
+/**
+ * Handle test action — fire a schedule immediately without modifying its state.
+ */
+async function handleTest(
+  args: ScheduleToolArgs,
+  context: ScheduleToolContext,
+  store: ScheduleStore
+): Promise<ScheduleToolResult> {
+  if (!args.schedule_id) {
+    return {
+      success: false,
+      message: 'Missing schedule ID',
+      error: 'Please specify which schedule to test.',
+    };
+  }
+
+  const userSchedules = await store.getByCreatorAsync(context.userId);
+  let schedule = userSchedules.find(s => s.id === args.schedule_id);
+  if (!schedule) {
+    schedule = userSchedules.find(s => s.id.startsWith(args.schedule_id!));
+  }
+  if (!schedule) {
+    return {
+      success: false,
+      message: 'Schedule not found',
+      error: `Could not find schedule with ID "${args.schedule_id}" in your schedules.`,
+    };
+  }
+
+  const scheduler = getScheduler();
+  if (!scheduler) {
+    return {
+      success: false,
+      message: 'Scheduler not running',
+      error: 'The scheduler is not active. Cannot test-fire schedules.',
+    };
+  }
+
+  logger.info(`[ScheduleTool] Test-firing schedule ${schedule.id} for user ${context.userId}`);
+  const result = await scheduler.testSchedule(schedule.id);
+
+  return {
+    success: result.success,
+    message: result.success
+      ? `**Test fired!** Schedule "${schedule.originalExpression || schedule.id}" executed successfully (${result.executionTimeMs}ms). The schedule was NOT modified — it will still fire at its normal time.`
+      : `**Test failed:** ${result.error}`,
+  };
+}
+
 // --- Message Trigger Handlers ---
 
 /**
@@ -1028,6 +1081,7 @@ ACTIONS:
 - list: Show user's active schedules
 - cancel: Remove a schedule by ID
 - pause/resume: Temporarily disable/enable a schedule
+- test: Fire a schedule immediately for testing (does NOT modify the schedule — it keeps its normal timing)
 
 MESSAGE-BASED TRIGGERS:
 In addition to time-based schedules, this tool can create/manage message-based triggers that react to
@@ -1157,13 +1211,14 @@ User: "disable trigger abc123"
             'cancel',
             'pause',
             'resume',
+            'test',
             'create_trigger',
             'list_triggers',
             'delete_trigger',
             'update_trigger',
           ],
           description:
-            'What to do: create/list/cancel/pause/resume for time-based schedules; create_trigger/list_triggers/delete_trigger/update_trigger for message-based triggers',
+            'What to do: create/list/cancel/pause/resume/test for time-based schedules; create_trigger/list_triggers/delete_trigger/update_trigger for message-based triggers. test fires a schedule immediately without modifying it.',
         },
         // WHAT to do
         reminder_text: {
