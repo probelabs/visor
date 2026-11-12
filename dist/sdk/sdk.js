@@ -42097,150 +42097,30 @@ var init_scheduler = __esm({
         return { message: "Workflow completed", workflow: schedule.workflow };
       }
       /**
-       * Execute a simple reminder by running it through the visor pipeline
-       * Treats the reminder text as if the user sent it as a message
+       * Execute a simple reminder by posting its text directly.
+       *
+       * Previous versions ran the reminder through the full visor AI pipeline,
+       * but that caused intent misrouting — reminders got classified as unrelated
+       * intents (e.g. git analysis) and never reached the user.  Simple reminders
+       * now bypass the pipeline entirely; the output adapter posts the text.
+       * For AI-processed scheduled tasks, use a workflow schedule instead.
        */
       async executeSimpleReminder(schedule) {
         const reminderText = schedule.workflowInputs?.text;
         if (!reminderText) {
           return { message: "Reminder!", type: "simple_reminder" };
         }
-        const allChecks = Object.keys(this.visorConfig.checks || {});
-        if (allChecks.length === 0) {
-          logger.warn("[Scheduler] No checks configured, returning reminder text directly");
-          return { message: reminderText, type: "simple_reminder" };
-        }
-        logger.info(`[Scheduler] Running reminder through visor pipeline (${allChecks.length} checks)`);
-        const channel = schedule.outputContext?.target || "";
-        const threadId = schedule.outputContext?.threadId;
-        let threadMessages = [];
-        let additionalPayload = {};
-        if (this.contextEnricher?.enrichContext) {
-          try {
-            const enriched = await this.contextEnricher.enrichContext(schedule);
-            threadMessages = enriched.threadMessages || [];
-            additionalPayload = enriched.additionalPayload || {};
-            if (threadMessages.length > 0) {
-              logger.debug(
-                `[Scheduler] Context enricher provided ${threadMessages.length} thread messages`
-              );
-            }
-          } catch (error) {
-            logger.warn(
-              `[Scheduler] Context enrichment failed: ${error instanceof Error ? error.message : error}`
-            );
-          }
-        }
-        let contextualReminderText = reminderText;
+        let message = reminderText;
         if (schedule.isRecurring && schedule.previousResponse) {
-          contextualReminderText = `${reminderText}
+          message = `${reminderText}
 
----
-**Previous Response (for context):**
-${schedule.previousResponse}
----
-
-Please provide an updated response based on the reminder above. You may reference or build upon the previous response if relevant.`;
+_Previous update:_
+>${schedule.previousResponse.split("\n").join("\n>")}`;
         }
-        const conversationData = {
-          current: {
-            user: schedule.creatorName || schedule.creatorId,
-            text: contextualReminderText
-          },
-          messages: threadMessages.length > 0 ? [
-            ...threadMessages,
-            { user: schedule.creatorName || schedule.creatorId, text: contextualReminderText }
-          ] : [{ user: schedule.creatorName || schedule.creatorId, text: contextualReminderText }]
-        };
-        const syntheticPayload = {
-          event: {
-            type: "message",
-            subtype: "scheduled_reminder",
-            text: contextualReminderText,
-            user: schedule.creatorId,
-            channel,
-            ts: String(Date.now() / 1e3),
-            thread_ts: threadId
-          },
-          // Include both for compatibility (slack_conversation for existing checks, conversation for generic)
-          slack_conversation: conversationData,
-          conversation: conversationData,
-          // Include schedule context for any checks that need it
-          schedule: {
-            id: schedule.id,
-            isReminder: true,
-            creatorId: schedule.creatorId,
-            creatorContext: schedule.creatorContext,
-            previousResponse: schedule.previousResponse
-          },
-          // Merge any additional frontend-specific payload
-          ...additionalPayload
-        };
-        const endpoint = this.contextEnricher?.getWebhookEndpoint?.() || this.visorConfig.slack?.endpoint || "/bots/slack/support";
-        const webhookData = /* @__PURE__ */ new Map();
-        webhookData.set(endpoint, syntheticPayload);
-        if (this.contextEnricher?.prepareExecution) {
-          try {
-            await this.contextEnricher.prepareExecution(schedule, reminderText);
-          } catch (error) {
-            logger.warn(
-              `[Scheduler] Execution preparation failed: ${error instanceof Error ? error.message : error}`
-            );
-          }
-        }
-        try {
-          const { refreshGitHubCredentials: refreshGitHubCredentials2 } = await Promise.resolve().then(() => (init_github_auth(), github_auth_exports));
-          await refreshGitHubCredentials2();
-        } catch {
-        }
-        const {
-          engine: runEngine,
-          config: cfgForRun,
-          responseRef
-        } = this.prepareExecution(schedule, reminderText);
-        try {
-          const reminderExecFn = () => runEngine.executeChecks({
-            checks: allChecks,
-            showDetails: true,
-            outputFormat: "json",
-            config: cfgForRun,
-            webhookContext: { webhookData, eventType: "schedule" },
-            debug: process.env.VISOR_DEBUG === "true"
-          });
-          if (this.taskStore) {
-            const { trackExecution: trackExecution2 } = await Promise.resolve().then(() => (init_track_execution(), track_execution_exports));
-            await trackExecution2(
-              {
-                taskStore: this.taskStore,
-                source: "scheduler",
-                workflowId: schedule.workflow,
-                configPath: this.configPath,
-                messageText: reminderText || `Reminder: ${schedule.id}`,
-                metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring }
-              },
-              reminderExecFn
-            );
-          } else {
-            await reminderExecFn();
-          }
-          if (schedule.isRecurring && responseRef.captured) {
-            await this.store.updateAsync(schedule.id, { previousResponse: responseRef.captured });
-            logger.info(
-              `[Scheduler] Saved previousResponse for recurring schedule ${schedule.id} (${responseRef.captured.length} chars)`
-            );
-          }
-          return {
-            message: "Reminder processed through pipeline",
-            type: "pipeline_executed",
-            reminderText,
-            capturedResponse: responseRef.captured
-          };
-        } catch (error) {
-          logger.error(
-            `[Scheduler] Failed to run reminder through pipeline: ${error instanceof Error ? error.message : error}`
-          );
-          return { message: reminderText, type: "simple_reminder" };
-        }
+        logger.info(
+          `[Scheduler] Posting reminder directly for schedule ${schedule.id} (${message.length} chars)`
+        );
+        return { message, type: "simple_reminder" };
       }
       /**
        * Handle schedule execution failure
@@ -42344,20 +42224,22 @@ function checkSchedulePermissions(context2, workflow, requestedScheduleType) {
   const permissions = context2.permissions;
   const scheduleType = requestedScheduleType || context2.scheduleType || "personal";
   if (context2.allowedScheduleType && scheduleType !== context2.allowedScheduleType) {
-    const contextNames = {
-      personal: "a direct message (DM)",
-      channel: "a channel",
-      dm: "a group DM"
-    };
-    const targetNames = {
-      personal: "personal",
-      channel: "channel",
-      dm: "group"
-    };
-    return {
-      allowed: false,
-      reason: `From ${contextNames[context2.allowedScheduleType]}, you can only create ${targetNames[context2.allowedScheduleType]} schedules. To create a ${targetNames[scheduleType]} schedule, please use the appropriate context.`
-    };
+    if (!context2.explicitTarget) {
+      const contextNames = {
+        personal: "a direct message (DM)",
+        channel: "a channel",
+        dm: "a group DM"
+      };
+      const targetNames = {
+        personal: "personal",
+        channel: "channel",
+        dm: "group"
+      };
+      return {
+        allowed: false,
+        reason: `From ${contextNames[context2.allowedScheduleType]}, you can only create ${targetNames[context2.allowedScheduleType]} schedules. To create a ${targetNames[scheduleType]} schedule, please use the appropriate context.`
+      };
+    }
   }
   if (!permissions) {
     return { allowed: true };
@@ -42544,6 +42426,9 @@ async function handleCreate(args, context2, store) {
     scheduleType = "channel";
   } else if (args.target_type === "user") {
     scheduleType = "dm";
+  }
+  if (args.target_type && args.target_id) {
+    context2 = { ...context2, explicitTarget: true };
   }
   const workflowName = args.workflow || "reminder";
   const permissionCheck = checkSchedulePermissions(context2, workflowName, scheduleType);
@@ -84284,8 +84169,9 @@ var init_slack_frontend = __esm({
         const payload = this.getInboundSlackPayload(ctx);
         const ev = payload?.event;
         const channel = String(ev?.channel || "");
-        const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
-        if (!channel || !threadTs) {
+        const isScheduledReminder = ev?.subtype === "scheduled_reminder";
+        const threadTs = isScheduledReminder ? String(ev?.thread_ts || "") : String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
+        if (!channel || !threadTs && !isScheduledReminder) {
           try {
             ctx.logger.warn(
               `[slack-frontend] skip posting error notice: missing channel/thread (channel=${channel || "-"} thread=${threadTs || "-"})`
@@ -84314,12 +84200,12 @@ ${suffix}`;
           const postResult = await slack.chat.postMessage({
             channel,
             text: chunk,
-            thread_ts: threadTs
+            ...threadTs ? { thread_ts: threadTs } : {}
           });
           if (!postResult || postResult.ok === false || !postResult.ok && !postResult.ts) {
             try {
               ctx.logger.warn(
-                `[slack-frontend] failed to post error notice chunk ${i + 1}/${chunks.length} to ${channel} thread=${threadTs} check=${checkId || "run"} error=${postResult?.error || "unknown_error"}`
+                `[slack-frontend] failed to post error notice chunk ${i + 1}/${chunks.length} to ${channel} thread=${threadTs || "top-level"} check=${checkId || "run"} error=${postResult?.error || "unknown_error"}`
               );
             } catch {
             }
@@ -84464,10 +84350,17 @@ ${suffix}`;
           const payload = this.getInboundSlackPayload(ctx);
           const ev = payload?.event;
           const channel = String(ev?.channel || "");
-          const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
-          if (!channel || !threadTs) {
+          const isScheduledReminder = ev?.subtype === "scheduled_reminder";
+          const threadTs = isScheduledReminder ? String(ev?.thread_ts || "") : String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
+          if (!channel) {
             ctx.logger.warn(
-              `[slack-frontend] skip posting AI reply for ${checkId}: missing channel/thread (channel=${channel || "-"} thread=${threadTs || "-"})`
+              `[slack-frontend] skip posting AI reply for ${checkId}: missing channel`
+            );
+            return;
+          }
+          if (!threadTs && !isScheduledReminder) {
+            ctx.logger.warn(
+              `[slack-frontend] skip posting AI reply for ${checkId}: missing thread (channel=${channel || "-"} thread=${threadTs || "-"})`
             );
             return;
           }
@@ -84535,7 +84428,7 @@ ${errorMessages}`;
                     content: pngBuffer,
                     filename,
                     channel,
-                    thread_ts: threadTs,
+                    ...threadTs ? { thread_ts: threadTs } : {},
                     title: `Diagram ${i + 1}`
                   });
                   if (uploadResult.ok) {
@@ -84575,7 +84468,7 @@ ${errorMessages}`;
                   content: buffer,
                   filename: section.filename,
                   channel,
-                  thread_ts: threadTs,
+                  ...threadTs ? { thread_ts: threadTs } : {},
                   title: section.filename
                 });
                 if (uploadResult.ok) {
@@ -84614,18 +84507,18 @@ ${suffix}`;
             const postResult = await slack.chat.postMessage({
               channel,
               text: chunk,
-              thread_ts: threadTs
+              ...threadTs ? { thread_ts: threadTs } : {}
             });
             if (!postResult || postResult.ok === false || !postResult.ok && !postResult.ts) {
               ctx.logger.warn(
-                `[slack-frontend] failed to post AI reply chunk ${i + 1}/${chunks.length} for ${checkId} to ${channel} thread=${threadTs} error=${postResult?.error || "unknown_error"}`
+                `[slack-frontend] failed to post AI reply chunk ${i + 1}/${chunks.length} for ${checkId} to ${channel} thread=${threadTs || "top-level"} error=${postResult?.error || "unknown_error"}`
               );
               return;
             }
             lastPostResult = postResult;
           }
           ctx.logger.info(
-            `[slack-frontend] posted AI reply (${chunks.length} chunk(s)) for ${checkId} to ${channel} thread=${threadTs} ts=${lastPostResult?.ts || "-"}`
+            `[slack-frontend] posted AI reply (${chunks.length} chunk(s)) for ${checkId} to ${channel} thread=${threadTs || "top-level"} ts=${lastPostResult?.ts || "-"}`
           );
           const responseCapture = ctx.responseCapture;
           if (responseCapture && typeof responseCapture === "function") {
@@ -84669,7 +84562,7 @@ ${suffix}`;
               content: buffer,
               filename: section.filename,
               channel,
-              thread_ts: threadTs,
+              ...threadTs ? { thread_ts: threadTs } : {},
               title: section.filename
             });
             if (uploadResult.ok) {
