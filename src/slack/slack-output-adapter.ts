@@ -60,11 +60,11 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
         return;
       }
 
-      // Post message
+      // Post message — omit thread_ts for top-level channel posts
       const postResult = await this.client.chat.postMessage({
         channel: targetChannel,
         text: message,
-        thread_ts: outputContext.threadId,
+        ...(outputContext.threadId ? { thread_ts: outputContext.threadId } : {}),
       });
 
       if (!postResult?.ok) {

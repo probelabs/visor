@@ -335,8 +335,11 @@ export class SlackFrontend implements Frontend {
     const payload = this.getInboundSlackPayload(ctx);
     const ev: any = payload?.event;
     const channel = String(ev?.channel || '');
-    const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
-    if (!channel || !threadTs) {
+    const isScheduledReminder = ev?.subtype === 'scheduled_reminder';
+    const threadTs = isScheduledReminder
+      ? String(ev?.thread_ts || '')
+      : String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
+    if (!channel || (!threadTs && !isScheduledReminder)) {
       try {
         ctx.logger.warn(
           `[slack-frontend] skip posting error notice: missing channel/thread (channel=${
@@ -365,12 +368,12 @@ export class SlackFrontend implements Frontend {
       const postResult = await slack.chat.postMessage({
         channel,
         text: chunk,
-        thread_ts: threadTs,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
       });
       if (!postResult || postResult.ok === false || (!postResult.ok && !postResult.ts)) {
         try {
           ctx.logger.warn(
-            `[slack-frontend] failed to post error notice chunk ${i + 1}/${chunks.length} to ${channel} thread=${threadTs} check=${
+            `[slack-frontend] failed to post error notice chunk ${i + 1}/${chunks.length} to ${channel} thread=${threadTs || 'top-level'} check=${
               checkId || 'run'
             } error=${postResult?.error || 'unknown_error'}`
           );
@@ -561,10 +564,21 @@ export class SlackFrontend implements Frontend {
       const payload = this.getInboundSlackPayload(ctx);
       const ev: any = payload?.event;
       const channel = String(ev?.channel || '');
-      const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
-      if (!channel || !threadTs) {
+      // For scheduled reminders (subtype='scheduled_reminder') posting to a channel,
+      // thread_ts may be absent — post as a top-level message, don't fall back to ev.ts.
+      const isScheduledReminder = ev?.subtype === 'scheduled_reminder';
+      const threadTs = isScheduledReminder
+        ? String(ev?.thread_ts || '')
+        : String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
+      if (!channel) {
         ctx.logger.warn(
-          `[slack-frontend] skip posting AI reply for ${checkId}: missing channel/thread (channel=${
+          `[slack-frontend] skip posting AI reply for ${checkId}: missing channel`
+        );
+        return;
+      }
+      if (!threadTs && !isScheduledReminder) {
+        ctx.logger.warn(
+          `[slack-frontend] skip posting AI reply for ${checkId}: missing thread (channel=${
             channel || '-'
           } thread=${threadTs || '-'})`
         );
@@ -652,7 +666,7 @@ export class SlackFrontend implements Frontend {
                 content: pngBuffer,
                 filename,
                 channel,
-                thread_ts: threadTs,
+                ...(threadTs ? { thread_ts: threadTs } : {}),
                 title: `Diagram ${i + 1}`,
               });
               if (uploadResult.ok) {
@@ -700,7 +714,7 @@ export class SlackFrontend implements Frontend {
               content: buffer,
               filename: section.filename,
               channel,
-              thread_ts: threadTs,
+              ...(threadTs ? { thread_ts: threadTs } : {}),
               title: section.filename,
             });
             if (uploadResult.ok) {
@@ -743,11 +757,11 @@ export class SlackFrontend implements Frontend {
         const postResult = await slack.chat.postMessage({
           channel,
           text: chunk,
-          thread_ts: threadTs,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
         });
         if (!postResult || postResult.ok === false || (!postResult.ok && !postResult.ts)) {
           ctx.logger.warn(
-            `[slack-frontend] failed to post AI reply chunk ${i + 1}/${chunks.length} for ${checkId} to ${channel} thread=${threadTs} error=${
+            `[slack-frontend] failed to post AI reply chunk ${i + 1}/${chunks.length} for ${checkId} to ${channel} thread=${threadTs || 'top-level'} error=${
               postResult?.error || 'unknown_error'
             }`
           );
@@ -756,7 +770,7 @@ export class SlackFrontend implements Frontend {
         lastPostResult = postResult;
       }
       ctx.logger.info(
-        `[slack-frontend] posted AI reply (${chunks.length} chunk(s)) for ${checkId} to ${channel} thread=${threadTs} ts=${
+        `[slack-frontend] posted AI reply (${chunks.length} chunk(s)) for ${checkId} to ${channel} thread=${threadTs || 'top-level'} ts=${
           lastPostResult?.ts || '-'
         }`
       );
@@ -815,7 +829,7 @@ export class SlackFrontend implements Frontend {
           content: buffer,
           filename: section.filename,
           channel,
-          thread_ts: threadTs,
+          ...(threadTs ? { thread_ts: threadTs } : {}),
           title: section.filename,
         });
         if (uploadResult.ok) {

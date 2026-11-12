@@ -70,25 +70,26 @@ function checkSchedulePermissions(
   const permissions = context.permissions;
   const scheduleType = requestedScheduleType || context.scheduleType || 'personal';
 
-  // Enforce context-based restrictions first
-  // From a DM, can only create personal schedules
-  // From a channel, can only create channel schedules
-  // From a group DM, can only create dm/group schedules
+  // Enforce context-based restrictions — but allow cross-context when the user
+  // explicitly provides a target (e.g. asking in DMs to post to a channel).
   if (context.allowedScheduleType && scheduleType !== context.allowedScheduleType) {
-    const contextNames: Record<ScheduleType, string> = {
-      personal: 'a direct message (DM)',
-      channel: 'a channel',
-      dm: 'a group DM',
-    };
-    const targetNames: Record<ScheduleType, string> = {
-      personal: 'personal',
-      channel: 'channel',
-      dm: 'group',
-    };
-    return {
-      allowed: false,
-      reason: `From ${contextNames[context.allowedScheduleType]}, you can only create ${targetNames[context.allowedScheduleType]} schedules. To create a ${targetNames[scheduleType]} schedule, please use the appropriate context.`,
-    };
+    // Allow if the user explicitly targeted a different context via target_type + target_id
+    if (!context.explicitTarget) {
+      const contextNames: Record<ScheduleType, string> = {
+        personal: 'a direct message (DM)',
+        channel: 'a channel',
+        dm: 'a group DM',
+      };
+      const targetNames: Record<ScheduleType, string> = {
+        personal: 'personal',
+        channel: 'channel',
+        dm: 'group',
+      };
+      return {
+        allowed: false,
+        reason: `From ${contextNames[context.allowedScheduleType]}, you can only create ${targetNames[context.allowedScheduleType]} schedules. To create a ${targetNames[scheduleType]} schedule, please use the appropriate context.`,
+      };
+    }
   }
 
   // No permissions configured - allow everything (backwards compatible)
@@ -245,12 +246,13 @@ export interface ScheduleToolContext {
   permissions?: SchedulePermissions;
   /**
    * Allowed schedule type based on originating context.
-   * When set, only schedules of this type can be created/managed.
-   * - From DM: only 'personal' allowed
-   * - From channel: only 'channel' allowed
-   * - From group DM: only 'dm' allowed (targeting the group)
+   * When set, only schedules of this type can be created/managed
+   * — unless explicitTarget is true.
    */
   allowedScheduleType?: ScheduleType;
+  /** True when the AI tool call includes an explicit target_type + target_id,
+   *  indicating the user intentionally wants cross-context delivery. */
+  explicitTarget?: boolean;
   /** Origin of the current execution, used to prevent scheduler recursion. */
   executionSource?: 'user' | 'scheduler';
 }
@@ -487,6 +489,11 @@ async function handleCreate(
     scheduleType = 'channel';
   } else if (args.target_type === 'user') {
     scheduleType = 'dm'; // Sending to a specific user is a DM schedule
+  }
+
+  // Mark explicit cross-context target so permission check allows it
+  if (args.target_type && args.target_id) {
+    context = { ...context, explicitTarget: true };
   }
 
   // Check permissions

@@ -886,8 +886,13 @@ export class Scheduler {
   }
 
   /**
-   * Execute a simple reminder by running it through the visor pipeline
-   * Treats the reminder text as if the user sent it as a message
+   * Execute a simple reminder by posting its text directly.
+   *
+   * Previous versions ran the reminder through the full visor AI pipeline,
+   * but that caused intent misrouting — reminders got classified as unrelated
+   * intents (e.g. git analysis) and never reached the user.  Simple reminders
+   * now bypass the pipeline entirely; the output adapter posts the text.
+   * For AI-processed scheduled tasks, use a workflow schedule instead.
    */
   private async executeSimpleReminder(schedule: Schedule): Promise<unknown> {
     const reminderText = schedule.workflowInputs?.text as string;
@@ -895,180 +900,16 @@ export class Scheduler {
       return { message: 'Reminder!', type: 'simple_reminder' };
     }
 
-    // Get all checks from config
-    const allChecks = Object.keys(this.visorConfig.checks || {});
-    if (allChecks.length === 0) {
-      logger.warn('[Scheduler] No checks configured, returning reminder text directly');
-      return { message: reminderText, type: 'simple_reminder' };
-    }
-
-    logger.info(`[Scheduler] Running reminder through visor pipeline (${allChecks.length} checks)`);
-
-    // Use context enricher to get thread history and other frontend-specific data
-    const channel = schedule.outputContext?.target || '';
-    const threadId = schedule.outputContext?.threadId;
-    let threadMessages: Array<{ user: string; text: string }> = [];
-    let additionalPayload: Record<string, unknown> = {};
-
-    if (this.contextEnricher?.enrichContext) {
-      try {
-        const enriched = await this.contextEnricher.enrichContext(schedule);
-        threadMessages = enriched.threadMessages || [];
-        additionalPayload = enriched.additionalPayload || {};
-        if (threadMessages.length > 0) {
-          logger.debug(
-            `[Scheduler] Context enricher provided ${threadMessages.length} thread messages`
-          );
-        }
-      } catch (error) {
-        logger.warn(
-          `[Scheduler] Context enrichment failed: ${error instanceof Error ? error.message : error}`
-        );
-      }
-    }
-
-    // Build context message that includes previous response if available
-    let contextualReminderText = reminderText;
+    let message = reminderText;
     if (schedule.isRecurring && schedule.previousResponse) {
-      contextualReminderText = `${reminderText}
-
----
-**Previous Response (for context):**
-${schedule.previousResponse}
----
-
-Please provide an updated response based on the reminder above. You may reference or build upon the previous response if relevant.`;
+      message = `${reminderText}\n\n_Previous update:_\n>${schedule.previousResponse.split('\n').join('\n>')}`;
     }
 
-    // Build synthetic event payload
-    // Keep slack_conversation for backward compatibility with existing checks
-    const conversationData = {
-      current: {
-        user: schedule.creatorName || schedule.creatorId,
-        text: contextualReminderText,
-      },
-      messages:
-        threadMessages.length > 0
-          ? [
-              ...threadMessages,
-              { user: schedule.creatorName || schedule.creatorId, text: contextualReminderText },
-            ]
-          : [{ user: schedule.creatorName || schedule.creatorId, text: contextualReminderText }],
-    };
+    logger.info(
+      `[Scheduler] Posting reminder directly for schedule ${schedule.id} (${message.length} chars)`
+    );
 
-    const syntheticPayload = {
-      event: {
-        type: 'message',
-        subtype: 'scheduled_reminder',
-        text: contextualReminderText,
-        user: schedule.creatorId,
-        channel: channel,
-        ts: String(Date.now() / 1000),
-        thread_ts: threadId,
-      },
-      // Include both for compatibility (slack_conversation for existing checks, conversation for generic)
-      slack_conversation: conversationData,
-      conversation: conversationData,
-      // Include schedule context for any checks that need it
-      schedule: {
-        id: schedule.id,
-        isReminder: true,
-        creatorId: schedule.creatorId,
-        creatorContext: schedule.creatorContext,
-        previousResponse: schedule.previousResponse,
-      },
-      // Merge any additional frontend-specific payload
-      ...additionalPayload,
-    };
-
-    // Get webhook endpoint from enricher or use Slack config or default
-    const endpoint =
-      this.contextEnricher?.getWebhookEndpoint?.() ||
-      (this.visorConfig as any).slack?.endpoint ||
-      '/bots/slack/support';
-
-    // Create webhook context map
-    const webhookData = new Map<string, unknown>();
-    webhookData.set(endpoint, syntheticPayload);
-
-    // Allow context enricher to prepare execution environment (e.g., seed prompt state)
-    if (this.contextEnricher?.prepareExecution) {
-      try {
-        await this.contextEnricher.prepareExecution(schedule, reminderText);
-      } catch (error) {
-        logger.warn(
-          `[Scheduler] Execution preparation failed: ${
-            error instanceof Error ? error.message : error
-          }`
-        );
-      }
-    }
-
-    // Refresh GitHub App installation token (no-op if not using App auth or still fresh)
-    try {
-      const { refreshGitHubCredentials } = await import('../github-auth');
-      await refreshGitHubCredentials();
-    } catch {}
-
-    // Use common execution helper
-    const {
-      engine: runEngine,
-      config: cfgForRun,
-      responseRef,
-    } = this.prepareExecution(schedule, reminderText);
-
-    try {
-      // Execute ALL checks - let the visor engine route based on config
-      const reminderExecFn = () =>
-        runEngine.executeChecks({
-          checks: allChecks,
-          showDetails: true,
-          outputFormat: 'json',
-          config: cfgForRun,
-          webhookContext: { webhookData, eventType: 'schedule' },
-          debug: process.env.VISOR_DEBUG === 'true',
-        } as any);
-      if (this.taskStore) {
-        const { trackExecution } = await import('../agent-protocol/track-execution');
-        await trackExecution(
-          {
-            taskStore: this.taskStore,
-            source: 'scheduler',
-            workflowId: schedule.workflow,
-            configPath: this.configPath,
-            messageText: reminderText || `Reminder: ${schedule.id}`,
-            metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring },
-          },
-          reminderExecFn
-        );
-      } else {
-        await reminderExecFn();
-      }
-
-      // The visor pipeline handles output via frontends (Slack, etc.)
-      // We return success - the actual response was posted by the pipeline
-
-      // Save captured response for recurring reminders (previousResponse feature)
-      if (schedule.isRecurring && responseRef.captured) {
-        await this.store.updateAsync(schedule.id, { previousResponse: responseRef.captured });
-        logger.info(
-          `[Scheduler] Saved previousResponse for recurring schedule ${schedule.id} (${responseRef.captured.length} chars)`
-        );
-      }
-
-      return {
-        message: 'Reminder processed through pipeline',
-        type: 'pipeline_executed',
-        reminderText,
-        capturedResponse: responseRef.captured,
-      };
-    } catch (error) {
-      logger.error(
-        `[Scheduler] Failed to run reminder through pipeline: ${error instanceof Error ? error.message : error}`
-      );
-      // Fallback to just returning the reminder text for posting
-      return { message: reminderText, type: 'simple_reminder' };
-    }
+    return { message, type: 'simple_reminder' };
   }
 
   /**
