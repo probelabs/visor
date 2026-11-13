@@ -5257,7 +5257,7 @@ async function executeWorkflowAsTool(workflowId, args, context2, argsOverrides) 
     ...args,
     ...argsOverrides
   };
-  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-HKCC7T5F.mjs");
+  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-CEGPFKOE.mjs");
   const provider = new WorkflowCheckProvider2();
   const checkConfig = {
     type: "workflow",
@@ -16851,7 +16851,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const map = options?.webhookContext?.webhookData;
             if (map) {
-              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-MEURQM52.mjs");
+              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-AJVB7ISF.mjs");
               const reg = CheckProviderRegistry2.getInstance();
               const p = reg.getProvider("http_input");
               if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -17019,7 +17019,7 @@ var init_state_machine_execution_engine = __esm({
           if (onRetryCheckpoint) await onRetryCheckpoint(retryCheckpoint);
         }
         try {
-          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-MEURQM52.mjs");
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-AJVB7ISF.mjs");
           const registry = CheckProviderRegistry2.getInstance();
           registry.setCustomTools(configWithTagFilter.tools || {});
         } catch (error) {
@@ -17077,7 +17077,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const webhookData = this.executionContext?.webhookContext?.webhookData;
             if (webhookData instanceof Map) {
-              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-CTU2CLM5.mjs");
+              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-CJLYKLIG.mjs");
               const slackCtx = extractSlackContext2(webhookData);
               if (slackCtx) {
                 const payload = Array.from(webhookData.values())[0];
@@ -19035,10 +19035,21 @@ async function handleCreate(args, context2, store) {
 }
 async function handleList(context2, store) {
   const allUserSchedules = await store.getByCreatorAsync(context2.userId);
-  const schedules = allUserSchedules.filter((s) => s.status !== "completed");
-  let filteredSchedules = schedules;
+  const userSchedules = allUserSchedules.filter((s) => s.status !== "completed");
+  let channelSchedules = [];
+  if (context2.allowedScheduleType === "channel" && context2.channelId) {
+    const allActive = await store.getActiveSchedulesAsync();
+    channelSchedules = allActive.filter((s) => {
+      if (s.creatorId === context2.userId) return false;
+      if (s.status === "completed") return false;
+      const target = s.outputContext?.target || "";
+      return target === context2.channelId;
+    });
+  }
+  const combined = [...userSchedules, ...channelSchedules];
+  let filteredSchedules = combined;
   if (context2.allowedScheduleType) {
-    filteredSchedules = schedules.filter((s) => {
+    filteredSchedules = combined.filter((s) => {
       const scheduleOutputType = s.outputContext?.type;
       if (!scheduleOutputType || scheduleOutputType === "none") {
         return context2.allowedScheduleType === "personal";
@@ -19153,6 +19164,14 @@ async function handleTest(args, context2, store) {
   let schedule = userSchedules.find((s) => s.id === args.schedule_id);
   if (!schedule) {
     schedule = userSchedules.find((s) => s.id.startsWith(args.schedule_id));
+  }
+  if (!schedule && context2.channelId) {
+    const allActive = await store.getActiveSchedulesAsync();
+    const channelSchedules = allActive.filter((s) => s.outputContext?.target === context2.channelId);
+    schedule = channelSchedules.find((s) => s.id === args.schedule_id);
+    if (!schedule) {
+      schedule = channelSchedules.find((s) => s.id.startsWith(args.schedule_id));
+    }
   }
   if (!schedule) {
     return {
@@ -19658,7 +19677,8 @@ function buildScheduleToolContext(sources, availableWorkflows, permissions, outp
       scheduleType: finalScheduleType,
       permissions,
       allowedScheduleType,
-      executionSource
+      executionSource,
+      channelId: sources.slackContext.channelId
     };
   }
   if (sources.githubContext) {
@@ -19951,7 +19971,8 @@ async function executeScheduleTool(args, slackContext, slackClient, availableWor
         userId: slackContext.userId,
         userName: slackContext.userName,
         timezone: timezone || "UTC",
-        channelType: slackContext.channelType
+        channelType: slackContext.channelType,
+        channelId: slackContext.channel
       }
     },
     availableWorkflows,
@@ -46136,8 +46157,8 @@ function buildBuiltinGlobals(opts) {
   const asyncFunctionNames = /* @__PURE__ */ new Set();
   const scheduleFn = async (args = {}) => {
     try {
-      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-CTNWBUHD.mjs");
-      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-CTU2CLM5.mjs");
+      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-LMIHQ6V4.mjs");
+      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-CJLYKLIG.mjs");
       const parentCtx = opts.sessionInfo?._parentContext;
       const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
       const webhookEventType = parentCtx?.webhookContext?.eventType || parentCtx?.prInfo?.eventContext?.eventType;
@@ -50591,4 +50612,4 @@ undici/lib/fetch/body.js:
 undici/lib/websocket/frame.js:
   (*! ws. MIT License. Einar Otto Stangvik <einaros@gmail.com> *)
 */
-//# sourceMappingURL=chunk-B7V22YWY.mjs.map
+//# sourceMappingURL=chunk-2NX6LULB.mjs.map

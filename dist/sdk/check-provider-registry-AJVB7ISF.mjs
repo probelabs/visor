@@ -1,7 +1,7 @@
 import {
   CheckProviderRegistry,
   init_check_provider_registry
-} from "./chunk-B7V22YWY.mjs";
+} from "./chunk-2NX6LULB.mjs";
 import "./chunk-H2ZWNJJO.mjs";
 import "./chunk-VPPBOKBQ.mjs";
 import "./chunk-SJHBRMHX.mjs";
@@ -35,4 +35,4 @@ init_check_provider_registry();
 export {
   CheckProviderRegistry
 };
-//# sourceMappingURL=check-provider-registry-MEURQM52.mjs.map
+//# sourceMappingURL=check-provider-registry-AJVB7ISF.mjs.map

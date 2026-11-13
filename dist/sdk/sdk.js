@@ -42542,10 +42542,21 @@ async function handleCreate(args, context2, store) {
 }
 async function handleList(context2, store) {
   const allUserSchedules = await store.getByCreatorAsync(context2.userId);
-  const schedules = allUserSchedules.filter((s) => s.status !== "completed");
-  let filteredSchedules = schedules;
+  const userSchedules = allUserSchedules.filter((s) => s.status !== "completed");
+  let channelSchedules = [];
+  if (context2.allowedScheduleType === "channel" && context2.channelId) {
+    const allActive = await store.getActiveSchedulesAsync();
+    channelSchedules = allActive.filter((s) => {
+      if (s.creatorId === context2.userId) return false;
+      if (s.status === "completed") return false;
+      const target = s.outputContext?.target || "";
+      return target === context2.channelId;
+    });
+  }
+  const combined = [...userSchedules, ...channelSchedules];
+  let filteredSchedules = combined;
   if (context2.allowedScheduleType) {
-    filteredSchedules = schedules.filter((s) => {
+    filteredSchedules = combined.filter((s) => {
       const scheduleOutputType = s.outputContext?.type;
       if (!scheduleOutputType || scheduleOutputType === "none") {
         return context2.allowedScheduleType === "personal";
@@ -42660,6 +42671,14 @@ async function handleTest(args, context2, store) {
   let schedule = userSchedules.find((s) => s.id === args.schedule_id);
   if (!schedule) {
     schedule = userSchedules.find((s) => s.id.startsWith(args.schedule_id));
+  }
+  if (!schedule && context2.channelId) {
+    const allActive = await store.getActiveSchedulesAsync();
+    const channelSchedules = allActive.filter((s) => s.outputContext?.target === context2.channelId);
+    schedule = channelSchedules.find((s) => s.id === args.schedule_id);
+    if (!schedule) {
+      schedule = channelSchedules.find((s) => s.id.startsWith(args.schedule_id));
+    }
   }
   if (!schedule) {
     return {
@@ -43165,7 +43184,8 @@ function buildScheduleToolContext(sources, availableWorkflows, permissions, outp
       scheduleType: finalScheduleType,
       permissions,
       allowedScheduleType,
-      executionSource
+      executionSource,
+      channelId: sources.slackContext.channelId
     };
   }
   if (sources.githubContext) {
@@ -43468,7 +43488,8 @@ async function executeScheduleTool(args, slackContext, slackClient, availableWor
         userId: slackContext.userId,
         userName: slackContext.userName,
         timezone: timezone || "UTC",
-        channelType: slackContext.channelType
+        channelType: slackContext.channelType,
+        channelId: slackContext.channel
       }
     },
     availableWorkflows,
