@@ -40790,7 +40790,6 @@ Good update example:
           "*Live Update*",
           "_Current task is still running. This message updates in place until the final answer is ready._",
           this.lastUpdateKind === "stall" ? DEFAULT_TASK_LIVE_UPDATE_STALL_NOTICE : "",
-          taskSummary,
           normalized,
           formatProgressMetadata(timing),
           `\`task_id: ${this.ctx.taskId}\``,

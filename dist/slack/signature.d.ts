@@ -1,2 +1,0 @@
-export declare function verifySlackSignature(headers: Record<string, string | string[] | undefined>, rawBody: string, signingSecret: string, toleranceSeconds?: number): boolean;
-//# sourceMappingURL=signature.d.ts.map

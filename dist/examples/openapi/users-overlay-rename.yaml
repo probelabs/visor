@@ -1,3 +1,0 @@
-actions:
-  - target: "$.paths['/users/{id}'].get.operationId"
-    update: getUserFromFileOverlay
