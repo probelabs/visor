@@ -711,12 +711,21 @@ function normalizeProgressSummary(text: string): string {
     }
   }
 
-  if (matched.size === wantedLabels.length) {
-    return wantedLabels.map(label => `- ${label}: ${matched.get(label)}`).join('\n');
+  if (matched.size >= 2) {
+    return wantedLabels
+      .filter(label => matched.has(label))
+      .map(label => `- ${label}: ${matched.get(label)}`)
+      .join('\n');
   }
 
-  const withoutTiming = lines.filter(line => !/^-?\s*(Timing|Metadata|Trace)\s*:/i.test(line));
-  return withoutTiming.join('\n');
+  // Strip anything that looks like task checkboxes, metadata, or non-progress content
+  const withoutNoise = lines.filter(
+    line =>
+      !/^-?\s*(Timing|Metadata|Trace|Tasks?)\s*:/i.test(line) &&
+      !/^\[?[x~! -]\]?\s/i.test(line) &&
+      !/^•\s*\[/i.test(line)
+  );
+  return withoutNoise.join('\n');
 }
 
 function formatProgressMetadata(timing: ProgressTimingMetadata): string {

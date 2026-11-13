@@ -1,0 +1,775 @@
+# Slack Org Assistant — intent routing + state-machine
+#
+# ASCII Flow Overview
+# ====================
+#
+#   Slack thread message
+#           │
+#           ▼
+#   ask (human-input, info)
+#           │
+#           ▼
+#   route-intent (ai, internal)
+#           │
+#           ├─ intent = chat
+#           │      │
+#           │      ▼
+#           │  chat-answer (ai, info)
+#           │      │
+#           │      └─ on_success → ask
+#           │
+#           ├─ intent = thread_summary
+#           │      │
+#           │      ▼
+#           │  summarize-thread (ai, info; uses slack.conversation)
+#           │      │
+#           │      └─ on_success → ask
+#           │
+#           ├─ intent = faq
+#           │      │
+#           │      ▼
+#           │  faq-answer (ai, info)
+#           │      │
+#           │      └─ on_success → ask
+#           │
+#           └─ intent = project_help
+#                  │
+#                  ▼
+#         project-intent (ai, internal)
+#                  │
+#                  ├─ project-status-fetch (script, external mock)
+#                  ├─ project-deploy-log  (script, external mock)
+#                  │
+#                  ├─ kind = status
+#                  │      │
+#                  │      └─ project-status-answer (ai, info)
+#                  │             └─ on_success → ask
+#                  │
+#                  ├─ kind = deployment
+#                  │      │
+#                  │      ├─ project-deploy-confirm (human-input, inner loop)
+#                  │      │      ↕
+#                  │      │   project-deploy-answer (ai, info; done=false → confirm, done=true → ask)
+#                  │      │
+#                  │      └─ (on exit) on_success → ask
+#                  │
+#                  └─ kind = owner
+#                         │
+#                         └─ project-owner-answer (ai, info)
+#                                └─ on_success → ask
+#
+# Mermaid State Flow (high-level)
+# ```mermaid
+# stateDiagram-v2
+#   [*] --> ask
+#   ask --> route_intent
+#
+#   route_intent --> chat_answer           : intent == "chat"
+#   route_intent --> summarize_thread      : intent == "thread_summary"
+#   route_intent --> faq_answer            : intent == "faq"
+#   route_intent --> capabilities_answer   : intent == "capabilities"
+#   route_intent --> project_intent        : intent == "project_help"
+#
+#   chat_answer --> ask
+#   summarize_thread --> ask
+#   faq_answer --> ask
+#   capabilities_answer --> ask
+#
+#   project_intent --> project_status_fetch
+#   project_intent --> project_deploy_log
+#
+#   project_intent --> project_status_answer    : kind == "status"
+#   project_status_answer --> ask
+#
+#   project_intent --> project_deploy_confirm   : kind == "deployment"
+#   project_deploy_confirm --> project_deploy_answer
+#   project_deploy_answer --> project_deploy_confirm : done == false
+#   project_deploy_answer --> ask                   : done == true
+#
+#   project_intent --> project_owner_answer  : kind == "owner"
+#   project_owner_answer --> ask
+# ```
+#
+# How to run (Socket Mode):
+#   SLACK_APP_TOKEN=xapp-... SLACK_BOT_TOKEN=xoxb-... \
+#   node dist/index.js --config examples/slack-simple-chat.yaml --slack
+#
+# Behaviour:
+#  - First user message in a Slack thread is treated as the first human_input
+#    (no prompt posted).
+#  - `route-intent` (AI) classifies the request into one of several intents:
+#      * free-form chat
+#      * summarize this Slack thread
+#      * project-specific help (status/deploy/owner)
+#      * FAQ / “how do I …?”
+#  - Based on that intent, the workflow routes to specialised sub-flows:
+#      * `chat-answer` — conversational answer using chat_history
+#      * `summarize-thread` — summary of the current Slack thread
+#      * `project-intent` → `project-*` answers (nested routing)
+#      * `faq-answer` — generic FAQ-style reply
+#  - Leaf steps then route back to `ask`, so each new Slack message re-enters
+#    the top-level router with full context.
+
+version: '1.0'
+
+slack:
+  # Optional Slack runtime hints for socket mode; safe to omit
+  version: "v1"
+  mentions: all          # accept DM 'message' events as well
+  threads: required      # require threaded replies for stable resume
+  # For tests and debugging we allow router/json outputs to be posted as raw JSON.
+  # In production you typically leave this unset/false so only text replies appear.
+  show_raw_output: true
+
+checks:
+  # 1) Human entry point (top-level loop)
+  # - Single source of truth for user messages in this workflow.
+  # - In Slack, the first message in a thread is treated as this input.
+  ask:
+    type: human-input
+    group: chat
+    criticality: info
+    prompt: |
+      Hi there! What can I do for you?
+      (This prompt is only posted when the workflow is waiting.)
+
+  # 2) Top-level intent router (AI, control-plane)
+  # - Reads the latest `ask` output and classifies user intent.
+  # - Drives routing into chat / summary / project / FAQ branches via transitions.
+  route-intent:
+    type: ai
+    group: chat
+    depends_on: ask
+    criticality: internal
+    assume:
+      - "outputs['ask'] != null"
+    guarantee: "output?.intent != null"
+    schema:
+      type: object
+      properties:
+        intent:
+          type: string
+          enum: [chat, thread_summary, project_help, faq, capabilities]
+        project:
+          type: string
+          description: Optional inferred project/service name
+        topic:
+          type: string
+          description: Optional free-form topic/subject
+      required: [intent]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You are general assistant, follow user instructions."
+    prompt: |
+      You are an internal assistant for an engineering organisation. Classify the
+      latest Slack message and decide what kind of automation should run.
+
+      Conversation so far (oldest → newest):
+      {% assign history = '' | chat_history: 'ask', 'chat-answer' %}
+      {% for m in history %}
+      {{ m.role | capitalize }}: {{ m.text }}
+      {% endfor %}
+
+      Latest user message:
+      {{ outputs['ask'].text }}
+
+      Choose the most appropriate intent (stored in the `intent` field):
+      - "chat"            → general Q&A or small talk
+      - "thread_summary"  → user wants a summary of the current Slack thread
+      - "project_help"    → user asks about a specific internal project/service
+      - "faq"             → generic "how do I …?" style question
+      - "capabilities"    → user asks what this assistant/workflow can do
+      You may optionally also record:
+      - `project`: inferred project/service name, if any
+      - `topic`: short free-form topic or question summary
+    on_success:
+      transitions:
+        - when: "output.intent === 'thread_summary'"
+          to: summarize-thread
+        - when: "output.intent === 'project_help'"
+          to: project-intent
+        - when: "output.intent === 'faq'"
+          to: faq-answer
+        - when: "output.intent === 'capabilities'"
+          to: capabilities-answer
+        - when: "output.intent === 'chat'"
+          to: chat-answer
+
+  # 2a) Capabilities / self-describe branch
+  # - Answers "what can you do?" style questions.
+  capabilities-answer:
+    type: ai
+    group: chat
+    depends_on: [route-intent]
+    criticality: info
+    if: "outputs['route-intent']?.intent === 'capabilities'"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You explain clearly and concisely what this workflow and assistant can do."
+    prompt: |
+      The user is asking about your capabilities.
+
+      Explain, in plain language, what kinds of things this workflow can help with, such as:
+      - General Q&A and discussion about the repo or topic.
+      - Summarising ongoing conversations or tickets.
+      - Routing project/service questions into status, deployment help, or ownership guidance.
+      - Answering internal how-to / FAQ style questions.
+
+      Keep the answer short (1–2 paragraphs + a concise bullet list).
+    on_success:
+      goto: ask
+
+  # 3a) Chat branch (general Q&A)
+  # - Handles free-form chat/workflow questions using `chat_history` for context.
+  chat-answer:
+    type: ai
+    group: chat
+    depends_on: [route-intent]
+    criticality: info
+    if: "outputs['route-intent']?.intent === 'chat'"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You are general assistant, follow user instructions."
+    prompt: |
+      You are a concise, friendly assistant helping colleagues in Slack.
+
+      Conversation so far (oldest → newest):
+      {% assign history = '' | chat_history: 'ask', 'chat-answer' %}
+      {% for m in history %}
+      {{ m.role | capitalize }}: {{ m.text }}
+      {% endfor %}
+
+      Latest user message:
+      {{ outputs['ask'].text }}
+
+      Reply naturally. Keep it short (1–3 sentences). No code fences unless the
+      user explicitly asks for code.
+    on_success:
+      goto: ask
+
+  # 3b) Thread summary branch
+  # - Summarises the current conversation using normalized `conversation`/`slack.conversation`.
+  # - Useful for "summarize this thread / discussion" style requests.
+  summarize-thread:
+    type: ai
+    group: chat
+    depends_on: [route-intent]
+    criticality: info
+    if: "outputs['route-intent']?.intent === 'thread_summary'"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You summarise Slack threads for busy engineers."
+    prompt: |
+      Summarise the current Slack thread for the user.
+
+      {% if slack.conversation %}
+      Thread context:
+      {% for m in slack.conversation.messages %}
+      - [{{ m.user }}] {{ m.text }}
+      {% endfor %}
+      {% else %}
+      There is no additional thread history available; use only the latest message.
+      {% endif %}
+
+      Produce:
+      - 3–5 bullet points capturing the key discussion
+      - a one-line tl;dr at the end, starting with "TL;DR:"
+    on_success:
+      goto: ask
+
+  # 3c) FAQ branch (how-to / internal workflows)
+  # - Targets "how do I …?" questions with concise, actionable guidance.
+  faq-answer:
+    type: ai
+    group: chat
+    depends_on: [route-intent]
+    criticality: info
+    if: "outputs['route-intent']?.intent === 'faq'"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You answer internal FAQs and give practical, concise instructions."
+    prompt: |
+      You are answering internal FAQs for an engineering org. Be concrete, assume
+      modern tooling, and prefer step-by-step instructions.
+
+      Question from Slack:
+      {{ outputs['ask'].text }}
+
+      Answer briefly (1–2 short paragraphs + a short checklist if helpful).
+    on_success:
+      goto: ask
+
+  # 3d) Project-help branch (nested routing)
+  # - Handles project/service-specific questions.
+  # - Sub-routes to status / deployment helper / ownership answers.
+  project-intent:
+    type: ai
+    group: chat
+    depends_on: [route-intent]
+    criticality: internal
+    if: "outputs['route-intent']?.intent === 'project_help'"
+    guarantee: "output?.project != null && output?.kind != null"
+    schema:
+      type: object
+      properties:
+        project:
+          type: string
+          description: Inferred project/service name
+        kind:
+          type: string
+          enum: [status, deployment, owner]
+      required: [project, kind]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You route requests about internal projects to the right helper."
+    prompt: |
+      A user is asking about an internal project or service.
+
+      Latest user message:
+      {{ outputs['ask'].text }}
+
+      Categorise the request into a `kind`:
+      - "status"     → user wants current status / health of a project
+      - "deployment" → user asks about how/where to deploy or current deployment state
+      - "owner"      → user wants to know who owns / maintains the project
+      Also infer a `project` name if possible (or a short alias the org
+      would recognise). Store these into the schema fields; do not explain
+      the internal representation to the user.
+    on_success:
+      transitions:
+        - when: "output && output.kind === 'status'"
+          to: project-status-answer
+        - when: "output && output.kind === 'deployment'"
+          to: project-deploy-confirm
+        - when: "output && output.kind === 'owner'"
+          to: project-owner-answer
+
+  # Project status answer
+  # - Uses `project-status-fetch` mock integration and the router output.
+  project-status-answer:
+    type: ai
+    group: chat
+    depends_on: [project-intent, project-status-fetch]
+    criticality: info
+    if: "outputs['project-intent']?.kind === 'status'"
+    assume:
+      - "!!outputs['project-status-fetch']?.project"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You provide high-level status summaries for internal projects."
+    prompt: |
+      Provide a short, high-level status update for the internal project below.
+      Assume this is a mock environment – make up reasonable but clearly generic details.
+
+      Project: {{ outputs['project-status-fetch'].project | default: "unknown-service" }}
+
+      Internal status snapshot (mocked):
+      - Health: {{ outputs['project-status-fetch'].status | default: "unknown" }}
+      - Last deploy: {{ outputs['project-status-fetch'].last_deploy | default: "unknown" }}
+
+      Answer in 2–3 sentences, focusing on current status, recent changes, and any
+      obvious next steps for the requester.
+    on_success:
+      goto: ask
+
+  # Deployment progress log (chat)
+  # - Sends a short, crafted message to the user when entering the deployment helper.
+  # - Because type=log and group=chat, Slack will post this into the thread.
+  deployment-progress-log:
+    type: log
+    group: chat
+    criticality: info
+    depends_on: [project-intent]
+    assume:
+      - "outputs['project-intent']?.kind === 'deployment'"
+    level: info
+    message: |
+      Preparing deployment helper for {{ outputs['project-intent'].project | default: "unknown-service" }}…
+
+  # Inner deployment helper loop: confirm ↔ answer until done
+  # - `project-deploy-confirm` / `project-deploy-answer` form a local loop.
+  # - `done=true` exits back to the top-level `ask`.
+  project-deploy-confirm:
+    type: human-input
+    group: chat
+    depends_on: [project-intent]
+    criticality: info
+    if: "outputs['project-intent']?.kind === 'deployment'"
+    prompt: |
+      You are in the deployment helper for {{ outputs['project-intent'].project | default: "unknown-service" }}.
+      Ask a deployment-related question or type "done" when you are finished with deployment help.
+
+  project-deploy-answer:
+    type: ai
+    group: chat
+    depends_on: [project-intent, project-deploy-confirm]
+    criticality: info
+    if: "outputs['project-intent']?.kind === 'deployment' && !!outputs['project-deploy-confirm']"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+        done:
+          type: boolean
+      required: [text, done]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You guide engineers through safe deployments for internal services."
+    prompt: |
+      The user is asking about deployment for this project:
+      {{ outputs['project-intent'].project | default: "unknown-service" }}
+
+      Give a short, generic deployment playbook:
+      - required pre-checks
+      - how to deploy (mocked commands / steps)
+      - how to verify success
+
+      Keep it organisation-agnostic and under ~8 bullet points.
+
+      Also decide whether the deployment helper should keep going or exit back
+      to the main assistant:
+      - set done = true if the user is finished with deployment questions
+      - set done = false if the user is likely to have follow-up questions
+
+    on_success:
+      transitions:
+        - when: "output?.done === true"
+          to: ask
+        - when: "output?.done === false"
+          to: project-deploy-confirm
+
+  # Project ownership / team information answer
+  project-owner-answer:
+    type: ai
+    group: chat
+    depends_on: [project-intent]
+    criticality: info
+    if: "outputs['project-intent']?.kind === 'owner'"
+    guarantee: "(output?.text ?? '').length > 0"
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    ai:
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You explain ownership patterns and how to find the right team."
+    prompt: |
+      The user wants to know who owns this project:
+      {{ outputs['project-intent'].project | default: "unknown-service" }}
+
+      Since this is a mock configuration, you cannot know the real owner. Explain briefly:
+      - how ownership is usually tracked (e.g. service catalog, CODEOWNERS)
+      - how the user could look it up
+      - any conventions your (imaginary) org uses.
+
+      Keep the answer short (1–2 paragraphs).
+    on_success:
+      goto: ask
+
+  # 4) Mock external integrations for project flows
+  #
+  # These `script` steps emulate calls to external systems, but only return
+  # structured data (no real network calls). They demonstrate how to:
+  # - mark external-ish logic (`criticality: external`)
+  # - use `assume` to guard preconditions
+  # - define JSON Schemas for integration responses.
+
+  # Emulate reading project status from an external system (service catalog / status API).
+  project-status-fetch:
+    type: script
+    group: integrations
+    criticality: external
+    depends_on: [project-intent]
+    assume:
+      - "!!outputs['project-intent']?.project"
+    content: |
+      const project = (outputs['project-intent'] && outputs['project-intent'].project) || 'unknown-service';
+      // In a real organisation this would call an external status API.
+      // Here we just mock a stable response.
+      return {
+        project,
+        status: 'green',
+        last_deploy: '2025-11-20T12:00:00Z'
+      };
+    schema:
+      type: object
+      properties:
+        project:
+          type: string
+        status:
+          type: string
+        last_deploy:
+          type: string
+      required: [project, status]
+
+  # Emulate writing a deployment note or updating a ticket in an external system.
+  project-deploy-log:
+    type: script
+    group: integrations
+    criticality: external
+    depends_on: [project-intent]
+    assume:
+      - "!!outputs['project-intent']?.project"
+    content: |
+      const project = (outputs['project-intent'] && outputs['project-intent'].project) || 'unknown-service';
+      const kind = (outputs['project-intent'] && outputs['project-intent'].kind) || 'deployment';
+      // In a real system this might POST to a change-management API.
+      // We just return a structured record to demonstrate contracts.
+      return {
+        project,
+        kind,
+        recorded: true
+      };
+    schema:
+      type: object
+      properties:
+        project:
+          type: string
+        kind:
+          type: string
+        recorded:
+          type: boolean
+      required: [project, kind, recorded]
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: chat-history-two-turns
+      description: Ensure chat_history merges ask/chat-answer with correct roles/order for a single turn.
+      flow:
+        - name: turns
+          event: manual
+          fixture: local.minimal
+          routing:
+            max_loops: 0
+          mocks:
+            ask[]:
+              - "Hello 1"
+            route-intent[]:
+              - intent: "chat"
+            chat-answer[]:
+              - text: "Reply 1"
+          expect:
+            calls:
+              - step: ask
+                exactly: 1
+              - step: route-intent
+                exactly: 1
+              - step: chat-answer
+                exactly: 1
+            prompts:
+              - step: chat-answer
+                index: last
+                contains:
+                  - "User: Hello 1"
+            outputs:
+              # Ensure assistant reply is present in outputs.history['chat-answer']
+              - step: chat-answer
+                index: 0
+                path: text
+                equals: "Reply 1"
+
+    - name: router-capabilities
+      description: Route to capabilities/self-describe branch when intent=capabilities.
+      flow:
+        - name: capabilities
+          event: manual
+          fixture: local.minimal
+          routing:
+            max_loops: 0
+          mocks:
+            ask[]:
+              - "What can you do?"
+            route-intent[]:
+              - intent: "capabilities"
+            capabilities-answer[]:
+              - text: "I can help with summaries and project questions."
+          expect:
+            calls:
+              - step: ask
+                exactly: 1
+              - step: route-intent
+                exactly: 1
+              - step: capabilities-answer
+                exactly: 1
+
+    - name: router-thread-summary
+      description: Route to thread-summary branch when intent=thread_summary.
+      flow:
+        - name: thread-summary
+          event: manual
+          fixture: local.minimal
+          routing:
+            max_loops: 0
+          mocks:
+            ask[]:
+              - "Summarize the discussion"
+            route-intent[]:
+              - intent: "thread_summary"
+            summarize-thread[]:
+              - text: "Summary text"
+          expect:
+            calls:
+              - step: ask
+                exactly: 1
+              - step: route-intent
+                exactly: 1
+              - step: summarize-thread
+                exactly: 1
+
+    - name: router-project-status
+      description: Route to project status path and use status fetch output.
+      flow:
+        - name: project-status
+          event: manual
+          fixture: local.minimal
+          routing:
+            max_loops: 0
+          mocks:
+            ask[]:
+              - "What is the status of checkout-service?"
+            route-intent[]:
+              - intent: "project_help"
+            project-intent[]:
+              - project: "checkout-service"
+                kind: "status"
+            project-status-fetch[]:
+              - project: "checkout-service"
+                status: "green"
+                last_deploy: "2025-11-20T12:00:00Z"
+            project-status-answer[]:
+              - text: "Status reply"
+          expect:
+            calls:
+              - step: ask
+                exactly: 1
+              - step: route-intent
+                exactly: 1
+              - step: project-intent
+                exactly: 1
+              - step: project-status-fetch
+                exactly: 1
+              - step: project-status-answer
+                exactly: 1
+
+    - name: deployment-branch-routing
+      description: Route to deployment helper branch, log progress, and run confirm + answer once.
+      flow:
+        - name: deploy-loop
+          event: manual
+          fixture: local.minimal
+          routing:
+            # Set max_loops: 0 to test single pass through the deployment flow.
+            # The goto: ask in project-deploy-answer would otherwise trigger loops.
+            max_loops: 0
+          mocks:
+            ask[]:
+              - "Help me deploy service"
+            route-intent[]:
+              - intent: "project_help"
+            project-intent[]:
+              - project: "svc-api"
+                kind: "deployment"
+            project-deploy-confirm[]:
+              - "How do I deploy?"
+            project-deploy-answer[]:
+              - text: "First deployment answer"
+                done: true
+          expect:
+            calls:
+              - step: ask
+                exactly: 1
+              - step: route-intent
+                exactly: 1
+              - step: project-intent
+                exactly: 1
+              - step: deployment-progress-log
+                exactly: 1
+              - step: project-deploy-confirm
+                exactly: 1
+              - step: project-deploy-answer
+                exactly: 1
+              - step: project-status-fetch
+                exactly: 1
+              - step: project-deploy-log
+                exactly: 1
+
+    - name: capabilities-loop-routing
+      description: Ensure capabilities intent does not cause router to loop when routing is enabled.
+      flow:
+        - name: capabilities-loop
+          event: manual
+          fixture: local.minimal
+          routing:
+            # Non-zero loop budget; we assert exact call counts to detect unintended loops.
+            max_loops: 5
+          mocks:
+            ask[]:
+              - "What can you do?"
+            route-intent[]:
+              - intent: "capabilities"
+            capabilities-answer[]:
+              - text: "I can help with summaries and project questions."
+          expect:
+            calls:
+              - step: ask
+                # In this manual test, routing transitions are exercised
+                # fully, so the router loops through the capabilities
+                # branch twice before the loop budget stops a third goto.
+                # We assert the exact call counts to keep this deterministic.
+                exactly: 3
+              - step: route-intent
+                exactly: 3
+              - step: capabilities-answer
+                exactly: 3

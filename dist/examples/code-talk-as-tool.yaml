@@ -1,0 +1,76 @@
+# =============================================================================
+# Example: Using code-talk as an AI Custom Tool
+# =============================================================================
+#
+# This example shows how to use the code-talk workflow as an AI tool,
+# allowing an AI assistant to explore your codebase on demand.
+#
+# Usage:
+#   visor --config examples/code-talk-as-tool.yaml --message "Help me understand the codebase"
+#
+# =============================================================================
+
+version: "1.0"
+
+imports:
+  - visor://code-talk.yaml
+
+# Define a project-specific wrapper that can be used as a tool
+checks:
+  # Get user request
+  get-request:
+    type: human-input
+    prompt: "What would you like help with?"
+    placeholder: "e.g., Help me understand how the API endpoints work"
+
+  # AI assistant with code exploration tool
+  assistant:
+    type: ai
+    depends_on: [get-request]
+    ai:
+      skip_code_context: true
+      prompt_type: general
+    prompt: |
+      You are a helpful assistant for this project.
+
+      The user asked: {{ outputs['get-request'].text }}
+
+      You have access to the code-talk tool which can explore the codebase
+      and answer technical questions with code references.
+
+      Use the code-talk tool when you need to:
+      - Find specific implementations
+      - Understand how components work
+      - Locate relevant code files
+      - Answer technical questions about the codebase
+
+      After getting information from the tool, provide a clear and helpful response.
+
+    ai_custom_tools:
+      # Use code-talk directly as a tool
+      - workflow: code-talk
+        args:
+          # Pre-configure with your project settings
+          architecture: |
+            # Project Architecture
+            Describe your project here.
+
+          projects:
+            - id: my-project
+              repo: your-org/your-repo
+              description: Main project codebase
+
+          max_projects: 1
+
+  # Show the result
+  show-result:
+    type: log
+    depends_on: [assistant]
+    message: |
+      ===============================================================
+      Assistant Response
+      ===============================================================
+
+      {{ outputs['assistant'].content }}
+
+      ===============================================================

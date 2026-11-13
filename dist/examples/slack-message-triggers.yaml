@@ -1,0 +1,270 @@
+# Slack Message Triggers — event-driven workflows from Slack messages
+#
+# This example shows how to build workflows that fire in response to
+# Slack messages matching specific patterns (channels, keywords, bots).
+#
+# Message triggers can be defined statically in config (scheduler.on_message)
+# or created dynamically at runtime via the AI schedule tool:
+#
+#   "watch #cicd for messages containing 'failed' and run handle-cicd"
+#   "list my message triggers"
+#   "delete trigger abc123"
+#
+# ASCII Flow Overview
+# ====================
+#
+#   Slack message arrives
+#           │
+#           ▼
+#   MessageTriggerEvaluator
+#     ├── channels match?
+#     ├── keyword/regex match?
+#     ├── bot filter?
+#     └── thread scope?
+#           │
+#           ▼ (matched)
+#   Workflow executes with slack.event context
+#           │
+#           ├─ alert-triage (AI: summarize + classify)
+#           │
+#           └─ cicd-responder (AI: suggest fix)
+#
+
+version: "1.0"
+
+# Static message trigger config (usually under scheduler.on_message in .visor.yaml)
+# These define patterns that route incoming Slack messages to workflows.
+#
+# scheduler:
+#   on_message:
+#     cicd-watcher:
+#       channels: ["C0CICD"]
+#       contains: ["failed", "error"]
+#       from_bots: true
+#       workflow: handle-cicd-failure
+#     security-alert:
+#       channels: ["C0SECURITY"]
+#       match: "CVE-\\d{4}-\\d+"
+#       workflow: triage-security
+#       inputs:
+#         severity: high
+
+# Workflows that fire on slack_message events.
+# In production these are invoked by the trigger evaluator;
+# in tests we simulate the event via fixture or inline payload.
+
+checks:
+  # Triage incoming alerts — summarize and classify severity
+  alert-triage:
+    type: ai
+    on: [slack_message]
+    prompt: |
+      A Slack message was received that matched a monitoring trigger.
+      Analyze the message and provide a structured triage response.
+
+      Channel: {{ slack.event.channel }}
+      Message: {{ slack.event.text }}
+
+      Classify the alert severity and recommend immediate actions.
+    schema:
+      type: object
+      properties:
+        severity:
+          type: string
+          enum: [critical, high, medium, low]
+        summary:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+      required: [severity, summary]
+
+  # CI/CD failure responder — analyze build failures
+  cicd-responder:
+    type: ai
+    on: [slack_message]
+    depends_on: [alert-triage]
+    prompt: |
+      A CI/CD notification was received. Based on the triage:
+      Severity: {{ outputs['alert-triage'].severity }}
+      Summary: {{ outputs['alert-triage'].summary }}
+
+      Original message: {{ slack.event.text }}
+
+      Suggest concrete next steps to resolve the failure.
+    schema:
+      type: object
+      properties:
+        diagnosis:
+          type: string
+        fix_steps:
+          type: array
+          items:
+            type: string
+        escalate:
+          type: boolean
+      required: [diagnosis, fix_steps]
+
+  # A PR-only check to verify event filtering works correctly
+  pr-review:
+    type: ai
+    on: [pr_opened]
+    prompt: "Review the PR changes."
+    schema: text
+
+# ─────────────────────────────────────────────────────────────
+# Embedded tests
+# ─────────────────────────────────────────────────────────────
+tests:
+  defaults:
+    strict: false
+    ai_provider: mock
+
+  cases:
+    # 1. Simple Slack message via built-in fixture
+    - name: simple-message-fixture
+      event: slack_message
+      fixture: slack.message.simple
+      mocks:
+        alert-triage:
+          severity: high
+          summary: "Build #42 failed in CI pipeline"
+          actions: ["Check build logs", "Retry pipeline"]
+        cicd-responder:
+          diagnosis: "Test suite timeout in integration tests"
+          fix_steps: ["Increase timeout", "Fix flaky test"]
+          escalate: false
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+          - step: cicd-responder
+            exactly: 1
+
+    # 2. Bot message via fixture (e.g., Jenkins or CI bot)
+    - name: bot-message-fixture
+      event: slack_message
+      fixture: slack.message.bot
+      mocks:
+        alert-triage:
+          severity: critical
+          summary: "Production deploy failed"
+          actions: ["Rollback immediately", "Notify on-call"]
+        cicd-responder:
+          diagnosis: "Docker image build failed — missing dependency"
+          fix_steps: ["Update Dockerfile", "Rebuild image"]
+          escalate: true
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+          - step: cicd-responder
+            exactly: 1
+
+    # 3. Thread reply via fixture
+    - name: thread-reply-fixture
+      event: slack_message
+      fixture: slack.message.thread
+      mocks:
+        alert-triage:
+          severity: low
+          summary: "Thread follow-up with error details"
+        cicd-responder:
+          diagnosis: "Additional context from thread"
+          fix_steps: ["Review thread context"]
+          escalate: false
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+
+    # 4. Inline Slack message payload (no fixture needed)
+    - name: inline-critical-alert
+      event: slack_message
+      slack_message:
+        channel: C0ALERTS
+        user: U_OPS
+        text: "CRITICAL: database connection pool exhausted"
+        ts: "2000.001"
+      mocks:
+        alert-triage:
+          severity: critical
+          summary: "Database connection pool exhausted"
+          actions: ["Scale pool", "Check for connection leaks"]
+        cicd-responder:
+          diagnosis: "Connection leak in auth service"
+          fix_steps: ["Deploy connection pool fix", "Restart auth pods"]
+          escalate: true
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+          - step: cicd-responder
+            exactly: 1
+
+    # 5. Inline message in a thread
+    - name: inline-thread-update
+      event: slack_message
+      slack_message:
+        channel: C0INCIDENTS
+        user: U_ONCALL
+        text: "Update: hotfix deployed, monitoring recovery"
+        ts: "2000.004"
+        thread_ts: "2000.001"
+      mocks:
+        alert-triage:
+          severity: low
+          summary: "Hotfix deployed — incident resolving"
+        cicd-responder:
+          diagnosis: "Hotfix applied successfully"
+          fix_steps: ["Continue monitoring"]
+          escalate: false
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+
+    # 6. Inline bot message (CI system notification)
+    - name: inline-ci-bot-failure
+      event: slack_message
+      slack_message:
+        channel: C0CICD
+        user: B_JENKINS
+        text: "Build #99 FAILED — test suite timeout after 30m"
+        ts: "2000.005"
+        is_bot: true
+      mocks:
+        alert-triage:
+          severity: high
+          summary: "Jenkins build timeout"
+          actions: ["Check test logs", "Increase timeout"]
+        cicd-responder:
+          diagnosis: "Flaky integration test causing timeout"
+          fix_steps: ["Quarantine flaky test", "Increase timeout to 45m"]
+          escalate: false
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+          - step: cicd-responder
+            exactly: 1
+
+    # 7. PR-only check must NOT fire on slack_message events
+    - name: event-filtering
+      event: slack_message
+      fixture: slack.message.simple
+      mocks:
+        alert-triage:
+          severity: medium
+          summary: "Alert processed"
+        cicd-responder:
+          diagnosis: "Handled"
+          fix_steps: []
+          escalate: false
+      expect:
+        calls:
+          - step: alert-triage
+            exactly: 1
+          - step: pr-review
+            exactly: 0

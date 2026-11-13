@@ -1,0 +1,290 @@
+version: "1.0"
+
+# =============================================================================
+# UTCP (Universal Tool Calling Protocol) Provider Examples
+#
+# UTCP is a client-side protocol for calling tools directly via their native
+# protocols (HTTP, CLI, SSE) without intermediate servers. Tools publish JSON
+# "manuals" describing how to call them; the UTCP SDK reads the manual and
+# makes direct calls.
+#
+# Prerequisites:
+#   npm install @utcp/sdk @utcp/http
+#
+# Run:
+#   visor --config examples/utcp-provider-example.yaml
+# =============================================================================
+
+steps:
+  # ===========================================================================
+  # Example 1: URL-Based Manual Discovery
+  # Point at an OpenAPI or UTCP endpoint and call tools directly
+  # ===========================================================================
+  petstore-lookup:
+    type: utcp
+    manual: https://petstore3.swagger.io/api/v3/openapi.json
+    method: findPetsByStatus
+    methodArgs:
+      status: available
+    timeout: 30
+    tags: ["demo"]
+    transform_js: |
+      // Extract first 5 pets from the response
+      const pets = Array.isArray(output) ? output.slice(0, 5) : [];
+      return pets.map(p => ({ name: p.name, status: p.status, id: p.id }));
+
+  # ===========================================================================
+  # Example 2: Inline Call Template
+  # Define the tool's HTTP endpoint directly in the config
+  # ===========================================================================
+  check-ip:
+    type: utcp
+    manual:
+      name: httpbin
+      call_template_type: http
+      url: https://httpbin.org
+      http_method: GET
+    method: get_ip
+    timeout: 15
+    tags: ["demo", "fast"]
+
+  # ===========================================================================
+  # Example 3: File-Based UTCP Manual
+  # Load tool definitions from a local JSON file
+  #
+  # Example manual file (tools/api-manual.json):
+  #   {
+  #     "utcp_version": "1.0.0",
+  #     "manual_version": "1.0.0",
+  #     "tools": [{
+  #       "name": "health_check",
+  #       "description": "Check service health",
+  #       "inputs": { "type": "object", "properties": {} },
+  #       "tool_call_template": {
+  #         "call_template_type": "http",
+  #         "url": "https://api.example.com/health",
+  #         "http_method": "GET"
+  #       }
+  #     }]
+  #   }
+  # ===========================================================================
+  health-check:
+    type: utcp
+    manual: ./tools/api-manual.json
+    method: health_check
+    timeout: 10
+    tags: ["monitoring"]
+
+  # ===========================================================================
+  # Example 4: UTCP with Liquid Templates in Arguments
+  # Pass PR context to tool calls dynamically
+  # ===========================================================================
+  external-scan:
+    type: utcp
+    manual: https://scanner.example.com/utcp
+    method: scan_code
+    methodArgs:
+      files: "{{ files | map: 'filename' | join: ',' }}"
+      pr_number: "{{ pr.number }}"
+      branch: "{{ pr.branch }}"
+      author: "{{ pr.author }}"
+    timeout: 120
+    tags: ["security"]
+
+  # ===========================================================================
+  # Example 5: UTCP with Variables for Authentication
+  # Pass API keys and tokens securely via environment variables
+  # ===========================================================================
+  authenticated-api:
+    type: utcp
+    manual: https://api.example.com/utcp
+    method: analyze
+    methodArgs:
+      input: "{{ files | map: 'filename' | json }}"
+    variables:
+      API_KEY: "${SCANNER_API_KEY}"
+      WORKSPACE_ID: "${GITHUB_REPOSITORY}"
+    timeout: 60
+    tags: ["security", "slow"]
+
+  # ===========================================================================
+  # Example 6: UTCP with JavaScript Transform for Issue Extraction
+  # Convert tool output into Visor issues for PR comments
+  # ===========================================================================
+  lint-with-utcp:
+    type: utcp
+    manual: https://linter.example.com/utcp
+    method: lint
+    methodArgs:
+      language: "typescript"
+      files: "{{ files | map: 'filename' | json }}"
+    transform_js: |
+      // Convert linter output to Visor issues
+      const findings = output.findings || output.results || [];
+      return findings.map(f => ({
+        file: f.file || f.path || 'unknown',
+        line: f.line || f.startLine || 0,
+        message: f.message || f.description,
+        severity: f.severity === 'error' ? 'error' : 'warning',
+        category: f.category || 'style',
+        ruleId: 'utcp/' + (f.rule || f.code || 'lint')
+      }));
+
+  # ===========================================================================
+  # Example 7: Chaining UTCP with AI Analysis
+  # Fetch data via UTCP, then analyze with AI
+  # ===========================================================================
+  fetch-metrics:
+    type: utcp
+    manual:
+      name: metrics_api
+      call_template_type: http
+      url: https://metrics.example.com/api/v1
+      http_method: GET
+    method: get_pr_metrics
+    methodArgs:
+      repo: "{{ env.GITHUB_REPOSITORY }}"
+      pr: "{{ pr.number }}"
+    tags: ["metrics"]
+
+  analyze-metrics:
+    type: ai
+    depends_on: [fetch-metrics]
+    prompt: |
+      Analyze these code metrics for PR #{{ pr.number }}:
+      {{ outputs["fetch-metrics"] | json }}
+
+      Identify any concerning trends in complexity, test coverage,
+      or code churn. Provide actionable recommendations.
+    schema: code-review
+    tags: ["metrics"]
+
+  # ===========================================================================
+  # Example 8: UTCP with argsTransform for Dynamic Arguments
+  # Use a Liquid template to construct the entire args object
+  # ===========================================================================
+  dynamic-args-check:
+    type: utcp
+    manual: https://api.example.com/utcp
+    method: deep_analysis
+    argsTransform: |
+      {
+        "files": {{ files | map: 'filename' | json }},
+        "config": {
+          "severity_threshold": "warning",
+          "max_issues": 50,
+          "language": "{{ files | map: 'filename' | first | split: '.' | last }}"
+        }
+      }
+    timeout: 90
+
+  # ===========================================================================
+  # Example 9: Conditional UTCP Execution
+  # Only run UTCP checks when specific files change
+  # ===========================================================================
+  api-contract-check:
+    type: utcp
+    manual: https://contract-validator.example.com/utcp
+    method: validate_openapi
+    if: "files.some(f => f.filename.includes('openapi') || f.filename.includes('swagger'))"
+    methodArgs:
+      spec_files: "{{ files | where: 'filename', 'openapi' | map: 'filename' | json }}"
+    tags: ["api", "contracts"]
+    transform_js: |
+      if (output.valid === false) {
+        return output.errors.map(e => ({
+          file: e.file || 'openapi.yaml',
+          line: e.line || 0,
+          message: e.message,
+          severity: 'error',
+          category: 'logic',
+          ruleId: 'utcp/openapi-violation'
+        }));
+      }
+      return [];
+
+  # ===========================================================================
+  # Example 10: UTCP in a Pipeline with Dependencies
+  # Multi-step workflow: fetch data -> process -> notify
+  # ===========================================================================
+  fetch-dependencies:
+    type: utcp
+    manual:
+      name: deps_api
+      call_template_type: http
+      url: https://deps.example.com/api
+      http_method: GET
+    method: list_outdated
+    methodArgs:
+      manifest: "package.json"
+    tags: ["deps"]
+
+  check-vulnerabilities:
+    type: utcp
+    depends_on: [fetch-dependencies]
+    manual:
+      name: vuln_api
+      call_template_type: http
+      url: https://vuln-db.example.com/api
+      http_method: POST
+    method: check_packages
+    methodArgs:
+      packages: "{{ outputs['fetch-dependencies'] | json }}"
+    tags: ["deps", "security"]
+    transform_js: |
+      const vulns = output.vulnerabilities || [];
+      return vulns.map(v => ({
+        file: 'package.json',
+        line: 0,
+        message: `${v.package}@${v.version}: ${v.advisory} (${v.severity})`,
+        severity: v.severity === 'critical' ? 'error' : 'warning',
+        category: 'security',
+        ruleId: 'utcp/vuln-' + v.id
+      }));
+
+# -------------------------------------------------------------------
+# Example 11: UTCP Tools Exposed to AI Agent
+# UTCP tools registered in ai_mcp_servers are discovered and exposed
+# as MCP tools to the AI agent. The AI can call any discovered tool.
+# -------------------------------------------------------------------
+  ai-with-utcp-tools:
+    type: ai
+    prompt: |
+      Review this PR for security issues. Use the scanner tools
+      to perform deep analysis of the code changes.
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          API_KEY: "${SCANNER_API_KEY}"
+        plugins: ["http"]
+
+# -------------------------------------------------------------------
+# Example 12: AI with Mixed Tool Sources (UTCP + MCP + HTTP)
+# Combine UTCP tools, regular MCP servers, and HTTP client tools
+# in a single AI check. The AI sees all tools together.
+# -------------------------------------------------------------------
+  ai-mixed-tools:
+    type: ai
+    prompt: |
+      Analyze this PR using all available tools.
+      Use the code scanner for security, JIRA for ticket context,
+      and the internal API for deployment status.
+    ai_mcp_servers:
+      code-scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          TOKEN: "${SCANNER_TOKEN}"
+      jira:
+        command: npx
+        args: ["-y", "@aashari/mcp-server-atlassian-jira"]
+        env:
+          ATLASSIAN_SITE_NAME: mysite
+      deploy-api:
+        type: http_client
+        base_url: https://deploy.internal.example.com/api
+        auth:
+          type: bearer
+          token: "${DEPLOY_TOKEN}"

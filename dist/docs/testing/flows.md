@@ -1,0 +1,331 @@
+# Flow Tests
+
+> Model realistic user journeys across multiple external events in one case.
+
+A flow case defines a `flow:` array of stages. Each stage has its own `event`, `fixture`, and optional settings like `env`, `mocks`, `routing`, `tags`, `github_recorder`, plus `expect`.
+
+```yaml
+- name: pr-review-e2e-flow
+  strict: true
+  flow:
+    - name: pr-open
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      mocks: { overview: { text: "Overview body", tags: { label: feature, review-effort: 2 } } }
+      expect:
+        calls:
+          - step: overview
+            exactly: 1
+          - step: apply-overview-labels
+            exactly: 1
+
+    - name: visor-retrigger
+      event: issue_comment
+      fixture: gh.issue_comment.visor_regenerate
+      mocks:
+        comment-assistant: { text: "Regenerating.", intent: comment_retrigger }
+        overview: { text: "Overview (regenerated)", tags: { label: feature, review-effort: 2 } }
+      expect:
+        calls:
+          - step: comment-assistant
+            exactly: 1
+          - step: overview
+            exactly: 1
+```
+
+## Stage selection and deltas
+
+- Run a single stage: `--only case#stage` (name substring match, case-insensitive) or `--only case#N` (1-based index).
+  - Examples: `--only pr-review-e2e-flow#facts-invalid`, `--only pr-review-e2e-flow#3`
+- Coverage, prompts, outputs, and provider calls are computed per-stage as deltas from the previous stage.
+- The same engine instance is reused across stages, so memory and output history carry over.
+
+## Ordering and `on_finish`
+
+- Flow execution honors dependencies and `on_success`/`on_fail` routing.
+- For forEach parents with `on_finish.run`, the runner defers static targets from the initial set so they execute after per-item processing.
+- Dynamic `on_finish.run_js` is executed and counted like regular steps.
+
+## Strict mode across stages
+
+- If any step executes in a stage and lacks a corresponding `expect.calls` entry for that stage, the stage fails under strict mode.
+- Use `no_calls` to assert absence (e.g., a standard comment should not trigger a reply or fact validation).
+
+## Example: Fact Validation Loop (pattern)
+
+Note: This is not a built‑in feature, just a concrete example of how to model a multi‑step workflow with your own step names.
+
+- Per-item validation (example): a step named `validate-fact` depends on `extract-facts` (which outputs an array) and runs once per item.
+- Aggregation (example): a step named `aggregate-validations` (type: `memory`) summarizes the latest validation wave and, when not all facts are valid, schedules a correction comment via `on_finish.run_js`.
+- In tests: provide array mocks for `extract-facts` and per‑call list mocks for `validate-fact[]`. Assert that only invalid facts appear in the correction prompt using `prompts.contains`/`not_contains`.
+
+Inline example:
+
+```yaml
+flow:
+  - name: facts-invalid
+    event: issue_comment
+    fixture: gh.issue_comment.visor_help
+    env: { ENABLE_FACT_VALIDATION: "true" }
+    mocks:
+      extract-facts:
+        - { id: f1, claim: "max_parallelism defaults to 4" }
+      validate-fact[]:
+        - { fact_id: f1, is_valid: false, correction: "max_parallelism defaults to 3" }
+    expect:
+      calls:
+        - step: validate-fact
+          exactly: 1
+      prompts:
+        - step: comment-assistant
+          index: last
+          contains: ["<previous_response>", "Correction:"]
+```
+
+## Stage-local configuration
+
+### Mocks and env
+
+- Stage mocks override flow-level defaults: the runner merges `{...flow.mocks, ...stage.mocks}`.
+- `env:` applies only for the stage and is restored afterward.
+
+### Routing overrides
+
+Per-stage routing settings override the base config for that stage only:
+
+```yaml
+flow:
+  - name: correction-loop
+    event: issue_comment
+    routing:
+      max_loops: 10    # allow more iterations for this stage
+    # ...
+```
+
+### Tag filtering
+
+Tags can be specified at flow-level and/or per-stage. They are merged with suite defaults:
+
+```yaml
+- name: my-flow
+  tags: "github"          # flow-level include filter
+  exclude_tags: "slow"    # flow-level exclude filter
+  flow:
+    - name: stage-one
+      tags: "security"    # additional per-stage filter
+      # ...
+```
+
+### GitHub recorder overrides
+
+Simulate GitHub API errors or timeouts per-stage:
+
+```yaml
+flow:
+  - name: api-error-stage
+    event: pr_opened
+    github_recorder:
+      error_code: 429     # simulate rate limit
+    # ...
+```
+
+## Multi-turn conversation testing
+
+Flows are ideal for simulating multi-message conversations. Each stage provides a new `execution_context.conversation` with accumulated message history, and the engine's output history carries across stages — so you can assert on any prior response using `index`.
+
+```yaml
+- name: multi-turn-conversation
+  flow:
+    # Turn 1
+    - name: intro-question
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "test-thread" }
+          messages:
+            - { role: user, text: "What is Tyk?" }
+          current: { role: user, text: "What is Tyk?" }
+      mocks:
+        chat[]:
+          - text: "Tyk is an open-source API gateway..."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          - step: chat
+            path: text
+            prompt: Is this a clear introduction to Tyk?
+
+    # Turn 2
+    - name: follow-up
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "test-thread" }
+          messages:
+            - { role: user, text: "What is Tyk?" }
+            - { role: assistant, text: "Tyk is an open-source API gateway..." }
+            - { role: user, text: "How does rate limiting work?" }
+          current: { role: user, text: "How does rate limiting work?" }
+      mocks:
+        chat[]:
+          - text: "Rate limiting uses Redis-based distributed counters..."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          # Assert on this turn's response
+          - step: chat
+            index: last
+            path: text
+            prompt: Does this explain rate limiting with technical details?
+          # Look back at turn 1 from this stage
+          - step: chat
+            index: 0
+            path: text
+            prompt: Was the first response a good intro (not too detailed)?
+
+    # Turn 3 — assert across all prior turns
+    - name: deep-dive
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "test-thread" }
+          messages:
+            - { role: user, text: "What is Tyk?" }
+            - { role: assistant, text: "Tyk is an open-source API gateway..." }
+            - { role: user, text: "How does rate limiting work?" }
+            - { role: assistant, text: "Rate limiting uses Redis..." }
+            - { role: user, text: "Show me the config" }
+          current: { role: user, text: "Show me the config" }
+      mocks:
+        chat[]:
+          - text: "Configure rate limits with `rate` and `per` fields..."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          # Assert on each turn by index (0-based)
+          - step: chat
+            index: 0
+            path: text
+            prompt: Was turn 1 a good general introduction?
+          - step: chat
+            index: 1
+            path: text
+            prompt: Did turn 2 explain rate limiting mechanisms?
+          - step: chat
+            index: 2
+            path: text
+            prompt: Does turn 3 include concrete config examples?
+```
+
+Key points:
+- **`index: 0`, `1`, `2`** — selects the Nth output from the step's history (0-based)
+- **`index: first`** / **`index: last`** — aliases for first and most recent
+- Output history accumulates across flow stages because the engine instance is shared
+- Each stage builds on the prior conversation by adding messages to `execution_context.conversation.messages`
+
+## Conversation sugar
+
+For multi-turn conversation tests, the `conversation:` format provides a more concise alternative to manually building flow stages with `execution_context.conversation`. It auto-expands into flow stages at runtime.
+
+```yaml
+- name: quick-conversation-test
+  strict: false
+  conversation:
+    - role: user
+      text: "What is Tyk?"
+      mocks:
+        chat: { text: "Tyk is an open-source API gateway.", intent: chat }
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+    - role: user
+      text: "How does rate limiting work?"
+      mocks:
+        chat: { text: "Rate limiting uses Redis counters.", intent: chat }
+      expect:
+        llm_judge:
+          - step: chat
+            turn: current
+            path: text
+            prompt: Does this explain rate limiting?
+          - step: chat
+            turn: 1
+            path: text
+            prompt: Was the first response a good intro?
+```
+
+**How it works:**
+- Each `role: user` turn becomes a flow stage with `event: manual`
+- Message history is auto-built from prior turns (mock response text is used as assistant messages)
+- `turn: N` (1-based) references the Nth turn's output; `turn: current` references the current turn
+- Use `role: assistant` turns to override mock-inferred responses in the history
+
+### Per-turn user identity
+
+Add `user:` to a turn to set `conversation.current.user` for that stage. This is useful for testing multi-user scenarios like group chats where different users interact in the same thread.
+
+```yaml
+- name: group-chat-isolation
+  conversation:
+    turns:
+      - role: user
+        user: "alice"
+        text: "What are my open tickets?"
+        mocks:
+          chat: { text: "You have 3 open tickets.", intent: chat }
+        expect:
+          outputs:
+            - step: chat
+              path: text
+              matches: "(?i)3|ticket"
+      - role: user
+        user: "bob"
+        text: "Show me my tickets"
+        mocks:
+          chat: { text: "You have 1 open ticket.", intent: chat }
+        expect:
+          outputs:
+            - step: chat
+              path: text
+              matches: "(?i)1|ticket"
+```
+
+The `user` value is available in Liquid templates as `{{ conversation.current.user }}`. This lets the system prompt pass per-user identity to tool calls, enabling true data isolation testing in `--no-mocks` mode.
+
+See [DSL Reference](./dsl-reference.md#conversation-sugar) for the full schema and [Cookbook](./cookbook.md) recipes #12–13 for more examples.
+
+## Debugging flows
+
+- Set `VISOR_DEBUG=true` to print stage headers, selected checks, and internal debug lines from the engine.
+- To reduce noise, limit the run to a stage: `VISOR_DEBUG=true visor test --only pr-review-e2e-flow#facts-invalid`.
+- Use the CLI `--debug` flag as a shorthand: `visor test --debug --only case#stage`.
+
+## Related Documentation
+
+- [Getting Started](./getting-started.md) - Introduction to the test framework
+- [DSL Reference](./dsl-reference.md) - Complete test YAML schema
+- [Assertions](./assertions.md) - Available assertion types
+- [Fixtures and Mocks](./fixtures-and-mocks.md) - Managing test data
+- [Cookbook](./cookbook.md) - Copy-pasteable test recipes
+- [CLI](./cli.md) - Test runner command line options
+- [CI Integration](./ci.md) - Running tests in CI pipelines
+- [Troubleshooting](./troubleshooting.md) - Common issues and solutions

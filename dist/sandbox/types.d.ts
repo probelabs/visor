@@ -1,0 +1,204 @@
+/**
+ * Types for sandbox execution environments (Docker and Bubblewrap)
+ */
+import type { ReviewIssue } from '../reviewer';
+import type { CheckConfig } from '../types/config';
+/**
+ * Cache configuration for sandbox volumes
+ */
+export interface SandboxCacheConfig {
+    /** Liquid template for cache scope prefix (default: git branch) */
+    prefix?: string;
+    /** Fallback prefix when current prefix has no cache */
+    fallback_prefix?: string;
+    /** Paths inside the container to cache */
+    paths: string[];
+    /** Time-to-live for cache volumes (e.g., "7d", "24h") */
+    ttl?: string;
+    /** Maximum number of cache scopes to keep */
+    max_scopes?: number;
+}
+/**
+ * Resource limits for sandbox containers
+ */
+export interface SandboxResourceConfig {
+    /** Memory limit (e.g., "512m", "2g") */
+    memory?: string;
+    /** CPU limit (e.g., 1.0, 0.5) */
+    cpu?: number;
+}
+/**
+ * Additional host path to bind-mount into the sandbox
+ */
+export interface SandboxBindPath {
+    /** Host path (supports ~ prefix for home directory) */
+    host: string;
+    /** Container path (defaults to resolved host path) */
+    container?: string;
+    /** Mount as read-only (default: true) */
+    read_only?: boolean;
+}
+/**
+ * Configuration for a project-level Docker service (e.g., redis, postgres)
+ */
+export interface ProjectServiceConfig {
+    /** Docker image (e.g., "redis:7-alpine") */
+    image: string;
+    /** Ports to expose within compose network (no host mapping) */
+    ports?: number[];
+    /** Environment variables for the service container */
+    environment?: Record<string, string>;
+    /** Volume mounts for the service */
+    volumes?: string[];
+    /** Healthcheck configuration */
+    healthcheck?: {
+        test: string[];
+        interval?: string;
+        timeout?: string;
+        retries?: number;
+    };
+}
+/**
+ * Tracks a running project service environment (compose project)
+ */
+export interface ProjectEnvironment {
+    /** Project identifier */
+    projectId: string;
+    /** Path to the generated docker-compose.yml */
+    composeFilePath: string;
+    /** Docker Compose project name */
+    projectName: string;
+    /** Workspace service name to exec into */
+    serviceName: string;
+    /** Service endpoints for env injection (service name -> host:port) */
+    serviceEndpoints: Record<string, {
+        host: string;
+        port: number;
+    }>;
+    /** Whether compose services are running */
+    started: boolean;
+}
+/**
+ * Configuration for a single sandbox environment
+ */
+export interface SandboxConfig {
+    /** Sandbox engine type: 'docker' (default), 'bubblewrap' (Linux namespaces), or 'seatbelt' (macOS sandbox-exec) */
+    engine?: 'docker' | 'bubblewrap' | 'seatbelt';
+    /** Docker image to use (e.g., "node:20-alpine") */
+    image?: string;
+    /** Path to Dockerfile (relative to config file or absolute) */
+    dockerfile?: string;
+    /** Inline Dockerfile content */
+    dockerfile_inline?: string;
+    /** Path to docker-compose file */
+    compose?: string;
+    /** Service name within the compose file */
+    service?: string;
+    /** Working directory inside container (default: /workspace) */
+    workdir?: string;
+    /** Glob patterns for host env vars to forward into sandbox */
+    env_passthrough?: string[];
+    /** Enable/disable network access (default: true) */
+    network?: boolean;
+    /** Mount repo as read-only (default: false) */
+    read_only?: boolean;
+    /** Resource limits */
+    resources?: SandboxResourceConfig;
+    /** Where visor is mounted inside container (default: /opt/visor) */
+    visor_path?: string;
+    /** Cache volume configuration */
+    cache?: SandboxCacheConfig;
+    /** Additional host paths to bind-mount into the sandbox */
+    bind_paths?: SandboxBindPath[];
+}
+/**
+ * Options for executing a command inside a sandbox
+ */
+export interface SandboxExecOptions {
+    /** Command to execute */
+    command: string;
+    /** Environment variables to set */
+    env: Record<string, string>;
+    /** Timeout in milliseconds */
+    timeoutMs: number;
+    /** Maximum output buffer size in bytes */
+    maxBuffer: number;
+}
+/**
+ * Result of a command executed inside a sandbox
+ */
+export interface SandboxExecResult {
+    /** Standard output */
+    stdout: string;
+    /** Standard error */
+    stderr: string;
+    /** Exit code of the command */
+    exitCode: number;
+}
+/**
+ * A running sandbox instance
+ */
+export interface SandboxInstance {
+    /** Sandbox name (matches key in sandboxes config) */
+    name: string;
+    /** Sandbox configuration */
+    config: SandboxConfig;
+    /** Execute a command inside the sandbox */
+    exec(options: SandboxExecOptions): Promise<SandboxExecResult>;
+    /** Stop and remove the sandbox container */
+    stop(): Promise<void>;
+}
+/**
+ * Serialized PR info sent to child visor via --run-check
+ */
+export interface SerializedPRInfo {
+    number: number;
+    title: string;
+    body: string;
+    author: string;
+    base: string;
+    head: string;
+    files: Array<{
+        filename: string;
+        status: string;
+        additions: number;
+        deletions: number;
+        changes: number;
+        patch?: string;
+    }>;
+    totalAdditions: number;
+    totalDeletions: number;
+    eventType?: string;
+    fullDiff?: string;
+    commitDiff?: string;
+    isIncremental?: boolean;
+    isIssue?: boolean;
+    eventContext?: Record<string, unknown>;
+}
+/**
+ * Payload sent to child visor via --run-check
+ */
+export interface CheckRunPayload {
+    /** The check configuration to execute */
+    check: CheckConfig;
+    /** PR information for the check */
+    prInfo: SerializedPRInfo;
+    /** Results from dependency checks */
+    dependencyOutputs?: Record<string, unknown>;
+    /** Environment variables to set */
+    env?: Record<string, string>;
+}
+/**
+ * Result from child visor --run-check
+ */
+export interface CheckRunResult {
+    /** Structured issues found */
+    issues: ReviewIssue[];
+    /** Raw output from the check (for dependent checks) */
+    output?: unknown;
+    /** Rendered text content */
+    content?: string;
+    /** Debug information */
+    debug?: unknown;
+}
+//# sourceMappingURL=types.d.ts.map

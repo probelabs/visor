@@ -1,0 +1,163 @@
+# GitHub Actions Workflow - Progressive Code Review with Tags
+# This workflow demonstrates different tag strategies for various scenarios
+#
+# NOTE: For fork PR support with check runs, change pull_request to pull_request_target
+# See docs/GITHUB_CHECKS.md#fork-pr-support for details
+
+name: Progressive Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  # ============================================
+  # STAGE 1: Quick validation (runs always)
+  # ============================================
+  quick-validation:
+    name: Fast Critical Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Run critical fast checks
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tags: "critical,fast"
+          fail-fast: "true"  # Stop immediately on critical issues
+          max-parallelism: "5"  # Run checks in parallel
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+  # ============================================
+  # STAGE 2: Security scan (parallel with Stage 1)
+  # ============================================
+  security-scan:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run all security checks
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tags: "security"
+          exclude-tags: "experimental"
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+  # ============================================
+  # STAGE 3: Full review (only for main branch)
+  # ============================================
+  comprehensive-review:
+    name: Comprehensive Analysis
+    runs-on: ubuntu-latest
+    if: github.base_ref == 'main' || github.base_ref == 'master'
+    needs: [quick-validation]  # Only run if quick checks pass
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run comprehensive checks
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tags: "comprehensive,remote"
+          exclude-tags: "experimental,fast"  # Skip fast checks (already ran)
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # Use more powerful model for comprehensive checks
+          AI_MODEL: "gemini-1.5-pro"
+
+  # ============================================
+  # STAGE 4: Performance profiling (for performance PRs)
+  # ============================================
+  performance-analysis:
+    name: Performance Profiling
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'performance') || contains(github.event.pull_request.title, 'perf')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run performance checks
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tags: "performance"
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+  # ============================================
+  # STAGE 5: Frontend checks (for frontend changes)
+  # ============================================
+  frontend-checks:
+    name: Frontend Analysis
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.pull_request.files.*.filename, '.tsx') ||
+      contains(github.event.pull_request.files.*.filename, '.jsx') ||
+      contains(github.event.pull_request.files.*.filename, '.css')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run frontend-specific checks
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tags: "frontend,accessibility,style"
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+  # ============================================
+  # OPTIONAL: Experimental features (manual trigger)
+  # ============================================
+  experimental-features:
+    name: Experimental Analysis
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '/experimental')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run experimental checks
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          tags: "experimental"
+          debug: "true"  # Enable debug for experimental features
+        env:
+          CLAUDE_CODE_API_KEY: ${{ secrets.CLAUDE_CODE_API_KEY }}
+          # Use Claude for experimental features
+          AI_PROVIDER: "claude-code"
+
+  # ============================================
+  # NIGHTLY: Deep analysis (scheduled)
+  # ============================================
+  deep-analysis:
+    name: Deep Code Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'  # Only for scheduled runs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run all checks including slow ones
+        uses: gates-ai/visor-action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Run everything except experimental
+          exclude-tags: "experimental"
+          # No tag filter means run all
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          AI_MODEL: "gemini-1.5-pro"  # Use best model for deep analysis

@@ -1,0 +1,421 @@
+## 🌐 HTTP Integration & Scheduling
+
+Visor provides comprehensive HTTP integration capabilities including webhook reception, HTTP outputs, scheduled executions via cron, and TLS/HTTPS support.
+
+### HTTP Server for Webhook Reception
+
+Configure an HTTP/HTTPS server to receive webhooks and trigger checks:
+
+```yaml
+version: "1.0"
+
+http_server:
+  enabled: true
+  port: 8080
+  host: "0.0.0.0"
+
+  # Optional TLS/HTTPS configuration
+  tls:
+    enabled: true
+    cert: "${TLS_CERT}"  # From environment variable
+    key: "${TLS_KEY}"
+    ca: "${TLS_CA}"      # Optional CA certificate
+    rejectUnauthorized: true
+
+  # Authentication
+  auth:
+    type: bearer_token
+    secret: "${WEBHOOK_SECRET}"
+
+  # Webhook endpoints
+  endpoints:
+    - path: "/webhook/github"
+      name: "github-events"
+    - path: "/webhook/jenkins"
+      name: "jenkins-builds"
+```
+
+Note: The HTTP server is automatically disabled when running in GitHub Actions to avoid conflicts.
+
+### Check Types for HTTP Integration
+
+> **Important:** HTTP steps that interact with external services should declare `criticality: external` and include `assume`/`guarantee` contracts for safety. See [Criticality Modes](./guides/criticality-modes.md) for details.
+
+#### 1. HTTP Input (Webhook Receiver)
+Receive data from configured webhook endpoints:
+
+```yaml
+steps:
+  github-webhook:
+    type: http_input
+    criticality: external  # Receives from external system
+    assume: "true"         # Precondition guard (required for critical steps)
+    schema: plain          # Output contract
+    endpoint: "/webhook/github"
+    on: [webhook_received]
+    transform: |
+      {
+        "event": "{{ webhook.action }}",
+        "repository": "{{ webhook.repository.full_name }}"
+      }
+```
+
+**HTTP Input Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `endpoint` | Webhook endpoint path (must match http_server endpoints) | Required |
+| `on` | Event triggers (typically `[webhook_received]`) | - |
+| `transform` | Liquid template to transform received webhook data | - |
+| `group` | Grouping category for the step | - |
+
+#### 2. HTTP Output (Send Data)
+Send check results to external services:
+
+```yaml
+steps:
+  notify-external:
+    type: http
+    criticality: external  # Sends to external system
+    assume: "outputs['security-check']"  # Only run if dependency succeeded
+    schema: plain
+    depends_on: [security-check]
+    url: "https://api.example.com/notify"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      Authorization: "Bearer ${API_TOKEN}"
+    timeout: 30000  # Optional timeout in milliseconds (default: 30000)
+    body: |
+      {
+        "results": {{ outputs['security-check'] | json }},
+        "timestamp": "{{ 'now' | date: '%Y-%m-%d %H:%M:%S' }}"
+      }
+```
+
+**HTTP Output Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `url` | Target URL | Required |
+| `body` | Request body template (Liquid) | Required |
+| `method` | HTTP method | POST |
+| `headers` | Request headers (supports env var substitution) | {} |
+| `timeout` | Request timeout in milliseconds | 30000 |
+| `metadata` | Additional metadata available in templates | {} |
+
+#### 3. HTTP Client (Fetch Data)
+Fetch data from external APIs:
+
+```yaml
+steps:
+  fetch-config:
+    type: http_client
+    criticality: external  # Fetches from external system
+    assume: "env.API_TOKEN"  # Require API token to be set
+    schema: plain
+    url: "https://api.example.com/config"
+    method: GET
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+    timeout: 30000  # Optional timeout in milliseconds (default: 30000)
+    transform: |
+      {
+        "settings": {{ response.data | json }},
+        "fetched_at": "{{ 'now' | date: '%Y-%m-%d' }}"
+      }
+```
+
+**HTTP Client Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `url` | Target URL (supports Liquid templates and env vars) | Required |
+| `method` | HTTP method (GET, POST, PUT, DELETE, etc.) | GET |
+| `headers` | Request headers (supports env var substitution) | {} |
+| `body` | Request body for POST/PUT (supports Liquid templates) | - |
+| `timeout` | Request timeout in milliseconds | 30000 |
+| `transform` | Liquid template to transform response | - |
+| `transform_js` | JavaScript expression to transform response | - |
+| `output_file` | Download response to file instead of returning data | - |
+| `skip_if_exists` | Skip download if file exists (caching) | true |
+| `rate_limit` | Rate limiting configuration (see below) | - |
+
+**Rate Limiting:**
+
+Throttle outgoing requests to avoid hitting API rate limits. Multiple steps sharing the same `key` share a single token bucket globally.
+
+```yaml
+steps:
+  fetch-data:
+    type: http_client
+    url: "https://api.example.com/data"
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+    rate_limit:
+      key: example-api        # Shared bucket name (defaults to URL origin)
+      requests: 30             # Max requests per window
+      per: minute              # second | minute | hour
+      max_retries: 3           # Retries on 429 (default: 3)
+      backoff: exponential     # fixed | exponential (default: exponential)
+      initial_delay_ms: 1000   # Base delay for backoff (default: 1000)
+```
+
+On a 429 response, the limiter automatically retries with backoff and respects the server's `Retry-After` header when present.
+
+**File Download Example:**
+
+```yaml
+steps:
+  download-artifact:
+    type: http_client
+    url: "https://example.com/artifacts/{{ pr.number }}.zip"
+    output_file: "./downloads/artifact.zip"
+    skip_if_exists: true  # Use cached file if exists
+```
+
+**JavaScript Transform Example:**
+
+```yaml
+steps:
+  fetch-and-transform:
+    type: http_client
+    url: "https://api.example.com/data"
+    transform_js: |
+      // Access response via 'output' variable
+      const items = output.items || [];
+      return items.filter(i => i.status === 'active');
+```
+
+#### 4. Log Provider (Debugging & Monitoring)
+Output debugging information and monitor workflow execution:
+
+```yaml
+steps:
+  debug-start:
+    type: log
+    group: debugging
+    level: info
+    message: "Starting code review for PR #{{ pr.number }} by {{ pr.author }}"
+    include_pr_context: true
+    include_dependencies: false
+    include_metadata: true
+
+  debug-dependencies:
+    type: log
+    group: debugging
+    level: debug
+    depends_on: [security-check]
+    message: |
+      Dependency results summary:
+      {% if dependencies %}
+      - Security check found {{ dependencies['security-check'].issueCount }} issues
+      {% else %}
+      - No dependencies processed
+      {% endif %}
+    include_dependencies: true
+
+  performance-monitor:
+    type: log
+    group: monitoring
+    level: warn
+    message: "Large PR detected: {{ pr.totalAdditions }} lines added"
+```
+
+**Log Provider Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `message` | Log message template (Liquid) | Required |
+| `level` | Log level: `debug`, `info`, `warn`, `error` | info |
+| `group` | Grouping category (e.g., `debugging`, `monitoring`, `chat`) | - |
+| `include_pr_context` | Include PR details in output | true |
+| `include_dependencies` | Include dependency results in output | true |
+| `include_metadata` | Include execution metadata in output | true |
+
+**Chat Group Example:**
+
+When `group: chat` is set, the log provider exposes a structured `output.text` field for chat-style integrations:
+
+```yaml
+steps:
+  chat-response:
+    type: log
+    group: chat
+    level: info
+    message: "Analysis complete for PR #{{ pr.number }}"
+```
+
+### Cron Scheduling
+
+```yaml
+steps:
+  nightly-security-scan:
+    type: ai
+    schedule: "0 3 * * *"  # Every day at 3am
+    prompt: "Run a deep security scan on the default branch"
+```
+
+```yaml
+steps:
+  weekly-health-check:
+    type: http_client
+    url: "https://api.example.com/health"
+    schedule: "0 0 * * 0"  # Every Sunday at midnight
+```
+
+### TLS/HTTPS Configuration
+
+You can configure TLS using environment variables, direct file paths, or Let's Encrypt.
+
+#### Environment Variables
+```yaml
+tls:
+  enabled: true
+  cert: "${TLS_CERT}"
+  key: "${TLS_KEY}"
+```
+
+#### File Paths
+```yaml
+tls:
+  enabled: true
+  cert: "/etc/ssl/certs/server.crt"
+  key: "/etc/ssl/private/server.key"
+```
+
+#### Let's Encrypt
+```yaml
+tls:
+  enabled: true
+  cert: "/etc/letsencrypt/live/example.com/fullchain.pem"
+  key: "/etc/letsencrypt/live/example.com/privkey.pem"
+```
+
+### HTTP Security Features
+
+Visor's HTTP server includes comprehensive security protections:
+
+#### Authentication Methods
+```yaml
+# Bearer Token Authentication
+auth:
+  type: bearer_token
+  secret: "${WEBHOOK_SECRET}"
+
+# HMAC-SHA256 Signature Verification
+auth:
+  type: hmac
+  secret: "${WEBHOOK_SECRET}"
+
+# Basic Authentication
+auth:
+  type: basic
+  username: "${HTTP_USERNAME}"
+  password: "${HTTP_PASSWORD}"
+
+# No Authentication (not recommended for production)
+auth:
+  type: none
+```
+
+#### HMAC Authentication Details
+For `hmac` authentication, webhooks must include the `x-webhook-signature` header:
+- Signature format: `sha256={hash}`
+- Uses HMAC-SHA256 with the configured secret
+- Implements timing-safe comparison to prevent timing attacks
+- Compatible with GitHub webhook signatures
+
+#### DoS Protection
+- Request size limits: Maximum 1MB request body size
+- Early rejection: Validates `Content-Length` header before processing
+- Graceful error handling: Returns proper HTTP status codes (413 Payload Too Large)
+
+#### Security Best Practices
+- Environment detection: Automatically disables in GitHub Actions
+- TLS support: Full HTTPS configuration with custom certificates
+- Input validation: Validates all webhook payloads before processing
+- Error isolation: Security failures don't affect independent checks
+
+### Complete HTTP Pipeline Example
+
+```yaml
+version: "1.0"
+
+# HTTP server configuration
+http_server:
+  enabled: true
+  port: 8443
+  tls:
+    enabled: true
+    cert: "${TLS_CERT}"
+    key: "${TLS_KEY}"
+  auth:
+    type: bearer_token
+    secret: "${WEBHOOK_SECRET}"
+  endpoints:
+    - path: "/webhook/deployment"
+      name: "deployment-trigger"
+
+steps:
+  # 1. Receive webhook
+  deployment-webhook:
+    type: http_input
+    endpoint: "/webhook/deployment"
+    on: [webhook_received]
+    transform: |
+      {
+        "version": "{{ webhook.version }}",
+        "environment": "{{ webhook.environment }}"
+      }
+
+  # 2. Analyze deployment
+  deployment-analysis:
+    type: ai
+    depends_on: [deployment-webhook]
+    prompt: |
+      Analyze deployment for version {{ outputs['deployment-webhook'].suggestions | first }}
+      Check for potential issues and risks
+
+  # 3. Fetch current status
+  current-status:
+    type: http_client
+    depends_on: [deployment-webhook]
+    url: "https://api.example.com/status"
+    method: GET
+
+  # 4. Send results
+  notify-team:
+    type: http
+    depends_on: [deployment-analysis, current-status]
+    url: "https://slack.example.com/webhook"
+    body: |
+      {
+        "text": "Deployment Analysis Complete",
+        "analysis": {{ outputs['deployment-analysis'] | json }},
+        "current_status": {{ outputs['current-status'] | json }}
+      }
+
+  # 5. Scheduled health check
+  health-check:
+    type: http_client
+    url: "https://api.example.com/health"
+    schedule: "*/5 * * * *"  # Every 5 minutes
+    transform: |
+      {
+        "status": "{{ response.status }}",
+        "checked_at": "{{ 'now' | date: '%Y-%m-%d %H:%M:%S' }}"
+      }
+```
+
+### Liquid Template Support
+
+All HTTP configurations support Liquid templating for dynamic content. See [Liquid Templates Guide](./liquid-templates.md) for complete reference.
+
+Common patterns:
+- Access webhook data: `{{ webhook.field }}`
+- Access headers: `{{ headers['x-custom-header'] }}`
+- Access previous outputs: `{{ outputs['check-name'].suggestions | first }}`
+- Date formatting: `{{ 'now' | date: '%Y-%m-%d' }}`
+- JSON encoding: `{{ data | json }}` (useful for debugging objects)
+
