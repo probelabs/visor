@@ -42136,13 +42136,12 @@ var init_scheduler = __esm({
         return { message: "Workflow completed", workflow: schedule.workflow };
       }
       /**
-       * Execute a simple reminder by posting its text directly.
+       * Execute a "reminder" schedule by routing through the default AI pipeline.
        *
-       * Previous versions ran the reminder through the full visor AI pipeline,
-       * but that caused intent misrouting — reminders got classified as unrelated
-       * intents (e.g. git analysis) and never reached the user.  Simple reminders
-       * now bypass the pipeline entirely; the output adapter posts the text.
-       * For AI-processed scheduled tasks, use a workflow schedule instead.
+       * Earlier versions posted reminder text verbatim, but that broke instructions
+       * like "summarize the channel" — they were printed as-is instead of being
+       * executed.  Now we always run reminder text through the full visor pipeline
+       * (the 'default' workflow) so the AI processes it as a task.
        */
       async executeSimpleReminder(schedule) {
         const reminderText = schedule.workflowInputs?.text;
@@ -42157,9 +42156,68 @@ _Previous update:_
 >${schedule.previousResponse.split("\n").join("\n>")}`;
         }
         logger.info(
-          `[Scheduler] Posting reminder directly for schedule ${schedule.id} (${message.length} chars)`
+          `[Scheduler] Executing reminder through AI pipeline for schedule ${schedule.id} (${message.length} chars)`
         );
-        return { message, type: "simple_reminder" };
+        const allChecks = Object.keys(this.visorConfig.checks || {});
+        if (allChecks.length === 0) {
+          return { message: reminderText, type: "simple_reminder" };
+        }
+        const syntheticPayload = {
+          event: {
+            type: "schedule_triggered",
+            schedule_id: schedule.id,
+            workflow: "default",
+            creator_id: schedule.creatorId,
+            creator_context: schedule.creatorContext,
+            channel: schedule.outputContext?.target,
+            timestamp: Date.now()
+          },
+          schedule: {
+            id: schedule.id,
+            workflow: "default",
+            workflowInputs: schedule.workflowInputs,
+            isRecurring: schedule.isRecurring,
+            outputContext: schedule.outputContext,
+            previousResponse: schedule.previousResponse
+          },
+          conversation: {
+            current: {
+              text: schedule.previousResponse ? `${message}
+
+Previous Response:
+${schedule.previousResponse}` : message
+            }
+          }
+        };
+        const webhookData = /* @__PURE__ */ new Map();
+        webhookData.set("/scheduler/trigger", syntheticPayload);
+        const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message);
+        const schedExecFn = () => runEngine.executeChecks({
+          checks: allChecks,
+          showDetails: true,
+          outputFormat: "json",
+          config: cfgForRun,
+          webhookContext: { webhookData, eventType: "schedule" },
+          debug: process.env.VISOR_DEBUG === "true",
+          inputs: { ...schedule.workflowInputs, text: message }
+        });
+        if (this.taskStore) {
+          const { trackExecution: trackExecution2 } = await Promise.resolve().then(() => (init_track_execution(), track_execution_exports));
+          await trackExecution2(
+            {
+              taskStore: this.taskStore,
+              source: "scheduler",
+              workflowId: "default",
+              configPath: this.configPath,
+              messageText: `Scheduled reminder: ${message.slice(0, 100)}`,
+              metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring }
+            },
+            schedExecFn
+          );
+        } else {
+          await schedExecFn();
+        }
+        return { message: "Reminder workflow completed", type: "reminder_workflow" };
       }
       /**
        * Handle schedule execution failure

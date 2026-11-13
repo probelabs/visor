@@ -5257,7 +5257,7 @@ async function executeWorkflowAsTool(workflowId, args, context2, argsOverrides) 
     ...args,
     ...argsOverrides
   };
-  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-XNRRAOAZ.mjs");
+  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-JCSIXHJX.mjs");
   const provider = new WorkflowCheckProvider2();
   const checkConfig = {
     type: "workflow",
@@ -16851,7 +16851,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const map = options?.webhookContext?.webhookData;
             if (map) {
-              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-LFMMXQSZ.mjs");
+              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-O4LM2S2H.mjs");
               const reg = CheckProviderRegistry2.getInstance();
               const p = reg.getProvider("http_input");
               if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -17019,7 +17019,7 @@ var init_state_machine_execution_engine = __esm({
           if (onRetryCheckpoint) await onRetryCheckpoint(retryCheckpoint);
         }
         try {
-          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-LFMMXQSZ.mjs");
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-O4LM2S2H.mjs");
           const registry = CheckProviderRegistry2.getInstance();
           registry.setCustomTools(configWithTagFilter.tools || {});
         } catch (error) {
@@ -17077,7 +17077,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const webhookData = this.executionContext?.webhookContext?.webhookData;
             if (webhookData instanceof Map) {
-              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-PMGNVV2D.mjs");
+              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-ZXYKV5G4.mjs");
               const slackCtx = extractSlackContext2(webhookData);
               if (slackCtx) {
                 const payload = Array.from(webhookData.values())[0];
@@ -18628,13 +18628,12 @@ var init_scheduler = __esm({
         return { message: "Workflow completed", workflow: schedule.workflow };
       }
       /**
-       * Execute a simple reminder by posting its text directly.
+       * Execute a "reminder" schedule by routing through the default AI pipeline.
        *
-       * Previous versions ran the reminder through the full visor AI pipeline,
-       * but that caused intent misrouting — reminders got classified as unrelated
-       * intents (e.g. git analysis) and never reached the user.  Simple reminders
-       * now bypass the pipeline entirely; the output adapter posts the text.
-       * For AI-processed scheduled tasks, use a workflow schedule instead.
+       * Earlier versions posted reminder text verbatim, but that broke instructions
+       * like "summarize the channel" — they were printed as-is instead of being
+       * executed.  Now we always run reminder text through the full visor pipeline
+       * (the 'default' workflow) so the AI processes it as a task.
        */
       async executeSimpleReminder(schedule) {
         const reminderText = schedule.workflowInputs?.text;
@@ -18649,9 +18648,68 @@ _Previous update:_
 >${schedule.previousResponse.split("\n").join("\n>")}`;
         }
         logger.info(
-          `[Scheduler] Posting reminder directly for schedule ${schedule.id} (${message.length} chars)`
+          `[Scheduler] Executing reminder through AI pipeline for schedule ${schedule.id} (${message.length} chars)`
         );
-        return { message, type: "simple_reminder" };
+        const allChecks = Object.keys(this.visorConfig.checks || {});
+        if (allChecks.length === 0) {
+          return { message: reminderText, type: "simple_reminder" };
+        }
+        const syntheticPayload = {
+          event: {
+            type: "schedule_triggered",
+            schedule_id: schedule.id,
+            workflow: "default",
+            creator_id: schedule.creatorId,
+            creator_context: schedule.creatorContext,
+            channel: schedule.outputContext?.target,
+            timestamp: Date.now()
+          },
+          schedule: {
+            id: schedule.id,
+            workflow: "default",
+            workflowInputs: schedule.workflowInputs,
+            isRecurring: schedule.isRecurring,
+            outputContext: schedule.outputContext,
+            previousResponse: schedule.previousResponse
+          },
+          conversation: {
+            current: {
+              text: schedule.previousResponse ? `${message}
+
+Previous Response:
+${schedule.previousResponse}` : message
+            }
+          }
+        };
+        const webhookData = /* @__PURE__ */ new Map();
+        webhookData.set("/scheduler/trigger", syntheticPayload);
+        const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message);
+        const schedExecFn = () => runEngine.executeChecks({
+          checks: allChecks,
+          showDetails: true,
+          outputFormat: "json",
+          config: cfgForRun,
+          webhookContext: { webhookData, eventType: "schedule" },
+          debug: process.env.VISOR_DEBUG === "true",
+          inputs: { ...schedule.workflowInputs, text: message }
+        });
+        if (this.taskStore) {
+          const { trackExecution } = await import("./track-execution-EW5QRBKG.mjs");
+          await trackExecution(
+            {
+              taskStore: this.taskStore,
+              source: "scheduler",
+              workflowId: "default",
+              configPath: this.configPath,
+              messageText: `Scheduled reminder: ${message.slice(0, 100)}`,
+              metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring }
+            },
+            schedExecFn
+          );
+        } else {
+          await schedExecFn();
+        }
+        return { message: "Reminder workflow completed", type: "reminder_workflow" };
       }
       /**
        * Handle schedule execution failure
@@ -46158,8 +46216,8 @@ function buildBuiltinGlobals(opts) {
   const asyncFunctionNames = /* @__PURE__ */ new Set();
   const scheduleFn = async (args = {}) => {
     try {
-      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-UKBKXA54.mjs");
-      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-PMGNVV2D.mjs");
+      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-LHCNAEME.mjs");
+      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-ZXYKV5G4.mjs");
       const parentCtx = opts.sessionInfo?._parentContext;
       const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
       const webhookEventType = parentCtx?.webhookContext?.eventType || parentCtx?.prInfo?.eventContext?.eventType;
@@ -50613,4 +50671,4 @@ undici/lib/fetch/body.js:
 undici/lib/websocket/frame.js:
   (*! ws. MIT License. Einar Otto Stangvik <einaros@gmail.com> *)
 */
-//# sourceMappingURL=chunk-O3JGYB6I.mjs.map
+//# sourceMappingURL=chunk-E3VIBAHP.mjs.map
