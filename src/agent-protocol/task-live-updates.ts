@@ -104,7 +104,8 @@ export interface TaskLiveUpdateDeps {
   ) => Promise<string | undefined>;
   extractSkillMetadata?: (
     traceRef: string,
-    traceId?: string
+    traceId?: string,
+    requestStartedAt?: Date
   ) => Promise<TaskLiveUpdateSkillMetadata | undefined>;
 }
 
@@ -398,7 +399,11 @@ export class TaskLiveUpdateManager {
       logger.info(
         `[TaskLiveUpdates] Publishing progress update for task ${this.ctx.taskId}: ${cleaned.slice(0, 160)}`
       );
-      this.lastSkillMetadata = await this.deps.extractSkillMetadata(traceRef, traceState.traceId);
+      this.lastSkillMetadata = await this.deps.extractSkillMetadata(
+        traceRef,
+        traceState.traceId,
+        this.startedAt
+      );
       this.lastUpdateKind = 'semantic';
       const message = this.decorateProgressText(
         cleaned,
@@ -498,11 +503,12 @@ export class TaskLiveUpdateManager {
     _traceId?: string
   ): string {
     const normalized = normalizeProgressSummary(text);
-    const taskSummary = formatTaskSummary(timing.taskSummary);
+    const taskSummary = formatTaskSummary(timing.taskSummary, this.startedAt);
     const blocks = [
       '*Live Update*',
       '_Current task is still running. This message updates in place until the final answer is ready._',
       this.lastUpdateKind === 'stall' ? DEFAULT_TASK_LIVE_UPDATE_STALL_NOTICE : '',
+      taskSummary,
       normalized,
       formatProgressMetadata(timing),
       `\`task_id: ${this.ctx.taskId}\``,
@@ -575,7 +581,8 @@ export class TaskLiveUpdateManager {
     }
     this.lastSkillMetadata = await this.deps.extractSkillMetadata(
       this.getTraceState().traceRef || traceId || '',
-      traceId
+      traceId,
+      this.startedAt
     );
 
     const fallback = buildStallFallbackSummary(traceSnapshot, this.lastUpdateText);
@@ -793,7 +800,7 @@ function appendTaskScopeLines(
   }
 }
 
-function formatTaskSummary(summary?: ProbeTaskSummary): string | undefined {
+function formatTaskSummary(summary?: ProbeTaskSummary, _startedAt?: Date): string | undefined {
   if (!summary || summary.tasks.length === 0) return undefined;
   const lines = ['*Tasks*'];
   if (summary.scopes.length > 0) {
@@ -824,7 +831,8 @@ function dedupeStrings(values: string[] | undefined): string[] {
 
 export async function extractTraceSkillMetadata(
   traceRef: string,
-  traceId?: string
+  traceId?: string,
+  requestStartedAt?: Date
 ): Promise<TaskLiveUpdateSkillMetadata | undefined> {
   if (!traceRef && !traceId) return undefined;
   try {
@@ -856,7 +864,11 @@ export async function extractTraceSkillMetadata(
 
     const finalActivatedSkills =
       activatedSkills.length > 0 ? activatedSkills : fallbackActivatedSkills;
-    const taskSummary = extractProbeTaskSummary(spans);
+    // Filter to spans from the current request to avoid stale task data from the shared task store
+    const taskSpans = requestStartedAt
+      ? spans.filter(s => s.startTimeMs >= requestStartedAt.getTime() - 5000)
+      : spans;
+    const taskSummary = extractProbeTaskSummary(taskSpans);
     if (!finalActivatedSkills.length && !taskSummary) return undefined;
     return {
       activatedSkills: finalActivatedSkills.length ? finalActivatedSkills : undefined,
