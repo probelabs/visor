@@ -1088,6 +1088,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
                       userName: slackContext.userName,
                       timezone: slackContext.timezone,
                       channelType: slackContext.channelType,
+                      channelId: slackContext.channel,
                     }
                   : undefined,
                 schedulerContext:
