@@ -45084,7 +45084,8 @@ var init_mcp_custom_sse_server = __esm({
                       userId: slackContext.userId,
                       userName: slackContext.userName,
                       timezone: slackContext.timezone,
-                      channelType: slackContext.channelType
+                      channelType: slackContext.channelType,
+                      channelId: slackContext.channel
                     } : void 0,
                     schedulerContext: webhookEventType === "schedule" ? {
                       scheduleId: this.workflowContext?.executionContext?.inputs?.schedule?.id
