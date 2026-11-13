@@ -1,0 +1,226 @@
+version: "1.0"
+
+# =============================================================================
+# A2A (Agent-to-Agent) Protocol Example
+#
+# Demonstrates two modes of A2A integration:
+#   1. Server-side: Visor exposes itself as an A2A agent, accepting tasks
+#      from external agents via the A2A protocol.
+#   2. Client-side: Visor calls external A2A agents as check steps within
+#      a workflow, using the `type: a2a` check provider.
+#
+# Run server mode:  visor --a2a --config examples/a2a-agent-example.yaml
+# Run client mode:  visor --check compliance-scan --config examples/a2a-agent-example.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Server-side configuration: Visor as an A2A agent
+# ---------------------------------------------------------------------------
+# When started with --a2a, Visor listens for inbound A2A requests and routes
+# them to internal workflows via skill_routing.
+
+agent_protocol:
+  enabled: true
+  protocol: a2a
+  port: 9000
+  host: "0.0.0.0"
+
+  # Inline agent card (alternative: agent_card: ./agent-card.json)
+  agent_card_inline:
+    name: "Code Review Agent"
+    description: "AI-powered code review agent built with Visor"
+    version: "1.0.0"
+    provider:
+      organization: "Visor"
+    skills:
+      - id: security
+        name: Security Review
+        description: Analyze code for security vulnerabilities (OWASP Top 10)
+        tags: [security, owasp]
+      - id: performance
+        name: Performance Review
+        description: Analyze code for performance issues and bottlenecks
+        tags: [performance]
+      - id: general
+        name: General Review
+        description: General code quality and best practices review
+        tags: [quality]
+    supported_interfaces:
+      - url: "http://localhost:9000"
+        protocol_binding: "a2a/v1"
+    capabilities:
+      streaming: false
+      push_notifications: false
+
+  # Authentication for inbound requests
+  auth:
+    type: bearer
+    token_env: AGENT_AUTH_TOKEN
+
+  # Route A2A skills to internal workflows
+  skill_routing:
+    security: security-review
+    performance: performance-review
+  default_workflow: general-review
+
+  # Task retention
+  task_ttl: "7d"
+
+  # Async queue settings
+  queue:
+    max_concurrent: 5
+    stale_claim_timeout: 300000
+
+# ---------------------------------------------------------------------------
+# Client-side checks: call external A2A agents
+# ---------------------------------------------------------------------------
+
+steps:
+  # Call an external compliance agent and get results
+  compliance-scan:
+    type: a2a
+    agent_url: "http://compliance-agent.example.com"
+    message: |
+      Review PR #{{ pr.number }}: {{ pr.title }}
+      Files changed: {{ files | size }}
+    auth:
+      scheme: bearer
+      token_env: COMPLIANCE_AGENT_TOKEN
+    blocking: true
+    timeout: 60000
+    on:
+      - pr_opened
+      - pr_updated
+
+  # Use A2A output in a downstream AI step
+  review-summary:
+    type: ai
+    depends_on: [compliance-scan]
+    prompt: |
+      Summarize the compliance scan results:
+      {{ outputs["compliance-scan"] | json }}
+    on:
+      - pr_opened
+      - pr_updated
+
+  # Multi-turn A2A with auto-reply on input_required
+  interactive-agent:
+    type: a2a
+    agent_card: "https://agent.example.com/.well-known/agent-card.json"
+    message: "Analyze {{ pr.title }} for best practices"
+    max_turns: 3
+    on_input_required: |
+      Here is additional context: {{ pr.body }}
+    transform_js: |
+      return {
+        issues: (output.issues || []).map(function(i) {
+          return {
+            file: i.file,
+            line: i.line || 0,
+            ruleId: 'a2a/' + (i.ruleId || 'issue'),
+            message: i.message,
+            severity: i.severity || 'warning'
+          };
+        })
+      };
+    on:
+      - manual
+
+  # Server-side workflows (referenced by skill_routing above)
+  security-review:
+    type: ai
+    prompt: |
+      Perform a security review focusing on OWASP Top 10 vulnerabilities.
+      Check for SQL injection, XSS, CSRF, and authentication issues.
+    on: [manual]
+
+  performance-review:
+    type: ai
+    prompt: |
+      Review for performance issues: N+1 queries, memory leaks,
+      unnecessary allocations, and algorithmic complexity.
+    on: [manual]
+
+  general-review:
+    type: ai
+    prompt: |
+      General code quality review: naming, structure, error handling,
+      and adherence to project conventions.
+    on: [manual]
+
+# ---------------------------------------------------------------------------
+# Co-located YAML tests
+# ---------------------------------------------------------------------------
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+  cases:
+    # Test 1: A2A check runs with mocked response
+    - name: a2a-check-basic-execution
+      description: A2A check step runs and returns mocked output
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      mocks:
+        compliance-scan:
+          text: "No compliance issues found"
+          compliant: true
+        review-summary:
+          text: "All clear"
+      expect:
+        calls:
+          - step: compliance-scan
+            exactly: 1
+          - step: review-summary
+            exactly: 1
+        outputs:
+          - step: compliance-scan
+            path: compliant
+            equals: true
+          - step: compliance-scan
+            path: text
+            equals: "No compliance issues found"
+
+    # Test 2: A2A output flows to dependent AI step via outputs template
+    - name: a2a-output-dependency-flow
+      description: Downstream AI step receives A2A output via depends_on
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      mocks:
+        compliance-scan:
+          findings:
+            - rule: "SEC-001"
+              severity: "high"
+              message: "SQL injection risk"
+        review-summary:
+          text: "Found 1 high-severity issue"
+      expect:
+        calls:
+          - step: compliance-scan
+            exactly: 1
+          - step: review-summary
+            exactly: 1
+        prompts:
+          - step: review-summary
+            contains:
+              - "SEC-001"
+              - "SQL injection"
+
+    # Test 3: A2A with transform_js processes agent response
+    - name: a2a-transform-js-applied
+      description: transform_js converts A2A agent response into structured issues
+      event: manual
+      fixture: local.minimal
+      mocks:
+        interactive-agent:
+          issues:
+            - file: "src/main.ts"
+              line: 42
+              ruleId: "best-practice"
+              message: "Consider using const instead of let"
+              severity: "info"
+      expect:
+        calls:
+          - step: interactive-agent
+            exactly: 1

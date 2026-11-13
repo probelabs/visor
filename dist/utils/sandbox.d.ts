@@ -1,0 +1,44 @@
+import Sandbox from '@nyariv/sandboxjs';
+/**
+ * Centralized helpers for creating and using SandboxJS instances consistently
+ * across providers. The goal is to have one place to define allowed globals
+ * and prototype whitelists, and to offer a small helper to inject a `log`
+ * utility inside user-provided JS snippets.
+ */
+export interface CompileOptions {
+    injectLog?: boolean;
+    logPrefix?: string;
+    /** When true, wrap the code in a function and `return` its result */
+    wrapFunction?: boolean;
+}
+export interface JsSyntaxValidationResult {
+    valid: boolean;
+    error?: string;
+}
+/**
+ * Validate JavaScript syntax without executing it.
+ * Uses the sandbox's compile method to check for syntax errors.
+ * Returns validation result with error message if invalid.
+ */
+export declare function validateJsSyntax(code: string): JsSyntaxValidationResult;
+/**
+ * Create a hardened Sandbox with a consistent set of globals and prototype
+ * whitelists. This is a superset of the sets previously used by individual
+ * providers, kept intentionally minimal and side‑effect free.
+ */
+export declare function createSecureSandbox(): Sandbox;
+/**
+ * Compile and execute user-provided JS inside the sandbox with optional
+ * helper injection. By default, code is wrapped in a function to keep the
+ * global scope clean.
+ */
+export declare function compileAndRun<T = unknown>(sandbox: Sandbox, userCode: string, scope: Record<string, unknown>, opts?: CompileOptions): T;
+/**
+ * Compile and execute user-provided JS with async support.
+ *
+ * Uses sandbox.compileAsync() + .run() (same pattern as Probe's DSL runtime).
+ * The code must already be transformed (async IIFE wrapped) by the caller —
+ * this function does NOT apply wrapping heuristics like compileAndRun does.
+ */
+export declare function compileAndRunAsync<T = unknown>(sandbox: Sandbox, transformedCode: string, scope: Record<string, unknown>, opts?: CompileOptions): Promise<T>;
+//# sourceMappingURL=sandbox.d.ts.map

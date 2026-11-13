@@ -1,0 +1,8 @@
+# Local Proof project used by the governed invocation subject.
+project:
+  name: visor-native-demo-pack
+  version: 1.0.0
+  specs:
+    - path: specs/system
+      prefix: SYS-REQ
+      type: system

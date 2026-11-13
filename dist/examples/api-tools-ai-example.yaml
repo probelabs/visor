@@ -1,0 +1,63 @@
+version: "1.0"
+
+# Reuse the API bundle from a separate tools file and expose it to AI.
+extends: ./api-tools-library.yaml
+
+checks:
+  api-assistant:
+    type: ai
+    prompt: |
+      You have access to users-api MCP tools generated from OpenAPI.
+      Explain how to call getUser and which required fields are needed.
+    ai_custom_tools:
+      - users-api
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+    on:
+      - manual
+
+  api-tool-whitelist-check:
+    type: mcp
+    transport: custom
+    method: createUser
+    methodArgs:
+      requestBody:
+        name: Alice
+    on:
+      - issue_comment
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+  cases:
+    - name: api-ai-example-loads-reusable-api-bundle
+      description: AI step resolves users-api from external library file
+      event: manual
+      fixture: local.minimal
+      mocks:
+        api-assistant:
+          text: getUser requires the id path parameter.
+      expect:
+        calls:
+          - step: api-assistant
+            exactly: 1
+        prompts:
+          - step: api-assistant
+            contains:
+              - users-api
+              - getUser
+
+    - name: api-ai-example-keeps-whitelist-enforcement
+      description: API bundle whitelist still applies when reused in AI config
+      event: issue_comment
+      fixture: gh.issue_comment.standard
+      expect:
+        calls:
+          - step: api-tool-whitelist-check
+            exactly: 1
+        outputs:
+          - step: api-tool-whitelist-check
+            path: issues[0].message
+            matches: "(?i)Custom tool not found: createUser"

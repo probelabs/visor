@@ -1,0 +1,100 @@
+version: "1.0"
+
+# Screenshot Tool Example
+# ========================
+# Demonstrates:
+#   - Workflow-as-MCP-tool: expose a workflow as an AI tool
+#   - http_client with output_file: download binary files (images)
+#   - Liquid templates in http_client body
+#   - allowed_folders: grant AI access to /tmp for readImage
+#
+# The AI takes a screenshot via Cloudflare Browser Rendering API,
+# then uses readImage to view the captured image and describe it.
+#
+# Prerequisites:
+#   CF_ACCOUNT_ID              - Cloudflare account ID
+#   CF_BROWSER_RENDERING_TOKEN - Browser Rendering API token
+#
+# Run:  visor run --config examples/screenshot-tool.yaml
+# Test: visor test --config examples/screenshot-tool.yaml
+
+# ---------------------------------------------------------------------------
+# Workflow: screenshot
+# Captures a web page as PNG via Cloudflare Browser Rendering API.
+# Exposed to the AI as an MCP tool via ai_custom_tools.
+# ---------------------------------------------------------------------------
+workflows:
+  screenshot:
+    inputs:
+      - name: url
+        required: true
+        description: URL of the web page to screenshot
+        schema:
+          type: string
+      - name: options
+        required: false
+        description: |
+          Optional screenshot configuration:
+            viewport: {width, height, deviceScaleFactor}
+            screenshotOptions: {fullPage: true/false}
+            gotoOptions: {waitUntil: "networkidle0"|"load"}
+            waitForSelector: CSS selector to wait for
+        schema:
+          type: object
+
+    outputs:
+      - name: result
+        value_js: |
+          const capture = outputs['capture'];
+          if (capture?.file_path) {
+            return {
+              success: true,
+              file_path: capture.file_path,
+              size: capture.size,
+              content_type: capture.content_type
+            };
+          }
+          return {
+            success: false,
+            error: capture?.issues?.[0]?.message || 'Screenshot capture failed'
+          };
+
+    steps:
+      capture:
+        type: http_client
+        method: POST
+        url: "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/browser-rendering/screenshot"
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Bearer ${CF_BROWSER_RENDERING_TOKEN}"
+        body: "{\"url\": \"{{ inputs.url }}\"}"
+        output_file: "/tmp/visor_screenshot_{{ 'now' | date: '%s%N' }}.png"
+        timeout: 30000
+
+# ---------------------------------------------------------------------------
+# AI step: take a screenshot and describe it
+# ---------------------------------------------------------------------------
+steps:
+  describe-page:
+    type: ai
+    ai:
+      max_iterations: 5
+      extra_allowed_folders:
+        - /tmp
+    ai_custom_tools:
+      screenshot:
+        workflow: screenshot
+        inputs: {}
+    prompt: |
+      You have a `screenshot` tool that captures web pages as images.
+
+      Take a screenshot of https://news.ycombinator.com, then use
+      readImage to view it and describe what you see on the page.
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Description of what was seen in the screenshot
+      required: [text]
+

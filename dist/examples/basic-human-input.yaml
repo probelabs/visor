@@ -1,0 +1,15 @@
+version: '1.0'
+
+checks:
+  ask-user:
+    type: human-input
+    prompt: "What is your name?"
+    placeholder: "Enter your name..."
+    allow_empty: false
+
+  greet:
+    type: log
+    depends_on: [ask-user]
+    message: |
+      Hello, {{ outputs['ask-user'] }}!
+      Welcome to Visor.
