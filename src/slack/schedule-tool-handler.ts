@@ -142,6 +142,7 @@ export async function executeScheduleTool(
         userName: slackContext.userName,
         timezone: timezone || 'UTC',
         channelType: slackContext.channelType,
+        channelId: slackContext.channel,
       },
     },
     availableWorkflows,

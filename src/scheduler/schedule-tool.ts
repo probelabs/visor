@@ -256,6 +256,8 @@ export interface ScheduleToolContext {
   explicitTarget?: boolean;
   /** Origin of the current execution, used to prevent scheduler recursion. */
   executionSource?: 'user' | 'scheduler';
+  /** The channel ID the request originated from (for listing channel schedules). */
+  channelId?: string;
 }
 
 /**
@@ -602,15 +604,29 @@ async function handleList(
   context: ScheduleToolContext,
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
-  // Only show schedules created by this user - protects privacy of personal schedules
+  // Start with schedules created by this user
   const allUserSchedules = await store.getByCreatorAsync(context.userId);
-  const schedules = allUserSchedules.filter(s => s.status !== 'completed');
+  const userSchedules = allUserSchedules.filter(s => s.status !== 'completed');
 
-  // If in a specific context, optionally filter to show only relevant schedules
-  let filteredSchedules = schedules;
+  // When listing from a channel, also include other users' schedules targeting this channel.
+  // Channel schedules are visible to everyone in the channel.
+  let channelSchedules: Schedule[] = [];
+  if (context.allowedScheduleType === 'channel' && context.channelId) {
+    const allActive = await store.getActiveSchedulesAsync();
+    channelSchedules = allActive.filter(s => {
+      if (s.creatorId === context.userId) return false; // already in userSchedules
+      if (s.status === 'completed') return false;
+      const target = s.outputContext?.target || '';
+      return target === context.channelId;
+    });
+  }
+
+  const combined = [...userSchedules, ...channelSchedules];
+
+  // If in a specific context, filter to show only relevant schedules
+  let filteredSchedules = combined;
   if (context.allowedScheduleType) {
-    // Map schedule output context to schedule type for filtering
-    filteredSchedules = schedules.filter(s => {
+    filteredSchedules = combined.filter(s => {
       const scheduleOutputType = s.outputContext?.type;
       if (!scheduleOutputType || scheduleOutputType === 'none') {
         return context.allowedScheduleType === 'personal';
@@ -779,10 +795,20 @@ async function handleTest(
     };
   }
 
+  // Search user's own schedules first, then channel schedules if in a channel context
   const userSchedules = await store.getByCreatorAsync(context.userId);
   let schedule = userSchedules.find(s => s.id === args.schedule_id);
   if (!schedule) {
     schedule = userSchedules.find(s => s.id.startsWith(args.schedule_id!));
+  }
+  // Also allow testing channel schedules created by other users
+  if (!schedule && context.channelId) {
+    const allActive = await store.getActiveSchedulesAsync();
+    const channelSchedules = allActive.filter(s => s.outputContext?.target === context.channelId);
+    schedule = channelSchedules.find(s => s.id === args.schedule_id);
+    if (!schedule) {
+      schedule = channelSchedules.find(s => s.id.startsWith(args.schedule_id!));
+    }
   }
   if (!schedule) {
     return {
@@ -1390,6 +1416,7 @@ export function buildScheduleToolContext(
       userName?: string;
       timezone?: string;
       channelType?: 'channel' | 'dm' | 'group';
+      channelId?: string;
     };
     cliContext?: { userId?: string };
     githubContext?: { login: string };
@@ -1433,6 +1460,7 @@ export function buildScheduleToolContext(
       permissions,
       allowedScheduleType,
       executionSource,
+      channelId: sources.slackContext.channelId,
     };
   }
 
