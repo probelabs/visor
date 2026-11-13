@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 process.env.VISOR_VERSION = '0.1.42';
 process.env.PROBE_VERSION = '0.6.0-rc346';
-process.env.VISOR_COMMIT_SHA = 'f8cfa6400d4d68b88807f7963b5d926fa0c8849b';
-process.env.VISOR_COMMIT_SHORT = 'f8cfa640';
+process.env.VISOR_COMMIT_SHA = 'c050371030b0c3c947982a4ae20e20f950c075b9';
+process.env.VISOR_COMMIT_SHORT = 'c0503710';
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
@@ -358083,10 +358083,6 @@ class Scheduler {
         if (!reminderText) {
             return { message: 'Reminder!', type: 'simple_reminder' };
         }
-        if (!this.engine) {
-            logger_1.logger.warn('[Scheduler] No execution engine set, posting reminder text directly');
-            return { message: reminderText, type: 'simple_reminder' };
-        }
         // Build the message to send through the pipeline
         let message = reminderText;
         if (schedule.isRecurring && schedule.previousResponse) {
@@ -358105,6 +358101,7 @@ class Scheduler {
                 workflow: 'default',
                 creator_id: schedule.creatorId,
                 creator_context: schedule.creatorContext,
+                channel: schedule.outputContext?.target,
                 timestamp: Date.now(),
             },
             schedule: {
@@ -358113,6 +358110,14 @@ class Scheduler {
                 workflowInputs: schedule.workflowInputs,
                 isRecurring: schedule.isRecurring,
                 outputContext: schedule.outputContext,
+                previousResponse: schedule.previousResponse,
+            },
+            conversation: {
+                current: {
+                    text: schedule.previousResponse
+                        ? `${message}\n\nPrevious Response:\n${schedule.previousResponse}`
+                        : message,
+                },
             },
         };
         const webhookData = new Map();

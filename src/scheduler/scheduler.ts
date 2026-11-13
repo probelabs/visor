@@ -933,11 +933,6 @@ export class Scheduler {
       return { message: 'Reminder!', type: 'simple_reminder' };
     }
 
-    if (!this.engine) {
-      logger.warn('[Scheduler] No execution engine set, posting reminder text directly');
-      return { message: reminderText, type: 'simple_reminder' };
-    }
-
     // Build the message to send through the pipeline
     let message = reminderText;
     if (schedule.isRecurring && schedule.previousResponse) {
@@ -954,13 +949,14 @@ export class Scheduler {
       return { message: reminderText, type: 'simple_reminder' };
     }
 
-    const syntheticPayload = {
+    const syntheticPayload: Record<string, unknown> = {
       event: {
         type: 'schedule_triggered',
         schedule_id: schedule.id,
         workflow: 'default',
         creator_id: schedule.creatorId,
         creator_context: schedule.creatorContext,
+        channel: schedule.outputContext?.target,
         timestamp: Date.now(),
       },
       schedule: {
@@ -969,6 +965,14 @@ export class Scheduler {
         workflowInputs: schedule.workflowInputs,
         isRecurring: schedule.isRecurring,
         outputContext: schedule.outputContext,
+        previousResponse: schedule.previousResponse,
+      },
+      conversation: {
+        current: {
+          text: schedule.previousResponse
+            ? `${message}\n\nPrevious Response:\n${schedule.previousResponse}`
+            : message,
+        },
       },
     };
 
