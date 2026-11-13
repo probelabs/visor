@@ -40263,11 +40263,13 @@ function normalizeProgressSummary(text2) {
       matched.set(canonical, match[2].trim());
     }
   }
-  if (matched.size === wantedLabels.length) {
-    return wantedLabels.map((label) => `- ${label}: ${matched.get(label)}`).join("\n");
+  if (matched.size >= 2) {
+    return wantedLabels.filter((label) => matched.has(label)).map((label) => `- ${label}: ${matched.get(label)}`).join("\n");
   }
-  const withoutTiming = lines.filter((line) => !/^-?\s*(Timing|Metadata|Trace)\s*:/i.test(line));
-  return withoutTiming.join("\n");
+  const withoutNoise = lines.filter(
+    (line) => !/^-?\s*(Timing|Metadata|Trace|Tasks?)\s*:/i.test(line) && !/^\[?[x~! -]\]?\s/i.test(line) && !/^•\s*\[/i.test(line)
+  );
+  return withoutNoise.join("\n");
 }
 function formatProgressMetadata(timing) {
   const parts = [`elapsed ${formatDuration(timing.elapsedSeconds)}`];

@@ -1,1 +1,0 @@
-{"version":3,"file":"opa-compiler.d.ts","sourceRoot":"","sources":["file:///home/buger/projects/visor/src/enterprise/policy/opa-compiler.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAQH;;;;;;;;;;;GAWG;AACH,qBAAa,WAAW;IACtB,OAAO,CAAC,MAAM,CAAC,SAAS,CAA6C;IAErE;;;;;;;OAOG;IACG,gBAAgB,CAAC,KAAK,EAAE,MAAM,EAAE,GAAG,OAAO,CAAC,MAAM,CAAC;IA+CxD;;;;;OAKG;IACH,OAAO,CAAC,WAAW;CA2FpB"}
