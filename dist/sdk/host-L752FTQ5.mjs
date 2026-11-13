@@ -27,13 +27,13 @@ var init_host = __esm({
             const { GitHubFrontend } = await import("./github-frontend-S7ZWX7PC.mjs");
             this.frontends.push(new GitHubFrontend());
           } else if (spec.name === "slack") {
-            const { SlackFrontend } = await import("./slack-frontend-6J4QX6O6.mjs");
+            const { SlackFrontend } = await import("./slack-frontend-SSZFDGH5.mjs");
             this.frontends.push(new SlackFrontend(spec.config));
           } else if (spec.name === "tui") {
             const { TuiFrontend } = await import("./tui-frontend-T56PZB67.mjs");
             this.frontends.push(new TuiFrontend(spec.config));
           } else if (spec.name === "telegram") {
-            const { TelegramFrontend } = await import("./telegram-frontend-JEG5UE44.mjs");
+            const { TelegramFrontend } = await import("./telegram-frontend-K7T62L3G.mjs");
             this.frontends.push(new TelegramFrontend(spec.config));
           } else if (spec.name === "email") {
             const { EmailFrontend } = await import("./email-frontend-3KYOLN2V.mjs");
@@ -42,7 +42,7 @@ var init_host = __esm({
             const { WhatsAppFrontend } = await import("./whatsapp-frontend-3EMMNC7R.mjs");
             this.frontends.push(new WhatsAppFrontend(spec.config));
           } else if (spec.name === "teams") {
-            const { TeamsFrontend } = await import("./teams-frontend-4FV5YWV4.mjs");
+            const { TeamsFrontend } = await import("./teams-frontend-WBWVJPZR.mjs");
             this.frontends.push(new TeamsFrontend(spec.config));
           } else if (spec.name === "a2a") {
             const { A2AFrontend } = await import("./a2a-frontend-BFZ5RNIZ.mjs");
@@ -84,4 +84,4 @@ export {
   FrontendsHost,
   isActiveFrontend
 };
-//# sourceMappingURL=host-CIYBLZTE.mjs.map
+//# sourceMappingURL=host-L752FTQ5.mjs.map

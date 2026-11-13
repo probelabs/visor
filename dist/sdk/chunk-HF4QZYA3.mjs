@@ -195,7 +195,7 @@ function appendTaskScopeLines(lines, scope, depth = 0) {
     appendTaskScopeLines(lines, child, depth + 1);
   }
 }
-function formatTaskSummary(summary) {
+function formatTaskSummary(summary, _startedAt) {
   if (!summary || summary.tasks.length === 0) return void 0;
   const lines = ["*Tasks*"];
   if (summary.scopes.length > 0) {
@@ -221,7 +221,7 @@ function dedupeStrings(values) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
 }
-async function extractTraceSkillMetadata(traceRef, traceId) {
+async function extractTraceSkillMetadata(traceRef, traceId, requestStartedAt) {
   if (!traceRef && !traceId) return void 0;
   try {
     const spans = await fetchTraceSpans(traceRef || traceId, { targetTraceId: traceId });
@@ -243,7 +243,8 @@ async function extractTraceSkillMetadata(traceRef, traceId) {
       (Array.isArray(routeIntentOutput?.skills) ? routeIntentOutput.skills : void 0) || (Array.isArray(classifyOutput?.skills) ? classifyOutput.skills : void 0)
     );
     const finalActivatedSkills = activatedSkills.length > 0 ? activatedSkills : fallbackActivatedSkills;
-    const taskSummary = extractProbeTaskSummary(spans);
+    const taskSpans = requestStartedAt ? spans.filter((s) => s.startTimeMs >= requestStartedAt.getTime() - 5e3) : spans;
+    const taskSummary = extractProbeTaskSummary(taskSpans);
     if (!finalActivatedSkills.length && !taskSummary) return void 0;
     return {
       activatedSkills: finalActivatedSkills.length ? finalActivatedSkills : void 0,
@@ -563,7 +564,11 @@ Good update example:
           logger.info(
             `[TaskLiveUpdates] Publishing progress update for task ${this.ctx.taskId}: ${cleaned.slice(0, 160)}`
           );
-          this.lastSkillMetadata = await this.deps.extractSkillMetadata(traceRef, traceState.traceId);
+          this.lastSkillMetadata = await this.deps.extractSkillMetadata(
+            traceRef,
+            traceState.traceId,
+            this.startedAt
+          );
           this.lastUpdateKind = "semantic";
           const message = this.decorateProgressText(
             cleaned,
@@ -651,11 +656,12 @@ Good update example:
       }
       decorateProgressText(text, timing, _traceId) {
         const normalized = normalizeProgressSummary(text);
-        const taskSummary = formatTaskSummary(timing.taskSummary);
+        const taskSummary = formatTaskSummary(timing.taskSummary, this.startedAt);
         const blocks = [
           "*Live Update*",
           "_Current task is still running. This message updates in place until the final answer is ready._",
           this.lastUpdateKind === "stall" ? DEFAULT_TASK_LIVE_UPDATE_STALL_NOTICE : "",
+          taskSummary,
           normalized,
           formatProgressMetadata(timing),
           `\`task_id: ${this.ctx.taskId}\``,
@@ -713,7 +719,8 @@ Good update example:
         }
         this.lastSkillMetadata = await this.deps.extractSkillMetadata(
           this.getTraceState().traceRef || traceId || "",
-          traceId
+          traceId,
+          this.startedAt
         );
         const fallback = buildStallFallbackSummary(traceSnapshot, this.lastUpdateText);
         const baseText = this.lastUpdateText || fallback;
@@ -759,4 +766,4 @@ export {
   TaskLiveUpdateManager,
   init_task_live_updates
 };
-//# sourceMappingURL=chunk-OATX4LL5.mjs.map
+//# sourceMappingURL=chunk-HF4QZYA3.mjs.map

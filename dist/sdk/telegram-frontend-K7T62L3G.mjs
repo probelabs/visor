@@ -1,7 +1,7 @@
 import {
   init_task_live_updates,
   isFrontendLiveUpdatesEnabled
-} from "./chunk-OATX4LL5.mjs";
+} from "./chunk-HF4QZYA3.mjs";
 import "./chunk-BVEATT5V.mjs";
 import {
   formatUserFacingExecutionMessage,
@@ -596,4 +596,4 @@ init_telegram_frontend();
 export {
   TelegramFrontend
 };
-//# sourceMappingURL=telegram-frontend-JEG5UE44.mjs.map
+//# sourceMappingURL=telegram-frontend-K7T62L3G.mjs.map

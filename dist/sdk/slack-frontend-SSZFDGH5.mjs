@@ -1,7 +1,7 @@
 import {
   init_task_live_updates,
   isFrontendLiveUpdatesEnabled
-} from "./chunk-OATX4LL5.mjs";
+} from "./chunk-HF4QZYA3.mjs";
 import "./chunk-BVEATT5V.mjs";
 import {
   chunkText,
@@ -1078,4 +1078,4 @@ init_slack_frontend();
 export {
   SlackFrontend
 };
-//# sourceMappingURL=slack-frontend-6J4QX6O6.mjs.map
+//# sourceMappingURL=slack-frontend-SSZFDGH5.mjs.map

@@ -2,7 +2,7 @@ import {
   TaskLiveUpdateManager,
   init_task_live_updates,
   resolveTaskLiveUpdatesConfig
-} from "./chunk-OATX4LL5.mjs";
+} from "./chunk-HF4QZYA3.mjs";
 import "./chunk-BVEATT5V.mjs";
 import {
   init_task_trace_resolution,
@@ -317,4 +317,4 @@ init_track_execution();
 export {
   trackExecution
 };
-//# sourceMappingURL=track-execution-KEAKONKK.mjs.map
+//# sourceMappingURL=track-execution-EW5QRBKG.mjs.map
