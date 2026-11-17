@@ -637,6 +637,14 @@ export class SlackFrontend implements Frontend {
         return;
       }
 
+      // Allow scheduled jobs to suppress output by responding with [SILENT]
+      if (/^\[SILENT\]/i.test(text.trim())) {
+        ctx.logger.info(
+          `[slack-frontend] suppressing AI reply for ${checkId}: [SILENT] marker detected`
+        );
+        return;
+      }
+
       // Mermaid rendering is temporarily disabled — mmdc/puppeteer is too
       // heavy for the current deployment and frequently times out.
       // TODO: re-enable once a lighter renderer (e.g. kroki) is available.

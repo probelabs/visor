@@ -143,11 +143,13 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
     if (!schedule.workflow && result.output) {
       const output = result.output as any;
       // Pipeline already handled output - don't double-post
-      if (output.type === 'pipeline_executed') {
-        return ''; // Return empty to skip posting
+      if (output.type === 'pipeline_executed' || output.type === 'reminder_workflow') {
+        return '';
       }
       // Simple reminder fallback - just post the message text
       if (output.type === 'simple_reminder' && output.message) {
+        // Respect [SILENT] marker
+        if (/^\[SILENT\]/i.test(output.message.trim())) return '';
         return output.message;
       }
       // If workflowInputs has text, use that

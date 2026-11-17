@@ -934,9 +934,10 @@ export class Scheduler {
     }
 
     // Build the message to send through the pipeline
-    let message = reminderText;
+    let message = `[Scheduled task] ${reminderText}`;
+    message += '\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else — no message will be posted._';
     if (schedule.isRecurring && schedule.previousResponse) {
-      message = `${reminderText}\n\n_Previous update:_\n>${schedule.previousResponse.split('\n').join('\n>')}`;
+      message += `\n\n_Previous update:_\n>${schedule.previousResponse.split('\n').join('\n>')}`;
     }
 
     logger.info(
