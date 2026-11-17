@@ -877,10 +877,11 @@ export class Scheduler {
       },
     };
 
-    // Create webhook context map
+    // Create webhook context map — store at both the scheduler endpoint and
+    // the default Slack endpoint so the Slack frontend can find the channel/thread
     const webhookData = new Map<string, unknown>();
-    const endpoint = '/scheduler/trigger';
-    webhookData.set(endpoint, syntheticPayload);
+    webhookData.set('/scheduler/trigger', syntheticPayload);
+    webhookData.set('/bots/slack/support', syntheticPayload);
 
     // Refresh GitHub App installation token (no-op if not using App auth or still fresh)
     try {
@@ -991,6 +992,7 @@ export class Scheduler {
 
     const webhookData = new Map<string, unknown>();
     webhookData.set('/scheduler/trigger', syntheticPayload);
+    webhookData.set('/bots/slack/support', syntheticPayload);
 
     const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message);
 
