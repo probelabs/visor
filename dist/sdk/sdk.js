@@ -36452,7 +36452,8 @@ function toDbRow(schedule) {
     run_count: schedule.runCount,
     failure_count: schedule.failureCount,
     last_error: schedule.lastError ?? null,
-    previous_response: schedule.previousResponse ?? null
+    previous_response: schedule.previousResponse ?? null,
+    require_output: schedule.requireOutput != null ? schedule.requireOutput ? 1 : 0 : null
   };
 }
 function safeJsonParse(value) {
@@ -36484,7 +36485,8 @@ function fromDbRow(row) {
     runCount: row.run_count,
     failureCount: row.failure_count,
     lastError: row.last_error ?? void 0,
-    previousResponse: row.previous_response ?? void 0
+    previousResponse: row.previous_response ?? void 0,
+    requireOutput: row.require_output === 1 ? true : void 0
   };
 }
 function toTriggerRow(trigger) {
@@ -36600,6 +36602,7 @@ var init_sqlite_store = __esm({
         failure_count   INTEGER      NOT NULL DEFAULT 0,
         last_error      TEXT,
         previous_response TEXT,
+        require_output  BOOLEAN,
         claimed_by      VARCHAR(255),
         claimed_at      BIGINT,
         lock_token      VARCHAR(36)
@@ -36648,6 +36651,13 @@ var init_sqlite_store = __esm({
       CREATE INDEX IF NOT EXISTS idx_message_triggers_status
         ON message_triggers(status);
     `);
+        const addColumnSafe = (table, col, type) => {
+          try {
+            db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+          } catch {
+          }
+        };
+        addColumnSafe("schedules", "require_output", "BOOLEAN");
       }
       // --- Helpers ---
       getDb() {
@@ -36675,13 +36685,15 @@ var init_sqlite_store = __esm({
         schedule_expr, run_at, is_recurring, original_expression,
         workflow, workflow_inputs, output_context,
         status, created_at, last_run_at, next_run_at,
-        run_count, failure_count, last_error, previous_response
+        run_count, failure_count, last_error, previous_response,
+        require_output
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?,
+        ?
       )
     `
         ).run(
@@ -36704,7 +36716,8 @@ var init_sqlite_store = __esm({
           row.run_count,
           row.failure_count,
           row.last_error,
-          row.previous_response
+          row.previous_response,
+          row.require_output
         );
         logger.info(
           `[SqliteStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}`
@@ -36721,13 +36734,15 @@ var init_sqlite_store = __esm({
         schedule_expr, run_at, is_recurring, original_expression,
         workflow, workflow_inputs, output_context,
         status, created_at, last_run_at, next_run_at,
-        run_count, failure_count, last_error, previous_response
+        run_count, failure_count, last_error, previous_response,
+        require_output
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?,
+        ?
       )
     `
         ).run(
@@ -36750,7 +36765,8 @@ var init_sqlite_store = __esm({
           row.run_count,
           row.failure_count,
           row.last_error,
-          row.previous_response
+          row.previous_response,
+          row.require_output
         );
       }
       async get(id) {
@@ -36772,7 +36788,8 @@ var init_sqlite_store = __esm({
         schedule_expr = ?, run_at = ?, is_recurring = ?, original_expression = ?,
         workflow = ?, workflow_inputs = ?, output_context = ?,
         status = ?, last_run_at = ?, next_run_at = ?,
-        run_count = ?, failure_count = ?, last_error = ?, previous_response = ?
+        run_count = ?, failure_count = ?, last_error = ?, previous_response = ?,
+        require_output = ?
       WHERE id = ?
     `
         ).run(
@@ -36794,6 +36811,7 @@ var init_sqlite_store = __esm({
           row.failure_count,
           row.last_error,
           row.previous_response,
+          row.require_output,
           row.id
         );
         return updated;
@@ -42108,6 +42126,10 @@ var init_scheduler = __esm({
         } catch {
         }
         const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
+        const inputs = { ...schedule.workflowInputs };
+        if (!schedule.requireOutput) {
+          inputs._silentHint = "If this task yields no results or nothing to report, respond with exactly [SILENT] and nothing else \u2014 no message will be posted.";
+        }
         const schedExecFn = () => runEngine.executeChecks({
           checks: checksToRun,
           showDetails: true,
@@ -42115,7 +42137,7 @@ var init_scheduler = __esm({
           config: cfgForRun,
           webhookContext: { webhookData, eventType: "schedule" },
           debug: process.env.VISOR_DEBUG === "true",
-          inputs: schedule.workflowInputs
+          inputs
         });
         if (this.taskStore) {
           const { trackExecution: trackExecution2 } = await Promise.resolve().then(() => (init_track_execution(), track_execution_exports));
@@ -42149,7 +42171,9 @@ var init_scheduler = __esm({
           return { message: "Reminder!", type: "simple_reminder" };
         }
         let message = `[Scheduled task] ${reminderText}`;
-        message += "\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else \u2014 no message will be posted._";
+        if (!schedule.requireOutput) {
+          message += "\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else \u2014 no message will be posted._";
+        }
         if (schedule.isRecurring && schedule.previousResponse) {
           message += `
 
@@ -42586,7 +42610,8 @@ async function handleCreate(args, context2, store) {
       // Only set if explicitly provided
       workflowInputs: args.workflow_inputs || (args.reminder_text ? { text: args.reminder_text } : void 0),
       outputContext,
-      nextRunAt
+      nextRunAt,
+      requireOutput: args.require_output
     });
     const displayText = args.reminder_text || args.workflow || "scheduled task";
     logger.info(
@@ -43142,6 +43167,10 @@ User: "disable trigger abc123"
         original_expression: {
           type: "string",
           description: "For create: the original natural language expression from user (for display only)"
+        },
+        require_output: {
+          type: "boolean",
+          description: "For create: when true, the job always posts output even if there is nothing to report. Default is false \u2014 the AI can suppress output by responding with [SILENT] when there are no results."
         },
         // For cancel/pause/resume
         schedule_id: {
