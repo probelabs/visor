@@ -9,7 +9,7 @@ import { CachePrewarmer } from './cache-prewarmer';
 import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
 import { withActiveSpan, withVisorRun, getVisorRunAttributes } from '../telemetry/trace-helpers';
-import { Scheduler } from '../scheduler/scheduler';
+import { Scheduler, setSchedulerInstance } from '../scheduler/scheduler';
 import { ScheduleStore, type Schedule } from '../scheduler/schedule-store';
 import { createHash } from 'crypto';
 import { createSlackOutputAdapter } from './slack-output-adapter';
@@ -242,6 +242,7 @@ export class SlackSocketRunner implements Runner {
             : undefined,
           defaultTimezone: schedulerCfg?.default_timezone,
         });
+        setSchedulerInstance(this.genericScheduler);
         this.genericScheduler.setEngine(this.engine);
         if (this.taskStore) this.genericScheduler.setTaskStore(this.taskStore, this.configPath);
 

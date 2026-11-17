@@ -1120,6 +1120,13 @@ export function getScheduler(
 }
 
 /**
+ * Register an externally-created scheduler as the singleton so getScheduler() returns it.
+ */
+export function setSchedulerInstance(scheduler: Scheduler): void {
+  schedulerInstance = scheduler;
+}
+
+/**
  * Reset the scheduler instance (for testing)
  */
 export function resetScheduler(): void {
