@@ -42036,8 +42036,9 @@ var init_scheduler = __esm({
         }
         logger.info(`[Scheduler] Test-firing schedule ${schedule.id}`);
         const startTime = Date.now();
+        const testSchedule = { ...schedule, requireOutput: true };
         try {
-          const output = await this.executeWorkflow(schedule);
+          const output = await this.executeWorkflow(testSchedule);
           const result = {
             success: true,
             output,

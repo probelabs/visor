@@ -1,7 +1,7 @@
 import {
-  CheckProviderRegistry,
-  init_check_provider_registry
-} from "./chunk-NAPFPUTL.mjs";
+  WorkflowCheckProvider,
+  init_workflow_check_provider
+} from "./chunk-QM4CLLKP.mjs";
 import "./chunk-H2ZWNJJO.mjs";
 import "./chunk-VPPBOKBQ.mjs";
 import "./chunk-SJHBRMHX.mjs";
@@ -31,8 +31,8 @@ import "./chunk-4MHHELVZ.mjs";
 import "./chunk-6E625R3C.mjs";
 import "./chunk-B2OUZAWY.mjs";
 import "./chunk-J7LXIPZS.mjs";
-init_check_provider_registry();
+init_workflow_check_provider();
 export {
-  CheckProviderRegistry
+  WorkflowCheckProvider
 };
-//# sourceMappingURL=check-provider-registry-ZA3KUQ4B.mjs.map
+//# sourceMappingURL=workflow-check-provider-EPPASCK4.mjs.map
