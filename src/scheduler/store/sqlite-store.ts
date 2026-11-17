@@ -52,6 +52,7 @@ interface ScheduleRow {
   failure_count: number;
   last_error: string | null;
   previous_response: string | null;
+  require_output: number | null; // SQLite boolean: 0/1/null
 }
 
 /**
@@ -79,6 +80,7 @@ function toDbRow(schedule: Schedule): ScheduleRow {
     failure_count: schedule.failureCount,
     last_error: schedule.lastError ?? null,
     previous_response: schedule.previousResponse ?? null,
+    require_output: schedule.requireOutput != null ? (schedule.requireOutput ? 1 : 0) : null,
   };
 }
 
@@ -116,6 +118,7 @@ function fromDbRow(row: ScheduleRow): Schedule {
     failureCount: row.failure_count,
     lastError: row.last_error ?? undefined,
     previousResponse: row.previous_response ?? undefined,
+    requireOutput: row.require_output === 1 ? true : undefined,
   };
 }
 
@@ -269,6 +272,7 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         failure_count   INTEGER      NOT NULL DEFAULT 0,
         last_error      TEXT,
         previous_response TEXT,
+        require_output  BOOLEAN,
         claimed_by      VARCHAR(255),
         claimed_at      BIGINT,
         lock_token      VARCHAR(36)
@@ -317,6 +321,16 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
       CREATE INDEX IF NOT EXISTS idx_message_triggers_status
         ON message_triggers(status);
     `);
+
+    // Add columns to existing databases (safe to call repeatedly — catches "duplicate column")
+    const addColumnSafe = (table: string, col: string, type: string) => {
+      try {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+      } catch {
+        // Column already exists
+      }
+    };
+    addColumnSafe('schedules', 'require_output', 'BOOLEAN');
   }
 
   // --- Helpers ---
@@ -353,13 +367,15 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         schedule_expr, run_at, is_recurring, original_expression,
         workflow, workflow_inputs, output_context,
         status, created_at, last_run_at, next_run_at,
-        run_count, failure_count, last_error, previous_response
+        run_count, failure_count, last_error, previous_response,
+        require_output
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?,
+        ?
       )
     `
     ).run(
@@ -382,7 +398,8 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
       row.run_count,
       row.failure_count,
       row.last_error,
-      row.previous_response
+      row.previous_response,
+      row.require_output
     );
 
     logger.info(
@@ -403,13 +420,15 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         schedule_expr, run_at, is_recurring, original_expression,
         workflow, workflow_inputs, output_context,
         status, created_at, last_run_at, next_run_at,
-        run_count, failure_count, last_error, previous_response
+        run_count, failure_count, last_error, previous_response,
+        require_output
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?,
+        ?
       )
     `
     ).run(
@@ -432,7 +451,8 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
       row.run_count,
       row.failure_count,
       row.last_error,
-      row.previous_response
+      row.previous_response,
+      row.require_output
     );
   }
 
@@ -464,7 +484,8 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         schedule_expr = ?, run_at = ?, is_recurring = ?, original_expression = ?,
         workflow = ?, workflow_inputs = ?, output_context = ?,
         status = ?, last_run_at = ?, next_run_at = ?,
-        run_count = ?, failure_count = ?, last_error = ?, previous_response = ?
+        run_count = ?, failure_count = ?, last_error = ?, previous_response = ?,
+        require_output = ?
       WHERE id = ?
     `
     ).run(
@@ -486,6 +507,7 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
       row.failure_count,
       row.last_error,
       row.previous_response,
+      row.require_output,
       row.id
     );
 

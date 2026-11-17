@@ -180,6 +180,8 @@ export interface ScheduleToolArgs {
   workflow?: string;
   /** Optional workflow inputs */
   workflow_inputs?: Record<string, unknown>;
+  /** When true, always post output even if there's nothing to report (disables [SILENT] suppression) */
+  require_output?: boolean;
 
   // For cancel/pause/resume actions:
   schedule_id?: string;
@@ -572,6 +574,7 @@ async function handleCreate(
         args.workflow_inputs || (args.reminder_text ? { text: args.reminder_text } : undefined),
       outputContext,
       nextRunAt,
+      requireOutput: args.require_output,
     });
 
     const displayText = args.reminder_text || args.workflow || 'scheduled task';
@@ -1297,6 +1300,11 @@ User: "disable trigger abc123"
           type: 'string',
           description:
             'For create: the original natural language expression from user (for display only)',
+        },
+        require_output: {
+          type: 'boolean',
+          description:
+            'For create: when true, the job always posts output even if there is nothing to report. Default is false — the AI can suppress output by responding with [SILENT] when there are no results.',
         },
         // For cancel/pause/resume
         schedule_id: {

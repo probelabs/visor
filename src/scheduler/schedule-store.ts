@@ -66,6 +66,9 @@ export interface Schedule {
 
   // Previous execution response (for recurring reminders)
   previousResponse?: string; // The AI response from the last execution
+
+  // Output control
+  requireOutput?: boolean; // When true, always post output (disable [SILENT] suppression)
 }
 
 /**

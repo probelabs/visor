@@ -888,6 +888,13 @@ export class Scheduler {
     // Use common preparation helper
     const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
 
+    // Build workflow inputs, injecting [SILENT] hint unless requireOutput is set
+    const inputs = { ...schedule.workflowInputs };
+    if (!schedule.requireOutput) {
+      inputs._silentHint =
+        'If this task yields no results or nothing to report, respond with exactly [SILENT] and nothing else — no message will be posted.';
+    }
+
     // Execute the workflow
     const schedExecFn = () =>
       runEngine.executeChecks({
@@ -897,7 +904,7 @@ export class Scheduler {
         config: cfgForRun,
         webhookContext: { webhookData, eventType: 'schedule' },
         debug: process.env.VISOR_DEBUG === 'true',
-        inputs: schedule.workflowInputs,
+        inputs,
       } as any);
     if (this.taskStore) {
       const { trackExecution } = await import('../agent-protocol/track-execution');
@@ -935,7 +942,9 @@ export class Scheduler {
 
     // Build the message to send through the pipeline
     let message = `[Scheduled task] ${reminderText}`;
-    message += '\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else — no message will be posted._';
+    if (!schedule.requireOutput) {
+      message += '\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else — no message will be posted._';
+    }
     if (schedule.isRecurring && schedule.previousResponse) {
       message += `\n\n_Previous update:_\n>${schedule.previousResponse.split('\n').join('\n>')}`;
     }
