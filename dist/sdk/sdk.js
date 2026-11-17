@@ -42119,8 +42119,8 @@ var init_scheduler = __esm({
           }
         };
         const webhookData = /* @__PURE__ */ new Map();
-        const endpoint = "/scheduler/trigger";
-        webhookData.set(endpoint, syntheticPayload);
+        webhookData.set("/scheduler/trigger", syntheticPayload);
+        webhookData.set("/bots/slack/support", syntheticPayload);
         try {
           const { refreshGitHubCredentials: refreshGitHubCredentials2 } = await Promise.resolve().then(() => (init_github_auth(), github_auth_exports));
           await refreshGitHubCredentials2();
@@ -42217,6 +42217,7 @@ ${schedule.previousResponse}` : message
         };
         const webhookData = /* @__PURE__ */ new Map();
         webhookData.set("/scheduler/trigger", syntheticPayload);
+        webhookData.set("/bots/slack/support", syntheticPayload);
         const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message);
         const schedExecFn = () => runEngine.executeChecks({
           checks: allChecks,
