@@ -5257,7 +5257,7 @@ async function executeWorkflowAsTool(workflowId, args, context2, argsOverrides) 
     ...args,
     ...argsOverrides
   };
-  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-JCSIXHJX.mjs");
+  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await import("./workflow-check-provider-JYRYOQNU.mjs");
   const provider = new WorkflowCheckProvider2();
   const checkConfig = {
     type: "workflow",
@@ -16851,7 +16851,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const map = options?.webhookContext?.webhookData;
             if (map) {
-              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-O4LM2S2H.mjs");
+              const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-5LNLEQL7.mjs");
               const reg = CheckProviderRegistry2.getInstance();
               const p = reg.getProvider("http_input");
               if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -17019,7 +17019,7 @@ var init_state_machine_execution_engine = __esm({
           if (onRetryCheckpoint) await onRetryCheckpoint(retryCheckpoint);
         }
         try {
-          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-O4LM2S2H.mjs");
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await import("./check-provider-registry-5LNLEQL7.mjs");
           const registry = CheckProviderRegistry2.getInstance();
           registry.setCustomTools(configWithTagFilter.tools || {});
         } catch (error) {
@@ -17077,7 +17077,7 @@ var init_state_machine_execution_engine = __esm({
           try {
             const webhookData = this.executionContext?.webhookContext?.webhookData;
             if (webhookData instanceof Map) {
-              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-ZXYKV5G4.mjs");
+              const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-6BDKAS7Z.mjs");
               const slackCtx = extractSlackContext2(webhookData);
               if (slackCtx) {
                 const payload = Array.from(webhookData.values())[0];
@@ -17108,7 +17108,7 @@ var init_state_machine_execution_engine = __esm({
         if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
           try {
             const { EventBus } = await import("./event-bus-5K3Y2FCS.mjs");
-            const { FrontendsHost } = await import("./host-L752FTQ5.mjs");
+            const { FrontendsHost } = await import("./host-24M63LIM.mjs");
             const bus = new EventBus();
             context2.eventBus = bus;
             frontendsHost = new FrontendsHost(bus, logger);
@@ -18640,9 +18640,10 @@ var init_scheduler = __esm({
         if (!reminderText) {
           return { message: "Reminder!", type: "simple_reminder" };
         }
-        let message = reminderText;
+        let message = `[Scheduled task] ${reminderText}`;
+        message += "\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else \u2014 no message will be posted._";
         if (schedule.isRecurring && schedule.previousResponse) {
-          message = `${reminderText}
+          message += `
 
 _Previous update:_
 >${schedule.previousResponse.split("\n").join("\n>")}`;
@@ -46216,8 +46217,8 @@ function buildBuiltinGlobals(opts) {
   const asyncFunctionNames = /* @__PURE__ */ new Set();
   const scheduleFn = async (args = {}) => {
     try {
-      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-LHCNAEME.mjs");
-      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-ZXYKV5G4.mjs");
+      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await import("./schedule-tool-IVHZLZDI.mjs");
+      const { extractSlackContext: extractSlackContext2 } = await import("./schedule-tool-handler-6BDKAS7Z.mjs");
       const parentCtx = opts.sessionInfo?._parentContext;
       const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
       const webhookEventType = parentCtx?.webhookContext?.eventType || parentCtx?.prInfo?.eventContext?.eventType;
@@ -50671,4 +50672,4 @@ undici/lib/fetch/body.js:
 undici/lib/websocket/frame.js:
   (*! ws. MIT License. Einar Otto Stangvik <einaros@gmail.com> *)
 */
-//# sourceMappingURL=chunk-E3VIBAHP.mjs.map
+//# sourceMappingURL=chunk-BBYJNGDV.mjs.map

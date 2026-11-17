@@ -876,6 +876,12 @@ ${errorMessages}`;
             );
             return;
           }
+          if (/^\[SILENT\]/i.test(text.trim())) {
+            ctx.logger.info(
+              `[slack-frontend] suppressing AI reply for ${checkId}: [SILENT] marker detected`
+            );
+            return;
+          }
           const diagrams = [];
           let processedText = text;
           if (diagrams.length > 0) {
@@ -1078,4 +1084,4 @@ init_slack_frontend();
 export {
   SlackFrontend
 };
-//# sourceMappingURL=slack-frontend-SSZFDGH5.mjs.map
+//# sourceMappingURL=slack-frontend-NGUZLNI2.mjs.map

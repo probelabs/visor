@@ -42148,9 +42148,10 @@ var init_scheduler = __esm({
         if (!reminderText) {
           return { message: "Reminder!", type: "simple_reminder" };
         }
-        let message = reminderText;
+        let message = `[Scheduled task] ${reminderText}`;
+        message += "\n\n_System: This is a scheduled task. If the task yields no results or nothing to report, respond with exactly [SILENT] and nothing else \u2014 no message will be posted._";
         if (schedule.isRecurring && schedule.previousResponse) {
-          message = `${reminderText}
+          message += `
 
 _Previous update:_
 >${schedule.previousResponse.split("\n").join("\n>")}`;
@@ -84559,6 +84560,12 @@ ${errorMessages}`;
           if (!text2) {
             ctx.logger.info(
               `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`
+            );
+            return;
+          }
+          if (/^\[SILENT\]/i.test(text2.trim())) {
+            ctx.logger.info(
+              `[slack-frontend] suppressing AI reply for ${checkId}: [SILENT] marker detected`
             );
             return;
           }
