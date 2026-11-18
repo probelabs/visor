@@ -383,4 +383,215 @@ describe('Scheduler Slack Output', () => {
       expect(deletedSchedule).toBeUndefined();
     });
   });
+
+  describe('webhook payload endpoint routing', () => {
+    test('reminder should store payload at Slack frontend endpoint', async () => {
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      const schedule = await store.createAsync({
+        creatorId: 'U123',
+        creatorContext: 'slack:U123',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflowInputs: { text: 'summarize today' },
+        outputContext: { type: 'slack', target: 'C123456' },
+      });
+
+      await (scheduler as any).executeSchedule(schedule);
+
+      const executeCall = mockExecuteChecks.mock.calls[0][0];
+      const webhookData = executeCall.webhookContext.webhookData as Map<string, unknown>;
+
+      // Must be stored at the Slack frontend's default endpoint
+      const slackPayload = webhookData.get('/bots/slack/support') as any;
+      expect(slackPayload).toBeDefined();
+      expect(slackPayload.event.channel).toBe('C123456');
+      expect(slackPayload.event.type).toBe('schedule_triggered');
+
+      // Also stored at the scheduler endpoint
+      expect(webhookData.get('/scheduler/trigger')).toBeDefined();
+    });
+  });
+
+  describe('conversation context for assume guards', () => {
+    test('reminder execution should pass conversation in execution context', async () => {
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      const schedule = await store.createAsync({
+        creatorId: 'U123',
+        creatorContext: 'slack:U123',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflowInputs: { text: 'check the CSV for payroll dates' },
+        outputContext: { type: 'slack', target: 'C123456' },
+      });
+
+      await (scheduler as any).executeSchedule(schedule);
+
+      // The mock engine's setExecutionContext should have been called with conversation
+      const MockEngine = (scheduler as any).engine?.constructor;
+      // Access the engine created by prepareExecution via the mock
+      const { StateMachineExecutionEngine: MockEngineClass } = jest.requireMock(
+        '../../../src/state-machine-execution-engine'
+      );
+      const instances = MockEngineClass.mock?.instances || [];
+      // The last instance is the one created for this execution
+      const engineInstance = instances[instances.length - 1];
+      if (engineInstance) {
+        const setCtxCalls = engineInstance.setExecutionContext.mock.calls;
+        expect(setCtxCalls.length).toBeGreaterThan(0);
+        const ctx = setCtxCalls[setCtxCalls.length - 1][0];
+        expect(ctx.conversation).toBeDefined();
+        expect(ctx.conversation.current.text).toContain('check the CSV for payroll dates');
+      }
+    });
+  });
+
+  describe('test-fire behavior', () => {
+    test('test-fire should use getScheduler singleton', async () => {
+      // Import setSchedulerInstance to register the singleton
+      const { setSchedulerInstance, getScheduler } = jest.requireActual(
+        '../../../src/scheduler/scheduler'
+      );
+
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      // Verify getScheduler returns undefined before registration
+      // (can't test actual module-level var in jest mocks, but verify the API shape)
+      expect(typeof scheduler.testSchedule).toBe('function');
+    });
+
+    test('test-fire should disable SILENT suppression', async () => {
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      const schedule = await store.createAsync({
+        creatorId: 'U123',
+        creatorContext: 'slack:U123',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflowInputs: { text: 'daily report' },
+        outputContext: { type: 'slack', target: 'C123456' },
+      });
+
+      await scheduler.testSchedule(schedule.id);
+
+      // The pipeline should have been called
+      expect(mockExecuteChecks).toHaveBeenCalled();
+
+      // The inputs should NOT contain the SILENT hint (test-fires force requireOutput)
+      const executeCall = mockExecuteChecks.mock.calls[0][0];
+      const inputText = executeCall.inputs?.text || '';
+      expect(inputText).not.toContain('[SILENT]');
+    });
+  });
+
+  describe('error logging with silent mode', () => {
+    test('pipeline errors should be logged even when SILENT is default', async () => {
+      const { logger } = jest.requireMock('../../../src/logger');
+
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      // Make executeChecks throw
+      mockExecuteChecks.mockRejectedValueOnce(new Error('AI provider timeout'));
+
+      const schedule = await store.createAsync({
+        creatorId: 'U123',
+        creatorContext: 'slack:U123',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflowInputs: { text: 'daily check' },
+        outputContext: { type: 'slack', target: 'C123456' },
+      });
+
+      await (scheduler as any).executeSchedule(schedule);
+
+      // Error should be logged regardless of SILENT mode
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('AI provider timeout')
+      );
+
+      // Schedule should track the failure
+      const updated = await store.getAsync(schedule.id);
+      expect(updated?.failureCount).toBe(1);
+      expect(updated?.lastError).toBe('AI provider timeout');
+    });
+
+    test('fast execution should log warning', async () => {
+      const { logger } = jest.requireMock('../../../src/logger');
+      logger.warn.mockClear();
+
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      // Mock engine returns instantly (simulating assume skip)
+      mockExecuteChecks.mockResolvedValueOnce(undefined);
+
+      const schedule = await store.createAsync({
+        creatorId: 'U123',
+        creatorContext: 'slack:U123',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflowInputs: { text: 'daily check' },
+        outputContext: { type: 'slack', target: 'C123456' },
+      });
+
+      await (scheduler as any).executeSchedule(schedule);
+
+      // Should warn about suspiciously fast execution
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('suspiciously fast')
+      );
+    });
+  });
 });

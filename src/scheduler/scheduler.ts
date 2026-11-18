@@ -698,11 +698,19 @@ export class Scheduler {
       // Execute the workflow
       const output = await this.executeWorkflow(schedule);
 
+      const execMs = Date.now() - startTime;
       result = {
         success: true,
         output,
-        executionTimeMs: Date.now() - startTime,
+        executionTimeMs: execMs,
       };
+
+      if (execMs < 5000) {
+        logger.warn(
+          `[Scheduler] Schedule ${schedule.id} completed suspiciously fast (${execMs}ms) — ` +
+            `pipeline may have skipped execution (check assume guards, missing conversation context)`
+        );
+      }
 
       // Update schedule state
       const now = Date.now();
@@ -792,7 +800,8 @@ export class Scheduler {
    */
   private prepareExecution(
     schedule: Schedule,
-    cliMessage?: string
+    cliMessage?: string,
+    conversation?: Record<string, unknown>
   ): {
     engine: StateMachineExecutionEngine;
     config: VisorConfig;
@@ -823,11 +832,12 @@ export class Scheduler {
       );
     };
 
-    // Set execution context
+    // Set execution context — include conversation so assume guards can evaluate it
     engine.setExecutionContext({
       ...this.executionContext,
       cliMessage,
       responseCapture,
+      ...(conversation ? { conversation } : {}),
     });
 
     return { engine, config, responseRef };
@@ -859,6 +869,7 @@ export class Scheduler {
     }
 
     // Build synthetic webhook context for the schedule
+    const workflowText = (schedule.workflowInputs?.text as string) || schedule.workflow || '';
     const syntheticPayload = {
       event: {
         type: 'schedule_triggered',
@@ -866,6 +877,7 @@ export class Scheduler {
         workflow: schedule.workflow,
         creator_id: schedule.creatorId,
         creator_context: schedule.creatorContext,
+        channel: schedule.outputContext?.target,
         timestamp: Date.now(),
       },
       schedule: {
@@ -874,6 +886,9 @@ export class Scheduler {
         workflowInputs: schedule.workflowInputs,
         isRecurring: schedule.isRecurring,
         outputContext: schedule.outputContext,
+      },
+      conversation: {
+        current: { text: workflowText },
       },
     };
 
@@ -889,8 +904,9 @@ export class Scheduler {
       await refreshGitHubCredentials();
     } catch {}
 
-    // Use common preparation helper
-    const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
+    // Use common preparation helper — pass conversation for assume guards
+    const conversationCtx = syntheticPayload.conversation as Record<string, unknown>;
+    const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, undefined, conversationCtx);
 
     // Build workflow inputs, injecting [SILENT] hint unless requireOutput is set
     const inputs = { ...schedule.workflowInputs };
@@ -994,7 +1010,8 @@ export class Scheduler {
     webhookData.set('/scheduler/trigger', syntheticPayload);
     webhookData.set('/bots/slack/support', syntheticPayload);
 
-    const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message);
+    const conversationCtx = syntheticPayload.conversation as Record<string, unknown>;
+    const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message, conversationCtx);
 
     const schedExecFn = () =>
       runEngine.executeChecks({
