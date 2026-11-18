@@ -801,7 +801,7 @@ export class Scheduler {
   private prepareExecution(
     schedule: Schedule,
     cliMessage?: string,
-    conversation?: Record<string, unknown>
+    conversation?: any
   ): {
     engine: StateMachineExecutionEngine;
     config: VisorConfig;
