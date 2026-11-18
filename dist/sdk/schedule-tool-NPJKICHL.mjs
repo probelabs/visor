@@ -1,12 +1,10 @@
 import {
-  createScheduleToolWithContext,
-  ensureReminderStoreInitialized,
-  ensureScheduleStoreInitialized,
-  executeScheduleTool,
-  extractSlackContext,
-  init_schedule_tool_handler,
-  isScheduleToolCall
-} from "./chunk-DLZORDXW.mjs";
+  buildScheduleToolContext,
+  getScheduleToolDefinition,
+  handleScheduleAction,
+  init_schedule_tool,
+  isScheduleTool
+} from "./chunk-7KDT463A.mjs";
 import "./chunk-H2ZWNJJO.mjs";
 import "./chunk-VPPBOKBQ.mjs";
 import "./chunk-SJHBRMHX.mjs";
@@ -36,13 +34,11 @@ import "./chunk-4MHHELVZ.mjs";
 import "./chunk-6E625R3C.mjs";
 import "./chunk-B2OUZAWY.mjs";
 import "./chunk-J7LXIPZS.mjs";
-init_schedule_tool_handler();
+init_schedule_tool();
 export {
-  createScheduleToolWithContext,
-  ensureReminderStoreInitialized,
-  ensureScheduleStoreInitialized,
-  executeScheduleTool,
-  extractSlackContext,
-  isScheduleToolCall
+  buildScheduleToolContext,
+  getScheduleToolDefinition,
+  handleScheduleAction,
+  isScheduleTool
 };
-//# sourceMappingURL=schedule-tool-handler-EMB7A3T3.mjs.map
+//# sourceMappingURL=schedule-tool-NPJKICHL.mjs.map

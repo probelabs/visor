@@ -84373,7 +84373,7 @@ var init_slack_frontend = __esm({
         const payload = this.getInboundSlackPayload(ctx);
         const ev = payload?.event;
         const channel = String(ev?.channel || "");
-        const isScheduledReminder = ev?.subtype === "scheduled_reminder";
+        const isScheduledReminder = ev?.subtype === "scheduled_reminder" || ev?.type === "schedule_triggered";
         const threadTs = isScheduledReminder ? String(ev?.thread_ts || "") : String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
         if (!channel || !threadTs && !isScheduledReminder) {
           try {
@@ -84554,7 +84554,7 @@ ${suffix}`;
           const payload = this.getInboundSlackPayload(ctx);
           const ev = payload?.event;
           const channel = String(ev?.channel || "");
-          const isScheduledReminder = ev?.subtype === "scheduled_reminder";
+          const isScheduledReminder = ev?.subtype === "scheduled_reminder" || ev?.type === "schedule_triggered";
           const threadTs = isScheduledReminder ? String(ev?.thread_ts || "") : String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
           if (!channel) {
             ctx.logger.warn(
