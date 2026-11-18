@@ -519,6 +519,45 @@ describe('Scheduler Slack Output', () => {
     });
   });
 
+  describe('schedule_triggered event type for Slack frontend', () => {
+    test('webhook payload event type should be schedule_triggered for top-level posting', async () => {
+      scheduler = new Scheduler(cfg, {
+        storagePath: '.test-schedules.json',
+      });
+      const outputAdapter = new SlackOutputAdapter(mockSlackClient);
+      scheduler.registerOutputAdapter(outputAdapter);
+
+      const store = scheduler.getStore();
+      await store.initialize();
+
+      const schedule = await store.createAsync({
+        creatorId: 'U123',
+        creatorContext: 'slack:U123',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflowInputs: { text: 'daily report' },
+        outputContext: { type: 'slack', target: 'C08527XAJGL' },
+      });
+
+      await (scheduler as any).executeSchedule(schedule);
+
+      const executeCall = mockExecuteChecks.mock.calls[0][0];
+      const webhookData = executeCall.webhookContext.webhookData as Map<string, unknown>;
+      const slackPayload = webhookData.get('/bots/slack/support') as any;
+
+      // Event type must be 'schedule_triggered' so Slack frontend
+      // treats it as a top-level post (no threadTs required)
+      expect(slackPayload.event.type).toBe('schedule_triggered');
+      expect(slackPayload.event.channel).toBe('C08527XAJGL');
+
+      // Should NOT have ts/thread_ts — it's a new top-level message
+      expect(slackPayload.event.ts).toBeUndefined();
+      expect(slackPayload.event.thread_ts).toBeUndefined();
+    });
+  });
+
   describe('error logging with silent mode', () => {
     test('pipeline errors should be logged even when SILENT is default', async () => {
       const { logger } = jest.requireMock('../../../src/logger');
