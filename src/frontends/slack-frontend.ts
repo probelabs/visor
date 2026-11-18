@@ -335,7 +335,8 @@ export class SlackFrontend implements Frontend {
     const payload = this.getInboundSlackPayload(ctx);
     const ev: any = payload?.event;
     const channel = String(ev?.channel || '');
-    const isScheduledReminder = ev?.subtype === 'scheduled_reminder';
+    const isScheduledReminder =
+      ev?.subtype === 'scheduled_reminder' || ev?.type === 'schedule_triggered';
     const threadTs = isScheduledReminder
       ? String(ev?.thread_ts || '')
       : String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
@@ -564,9 +565,10 @@ export class SlackFrontend implements Frontend {
       const payload = this.getInboundSlackPayload(ctx);
       const ev: any = payload?.event;
       const channel = String(ev?.channel || '');
-      // For scheduled reminders (subtype='scheduled_reminder') posting to a channel,
+      // For scheduled reminders/triggers posting to a channel,
       // thread_ts may be absent — post as a top-level message, don't fall back to ev.ts.
-      const isScheduledReminder = ev?.subtype === 'scheduled_reminder';
+      const isScheduledReminder =
+        ev?.subtype === 'scheduled_reminder' || ev?.type === 'schedule_triggered';
       const threadTs = isScheduledReminder
         ? String(ev?.thread_ts || '')
         : String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
