@@ -472,4 +472,82 @@ describe('SlackFrontend (event-bus)', () => {
     const secondChunk = slack.chat.postMessage.mock.calls[1][0].text;
     expect(secondChunk.startsWith('```typescript\n')).toBe(true);
   });
+
+  test('schedule_triggered event posts as top-level message without threadTs', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: {
+        type: 'schedule_triggered',
+        channel: 'C08527XAJGL',
+        schedule_id: 'sched-123',
+      },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          reply: { type: 'ai', group: 'chat', schema: 'plain' },
+        },
+      },
+      run: { runId: 'r-sched' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: 'Here is your scheduled report.' } },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.channel).toBe('C08527XAJGL');
+    expect(req.text).toBe('Here is your scheduled report.');
+    // No thread_ts — this is a top-level channel message
+    expect(req.thread_ts).toBeUndefined();
+  });
+
+  test('schedule_triggered event without channel skips posting', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const sink = jest.fn();
+    logger.setSink(sink);
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: {
+        type: 'schedule_triggered',
+        // No channel — should skip
+      },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          reply: { type: 'ai', group: 'chat', schema: 'plain' },
+        },
+      },
+      run: { runId: 'r-sched2' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: 'Should not post' } },
+    });
+
+    expect(slack.chat.postMessage).not.toHaveBeenCalled();
+  });
 });
