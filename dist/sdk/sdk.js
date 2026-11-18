@@ -41982,11 +41982,17 @@ var init_scheduler = __esm({
         let result;
         try {
           const output = await this.executeWorkflow(schedule);
+          const execMs = Date.now() - startTime;
           result = {
             success: true,
             output,
-            executionTimeMs: Date.now() - startTime
+            executionTimeMs: execMs
           };
+          if (execMs < 5e3) {
+            logger.warn(
+              `[Scheduler] Schedule ${schedule.id} completed suspiciously fast (${execMs}ms) \u2014 pipeline may have skipped execution (check assume guards, missing conversation context)`
+            );
+          }
           const now = Date.now();
           await this.store.updateAsync(schedule.id, {
             lastRunAt: now,
@@ -42059,7 +42065,7 @@ var init_scheduler = __esm({
       /**
        * Helper to prepare execution environment - reduces duplication between workflow and reminder execution
        */
-      prepareExecution(schedule, cliMessage) {
+      prepareExecution(schedule, cliMessage, conversation) {
         const config = JSON.parse(JSON.stringify(this.visorConfig));
         const fronts = Array.isArray(config.frontends) ? config.frontends : [];
         const hasSlackFrontend = fronts.some((f) => f && f.name === "slack");
@@ -42078,7 +42084,8 @@ var init_scheduler = __esm({
         engine.setExecutionContext({
           ...this.executionContext,
           cliMessage,
-          responseCapture
+          responseCapture,
+          ...conversation ? { conversation } : {}
         });
         return { engine, config, responseRef };
       }
@@ -42101,6 +42108,7 @@ var init_scheduler = __esm({
         if (schedule.workflow !== "default" && !allChecks.includes(schedule.workflow)) {
           throw new Error(`Workflow "${schedule.workflow}" not found in configuration`);
         }
+        const workflowText = schedule.workflowInputs?.text || schedule.workflow || "";
         const syntheticPayload = {
           event: {
             type: "schedule_triggered",
@@ -42108,6 +42116,7 @@ var init_scheduler = __esm({
             workflow: schedule.workflow,
             creator_id: schedule.creatorId,
             creator_context: schedule.creatorContext,
+            channel: schedule.outputContext?.target,
             timestamp: Date.now()
           },
           schedule: {
@@ -42116,6 +42125,9 @@ var init_scheduler = __esm({
             workflowInputs: schedule.workflowInputs,
             isRecurring: schedule.isRecurring,
             outputContext: schedule.outputContext
+          },
+          conversation: {
+            current: { text: workflowText }
           }
         };
         const webhookData = /* @__PURE__ */ new Map();
@@ -42126,7 +42138,8 @@ var init_scheduler = __esm({
           await refreshGitHubCredentials2();
         } catch {
         }
-        const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
+        const conversationCtx = syntheticPayload.conversation;
+        const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, void 0, conversationCtx);
         const inputs = { ...schedule.workflowInputs };
         if (!schedule.requireOutput) {
           inputs._silentHint = "If this task yields no results or nothing to report, respond with exactly [SILENT] and nothing else \u2014 no message will be posted.";
@@ -42218,7 +42231,8 @@ ${schedule.previousResponse}` : message
         const webhookData = /* @__PURE__ */ new Map();
         webhookData.set("/scheduler/trigger", syntheticPayload);
         webhookData.set("/bots/slack/support", syntheticPayload);
-        const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message);
+        const conversationCtx = syntheticPayload.conversation;
+        const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule, message, conversationCtx);
         const schedExecFn = () => runEngine.executeChecks({
           checks: allChecks,
           showDetails: true,
