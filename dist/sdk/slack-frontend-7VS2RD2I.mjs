@@ -616,7 +616,10 @@ var init_slack_frontend = __esm({
       }
       isLiveTaskUpdatesMode(ctx) {
         try {
-          if (!this.getInboundSlackPayload(ctx)) return false;
+          const payload = this.getInboundSlackPayload(ctx);
+          if (!payload) return false;
+          const ev = payload?.event;
+          if (ev?.type === "schedule_triggered" || ev?.subtype === "scheduled_reminder") return false;
           return isFrontendLiveUpdatesEnabled(ctx.config?.task_live_updates, "slack");
         } catch {
           return false;
@@ -825,9 +828,7 @@ ${suffix}`;
           const isScheduledReminder = ev?.subtype === "scheduled_reminder" || ev?.type === "schedule_triggered";
           const threadTs = isScheduledReminder ? String(ev?.thread_ts || "") : String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
           if (!channel) {
-            ctx.logger.warn(
-              `[slack-frontend] skip posting AI reply for ${checkId}: missing channel`
-            );
+            ctx.logger.warn(`[slack-frontend] skip posting AI reply for ${checkId}: missing channel`);
             return;
           }
           if (!threadTs && !isScheduledReminder) {
@@ -1084,4 +1085,4 @@ init_slack_frontend();
 export {
   SlackFrontend
 };
-//# sourceMappingURL=slack-frontend-7UQMLF3R.mjs.map
+//# sourceMappingURL=slack-frontend-7VS2RD2I.mjs.map

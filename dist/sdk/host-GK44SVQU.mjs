@@ -27,7 +27,7 @@ var init_host = __esm({
             const { GitHubFrontend } = await import("./github-frontend-S7ZWX7PC.mjs");
             this.frontends.push(new GitHubFrontend());
           } else if (spec.name === "slack") {
-            const { SlackFrontend } = await import("./slack-frontend-7UQMLF3R.mjs");
+            const { SlackFrontend } = await import("./slack-frontend-7VS2RD2I.mjs");
             this.frontends.push(new SlackFrontend(spec.config));
           } else if (spec.name === "tui") {
             const { TuiFrontend } = await import("./tui-frontend-T56PZB67.mjs");
@@ -84,4 +84,4 @@ export {
   FrontendsHost,
   isActiveFrontend
 };
-//# sourceMappingURL=host-UCOJ4RG5.mjs.map
+//# sourceMappingURL=host-GK44SVQU.mjs.map
