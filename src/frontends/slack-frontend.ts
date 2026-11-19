@@ -292,7 +292,10 @@ export class SlackFrontend implements Frontend {
 
   private isLiveTaskUpdatesMode(ctx: FrontendContext): boolean {
     try {
-      if (!this.getInboundSlackPayload(ctx)) return false;
+      const payload = this.getInboundSlackPayload(ctx);
+      if (!payload) return false;
+      const ev: any = payload?.event;
+      if (ev?.type === 'schedule_triggered' || ev?.subtype === 'scheduled_reminder') return false;
       return isFrontendLiveUpdatesEnabled((ctx.config as any)?.task_live_updates, 'slack');
     } catch {
       return false;
@@ -573,9 +576,7 @@ export class SlackFrontend implements Frontend {
         ? String(ev?.thread_ts || '')
         : String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
       if (!channel) {
-        ctx.logger.warn(
-          `[slack-frontend] skip posting AI reply for ${checkId}: missing channel`
-        );
+        ctx.logger.warn(`[slack-frontend] skip posting AI reply for ${checkId}: missing channel`);
         return;
       }
       if (!threadTs && !isScheduledReminder) {

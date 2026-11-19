@@ -514,6 +514,47 @@ describe('SlackFrontend (event-bus)', () => {
     expect(req.thread_ts).toBeUndefined();
   });
 
+  test('schedule_triggered event bypasses live updates and posts directly', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: {
+        type: 'schedule_triggered',
+        channel: 'C08527XAJGL',
+        schedule_id: 'sched-456',
+      },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        task_live_updates: { enabled: true, frontends: { slack: { enabled: true } } },
+        checks: {
+          reply: { type: 'ai', group: 'chat', schema: 'plain' },
+        },
+      },
+      run: { runId: 'r-sched-live' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: 'Scheduled report with live updates on.' } },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.channel).toBe('C08527XAJGL');
+    expect(req.text).toBe('Scheduled report with live updates on.');
+    expect(req.thread_ts).toBeUndefined();
+  });
+
   test('schedule_triggered event without channel skips posting', async () => {
     const bus = new EventBus();
     const slack = makeFakeSlack();
